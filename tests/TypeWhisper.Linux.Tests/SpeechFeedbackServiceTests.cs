@@ -96,13 +96,19 @@ public sealed class SpeechFeedbackServiceTests
             TestPluginManagerFactory.Create(),
             provider
         );
-        Assert.Null(sut.StartReadBack(" ", null));
-        using (sut.ReserveStartupFeedback())
+        try
         {
-            Assert.Null(sut.StartReadBack("reserved", null));
+            Assert.Null(sut.StartReadBack(" ", null));
+            using (sut.ReserveStartupFeedback())
+            {
+                Assert.Null(sut.StartReadBack("reserved", null));
+            }
+        }
+        finally
+        {
+            sut.Dispose();
         }
 
-        sut.Dispose();
         Assert.Null(sut.StartReadBack("disposed", null));
         Assert.Empty(provider.Requests);
     }
