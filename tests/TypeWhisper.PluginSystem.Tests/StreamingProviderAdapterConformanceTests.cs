@@ -1,3 +1,6 @@
+extern alias OpenAi;
+using OpenAiRealtimeStreamingSession = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiRealtimeStreamingSession;
+using OpenAiRealtimeWebSocketAdapter = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiRealtimeWebSocketAdapter;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
@@ -8,7 +11,6 @@ using TypeWhisper.Plugin.Deepgram;
 using TypeWhisper.Plugin.ElevenLabs;
 using TypeWhisper.Plugin.Gemini;
 using TypeWhisper.Plugin.Gladia;
-using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.Plugin.Meta;
 using TypeWhisper.Plugin.Reson8;
 using TypeWhisper.Plugin.SmallestAi;
@@ -139,7 +141,8 @@ public sealed class StreamingProviderAdapterConformanceTests
         var xai = await new XaiWebSocketAdapter("xai-key", "de")
             .GetConnectionOptionsAsync(CancellationToken.None);
         var openAi = await new OpenAiRealtimeWebSocketAdapter(
-                "openai-key",
+                OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
+                OpenAiRealtimeStreamingSession.CreateRealtimeHeaders("openai-key"),
                 OpenAiRealtimeStreamingSession.LegacyModelId,
                 ["de"],
                 null,
@@ -679,7 +682,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null),
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
-                "key",
+                OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
+                OpenAiRealtimeStreamingSession.CreateRealtimeHeaders("key"),
                 OpenAiRealtimeStreamingSession.LegacyModelId,
                 [],
                 null,

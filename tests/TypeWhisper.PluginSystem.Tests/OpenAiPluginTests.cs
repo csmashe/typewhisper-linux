@@ -1,3 +1,7 @@
+extern alias OpenAi;
+using OpenAiRealtimeStreamingSession = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiRealtimeStreamingSession;
+using OpenAiRealtimeTranscriptCollector = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiRealtimeTranscriptCollector;
+using OpenAiResponsesClient = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiResponsesClient;
 using TypeWhisper.PluginSDK.Helpers;
 using System.Net;
 using System.Net.WebSockets;
@@ -9,6 +13,7 @@ using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.WebSockets;
 
 // The CapturingHandler lambdas assert on the outgoing request (method, URI,
 // headers, body) and return a canned response. ReSharper reads xUnit asserts
@@ -1395,9 +1400,98 @@ public partial class OpenAiPluginTests
     }
 
     [Fact]
+    public async Task RealtimeStreaming_ConnectsToOpenAiWithBearerHeader()
+    {
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var client = new HttpClient();
+        using var sut = new OpenAiPlugin(client, new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(host);
+        sut.SelectModel(OpenAiRealtimeStreamingSession.LiveModelId);
+
+        await using var session = await sut.StartStreamingAsync("en", CancellationToken.None);
+        var options = Assert.IsType<WebSocketConnectionOptions>(transport.ConnectionOptions);
+        Assert.Equal("wss://api.openai.com/v1/realtime?intent=transcription", options.Uri.AbsoluteUri);
+        Assert.Equal("Bearer sk-test", Assert.Single(options.Headers!).Value);
+        Assert.True(options.Headers!.ContainsKey("Authorization"));
+        Assert.IsType<IStreamingSessionHealth>(session, exactMatch: false);
+    }
+
+    [Fact]
     public Task RequestFailures_AreClassified() =>
         ProviderFailureAssertions.VerifyAsync<OpenAiPlugin>();
 
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResponsesClient_ConstructorsUseConfiguredEndpointAndHeaders(bool explicitEndpoint)
+    {
+        var expectedUri = explicitEndpoint
+            ? "https://example.test/custom/responses?api-version=test"
+            : "https://example.test/v1/responses";
+        using var httpClient = new HttpClient(new CapturingHandler((request, body) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(expectedUri, request.RequestUri!.AbsoluteUri);
+            if (explicitEndpoint)
+            {
+                Assert.Equal("key", Assert.Single(request.Headers.GetValues("api-key")));
+                Assert.Null(request.Headers.Authorization);
+            }
+            else
+                Assert.Equal("Bearer key", request.Headers.Authorization?.ToString());
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal(0.7, doc.RootElement.GetProperty("temperature").GetDouble());
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"output_text":"ok"}"""),
+            });
+        }));
+        var client = explicitEndpoint
+            ? new OpenAiResponsesClient(httpClient, new Uri(expectedUri), new Dictionary<string, string> { ["api-key"] = "key" })
+            : new OpenAiResponsesClient(httpClient, "https://example.test/", "key");
+        Assert.Equal("ok", await client.ProcessAsync("system", "user", "model", null, CancellationToken.None, 0.7));
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public void ResponsesParser_RejectsFailedOrCancelledOutput(string status)
+    {
+        var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(
+            $$"""{"status":"{{status}}","output_text":"partial"}"""));
+        Assert.Equal(PluginRequestFailureKind.OutputIncomplete, ex.FailureKind);
+    }
+
+    [Fact]
+    public void ResponsesParser_ReadsNestedTextValue()
+    {
+        Assert.Equal("answer", OpenAiResponsesClient.ParseResponse(
+            """{"output":[{"content":[{"type":"text","text":{"value":" answer "}}]}]}"""));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"output_text\":\" \"}")]
+    [InlineData("{\"output\":[]}")]
+    public void ResponsesParser_ClassifiesEmptyText(string json)
+    {
+        var ex = Assert.Throws<PluginRequestException>(() => OpenAiResponsesClient.ParseResponse(json));
+        Assert.Equal(PluginRequestFailureKind.EmptyResponse, ex.FailureKind);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0.7)]
+    public void ResponsesRequests_OnlyIncludeTemperatureWhenPassed(double? temperature)
+    {
+        var body = OpenAiResponsesClient.CreateRequestBody("model", "system", "user", null, temperature);
+        Assert.Equal(temperature.HasValue, body.ContainsKey("temperature"));
+        if (temperature.HasValue)
+            Assert.Equal(temperature.Value, body["temperature"].GetDouble());
+        Assert.Equal("message", body["input"][0].GetProperty("type").GetString());
+    }
 
     [Fact]
     public void ResponsesParser_RejectsIncompleteTokenLimitedOutput()
@@ -1507,6 +1601,36 @@ public partial class OpenAiPluginTests
         Assert.True(OpenAiPlugin.UsesResponsesApi("o4-mini"));
         Assert.False(OpenAiPlugin.UsesResponsesApi("gpt-4o"));
         Assert.False(OpenAiPlugin.UsesResponsesApi("gpt-4.1-mini"));
+    }
+
+    [Theory]
+    [InlineData("gpt-6-astra", true)]
+    [InlineData("gpt-6-astra-2026-09-01", true)]
+    [InlineData("GPT-6-ASTRA", true)]
+    [InlineData("gpt-6-astral", false)]
+    [InlineData("o10", false)]
+    [InlineData("o30", false)]
+    [InlineData("o1", true)]
+    [InlineData("o4-mini", true)]
+    [InlineData("ft:o4-mini-2025-04-16:org::id", true)]
+    [InlineData("ft:gpt-4o-mini:org:suffix:id", false)]
+    [InlineData("gpt-4.1", false)]
+    public void ReasoningModels_UseResponsesApiAndSupportReasoningEffort(string modelId, bool expected)
+    {
+        Assert.Equal(expected, OpenAiPlugin.UsesResponsesApi(modelId));
+        Assert.Equal(expected, OpenAiPlugin.SupportsReasoningEffort(modelId));
+        Assert.Equal(expected ? "max_completion_tokens" : "max_tokens", OpenAiPlugin.OutputTokenParameter(modelId));
+    }
+
+    [Theory]
+    [InlineData("gpt-6-astra", null, null)]
+    [InlineData("GPT-6-ASTRA-2026-09-01", "medium", null)]
+    [InlineData("gpt-4.1", null, 0.3)]
+    public void ChatCompletionTemperature_DisablesCustomTemperatureForAstra(
+        string modelId, string? reasoningEffort, double? expected)
+    {
+        Assert.Equal(expected, OpenAiPlugin.ChatCompletionTemperature(modelId, reasoningEffort));
+        Assert.Equal(expected is not null, OpenAiPlugin.SupportsCustomTemperature(modelId, reasoningEffort));
     }
 
     [Fact]
@@ -1646,8 +1770,12 @@ public partial class OpenAiPluginTests
         Assert.Equal("pcm", body["response_format"].GetString());
     }
 
-    [Fact]
-    public async Task ProcessAsync_UsesResponsesApiForGPT5Models()
+    [Theory]
+    [InlineData("gpt-5.5")]
+    [InlineData("gpt-6-astra")]
+    [InlineData("gpt-6-astra-2026-09-01")]
+    [InlineData("ft:o4-mini-2025-04-16:org::id")]
+    public async Task ProcessAsync_UsesResponsesApiForReasoningModels(string modelId)
     {
         HttpRequestMessage? capturedRequest = null;
         string? capturedBody = null;
@@ -1664,7 +1792,7 @@ public partial class OpenAiPluginTests
         var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var result = await sut.ProcessAsync("Fix grammar", "hello world", "gpt-5.5", CancellationToken.None);
+        var result = await sut.ProcessAsync("Fix grammar", "hello world", modelId, CancellationToken.None);
 
         Assert.Equal("Cleaned transcript", result);
         Assert.Equal(HttpMethod.Post, capturedRequest?.Method);
@@ -1674,8 +1802,11 @@ public partial class OpenAiPluginTests
         Assert.NotNull(capturedBody);
 
         using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal(modelId, doc.RootElement.GetProperty("model").GetString());
         Assert.False(doc.RootElement.GetProperty("store").GetBoolean());
         Assert.Equal("medium", doc.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
+        Assert.False(doc.RootElement.TryGetProperty("temperature", out _));
+        Assert.False(doc.RootElement.TryGetProperty("max_tokens", out _));
     }
 
     [Fact]
@@ -1756,6 +1887,29 @@ public partial class OpenAiPluginTests
             host.GetSetting<List<OpenAiFetchedModel>>("fetchedTranscriptionModels");
         Assert.NotNull(cachedTranscriptionModels);
         Assert.Equal(7, cachedTranscriptionModels.Count);
+    }
+
+    [Theory]
+    [InlineData("o1", true)]
+    [InlineData("o3", true)]
+    [InlineData("o4", true)]
+    [InlineData("o1-2024-12-17", true)]
+    [InlineData("o3-mini", true)]
+    [InlineData("o4-mini", true)]
+    [InlineData("ft:gpt-4o:org::id", true)]
+    [InlineData("FT:GPT-4O:org::id", true)]
+    [InlineData("o10", false)]
+    [InlineData("o30", false)]
+    [InlineData("gpt-live-1", false)]
+    [InlineData("gpt-3.5-turbo-instruct", false)]
+    [InlineData("gpt-3.5-turbo-instruct-0914", false)]
+    [InlineData("ft:gpt-4o", false)]
+    [InlineData("ft:gpt-4o:", false)]
+    [InlineData("ft:gpt-4o:org::", false)]
+    [InlineData("ft:whisper-1:org::id", false)]
+    public void IsChatModel_FiltersBaseModelsAndFineTunes(string modelId, bool expected)
+    {
+        Assert.Equal(expected, OpenAiPlugin.IsChatModel(modelId));
     }
 
     [Fact]
@@ -1868,6 +2022,46 @@ public partial class OpenAiPluginTests
     }
 
     [Fact]
+    public void LoopbackOAuthServer_ReportsDenialAsAuthenticationFailure()
+    {
+        var error = Assert.Throws<PluginRequestException>(() =>
+            OpenAiLoopbackOAuthServer.ParseAuthorizationCode(
+                "GET /auth/callback?error=access_denied&state=expected HTTP/1.1", "expected"));
+
+        Assert.Equal(PluginRequestFailureKind.Authentication, error.FailureKind);
+        Assert.Equal("ChatGPT sign-in was declined or cancelled.", error.Message);
+    }
+
+    [Fact]
+    public void LoopbackOAuthServer_ChecksStateBeforeDenial()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            OpenAiLoopbackOAuthServer.ParseAuthorizationCode(
+                "GET /auth/callback?error=access_denied&state=wrong HTTP/1.1", "expected"));
+    }
+
+    [Theory]
+    [InlineData("{}", """{"chatgpt_plan_type":"plus"}""", null, null, null, "plus")]
+    [InlineData("""{"chatgpt_account_id":"id-account"}""", """{"chatgpt_account_id":"access-account"}""", null, null, "id-account", null)]
+    [InlineData("{}", "{}", null, "plus", null, "plus")]
+    [InlineData("{}", """{"chatgpt_account_id":"access-account"}""", null, null, "access-account", null)]
+    [InlineData("""{"chatgpt_account_id":"id-account"}""", "{}", "preferred", null, "preferred", null)]
+    [InlineData("""{"chatgpt_plan_type":"pro"}""", """{"chatgpt_plan_type":"plus"}""", null, "free", null, "pro")]
+    [InlineData("{}", """{"https://api.openai.com/auth":{"chatgpt_account_id":"access-account","chatgpt_plan_type":"plus"}}""", null, null, "access-account", "plus")]
+    public void ExtractMetadata_ResolvesEachFieldWithTokenPrecedenceAndFallback(
+        string idPayload, string accessPayload, string? preferredAccountId, string? fallbackPlanType,
+        string? expectedAccountId, string? expectedPlanType)
+    {
+        var tokens = new OpenAiOAuthTokenResponse(CreateJwt(idPayload), CreateJwt(accessPayload), null, 3600);
+
+        var metadata = OpenAiOAuthClient.ExtractMetadata(
+            tokens, preferredAccountId: preferredAccountId, fallbackPlanType: fallbackPlanType);
+
+        Assert.Equal(expectedAccountId, metadata.AccountId);
+        Assert.Equal(expectedPlanType, metadata.PlanType);
+    }
+
+    [Fact]
     public async Task ProcessAsync_UsesChatGptEndpointWhenChatGptAuthModeIsSelected()
     {
         HttpRequestMessage? capturedRequest = null;
@@ -1958,6 +2152,40 @@ public partial class OpenAiPluginTests
         Assert.NotNull(capturedTokenRequest);
         Assert.Equal("original-refresh-token", host.Secrets["oauth-refresh-token"]);
         Assert.Equal("new-access-token", host.Secrets["oauth-access-token"]);
+    }
+
+    [Fact]
+    public async Task ChatGptRefresh_PreservesExistingPlanWhenBothTokensOmitPlanType()
+    {
+        var accessToken = CreateJwt("{}");
+        var idToken = CreateJwt("""{"chatgpt_account_id":"acct_123"}""");
+        var tokenResponse = JsonSerializer.Serialize(new
+        {
+            access_token = accessToken,
+            id_token = idToken,
+            expires_in = 3600,
+        });
+        var handler = new CapturingHandler((request, _) => Task.FromResult(JsonResponse(
+            request.RequestUri?.AbsoluteUri == "https://auth.openai.com/oauth/token"
+                ? tokenResponse
+                : """{"output_text":"OK"}""")));
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthPlanType", "plus");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        host.Secrets["oauth-access-token"] = "old-access-token";
+        host.Secrets["oauth-refresh-token"] = "original-refresh-token";
+
+        using var httpClient = new HttpClient(handler);
+        using var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
+
+        Assert.Equal(accessToken, host.Secrets["oauth-access-token"]);
+        Assert.Equal(idToken, host.Secrets["oauth-id-token"]);
+        Assert.Equal("plus", host.GetSetting<string>("oauthPlanType"));
+        Assert.Equal("plus", sut.ChatGptPlanType);
     }
 
     [Fact]

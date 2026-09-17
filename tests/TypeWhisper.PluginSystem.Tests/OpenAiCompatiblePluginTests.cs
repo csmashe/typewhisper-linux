@@ -1,3 +1,5 @@
+extern alias OpenAiCompatible;
+using OpenAiRealtimeStreamingSession = OpenAiCompatible::TypeWhisper.Plugins.Shared.OpenAi.OpenAiRealtimeStreamingSession;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
@@ -6,11 +8,878 @@ using TypeWhisper.Plugin.OpenAiCompatible;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class OpenAiCompatiblePluginTests
 {
+    [Theory]
+    [InlineData("auto", "gpt-live-transcribe-2026-01-01", true)]
+    [InlineData("auto", "gpt-live-transcribe", true)]
+    [InlineData("auto", "gpt-realtime-whisper", true)]
+    [InlineData("auto", "gpt-realtime-whisper-2026-01-01", true)]
+    [InlineData("auto", "whisper-1", false)]
+    [InlineData("auto", "gpt-live-transcriber", false)]
+    [InlineData("auto", "gpt-realtime-whispering", false)]
+    [InlineData("auto", null, false)]
+    [InlineData("realtime", "my-alias", true)]
+    [InlineData("batch", "gpt-live-transcribe", false)]
+    public void UsesRealtime_SelectsTransport(string mode, string? model, bool expected) =>
+        Assert.Equal(expected, OpenAiCompatiblePlugin.UsesRealtime(mode, model));
+
+    [Theory]
+    [InlineData("auto", "gpt-realtime-whisper", false)]
+    [InlineData("auto", "gpt-realtime-whisper-2026-01-01", false)]
+    [InlineData("auto", "gpt-realtime-whispering", true)]
+    [InlineData("auto", "gpt-live-transcribe", true)]
+    [InlineData("auto", "my-alias", true)]
+    [InlineData("live", "gpt-realtime-whisper", true)]
+    [InlineData("live", "my-alias", true)]
+    [InlineData("whisper", "gpt-live-transcribe", false)]
+    [InlineData("whisper", "my-alias", false)]
+    public void IsLiveModel_RespectsProtocol(string protocol, string model, bool expected) =>
+        Assert.Equal(expected, OpenAiRealtimeStreamingSession.IsLiveModel(model, protocol));
+
+    [Theory]
+    [InlineData("https://x", "", "wss://x/v1/realtime?intent=transcription")]
+    [InlineData("https://x", "2025-03-01-preview", "wss://x/v1/realtime?api-version=2025-03-01-preview&intent=transcription")]
+    [InlineData("http://x", "", "ws://x/v1/realtime?intent=transcription")]
+    [InlineData("http://x:8080/base/", "", "ws://x:8080/base/v1/realtime?intent=transcription")]
+    public void RealtimeUri_PreservesVersionPathAndPort(string baseUrl, string version, string expected) =>
+        Assert.Equal(expected, OpenAiCompatiblePlugin.RealtimeUri(baseUrl, version).AbsoluteUri);
+
+    [Theory]
+    [InlineData(false, false, "auto", "gpt-live-transcribe", "auto", 0, true)]
+    [InlineData(false, true, "realtime", "my-alias", "live", 2, true)]
+    [InlineData(false, false, "realtime", "my-alias", "whisper", 1, false)]
+    [InlineData(true, false, "auto", "gpt-realtime-whisper-2026-01-01", "auto", 0, false)]
+    [InlineData(true, true, "realtime", "my-alias", "live", 2, true)]
+    [InlineData(true, false, "realtime", "my-alias", "whisper", 1, false)]
+    public async Task RealtimeRole_ConnectsWithEndpointHeadersAndSessionUpdate(
+        bool additional, bool azure, string mode, string model, string protocol, int overload, bool live)
+    {
+        var host = new TestPluginHostServices();
+        var baseUrl = azure ? "https://test.openai.azure.com" : "https://example.test";
+        const string version = "2025-03-01-preview";
+        if (additional)
+        {
+            host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+            {
+                new() { Id = "openai-compatible-realtime", Name = "Realtime", BaseUrl = baseUrl,
+                    ApiVersion = version, SelectedModelId = model, TranscriptionMode = mode, RealtimeProtocol = protocol },
+            });
+            host.Secrets["api-key.openai-compatible-realtime"] = "key";
+        }
+        else
+        {
+            host.SetSetting("baseUrl", baseUrl);
+            host.SetSetting("apiVersion", version);
+            host.SetSetting("selectedModel", model);
+            host.SetSetting("transcriptionMode", mode);
+            host.SetSetting("realtimeProtocol", protocol);
+            host.Secrets["api-key"] = "key";
+        }
+        using var client = new HttpClient(new CapturingHandler((_, _) => throw new InvalidOperationException("Unexpected HTTP request")));
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var sut = new OpenAiCompatiblePlugin(client, transportFactory: new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(host);
+        var role = additional ? Assert.Single(sut.AdditionalTranscriptionEngines) : sut;
+        Assert.True(role.SupportsStreaming);
+        Assert.False(role.SupportsTranslation);
+        Assert.Equal(live, role.SupportsLanguageHints);
+        await using var session = overload switch
+        {
+            0 => await role.StartStreamingAsync("de", CancellationToken.None),
+            1 => await role.StartStreamingWithLanguageHintsAsync(["de", "en"], CancellationToken.None),
+            _ => await role.StartStreamingWithLanguageHintsAndPromptAsync(["de", "en"], "dictionary terms", CancellationToken.None),
+        };
+        Assert.Null(Assert.IsType<IStreamingSessionHealth>(session, exactMatch: false).Fault);
+        var options = Assert.IsType<WebSocketConnectionOptions>(transport.ConnectionOptions);
+        Assert.Equal(baseUrl.Replace("https://", "wss://") + "/v1/realtime?api-version=" + version + "&intent=transcription", options.Uri.AbsoluteUri);
+        Assert.Equal("Bearer key", options.Headers!["Authorization"]);
+        Assert.Equal(azure, options.Headers.ContainsKey("api-key"));
+        if (azure)
+            Assert.Equal("key", options.Headers["api-key"]);
+        using var payload = JsonDocument.Parse((await transport.NextSentAsync()).Payload);
+        Assert.Equal("session.update", payload.RootElement.GetProperty("type").GetString());
+        var input = payload.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input");
+        // Live streaming needs server VAD so utterances commit before the user stops dictating.
+        Assert.Equal("server_vad", input.GetProperty("turn_detection").GetProperty("type").GetString());
+        Assert.Equal(24000, input.GetProperty("format").GetProperty("rate").GetInt32());
+        var transcription = input.GetProperty("transcription");
+        Assert.Equal(model, transcription.GetProperty("model").GetString());
+        if (live)
+        {
+            string[] expectedLanguages = overload == 0 ? ["de"] : ["de", "en"];
+            Assert.Equal(expectedLanguages,
+                transcription.GetProperty("languages").EnumerateArray().Select(e => e.GetString()));
+            Assert.Equal("low", transcription.GetProperty("delay").GetString());
+            Assert.False(transcription.TryGetProperty("language", out _));
+        }
+        else
+        {
+            Assert.Equal("de", transcription.GetProperty("language").GetString());
+            Assert.False(transcription.TryGetProperty("languages", out _));
+            Assert.False(transcription.TryGetProperty("delay", out _));
+        }
+        if (overload == 2)
+            Assert.Equal("dictionary terms", transcription.GetProperty("prompt").GetString());
+        else
+            Assert.False(transcription.TryGetProperty("prompt", out _));
+    }
+
+    [Theory]
+    [InlineData(false, "realtime")]
+    [InlineData(true, "realtime")]
+    [InlineData(false, "batch")]
+    [InlineData(true, "batch")]
+    public async Task Translation_RejectsRealtimeBeforeHttpAndPreservesBatch(bool additional, string mode)
+    {
+        var calls = 0;
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            calls++;
+            Assert.EndsWith("/v1/audio/translations", request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"text":"translated"}""") };
+        }));
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        host.SetSetting("baseUrl", "https://example.test");
+        host.SetSetting("selectedModel", "gpt-live-transcribe");
+        host.SetSetting("transcriptionMode", mode);
+        host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+        {
+            new() { Id = "openai-compatible-realtime", BaseUrl = "https://example.test",
+                SelectedModelId = "gpt-live-transcribe", TranscriptionMode = mode },
+        });
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var role = additional ? Assert.Single(sut.AdditionalTranscriptionEngines) : sut;
+        Assert.Equal(mode == "batch", role.SupportsTranslation);
+        if (mode == "realtime")
+        {
+            var error = await Assert.ThrowsAsync<PluginRequestException>(() => role.TranscribeAsync([], "de", true, null, CancellationToken.None));
+            Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+            Assert.Equal(host.Localization.GetString("Settings.RealtimeNoTranslation"), error.Message);
+            Assert.Equal(0, calls);
+        }
+        else
+        {
+            Assert.False(role.SupportsStreaming);
+            Assert.False(role.SupportsLanguageHints);
+            await role.TranscribeAsync([], "de", true, null, CancellationToken.None);
+            Assert.Equal(1, calls);
+            await Assert.ThrowsAsync<NotSupportedException>(() => role.StartStreamingAsync("de", CancellationToken.None));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "auto", "gpt-realtime-whisper", "auto", "de")]
+    [InlineData(false, "realtime", "my-alias", "live", null)]
+    [InlineData(true, "realtime", "my-alias", "whisper", "de")]
+    [InlineData(true, "auto", "gpt-live-transcribe", "auto", null)]
+    public async Task RealtimeRole_TranscribesRecordedAudioOverWebSocket(
+        bool additional, string mode, string model, string protocol, string? expectedLanguage)
+    {
+        var host = new TestPluginHostServices();
+        if (additional)
+        {
+            host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+            {
+                new() { Id = "openai-compatible-realtime", Name = "Realtime", BaseUrl = "https://example.test",
+                    SelectedModelId = model, TranscriptionMode = mode, RealtimeProtocol = protocol },
+            });
+            host.Secrets["api-key.openai-compatible-realtime"] = "key";
+        }
+        else
+        {
+            host.SetSetting("baseUrl", "https://example.test");
+            host.SetSetting("selectedModel", model);
+            host.SetSetting("transcriptionMode", mode);
+            host.SetSetting("realtimeProtocol", protocol);
+            host.Secrets["api-key"] = "key";
+        }
+        using var client = new HttpClient(new CapturingHandler((_, _) => throw new InvalidOperationException("Unexpected HTTP request")));
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var sut = new OpenAiCompatiblePlugin(client, transportFactory: new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(host);
+        var role = additional ? Assert.Single(sut.AdditionalTranscriptionEngines) : sut;
+
+        var transcribe = role.TranscribeWithLanguageHintsAsync(
+            BuildPcm16Wav([1, 0, 2, 0]), ["de", "auto", "en", "de"], false, "dictionary terms", CancellationToken.None);
+        using var update = JsonDocument.Parse((await transport.NextSentAsync()).Payload);
+        Assert.Equal("session.update", update.RootElement.GetProperty("type").GetString());
+        var input = update.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input");
+        // Whole-recording upload commits once at the end, so no server VAD.
+        Assert.Equal(JsonValueKind.Null, input.GetProperty("turn_detection").ValueKind);
+        var transcription = input.GetProperty("transcription");
+        Assert.Equal(model, transcription.GetProperty("model").GetString());
+        Assert.Equal("dictionary terms", transcription.GetProperty("prompt").GetString());
+        if (expectedLanguage is null)
+            Assert.Equal(["de", "en"], transcription.GetProperty("languages").EnumerateArray().Select(e => e.GetString()));
+        else
+            Assert.Equal("de", transcription.GetProperty("language").GetString());
+        Assert.Equal("wss://example.test/v1/realtime?intent=transcription", transport.ConnectionOptions!.Uri.AbsoluteUri);
+        Assert.Equal("Bearer key", transport.ConnectionOptions.Headers!["Authorization"]);
+        string? type;
+        do
+        {
+            using var sent = JsonDocument.Parse((await transport.NextSentAsync()).Payload);
+            type = sent.RootElement.GetProperty("type").GetString();
+        } while (type != "input_audio_buffer.commit");
+        transport.EnqueueText("""{"type":"input_audio_buffer.committed","item_id":"item_1"}""");
+        transport.EnqueueText("""{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_1","transcript":"hallo welt"}""");
+
+        var result = await transcribe.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("hallo welt", result.Text);
+        Assert.Equal(expectedLanguage, result.DetectedLanguage);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealtimeRole_ProgressOverloadForwardsAllLanguageHints(bool additional)
+    {
+        var host = new TestPluginHostServices();
+        if (additional)
+        {
+            host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+            {
+                new() { Id = "openai-compatible-realtime", Name = "Realtime", BaseUrl = "https://example.test",
+                    SelectedModelId = "gpt-live-transcribe" },
+            });
+            host.Secrets["api-key.openai-compatible-realtime"] = "key";
+        }
+        else
+        {
+            host.SetSetting("baseUrl", "https://example.test");
+            host.SetSetting("selectedModel", "gpt-live-transcribe");
+            host.Secrets["api-key"] = "key";
+        }
+        using var client = new HttpClient(new CapturingHandler((_, _) => throw new InvalidOperationException("Unexpected HTTP request")));
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var sut = new OpenAiCompatiblePlugin(client, transportFactory: new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(host);
+        var role = additional ? Assert.Single(sut.AdditionalTranscriptionEngines) : sut;
+
+        var transcribe = role.TranscribeStreamingWithLanguageHintsAsync(
+            BuildPcm16Wav([1, 0, 2, 0]), ["de", "en"], false, null, _ => true, CancellationToken.None);
+        using var update = JsonDocument.Parse((await transport.NextSentAsync()).Payload);
+        Assert.Equal("session.update", update.RootElement.GetProperty("type").GetString());
+        var transcription = update.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input").GetProperty("transcription");
+        Assert.Equal(["de", "en"], transcription.GetProperty("languages").EnumerateArray().Select(e => e.GetString()));
+        string? type;
+        do
+        {
+            using var sent = JsonDocument.Parse((await transport.NextSentAsync()).Payload);
+            type = sent.RootElement.GetProperty("type").GetString();
+        } while (type != "input_audio_buffer.commit");
+        transport.EnqueueText("""{"type":"input_audio_buffer.committed","item_id":"item_1"}""");
+        transport.EnqueueText("""{"type":"conversation.item.input_audio_transcription.completed","item_id":"item_1","transcript":"hallo welt"}""");
+
+        Assert.Equal("hallo welt", (await transcribe.WaitAsync(TimeSpan.FromSeconds(10))).Text);
+    }
+
+    private static byte[] BuildPcm16Wav(byte[] pcm)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
+        writer.Write("RIFF"u8.ToArray());
+        writer.Write(36 + pcm.Length);
+        writer.Write("WAVE"u8.ToArray());
+        writer.Write("fmt "u8.ToArray());
+        writer.Write(16);
+        writer.Write((short)1);
+        writer.Write((short)1);
+        writer.Write(16000);
+        writer.Write(32000);
+        writer.Write((short)2);
+        writer.Write((short)16);
+        writer.Write("data"u8.ToArray());
+        writer.Write(pcm.Length);
+        writer.Write(pcm);
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealtimeWithoutModel_IsConfigurationFailure(bool additional)
+    {
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        host.SetSetting("baseUrl", "https://example.test");
+        host.SetSetting("transcriptionMode", "realtime");
+        host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+        {
+            new() { Id = "openai-compatible-realtime", BaseUrl = "https://example.test", TranscriptionMode = "realtime" },
+        });
+        using var sut = new OpenAiCompatiblePlugin();
+        await sut.ActivateAsync(host);
+        var role = additional ? Assert.Single(sut.AdditionalTranscriptionEngines) : sut;
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() => role.StartStreamingAsync(null, CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.Equal(host.Localization.GetString("Settings.NoTranscriptionModelSelected"), error.Message);
+    }
+
+    [Theory]
+    [InlineData("transcriptionMode", "realtime")]
+    [InlineData("realtimeProtocol", "whisper")]
+    public async Task RealtimeOptions_RoundTripAndInvalidateProfileRole(string key, string value)
+    {
+        using var client = ModelsClient();
+        var host = CachedProfileHost();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        Assert.Equal("auto", await sut.GetSettingValueAsync(key));
+        await sut.SetSettingValueAsync(key, "unknown");
+        Assert.Equal("auto", await sut.GetSettingValueAsync(key));
+        await sut.SetSettingValueAsync(key, value);
+        Assert.Equal(value, host.GetSetting<string>(key));
+        var oldRole = Assert.Single(sut.AdditionalTranscriptionEngines);
+        var values = Assert.Single(await sut.GetItemsAsync("profiles")).Values.ToDictionary(p => p.Key, p => p.Value);
+        Assert.Equal("auto", values[key]);
+        values[key] = value;
+        Assert.True((await sut.SetItemsAsync("profiles", [new PluginCollectionItem(values)])).IsSuccess);
+        Assert.NotSame(oldRole, Assert.Single(sut.AdditionalTranscriptionEngines));
+        Assert.Equal(oldRole.SelectedModelId, Assert.Single(sut.AdditionalTranscriptionEngines).SelectedModelId);
+        using var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        Assert.Equal(value, await reloaded.GetSettingValueAsync(key));
+        Assert.Equal(value, Assert.Single(await reloaded.GetItemsAsync("profiles")).Values[key]);
+        var flat = Assert.Single(sut.GetSettingDefinitions(), d => d.Key == key);
+        var collection = Assert.Single(Assert.Single(sut.GetCollectionDefinitions()).ItemFields, d => d.Key == key);
+        Assert.Equal(PluginSettingKind.Dropdown, flat.Kind);
+        Assert.Equal(flat.Label, collection.Label);
+        Assert.Equal(flat.Description, collection.Description);
+        Assert.Equal(flat.Options, collection.Options);
+    }
+
+    [Fact]
+    public async Task UnknownRealtimeProfileOptions_NormalizeToAuto()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+        {
+            new() { Id = "openai-compatible-realtime", BaseUrl = "https://example.test",
+                TranscriptionMode = "unknown", RealtimeProtocol = "unknown" },
+        });
+        using var sut = new OpenAiCompatiblePlugin();
+        await sut.ActivateAsync(host);
+        var saved = Assert.Single(host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!);
+        Assert.Equal("auto", saved.TranscriptionMode);
+        Assert.Equal("auto", saved.RealtimeProtocol);
+    }
+
+    [Fact]
+    public void RequestUri_AppendsVersionAndRejectsNonHttpBaseUrl()
+    {
+        Assert.Equal("https://x/v1/models?api-version=2025-03-01-preview",
+            OpenAiCompatiblePlugin.RequestUri("https://x/", "2025-03-01-preview", "/v1/models").AbsoluteUri);
+        Assert.Equal("https://x/v1/models?api-version=a%20b%26c",
+            OpenAiCompatiblePlugin.RequestUri("https://x", " a b&c ", "v1/models").AbsoluteUri);
+        Assert.Equal("https://x/v1/models",
+            OpenAiCompatiblePlugin.RequestUri("https://x", "", "v1/models").AbsoluteUri);
+        foreach (var url in new[] { "ftp://x", "relative" })
+            Assert.Equal(PluginRequestFailureKind.Configuration,
+                Assert.Throws<PluginRequestException>(() => OpenAiCompatiblePlugin.RequestUri(url, "", "v1/models")).FailureKind);
+    }
+
+    [Theory]
+    [InlineData("standard", "", false, "/v1/audio/transcriptions")]
+    [InlineData("standard", "", true, "/v1/audio/translations")]
+    [InlineData("deployment-scoped", "2025-03-01-preview", false, "/deployments/my%2Fmodel%20id/audio/transcriptions?api-version=2025-03-01-preview")]
+    [InlineData("deployment-scoped", "2025-03-01-preview", true, "/deployments/my%2Fmodel%20id/audio/translations?api-version=2025-03-01-preview")]
+    public void BatchUri_SelectsRoute(string batch, string version, bool translate, string expected)
+    {
+        Assert.Equal("https://x" + expected,
+            OpenAiCompatiblePlugin.BatchUri("https://x", version, batch, "my/model id", translate).AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("preview")]
+    [InlineData("v2025-03-01")]
+    [InlineData("2025-3-1")]
+    public void BatchUri_RequiresDatedVersion(string version)
+    {
+        Assert.False(OpenAiCompatiblePlugin.IsDatedApiVersion(version));
+        var error = Assert.Throws<PluginRequestException>(() =>
+            OpenAiCompatiblePlugin.BatchUri("https://x", version, "deployment-scoped", "whisper", false));
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.Equal("Deployment-scoped transcription requires a dated API version, such as 2025-03-01-preview.", error.Message);
+    }
+
+    [Theory]
+    [InlineData("2025-03-01")]
+    [InlineData("2025-03-01-preview")]
+    public void IsDatedApiVersion_AcceptsDatePrefix(string version) =>
+        Assert.True(OpenAiCompatiblePlugin.IsDatedApiVersion(version));
+
+    [Theory]
+    [InlineData("https://api.openai.com", false)]
+    [InlineData("https://foo.openai.azure.com", true)]
+    [InlineData("https://FOO.OPENAI.AZURE.US", true)]
+    [InlineData("https://foo.services.ai.azure.com", true)]
+    [InlineData("https://foo.openai.azure.com.example.test", false)]
+    public void AuthenticationHeaders_UsesAzureSuffixes(string url, bool azure)
+    {
+        var headers = OpenAiCompatiblePlugin.AuthenticationHeaders(new Uri(url), "key");
+        Assert.Equal("Bearer key", headers["Authorization"]);
+        Assert.Equal(azure ? 2 : 1, headers.Count);
+        if (azure)
+            Assert.Equal("key", headers["api-key"]);
+        foreach (var blank in new[] { null, "", "  " })
+            Assert.Empty(OpenAiCompatiblePlugin.AuthenticationHeaders(new Uri(url), blank));
+    }
+
+    [Theory]
+    [InlineData(false, "deployment-scoped", "2025-03-01-preview", false)]
+    [InlineData(true, "deployment-scoped", "2025-03-01-preview", false)]
+    [InlineData(false, "deployment-scoped", "2025-03-01-preview", true)]
+    [InlineData(true, "deployment-scoped", "2025-03-01-preview", true)]
+    [InlineData(false, "standard", "2025-03-01-preview", false)]
+    [InlineData(true, "standard", "2025-03-01-preview", false)]
+    [InlineData(false, "standard", "", false)]
+    [InlineData(true, "standard", "", false)]
+    public async Task BatchRequests_UseEndpointOptions(bool profile, string batch, string version, bool translate)
+    {
+        var postCount = 0;
+        using var client = new HttpClient(new AsyncHandler(async (request, ct) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return ModelCatalogResponse("whisper");
+            postCount++;
+            Assert.Equal(OpenAiCompatiblePlugin.BatchUri("https://foo.openai.azure.com", version, batch, "whisper", translate), request.RequestUri);
+            Assert.Equal("Bearer key", Assert.Single(request.Headers.GetValues("Authorization")));
+            Assert.Equal("key", Assert.Single(request.Headers.GetValues("api-key")));
+            var content = Assert.IsType<MultipartFormDataContent>(request.Content);
+            var format = content.Single(part => part.Headers.ContentDisposition!.Name!.Trim('"') == "response_format");
+            Assert.Equal(batch == "deployment-scoped" || version.Length > 0 ? "json" : "verbose_json",
+                await format.ReadAsStringAsync(ct));
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"text":"ok"}""") };
+        }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://foo.openai.azure.com");
+        host.SetSetting("apiVersion", version);
+        host.SetSetting("batchEndpoint", batch);
+        host.SetSetting("selectedModel", "whisper");
+        host.Secrets["api-key"] = "key";
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        ITranscriptionEngineRole role = sut;
+        if (profile)
+        {
+            Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("Azure", "https://foo.openai.azure.com",
+                apiKey: "key", model: "whisper", apiVersion: version, batchEndpoint: batch)])).IsSuccess);
+            role = Assert.Single(sut.AdditionalTranscriptionEngines);
+        }
+        var result = await role.TranscribeAsync([], null, translate, null, CancellationToken.None);
+        Assert.Equal("ok", result.Text);
+        Assert.Empty(result.Segments);
+        Assert.Equal(1, postCount);
+    }
+
+    [Theory]
+    [InlineData(false, "chat-completions", false)]
+    [InlineData(true, "chat-completions", false)]
+    [InlineData(false, "chat-completions", true)]
+    [InlineData(true, "chat-completions", true)]
+    [InlineData(false, "responses", false)]
+    [InlineData(true, "responses", false)]
+    [InlineData(false, "responses", true)]
+    [InlineData(true, "responses", true)]
+    public async Task VersionedRequests_UseAzureHeadersForTextAndModels(bool profile, string api, bool streaming)
+    {
+        var paths = new List<string>();
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            Assert.Equal("?api-version=2025-03-01-preview", request.RequestUri!.Query);
+            Assert.Equal("Bearer key", Assert.Single(request.Headers.GetValues("Authorization")));
+            Assert.Equal("key", Assert.Single(request.Headers.GetValues("api-key")));
+            paths.Add(request.RequestUri.AbsolutePath);
+            if (request.Method == HttpMethod.Get)
+                return ModelCatalogResponse("m1");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(api == "responses" ? """{"output_text":"ok"}"""
+                    : streaming ? "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                    : """{"choices":[{"message":{"content":"ok"}}]}"""),
+            };
+        }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://foo.openai.azure.com");
+        host.SetSetting("apiVersion", " 2025-03-01-preview ");
+        host.SetSetting("textApi", api);
+        host.Secrets["api-key"] = "key";
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        ILlmProviderRole role = sut;
+        if (profile)
+        {
+            Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("Azure", "https://foo.openai.azure.com",
+                apiKey: "key", llmModel: "m1", apiVersion: " 2025-03-01-preview ", textApi: api)])).IsSuccess);
+            role = Assert.Single(sut.AdditionalLlmProviders);
+        }
+        else
+        {
+            Assert.True(await sut.ValidateConnectionAsync());
+            Assert.NotNull(await sut.FetchModelsAsync());
+            Assert.True((await sut.ValidateAsync())!.IsSuccess);
+        }
+        Assert.Equal(["ok"], await ProcessTextOptionsAsync(role, streaming));
+        Assert.Contains("/v1/models", paths);
+        Assert.Equal(api == "responses" ? "/v1/responses" : "/v1/chat/completions", paths[^1]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("preview")]
+    public async Task DeploymentSetting_RejectsMissingDateWithLocalizedMessage(string version)
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("apiVersion", version);
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => sut.SetSettingValueAsync("batchEndpoint", "deployment-scoped"));
+        Assert.Equal(host.Localization.GetString("Settings.ApiVersionRequired"), error.Message);
+        Assert.Equal("standard", await sut.GetSettingValueAsync("batchEndpoint"));
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://x", batchEndpoint: "deployment-scoped", apiVersion: version)]);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(error.Message, result.Message);
+        Assert.Empty(await sut.GetItemsAsync("profiles"));
+    }
+
+    [Fact]
+    public async Task DeploymentSetting_SwitchingToStandardWhileClearingVersionSaves()
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        host.SetSetting("apiVersion", "2025-03-01-preview");
+        host.SetSetting("batchEndpoint", "deployment-scoped");
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        // Form order: the cleared version arrives while the old route is still deployment-scoped.
+        await sut.SetSettingValueAsync("apiVersion", "");
+        await sut.SetSettingValueAsync("batchEndpoint", "standard");
+        Assert.Equal("", await sut.GetSettingValueAsync("apiVersion"));
+        Assert.Equal("standard", await sut.GetSettingValueAsync("batchEndpoint"));
+        Assert.Equal("standard", host.GetSetting<string>("batchEndpoint"));
+    }
+
+    [Theory]
+    [InlineData("apiVersion", "2025-04-01-preview")]
+    [InlineData("batchEndpoint", "deployment-scoped")]
+    public async Task DefaultEndpoint_ChangingRouteClearsModels(string key, string value)
+    {
+        using var client = ModelsClient();
+        var host = CachedDefaultHost();
+        host.SetSetting("apiVersion", "2025-03-01-preview");
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("apiVersion", " 2025-03-01-preview ");
+        await sut.SetSettingValueAsync("batchEndpoint", "standard");
+        Assert.Single(sut.FetchedModels);
+        await sut.SetSettingValueAsync(key, value);
+        Assert.Empty(sut.FetchedModels);
+        Assert.Null(sut.SelectedModelId);
+        Assert.Null(sut.SelectedLlmModelId);
+        Assert.Equal(value, host.GetSetting<string>(key));
+        Assert.Equal(value, await sut.GetSettingValueAsync(key));
+    }
+
+    [Theory]
+    [InlineData("apiVersion", "2025-04-01-preview", true)]
+    [InlineData("batchEndpoint", "deployment-scoped", true)]
+    [InlineData("apiVersion", "2025-04-01-preview", false)]
+    [InlineData("batchEndpoint", "deployment-scoped", false)]
+    public async Task ProfileRouteOptions_RoundTripAndInvalidateRoleAndCatalog(string key, string value, bool hasCatalog)
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+        var host = CachedProfileHost();
+        var profiles = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
+        profiles[0].ApiVersion = "2025-03-01-preview";
+        if (!hasCatalog)
+        {
+            profiles[0].FetchedModels = [];
+            profiles[0].SelectedModelId = null;
+            profiles[0].SelectedLlmModelId = null;
+        }
+        host.SetSetting("additionalProfiles", profiles);
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var oldRole = Assert.Single(sut.AdditionalLlmProviders);
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var values = item.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        values[key] = value;
+        Assert.True((await sut.SetItemsAsync("profiles", [new PluginCollectionItem(values)])).IsSuccess);
+        Assert.NotSame(oldRole, Assert.Single(sut.AdditionalLlmProviders));
+        var saved = Assert.Single(host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!);
+        Assert.Empty(saved.FetchedModels);
+        Assert.Null(saved.SelectedModelId);
+        Assert.Null(saved.SelectedLlmModelId);
+        using var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        var roundTrip = Assert.Single(await reloaded.GetItemsAsync("profiles"));
+        Assert.Equal(values["apiVersion"], roundTrip.Values["apiVersion"]);
+        Assert.Equal(values["batchEndpoint"], roundTrip.Values["batchEndpoint"]);
+    }
+
+    [Theory]
+    [InlineData("responses", "high", "custom", 0.7, null, false)]
+    [InlineData("responses", "", "custom", 0.7, 0.7, false)]
+    [InlineData("responses", "", "provider-default", 0.7, null, false)]
+    [InlineData("responses", "high", "custom", 0.7, null, true)]
+    [InlineData("responses", "", "custom", 0.7, 0.7, true)]
+    [InlineData("chat-completions", "", "provider-default", 0.3, null, false)]
+    [InlineData("chat-completions", "high", "custom", 1.5, 1.5, false)]
+    [InlineData("chat-completions", "", "provider-default", 0.3, null, true)]
+    [InlineData("chat-completions", "", "custom", 1.5, 1.5, true)]
+    public async Task DefaultEndpoint_TextOptionsShapeRequests(
+        string api, string effort, string temperatureMode, double temperature, double? expectedTemperature, bool streaming)
+    {
+        var requests = new List<(string Path, JsonElement Body)>();
+        using var client = TextOptionsClient(requests);
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://example.test");
+        host.Secrets["api-key"] = "key";
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        await sut.SetSettingValueAsync("textApi", api);
+        await sut.SetSettingValueAsync("reasoningEffort", effort);
+        await sut.SetSettingValueAsync("temperatureMode", temperatureMode);
+        await sut.SetSettingValueAsync("temperature", temperature.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var chunks = await ProcessTextOptionsAsync(sut, streaming);
+        Assert.Equal([api == "responses" ? "response" : "chat"], chunks);
+        var request = Assert.Single(requests);
+        Assert.Equal(api == "responses" ? "/v1/responses" : "/v1/chat/completions", request.Path);
+        Assert.Equal(expectedTemperature.HasValue, request.Body.TryGetProperty("temperature", out var value));
+        if (expectedTemperature.HasValue)
+            Assert.Equal(expectedTemperature.Value, value.GetDouble());
+        if (api == "responses")
+        {
+            Assert.Equal("message", request.Body.GetProperty("input")[0].GetProperty("type").GetString());
+            Assert.Equal(effort.Length > 0, request.Body.TryGetProperty("reasoning", out var reasoning));
+            if (effort.Length > 0)
+                Assert.Equal(effort, reasoning.GetProperty("effort").GetString());
+        }
+        else
+            Assert.False(request.Body.TryGetProperty("reasoning_effort", out _));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdditionalProfile_TextOptionsRoundTripAndUseResponses(bool streaming)
+    {
+        var requests = new List<(string Path, JsonElement Body)>();
+        using var client = TextOptionsClient(requests);
+        var host = new TestPluginHostServices();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", apiKey: "key",
+            llmModel: "m1", textApi: "responses", reasoningEffort: "high", temperatureMode: "custom", temperature: "0.7")]);
+        Assert.True(result.IsSuccess);
+        var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        var item = Assert.Single(await reloaded.GetItemsAsync("profiles"));
+        Assert.Equal("responses", item.Values["textApi"]);
+        Assert.Equal("high", item.Values["reasoningEffort"]);
+        Assert.Equal("custom", item.Values["temperatureMode"]);
+        Assert.Equal("0.7", item.Values["temperature"]);
+        Assert.Equal(["response"], await ProcessTextOptionsAsync(Assert.Single(reloaded.AdditionalLlmProviders), streaming));
+        var request = Assert.Single(requests);
+        Assert.Equal("/v1/responses", request.Path);
+        Assert.Equal("high", request.Body.GetProperty("reasoning").GetProperty("effort").GetString());
+        Assert.False(request.Body.TryGetProperty("temperature", out _));
+    }
+
+    [Fact]
+    public async Task AdditionalProfile_ChangingOnlyTextApiInvalidatesRoleAndChangesRequest()
+    {
+        var requests = new List<(string Path, JsonElement Body)>();
+        using var client = TextOptionsClient(requests);
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", apiKey: "key", llmModel: "m1")]);
+        var originalRole = Assert.Single(sut.AdditionalLlmProviders);
+        Assert.Equal(["chat"], await ProcessTextOptionsAsync(originalRole, false));
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        var values = item.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        values["textApi"] = "responses";
+        Assert.True((await sut.SetItemsAsync("profiles", [new PluginCollectionItem(values)])).IsSuccess);
+        var newRole = Assert.Single(sut.AdditionalLlmProviders);
+        Assert.NotSame(originalRole, newRole);
+        Assert.Equal(["response"], await ProcessTextOptionsAsync(newRole, false));
+        Assert.Equal(["/v1/chat/completions", "/v1/responses"], requests.Select(r => r.Path));
+    }
+
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("2.5")]
+    [InlineData("-0.1")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("0,7")]
+    public async Task Temperature_RejectsInvalidValuesForDefaultAndProfiles(string value)
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices { Localization = TimeoutLocalization() };
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => sut.SetSettingValueAsync("temperature", value));
+        var expected = host.Localization.GetString("Settings.TemperatureInvalid");
+        Assert.Equal(expected, ex.Message);
+        Assert.Equal("0.3", await sut.GetSettingValueAsync("temperature"));
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", temperature: value)]);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(expected, result.Message);
+        Assert.Empty(await sut.GetItemsAsync("profiles"));
+    }
+
+    [Theory]
+    [InlineData(false, "<think>plan</think> answer ", "answer")]
+    [InlineData(true, "<think>plan</think> answer ", "answer")]
+    [InlineData(false, "<think>plan</think>", null)]
+    [InlineData(true, "<think>plan</think>", null)]
+    public async Task ResponsesEndpoint_StripsThinkBlocks(bool useProfile, string outputText, string? expected)
+    {
+        using var client = new HttpClient(new CapturingHandler((request, _) => request.Method == HttpMethod.Get
+            ? ModelCatalogResponse("m1")
+            : new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { output_text = outputText })),
+            }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "https://example.test");
+        host.SetSetting("textApi", "responses");
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        ILlmProviderRole role = sut;
+        if (useProfile)
+        {
+            Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", llmModel: "m1", textApi: "responses")])).IsSuccess);
+            role = Assert.Single(sut.AdditionalLlmProviders);
+        }
+        if (expected is not null)
+        {
+            Assert.Equal(expected, await role.ProcessAsync("system", "user", "m1", CancellationToken.None));
+            return;
+        }
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => role.ProcessAsync("system", "user", "m1", CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.EmptyResponse, ex.FailureKind);
+    }
+
+    [Fact]
+    public async Task AdditionalProfile_BlankTemperatureKeepsPreviousOrDefault()
+    {
+        // The settings UI seeds new text fields with "" (see PluginCollectionViewModels.AddItem).
+        using var client = ModelsClient();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        var result = await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", temperature: "")]);
+        Assert.True(result.IsSuccess, result.Message);
+        var item = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("0.3", item.Values["temperature"]);
+        Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", id: item.Values["__id"],
+            temperatureMode: "custom", temperature: "0.7")])).IsSuccess);
+        Assert.True((await sut.SetItemsAsync("profiles", [ProfileItem("P", "https://example.test", id: item.Values["__id"],
+            temperatureMode: "custom", temperature: " ")])).IsSuccess);
+        Assert.Equal("0.7", Assert.Single(await sut.GetItemsAsync("profiles")).Values["temperature"]);
+    }
+
+    [Fact]
+    public async Task TextOptions_DefaultsNormalizeAndPersist()
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices();
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var defaults = new Dictionary<string, string>
+        {
+            ["textApi"] = "chat-completions", ["reasoningEffort"] = "",
+            ["temperatureMode"] = "provider-default", ["temperature"] = "0.3",
+        };
+        foreach (var (key, value) in defaults)
+            Assert.Equal(value, await sut.GetSettingValueAsync(key));
+        foreach (var key in defaults.Keys.Where(k => k != "temperature"))
+        {
+            await sut.SetSettingValueAsync(key, "unknown");
+            Assert.Equal(defaults[key], await sut.GetSettingValueAsync(key));
+            Assert.Equal(defaults[key], host.GetSetting<string>(key));
+        }
+        await sut.SetSettingValueAsync("textApi", "responses");
+        await sut.SetSettingValueAsync("reasoningEffort", "max");
+        await sut.SetSettingValueAsync("temperatureMode", "custom");
+        await sut.SetSettingValueAsync("temperature", "1.5");
+        var reloaded = new OpenAiCompatiblePlugin(client);
+        await reloaded.ActivateAsync(host);
+        Assert.Equal("responses", await reloaded.GetSettingValueAsync("textApi"));
+        Assert.Equal("max", await reloaded.GetSettingValueAsync("reasoningEffort"));
+        Assert.Equal("custom", await reloaded.GetSettingValueAsync("temperatureMode"));
+        Assert.Equal("1.5", await reloaded.GetSettingValueAsync("temperature"));
+        var fields = Assert.Single(sut.GetCollectionDefinitions()).ItemFields;
+        foreach (var key in defaults.Keys)
+        {
+            var flat = Assert.Single(sut.GetSettingDefinitions(), d => d.Key == key);
+            var collection = Assert.Single(fields, d => d.Key == key);
+            Assert.Equal(key == "temperature" ? PluginSettingKind.Text : PluginSettingKind.Dropdown, flat.Kind);
+            Assert.Equal(flat.Label, collection.Label);
+            Assert.Equal(flat.Description, collection.Description);
+            Assert.Equal(flat.Options, collection.Options);
+        }
+    }
+
+    [Fact]
+    public async Task AdditionalProfile_UnknownTextOptionsLoadWithDefaults()
+    {
+        using var client = ModelsClient();
+        var host = new TestPluginHostServices();
+        host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+        {
+            new() { Id = "openai-compatible-test", Name = "P", BaseUrl = "https://example.test",
+                TextApi = "unknown", ReasoningEffort = "unknown", TemperatureMode = "unknown", Temperature = 2.5 },
+        });
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+        var saved = Assert.Single(await sut.GetItemsAsync("profiles"));
+        Assert.Equal("chat-completions", saved.Values["textApi"]);
+        Assert.Equal("", saved.Values["reasoningEffort"]);
+        Assert.Equal("provider-default", saved.Values["temperatureMode"]);
+        Assert.Equal("0.3", saved.Values["temperature"]);
+        Assert.Equal(0.3, Assert.Single(host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!).Temperature);
+    }
+
+    private static HttpClient TextOptionsClient(List<(string Path, JsonElement Body)> requests) =>
+        new(new CapturingHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return ModelCatalogResponse("m1");
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("Bearer key", request.Headers.Authorization?.ToString());
+            using var doc = JsonDocument.Parse(body!);
+            requests.Add((request.RequestUri!.AbsolutePath, doc.RootElement.Clone()));
+            var responses = request.RequestUri.AbsolutePath.EndsWith("/responses", StringComparison.Ordinal);
+            var streaming = doc.RootElement.TryGetProperty("stream", out var stream) && stream.GetBoolean();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responses ? """{"output_text":"response"}"""
+                    : streaming ? "data: {\"choices\":[{\"delta\":{\"content\":\"chat\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                    : """{"choices":[{"message":{"content":"chat"}}]}"""),
+            };
+        }));
+
+    private static async Task<List<string>> ProcessTextOptionsAsync(ILlmProviderRole role, bool streaming)
+    {
+        if (!streaming)
+            return [await role.ProcessAsync("system", "user", "m1", CancellationToken.None)];
+        var chunks = new List<string>();
+        await foreach (var chunk in role.ProcessStreamingAsync("system", "user", "m1", CancellationToken.None))
+            chunks.Add(chunk);
+        return chunks;
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -174,14 +1043,22 @@ public sealed class OpenAiCompatiblePluginTests
     [InlineData(true, false, true)]
     [InlineData(false, true, true)]
     [InlineData(true, true, true)]
-    public async Task LlmTimeout_DeadlineAndCallerCancellationHaveDistinctExceptions(bool streaming, bool cancelCaller, bool useDefault)
+    [InlineData(false, false, false, "responses")]
+    [InlineData(false, false, true, "responses")]
+    [InlineData(false, true, false, "responses")]
+    [InlineData(false, true, true, "responses")]
+    [InlineData(true, false, false, "responses")]
+    [InlineData(true, false, true, "responses")]
+    [InlineData(true, true, false, "responses")]
+    [InlineData(true, true, true, "responses")]
+    public async Task LlmTimeout_DeadlineAndCallerCancellationHaveDistinctExceptions(bool streaming, bool cancelCaller, bool useDefault, string textApi = "chat-completions")
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var body = new StalledSseStream("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n");
         var chunks = new List<string>();
         using var client = new HttpClient(new AsyncHandler(async (_, ct) =>
         {
-            if (streaming)
+            if (streaming && textApi == "chat-completions")
             {
                 // ReSharper disable once AccessToDisposedClosure -- the handler completes before the stream is disposed at test exit.
                 var content = new StreamContent(body);
@@ -198,6 +1075,8 @@ public sealed class OpenAiCompatiblePluginTests
         host.Localization = TimeoutLocalization();
         var profiles = host.GetSetting<List<OpenAiCompatibleProfile>>("additionalProfiles")!;
         profiles[0].LlmRequestTimeoutSeconds = 5;
+        profiles[0].TextApi = textApi;
+        host.SetSetting("textApi", textApi);
         host.SetSetting("additionalProfiles", profiles);
         host.SetSetting("baseUrl", "http://localhost:11434");
         host.SetSetting("selectedLlmModel", "m1");
@@ -208,8 +1087,8 @@ public sealed class OpenAiCompatiblePluginTests
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var role = useDefault ? sut : sut.AdditionalLlmProviders[0];
         var request = RequestAsync(caller.Token);
-        await (streaming ? body.Stalled.Task : entered.Task).WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
-        if (streaming)
+        await (streaming && textApi == "chat-completions" ? body.Stalled.Task : entered.Task).WaitAsync(TimeSpan.FromSeconds(10), guard.Token);
+        if (streaming && textApi == "chat-completions")
             Assert.Equal(["Hel"], chunks);
         if (cancelCaller)
         {
@@ -509,7 +1388,10 @@ public sealed class OpenAiCompatiblePluginTests
 
     private static PluginCollectionItem ProfileItem(
         string name, string baseUrl, string? apiKey = null,
-        string? model = null, string? llmModel = null, string? id = "") =>
+        string? model = null, string? llmModel = null, string? id = "",
+        string textApi = "chat-completions", string reasoningEffort = "",
+        string temperatureMode = "provider-default", string temperature = "0.3",
+        string apiVersion = "", string batchEndpoint = "standard") =>
         new(new Dictionary<string, string?>
         {
             ["name"] = name,
@@ -518,6 +1400,12 @@ public sealed class OpenAiCompatiblePluginTests
             ["selectedModel"] = model,
             ["selectedLlmModel"] = llmModel,
             ["__id"] = id,
+            ["apiVersion"] = apiVersion,
+            ["batchEndpoint"] = batchEndpoint,
+            ["textApi"] = textApi,
+            ["reasoningEffort"] = reasoningEffort,
+            ["temperatureMode"] = temperatureMode,
+            ["temperature"] = temperature,
         });
 
     [Fact]
@@ -1876,8 +2764,11 @@ public sealed class OpenAiCompatiblePluginTests
         }
     }
 
-    [Fact]
-    public async Task ValidateAsync_EndpointAba_DiscardsStaleResponse()
+    [Theory]
+    [InlineData("baseUrl", "http://localhost:9999", "http://localhost:11434")]
+    [InlineData("apiVersion", "2025-04-01-preview", "2025-03-01-preview")]
+    [InlineData("batchEndpoint", "deployment-scoped", "standard")]
+    public async Task ValidateAsync_EndpointAba_DiscardsStaleResponse(string key, string changed, string original)
     {
         var originalRequestStarted = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1902,6 +2793,7 @@ public sealed class OpenAiCompatiblePluginTests
             return ModelCatalogResponse("fresh-a-model");
         });
         var host = CachedDefaultHost();
+        host.SetSetting("apiVersion", "2025-03-01-preview");
         using var httpClient = new HttpClient(handler);
         var sut = new OpenAiCompatiblePlugin(httpClient);
         await sut.ActivateAsync(host);
@@ -1910,8 +2802,8 @@ public sealed class OpenAiCompatiblePluginTests
         await originalRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
         try
         {
-            await sut.SetSettingValueAsync("baseUrl", "http://localhost:9999");
-            await sut.SetSettingValueAsync("baseUrl", "http://localhost:11434");
+            await sut.SetSettingValueAsync(key, changed);
+            await sut.SetSettingValueAsync(key, original);
             await sut.RefreshModelCatalogAsync().WaitAsync(TimeSpan.FromSeconds(30));
 
             releaseOriginalRequest.TrySetResult(true);

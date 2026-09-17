@@ -368,7 +368,7 @@ public sealed class StreamingProviderFailurePropagationTests
     }
 
     [Fact]
-    public async Task ElevenLabs_VadCommitBeforeFinalize_DoesNotSatisfyFinalCommitWait()
+    public async Task ElevenLabs_PeriodicCommitBeforeFinalize_DoesNotSatisfyFinalCommitWait()
     {
         var socket = new FakeWebSocket();
         await using var session = await ElevenLabsSession.CreateConnectedSessionForTests(socket);

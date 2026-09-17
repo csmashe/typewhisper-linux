@@ -14,6 +14,25 @@ namespace TypeWhisper.PluginSDK.Helpers;
 // ReSharper disable once UnusedType.Global
 public static class OpenAiTranscriptionHelper
 {
+    /// <inheritdoc cref="TranscribeAsync(HttpClient, string, string, string, byte[], string?, bool, string, string?, Uri?, IReadOnlyDictionary{string, string}?, CancellationToken)" />
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedParameter.Global
+    public static Task<PluginTranscriptionResult> TranscribeAsync(
+        HttpClient httpClient,
+        string baseUrl,
+        string apiKey,
+        string model,
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string responseFormat,
+        CancellationToken ct,
+        string? prompt = null
+    ) =>
+        // Kept binary-compatible: plugins compiled against the older SDK still bind here.
+        TranscribeAsync(httpClient, baseUrl, apiKey, model, wavAudio, language, translate,
+            responseFormat, prompt, endpointOverride: null, requestHeaders: null, ct);
+
     /// <summary>
     ///     Sends a transcription request to a Whisper-compatible API endpoint.
     /// </summary>
@@ -33,12 +52,13 @@ public static class OpenAiTranscriptionHelper
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <param name="prompt">Optional text to bias the model toward specific spelling, vocabulary, or style; null to omit.</param>
+    /// <param name="endpointOverride">Explicit endpoint, already selected for transcription or translation; null builds the standard route.</param>
+    /// <param name="requestHeaders">Extra headers; a supplied Authorization replaces apiKey bearer authentication.</param>
     /// <returns>
     ///     Transcription result with text, detected language, and duration. The <c>"text"</c>
     ///     format supplies only text, so language, duration, and segments use their default values.
     /// </returns>
     // ReSharper disable once UnusedMember.Global
-    // ReSharper disable once UnusedParameter.Global
     public static async Task<PluginTranscriptionResult> TranscribeAsync(
         HttpClient httpClient,
         string baseUrl,
@@ -48,8 +68,10 @@ public static class OpenAiTranscriptionHelper
         string? language,
         bool translate,
         string responseFormat,
-        CancellationToken ct,
-        string? prompt = null
+        string? prompt,
+        Uri? endpointOverride,
+        IReadOnlyDictionary<string, string>? requestHeaders,
+        CancellationToken ct
     )
     {
         var parseAsPlainText = responseFormat switch
@@ -91,8 +113,12 @@ public static class OpenAiTranscriptionHelper
             content.Add(new StringContent(prompt), "prompt");
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpointOverride ?? new Uri(endpoint, UriKind.RelativeOrAbsolute));
+        if (requestHeaders?.Keys.Any(name => name.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) != true)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        if (requestHeaders is not null)
+            foreach (var (name, value) in requestHeaders)
+                request.Headers.TryAddWithoutValidation(name, value);
         request.Content = content;
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(httpClient, request, ct);

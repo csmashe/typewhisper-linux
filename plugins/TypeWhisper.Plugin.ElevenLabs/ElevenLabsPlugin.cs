@@ -5,6 +5,7 @@
 
 using System.Buffers;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -14,6 +15,7 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Plugin.ElevenLabs;
 
 internal enum ElevenLabsTranscriptionMode { Automatic, RestOnly }
+internal enum ApiKeyCheck { Valid, Invalid, Unverified, Unavailable }
 
 public sealed class ElevenLabsPlugin
     : ITranscriptionEnginePlugin,
@@ -35,6 +37,9 @@ public sealed class ElevenLabsPlugin
     // No useDictionaryTerms toggle: dictionary terms arrive only through HTTP API prompts; dictation corrects afterward.
 
     private static readonly SearchValues<char> s_invalidKeytermCharacters = SearchValues.Create("<>{}[]\\");
+
+    // Keyterm limits: https://elevenlabs.io/docs/api-reference/speech-to-text/convert
+    private static readonly DictionaryTermsBudget s_dictionaryBudget = new(MaxTerms: 1000, MaxCharsPerTerm: 49, MaxWordsPerTerm: 5);
 
     private static readonly IReadOnlyList<ElevenLabsModelEntry> s_modelEntries =
     [
@@ -193,8 +198,9 @@ public sealed class ElevenLabsPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
-    // REST-only avoids realtime concurrency limits; the host startup policy reads this property live.
-    public bool SupportsStreaming => TranscriptionMode == ElevenLabsTranscriptionMode.Automatic;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_dictionaryBudget;
+    // Audio events and speaker hints are REST-only, so automatic mode uses the complete recording when set; the host reads this live at recording start.
+    public bool SupportsStreaming => TranscriptionMode == ElevenLabsTranscriptionMode.Automatic && !TagAudioEvents && SpeakerCount == DefaultSpeakerCount;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
@@ -308,7 +314,7 @@ public sealed class ElevenLabsPlugin
         }
     }
 
-    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
+    internal async Task<ApiKeyCheck> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/user");
         request.Headers.TryAddWithoutValidation("xi-api-key", apiKey);
@@ -316,9 +322,48 @@ public sealed class ElevenLabsPlugin
         try
         {
             using var response = await _httpClient.SendAsync(request, ct);
-            return response.IsSuccessStatusCode;
+            if (response.IsSuccessStatusCode)
+                return ApiKeyCheck.Valid;
+
+            // Rate limits and server errors say nothing about the key itself.
+            return response.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized when IsUserReadPermissionOnly(await response.Content.ReadAsStringAsync(ct))
+                    => ApiKeyCheck.Unverified,
+                HttpStatusCode.TooManyRequests or >= HttpStatusCode.InternalServerError => ApiKeyCheck.Unavailable,
+                _ => ApiKeyCheck.Invalid,
+            };
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException)
+        {
+            // Transport failure or client timeout: the key was never checked.
+            return ApiKeyCheck.Unavailable;
+        }
+    }
+
+    internal static bool IsUserReadPermissionOnly(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("detail", out var detail)
+                && detail.ValueKind == JsonValueKind.Object
+                && detail.TryGetProperty("status", out var status)
+                && status.ValueKind == JsonValueKind.String
+                && status.GetString() == "missing_permissions"
+                && detail.TryGetProperty("message", out var message)
+                && message.ValueKind == JsonValueKind.String
+                && string.Equals(
+                    message.GetString()?.Trim(),
+                    "The API key you used is missing the permission user_read to execute this operation.",
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
         {
             return false;
         }
@@ -536,10 +581,14 @@ public sealed class ElevenLabsPlugin
         if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(ApiKey, ct);
-        return valid
-            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
-            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        var check = await ValidateApiKeyAsync(ApiKey, ct);
+        return check switch
+        {
+            ApiKeyCheck.Valid => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid")),
+            ApiKeyCheck.Unverified => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyUnverified")),
+            ApiKeyCheck.Unavailable => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyUnavailable")),
+            _ => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid")),
+        };
     }
 
     public void Dispose()

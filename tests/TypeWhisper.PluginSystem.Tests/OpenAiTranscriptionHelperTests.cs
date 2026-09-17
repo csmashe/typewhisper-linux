@@ -8,6 +8,50 @@ namespace TypeWhisper.PluginSystem.Tests;
 public class OpenAiTranscriptionHelperTests
 {
     [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task TranscribeAsync_EndpointAndHeadersOverrideDefaults(
+        bool translate, bool useOverrides, bool overrideAuthorization)
+    {
+        var endpoint = new Uri("https://foo.openai.azure.com/deployments/whisper/audio/transcriptions?api-version=2025-03-01-preview");
+        var headers = new Dictionary<string, string> { ["api-key"] = "azure-key" };
+        if (overrideAuthorization)
+            headers["authorization"] = "Basic supplied";
+        using var client = new HttpClient(new OverrideHandler(request =>
+        {
+            Assert.Equal(useOverrides ? endpoint : new Uri("https://example.test/v1/audio/" +
+                (translate ? "translations" : "transcriptions")), request.RequestUri);
+            Assert.Equal(overrideAuthorization ? "Basic supplied" : "Bearer key",
+                Assert.Single(request.Headers.GetValues("Authorization")));
+            if (useOverrides)
+                Assert.Equal("azure-key", Assert.Single(request.Headers.GetValues("api-key")));
+            else
+                Assert.False(request.Headers.Contains("api-key"));
+        }));
+        var result = await OpenAiTranscriptionHelper.TranscribeAsync(client, "https://example.test", "key",
+            "whisper", [], null, translate, "json", prompt: null,
+            endpointOverride: useOverrides ? endpoint : null, requestHeaders: useOverrides ? headers : null,
+            ct: CancellationToken.None);
+        Assert.Equal("ok", result.Text);
+    }
+
+    private sealed class OverrideHandler(Action<HttpRequestMessage> inspect) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            inspect(request);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"text":"ok"}"""),
+            });
+        }
+    }
+
+    [Theory]
     [InlineData(true, "de")]
     [InlineData(true, "en")]
     [InlineData(false, "de")]

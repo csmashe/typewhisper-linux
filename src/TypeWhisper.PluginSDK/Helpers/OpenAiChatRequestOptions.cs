@@ -5,6 +5,12 @@ public sealed record OpenAiChatRequestOptions
 {
     /// <summary>Minimum output token cap; raised by LlmOutputTokenBudget for long prompts. Null omits the field.</summary>
     public int? MaxOutputTokens { get; init; } = 2048;
+    /// <summary>Explicit endpoint; null uses the standard chat completions route.</summary>
+    public Uri? RequestUri { get; init; }
+
+    /// <summary>Extra headers. Authorization, when supplied, replaces apiKey bearer authentication.</summary>
+    public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
+
     public string? ProviderName { get; init; }
 
     /// <summary>

@@ -105,7 +105,132 @@ public class ElevenLabsPluginTests
         using var httpClient = new HttpClient(handler);
         var sut = new ElevenLabsPlugin(httpClient);
 
-        Assert.True(await sut.ValidateApiKeyAsync("eleven-key"));
+        Assert.Equal(ApiKeyCheck.Valid, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Fact]
+    public void DictionaryTermsBudget_MatchesProviderKeytermLimits()
+    {
+        using var sut = new ElevenLabsPlugin();
+
+        Assert.Equal(1000, sut.DictionaryTermsBudget.MaxTerms);
+        Assert.Equal(49, sut.DictionaryTermsBudget.MaxCharsPerTerm);
+        Assert.Equal(5, sut.DictionaryTermsBudget.MaxWordsPerTerm);
+    }
+
+    [Theory]
+    [InlineData("automatic", false, 1, true)]
+    [InlineData("automatic", true, 1, false)]
+    [InlineData("automatic", false, 0, false)]
+    [InlineData("automatic", false, 2, false)]
+    [InlineData("restOnly", false, 1, false)]
+    public async Task SupportsStreaming_RequiresAutomaticModeWithoutBatchOnlyOptions(
+        string mode, bool tagAudioEvents, int speakerCount, bool expected)
+    {
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        await sut.SetSettingValueAsync("transcriptionMode", mode);
+        await sut.SetSettingValueAsync("tagAudioEvents", tagAudioEvents ? "true" : "false");
+        await sut.SetSettingValueAsync("numSpeakers", speakerCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Equal(expected, sut.SupportsStreaming);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized,
+        """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",
+        true, "Settings.ApiKeyUnverified")]
+    [InlineData(HttpStatusCode.Unauthorized,
+        """{"detail":{"status":"missing_permissions","message":"Missing speech_to_text permission"}}""",
+        false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.Unauthorized, """{"detail":{"status":"invalid_api_key"}}""", false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.OK, """{"user_id":"u"}""", true, "Settings.ApiKeyValid")]
+    [InlineData(HttpStatusCode.NoContent, "", true, "Settings.ApiKeyValid")]
+    [InlineData(HttpStatusCode.Unauthorized, "not JSON", false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.Forbidden,
+        """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",
+        false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.InternalServerError,
+        """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",
+        false, "Settings.ApiKeyUnavailable")]
+    [InlineData(HttpStatusCode.TooManyRequests, """{"detail":"rate limited"}""", false, "Settings.ApiKeyUnavailable")]
+    public async Task ValidateAsync_ReportsUnverifiedForUserReadRestrictedKey(
+        HttpStatusCode statusCode, string body, bool expectedSuccess, string expectedMessage)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            var response = JsonResponse(body);
+            response.StatusCode = statusCode;
+            return response;
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.Equal(expectedSuccess, result.IsSuccess);
+        Assert.Equal(expectedMessage, result.Message);
+    }
+
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(TaskCanceledException))]
+    [InlineData(typeof(IOException))]
+    public async Task ValidateApiKeyAsync_ReturnsUnavailableOnTransportFailure(Type exceptionType)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+            throw (Exception)Activator.CreateInstance(exceptionType, "Request failed")!));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        Assert.Equal(ApiKeyCheck.Unavailable, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, ApiKeyCheck.Unavailable)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, ApiKeyCheck.Unavailable)]
+    [InlineData(HttpStatusCode.Unauthorized, ApiKeyCheck.Invalid)]
+    [InlineData(HttpStatusCode.Forbidden, ApiKeyCheck.Invalid)]
+    [InlineData(HttpStatusCode.NotFound, ApiKeyCheck.Invalid)]
+    internal async Task ValidateApiKeyAsync_MapsStatusCodes(HttpStatusCode statusCode, ApiKeyCheck expected)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            var response = JsonResponse("""{"detail":"no"}""");
+            response.StatusCode = statusCode;
+            return response;
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        Assert.Equal(expected, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Fact]
+    public async Task ValidateApiKeyAsync_PropagatesCallerCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) => throw new TaskCanceledException("cancelled")));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.ValidateApiKeyAsync("eleven-key", cts.Token));
+    }
+
+    [Theory]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""", true)]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":"  THE API KEY YOU USED IS MISSING THE PERMISSION USER_READ TO EXECUTE THIS OPERATION.  "}}""", true)]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":"Missing speech_to_text permission"}}""", false)]
+    [InlineData("""{"detail":{"status":"invalid_api_key","message":"The API key you used is missing the permission user_read to execute this operation."}}""", false)]
+    [InlineData("not JSON", false)]
+    [InlineData("[]", false)]
+    [InlineData("""{"detail":null}""", false)]
+    [InlineData("""{"detail":{}}""", false)]
+    [InlineData("""{"detail":{"status":401}}""", false)]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":null}}""", false)]
+    public void IsUserReadPermissionOnly_RecognizesOnlyUserReadRestriction(string json, bool expected)
+    {
+        Assert.Equal(expected, ElevenLabsPlugin.IsUserReadPermissionOnly(json));
     }
 
     [Fact]
@@ -182,7 +307,7 @@ public class ElevenLabsPluginTests
     }
 
     [Fact]
-    public void BuildRealtimeUri_UsesScribeRealtimeAndVad()
+    public void BuildRealtimeUri_UsesScribeRealtimeAndManualCommits()
     {
         var uri = ElevenLabsStreamingSession
             .BuildRealtimeUri("scribe_v2_realtime", "de", noVerbatim: true)
@@ -191,7 +316,8 @@ public class ElevenLabsPluginTests
         Assert.StartsWith("wss://api.elevenlabs.io/v1/speech-to-text/realtime?", uri);
         Assert.Contains("model_id=scribe_v2_realtime", uri);
         Assert.Contains("audio_format=pcm_16000", uri);
-        Assert.Contains("commit_strategy=vad", uri);
+        Assert.Contains("commit_strategy=manual", uri);
+        Assert.DoesNotContain("vad", uri);
         Assert.Contains("include_timestamps=true", uri);
         Assert.Contains("include_language_detection=true", uri);
         Assert.Contains("no_verbatim=true", uri);
@@ -282,6 +408,9 @@ public class ElevenLabsPluginTests
         await sut.SetSettingValueAsync("numSpeakers", "-1");
         Assert.Equal(0, host.GetSetting<int>("numSpeakers"));
         await sut.SetSettingValueAsync("transcriptionMode", "automatic");
+        Assert.False(sut.SupportsStreaming);
+        await sut.SetSettingValueAsync("tagAudioEvents", "false");
+        await sut.SetSettingValueAsync("numSpeakers", "1");
         Assert.True(sut.SupportsStreaming);
         Assert.Equal(2, host.NotifyCapabilitiesChangedCount);
     }

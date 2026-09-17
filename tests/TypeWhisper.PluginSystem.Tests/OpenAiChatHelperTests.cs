@@ -9,6 +9,122 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public sealed class OpenAiChatHelperTests
 {
+    private const string TokenParameterError = "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.";
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task RequestOverrides_ArePreservedOnRetry(bool streaming, bool overrideAuthorization)
+    {
+        var headers = new Dictionary<string, string> { ["api-key"] = "azure-key" };
+        if (overrideAuthorization)
+            headers["authorization"] = "Basic supplied";
+        var endpoint = new Uri("https://foo.openai.azure.com/custom/chat?api-version=2025-03-01-preview");
+        using var handler = new TokenRetryHandler(TokenParameterError, streaming,
+            expectedEndpoint: endpoint, expectedHeaders: headers);
+        using var client = new HttpClient(handler);
+        Assert.Equal("ok", await SendWithOptionsAsync(client, new OpenAiChatRequestOptions
+        {
+            RequestUri = endpoint,
+            RequestHeaders = headers,
+        }, streaming));
+        Assert.Equal(2, handler.Bodies.Count);
+    }
+
+    [Theory]
+    [InlineData(false, "max_tokens", "max_completion_tokens")]
+    [InlineData(true, "max_tokens", "max_completion_tokens")]
+    [InlineData(false, "max_completion_tokens", "max_tokens")]
+    [InlineData(true, "max_completion_tokens", "max_tokens")]
+    public async Task OutputTokenRetry_SwitchesParameterOnce(bool streaming, string original, string alternate)
+    {
+        var error = $"Unsupported parameter: '{original}' is not supported with this model. Use '{alternate}' instead.";
+        using var handler = new TokenRetryHandler(error.ToUpperInvariant(), streaming);
+        using var client = new HttpClient(handler);
+        var options = new OpenAiChatRequestOptions { MaxOutputTokenParameter = original, Temperature = null };
+        Assert.Equal("ok", await SendWithOptionsAsync(client, options, streaming));
+        Assert.Equal(2, handler.Bodies.Count);
+        Assert.True(handler.Bodies[0].TryGetProperty(original, out var cap));
+        var retry = handler.Bodies[1];
+        Assert.Equal(cap.GetInt32(), retry.GetProperty(alternate).GetInt32());
+        Assert.False(retry.TryGetProperty(original, out _));
+        Assert.False(retry.TryGetProperty("temperature", out _));
+        Assert.Equal(streaming, retry.TryGetProperty("stream", out var stream) && stream.GetBoolean());
+        Assert.Equal(original, options.MaxOutputTokenParameter);
+    }
+
+    [Theory]
+    [InlineData(false, "Different error", 2048, 400, 1)]
+    [InlineData(true, "Different error", 2048, 400, 1)]
+    [InlineData(false, TokenParameterError, null, 400, 1)]
+    [InlineData(true, TokenParameterError, null, 400, 1)]
+    [InlineData(false, TokenParameterError, 2048, 500, 1)]
+    [InlineData(true, TokenParameterError, 2048, 500, 1)]
+    [InlineData(false, TokenParameterError, 2048, 400, 2)]
+    [InlineData(true, TokenParameterError, 2048, 400, 2)]
+    public async Task OutputTokenRetry_PropagatesFailuresWithoutFurtherRetry(
+        bool streaming, string message, int? cap, int status, int expectedCalls)
+    {
+        using var handler = new TokenRetryHandler(message, streaming, alwaysFail: true, status: status);
+        using var client = new HttpClient(handler);
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => SendWithOptionsAsync(
+            client, new OpenAiChatRequestOptions { MaxOutputTokens = cap }, streaming));
+        Assert.Equal(status, ex.HttpStatusCode);
+        Assert.Contains(message, ex.Message);
+        Assert.Equal(expectedCalls, handler.Bodies.Count);
+    }
+
+    [Fact]
+    public async Task TemperatureNull_OmitsField()
+    {
+        using var doc = JsonDocument.Parse(await CaptureRequestAsync(new OpenAiChatRequestOptions { Temperature = null }));
+        Assert.False(doc.RootElement.TryGetProperty("temperature", out _));
+    }
+
+    private static async Task<string> SendWithOptionsAsync(HttpClient client, OpenAiChatRequestOptions options, bool streaming)
+    {
+        if (!streaming)
+            return await OpenAiChatHelper.SendChatCompletionAsync(
+                client, "https://example.test", "key", "model", "system", "user", options, CancellationToken.None);
+        var chunks = new List<string>();
+        await foreach (var chunk in OpenAiChatHelper.SendChatCompletionStreamingAsync(
+            client, "https://example.test", "key", "model", "system", "user", options, CancellationToken.None))
+            chunks.Add(chunk);
+        return string.Concat(chunks);
+    }
+
+    private sealed class TokenRetryHandler(string message, bool streaming, bool alwaysFail = false, int status = 400,
+        Uri? expectedEndpoint = null, IReadOnlyDictionary<string, string>? expectedHeaders = null)
+        : HttpMessageHandler
+    {
+        public List<JsonElement> Bodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            using var doc = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            Bodies.Add(doc.RootElement.Clone());
+            Assert.Equal(expectedHeaders?.GetValueOrDefault("authorization") ?? "Bearer key",
+                Assert.Single(request.Headers.GetValues("Authorization")));
+            Assert.Equal(expectedEndpoint ?? new Uri("https://example.test/v1/chat/completions"), request.RequestUri);
+            if (expectedHeaders is not null)
+                foreach (var (name, value) in expectedHeaders)
+                    Assert.Equal(value, Assert.Single(request.Headers.GetValues(name)));
+            if (Bodies.Count == 1 || alwaysFail)
+                return new HttpResponseMessage((HttpStatusCode)status)
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(new { error = new { message } })),
+                };
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(streaming
+                    ? "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                    : """{"choices":[{"message":{"content":"ok"}}]}"""),
+            };
+        }
+    }
+
     [Fact]
     public async Task SendChatCompletionAsync_ScalesOutputBudgetForLongInput()
     {
@@ -357,6 +473,46 @@ public sealed class OpenAiChatHelperTests
         Assert.Contains("'choices[0].message.content'", exception.Message);
     }
 
+    [Theory]
+    [InlineData("""[{"type":"text","text":"Grüße "},{"type":"reasoning","text":"private"},{"type":"text","text":"zurück"}]""", "Grüße zurück")]
+    [InlineData("""[{"type":"text","text":"<think>private</think> Hello"}]""", "Hello")]
+    [InlineData("""[null,42,{}, {"type":"image","text":"private"},{"type":"text","text":42},{"type":"text","text":"visible"}]""", "visible")]
+    [InlineData("[]", "")]
+    public async Task SendChatCompletionAsync_TypedContent_ReturnsOnlyTextParts(string content, string expected)
+    {
+        var result = await SendChatResponseAsync($$$"""{"choices":[{"message":{"content":{{{content}}}}}]}""");
+
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("""{"content":null,"reasoning":"private"}""")]
+    [InlineData("""{"content":null,"reasoning_content":"private"}""")]
+    [InlineData("""{"reasoning":"private"}""")]
+    [InlineData("""{"reasoning_content":"private"}""")]
+    [InlineData("""{"content":[{"type":"text","text":"<think>private</think>"}]}""")]
+    [InlineData("""{"content":[{"type":"reasoning","text":"private"}]}""")]
+    [InlineData("""{"content":[{"type":"text","text":" "}]}""")]
+    public async Task SendChatCompletionAsync_ReasoningWithoutAnswer_ThrowsReasoningOnlyError(string message)
+    {
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            SendChatResponseAsync($$"""{"choices":[{"message":{{message}}}]}"""));
+
+        Assert.Contains("only reasoning content", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\" \"")]
+    [InlineData("42")]
+    public async Task SendChatCompletionAsync_NullContentWithoutReasoningText_ThrowsProtocolFailure(string reasoning)
+    {
+        var exception = await AssertProtocolFailureAsync(
+            $$$"""{"choices":[{"message":{"content":null,"reasoning":{{{reasoning}}}}}]}""");
+
+        Assert.Contains("'choices[0].message.content' must be a string", exception.Message);
+    }
+
     [Fact]
     public async Task SendChatCompletionAsync_NonStringContent_ThrowsProtocolFailure()
     {
@@ -364,7 +520,7 @@ public sealed class OpenAiChatHelperTests
 
         var exception = await AssertProtocolFailureAsync(json);
 
-        Assert.Contains("'choices[0].message.content'", exception.Message);
+        Assert.Contains("'choices[0].message.content' must be a string", exception.Message);
     }
 
     [Fact]
@@ -392,6 +548,23 @@ public sealed class OpenAiChatHelperTests
             "Hello",
             OpenAiChatHelper.ParseChatCompletionStreamDelta(
                 """{"choices":[{"delta":{"content":"Hello"}}]}"""));
+    }
+
+    [Fact]
+    public void ParseChatCompletionStreamDelta_TypedContent_ReturnsOnlyTextParts()
+    {
+        Assert.Equal("Grüße zurück", OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            """{"choices":[{"delta":{"content":[{"type":"text","text":"Grüße "},{"type":"reasoning","text":"private"},{"type":"text","text":"zurück"}]}}]}"""));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("""[{"type":"reasoning","text":"private"}]""")]
+    [InlineData("""[{"type":"text","text":""}]""")]
+    public void ParseChatCompletionStreamDelta_ArrayWithoutVisibleText_ReturnsNull(string content)
+    {
+        Assert.Null(OpenAiChatHelper.ParseChatCompletionStreamDelta(
+            $$$"""{"choices":[{"delta":{"content":{{{content}}}}}]}"""));
     }
 
     [Fact]
@@ -453,7 +626,6 @@ public sealed class OpenAiChatHelperTests
     [Theory]
     [InlineData("42")]
     [InlineData("{}")]
-    [InlineData("[]")]
     [InlineData("true")]
     public void ParseChatCompletionStreamDelta_NonStringContent_ThrowsProtocolFailure(
         string contentJson)

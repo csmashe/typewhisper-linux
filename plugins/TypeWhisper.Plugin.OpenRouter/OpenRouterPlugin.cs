@@ -48,14 +48,37 @@ public sealed class OpenRouterPlugin
     private List<OpenRouterFetchedModel> _fetchedModels = [];
     private bool _streamResponses = true;
 
+    // OpenAI speech-to-text documented languages; other upstreams keep automatic detection
+    private static readonly IReadOnlyList<string> s_openAiLanguages =
+    [
+        "af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr", "cs", "da", "nl", "en",
+        "et", "fi", "fr", "gl", "de", "el", "he", "hi", "hu", "is", "id", "it", "ja", "kn",
+        "kk", "ko", "lv", "lt", "mk", "ms", "mi", "mr", "ne", "no", "fa", "pl", "pt", "ro",
+        "ru", "sr", "sk", "sl", "es", "sw", "sv", "tl", "ta", "th", "tr", "uk", "ur", "vi", "cy",
+    ];
+
+    private static IReadOnlyList<string> LanguagesFor(string? modelId) => modelId switch
+    {
+        "openai/whisper-large-v3-turbo" or "openai/whisper-large-v3" or "openai/whisper-1"
+            or "openai/gpt-4o-mini-transcribe" or "openai/gpt-4o-transcribe" or "openai/gpt-transcribe"
+            => s_openAiLanguages,
+        _ => [],
+    };
+
     private static readonly IReadOnlyList<PluginModelInfo> s_fallbackTranscriptionModels =
     [
-        new(DefaultTranscriptionModelId, "OpenAI: Whisper Large V3 Turbo") { IsRecommended = true },
-        new("openai/whisper-large-v3", "OpenAI: Whisper Large V3"),
-        new("openai/whisper-1", "OpenAI: Whisper 1"),
-        new("openai/gpt-4o-mini-transcribe", "OpenAI: GPT-4o Mini Transcribe"),
-        new("openai/gpt-4o-transcribe", "OpenAI: GPT-4o Transcribe"),
-        new("google/chirp-3", "Google: Chirp 3"),
+        new(DefaultTranscriptionModelId, "OpenAI: Whisper Large V3 Turbo")
+            { IsRecommended = true, LanguageCount = LanguagesFor(DefaultTranscriptionModelId).Count },
+        new("openai/whisper-large-v3", "OpenAI: Whisper Large V3")
+            { LanguageCount = LanguagesFor("openai/whisper-large-v3").Count },
+        new("openai/whisper-1", "OpenAI: Whisper 1")
+            { LanguageCount = LanguagesFor("openai/whisper-1").Count },
+        new("openai/gpt-4o-mini-transcribe", "OpenAI: GPT-4o Mini Transcribe")
+            { LanguageCount = LanguagesFor("openai/gpt-4o-mini-transcribe").Count },
+        new("openai/gpt-4o-transcribe", "OpenAI: GPT-4o Transcribe")
+            { LanguageCount = LanguagesFor("openai/gpt-4o-transcribe").Count },
+        new("google/chirp-3", "Google: Chirp 3")
+            { LanguageCount = LanguagesFor("google/chirp-3").Count },
     ];
 
     private static readonly IReadOnlyList<PluginModelInfo> s_fallbackModels =
@@ -119,10 +142,12 @@ public sealed class OpenRouterPlugin
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels =>
         _fetchedTranscriptionModels.Count > 0
-            ? _fetchedTranscriptionModels.Select(model => new PluginModelInfo(model.Id, model.Name)).ToList()
+            ? _fetchedTranscriptionModels.Select(model => new PluginModelInfo(model.Id, model.Name)
+                { LanguageCount = LanguagesFor(model.Id).Count }).ToList()
             : s_fallbackTranscriptionModels;
 
     public string? SelectedModelId { get; private set; }
+    public IReadOnlyList<string> SupportedLanguages => LanguagesFor(SelectedModelId);
 
     public bool SupportsTranslation => false;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
@@ -133,8 +158,12 @@ public sealed class OpenRouterPlugin
         if (TranscriptionModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             throw new ArgumentException($"Unknown model: {modelId}");
 
+        if (string.Equals(SelectedModelId, modelId, StringComparison.Ordinal))
+            return;
+
         SelectedModelId = modelId;
         _host?.SetSetting(SelectedTranscriptionModelSettingName, modelId);
+        _host?.NotifyCapabilitiesChanged();
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -437,15 +466,16 @@ public sealed class OpenRouterPlugin
             if (!doc.RootElement.TryGetProperty("data", out var data))
                 return null;
 
+            if (TryReadDouble(data, "limit_remaining", out var remaining))
+                return remaining;
+
             if (TryReadDouble(data, "limit", out var limit)
                 && TryReadDouble(data, "usage", out var usage))
             {
                 return limit - usage;
             }
 
-            return TryReadDouble(data, "limit_remaining", out var remaining)
-                ? remaining
-                : null;
+            return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (TaskCanceledException)
@@ -520,6 +550,20 @@ public sealed class OpenRouterPlugin
             },
             ct);
 
+    // OpenAI's gpt-* transcribe models accept only json/text; verbose_json is whisper-only there
+    private static bool SupportsVerboseTimestamps(string model)
+    {
+        if (model.Split('/', 2) is not [var provider, var name])
+            return false;
+
+        return provider switch
+        {
+            "groq" or "together" => true,
+            "openai" => !name.StartsWith("gpt-", StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
     private async Task<PluginTranscriptionResult> SendAudioTranscriptionAsync(
         string model,
         byte[] wavAudio,
@@ -538,6 +582,12 @@ public sealed class OpenRouterPlugin
 
         if (!string.IsNullOrWhiteSpace(language))
             body["language"] = language;
+
+        if (SupportsVerboseTimestamps(model))
+        {
+            body["response_format"] = "verbose_json";
+            body["timestamp_granularities"] = new[] { "segment" };
+        }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/audio/transcriptions");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
@@ -569,11 +619,44 @@ public sealed class OpenRouterPlugin
             duration = usageSeconds;
         }
 
-        // OpenRouter's transcription endpoint echoes the *requested* language
-        // (or the model's interpretation of it) rather than a detected ISO code.
-        // Drop it to avoid drifting AppSettings.LastDetectedLanguage on every
-        // request; explicit language selection happens upstream in the orchestrator.
-        return new PluginTranscriptionResult(text, null, duration, null);
+        var segments = ParseSegments(root);
+
+        return new PluginTranscriptionResult(text, null, duration, null) { Segments = segments };
+    }
+
+    private static List<PluginTranscriptionSegment> ParseSegments(JsonElement root)
+    {
+        var segments = new List<PluginTranscriptionSegment>();
+        if (!root.TryGetProperty("segments", out var segmentArray)
+            || segmentArray.ValueKind != JsonValueKind.Array)
+        {
+            return segments;
+        }
+
+        foreach (var segment in segmentArray.EnumerateArray())
+        {
+            if (segment.ValueKind != JsonValueKind.Object
+                || !segment.TryGetProperty("text", out var segmentText)
+                || segmentText.ValueKind != JsonValueKind.String
+                || !segment.TryGetProperty("start", out var startElement)
+                || startElement.ValueKind != JsonValueKind.Number
+                || !startElement.TryGetDouble(out var start) || !double.IsFinite(start) || start < 0
+                || !segment.TryGetProperty("end", out var endElement)
+                || endElement.ValueKind != JsonValueKind.Number
+                || !endElement.TryGetDouble(out var end) || !double.IsFinite(end) || end < start)
+            {
+                continue;
+            }
+
+            segments.Add(new PluginTranscriptionSegment(segmentText.GetString()!, start, end)
+            {
+                NoSpeechProbability = segment.TryGetProperty("no_speech_prob", out var probability)
+                    && probability.ValueKind == JsonValueKind.Number
+                    && probability.TryGetSingle(out var value) ? value : null,
+            });
+        }
+
+        return segments;
     }
 
     // Normalization helpers
