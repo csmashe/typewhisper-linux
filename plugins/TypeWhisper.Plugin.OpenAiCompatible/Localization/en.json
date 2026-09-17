@@ -61,5 +61,16 @@
   "Settings.BatchEndpointDescription": "Standard uses /v1/audio/transcriptions. Deployment-scoped uses /deployments/{model}/audio/transcriptions and needs a dated API version.",
   "Settings.BatchEndpointStandard": "Standard v1",
   "Settings.BatchEndpointDeployment": "Deployment-scoped",
-  "Settings.ApiVersionRequired": "Deployment-scoped transcription requires a dated API version, such as 2025-03-01-preview."
+  "Settings.ApiVersionRequired": "Deployment-scoped transcription requires a dated API version, such as 2025-03-01-preview.",
+  "Settings.TranscriptionMode": "Transcription mode",
+  "Settings.TranscriptionModeDescription": "Auto uses realtime for gpt-live-transcribe and gpt-realtime-whisper models and batch for everything else. Realtime forces the /v1/realtime WebSocket for custom deployment aliases; batch always uploads the recording.",
+  "Settings.TranscriptionModeAuto": "Automatic",
+  "Settings.TranscriptionModeBatch": "Batch",
+  "Settings.TranscriptionModeRealtime": "Realtime",
+  "Settings.RealtimeProtocol": "Realtime protocol",
+  "Settings.RealtimeProtocolDescription": "Auto recognises the Realtime Whisper family and treats other models as Live Transcribe. Choose explicitly for custom aliases.",
+  "Settings.RealtimeProtocolAuto": "Automatic",
+  "Settings.RealtimeProtocolLive": "Live Transcribe",
+  "Settings.RealtimeProtocolWhisper": "Realtime Whisper",
+  "Settings.RealtimeNoTranslation": "Realtime transcription does not support translation. Use batch mode."
 }

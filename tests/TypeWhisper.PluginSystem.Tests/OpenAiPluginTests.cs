@@ -1,4 +1,6 @@
 extern alias OpenAi;
+using OpenAiRealtimeStreamingSession = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiRealtimeStreamingSession;
+using OpenAiRealtimeTranscriptCollector = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiRealtimeTranscriptCollector;
 using OpenAiResponsesClient = OpenAi::TypeWhisper.Plugins.Shared.OpenAi.OpenAiResponsesClient;
 using TypeWhisper.PluginSDK.Helpers;
 using System.Net;
@@ -11,6 +13,7 @@ using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.WebSockets;
 
 // The CapturingHandler lambdas assert on the outgoing request (method, URI,
 // headers, body) and return a canned response. ReSharper reads xUnit asserts
@@ -1394,6 +1397,24 @@ public partial class OpenAiPluginTests
 
         Assert.True(sut.SupportsStreaming);
         Assert.False(sut.SupportsTranslation);
+    }
+
+    [Fact]
+    public async Task RealtimeStreaming_ConnectsToOpenAiWithBearerHeader()
+    {
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } };
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var client = new HttpClient();
+        using var sut = new OpenAiPlugin(client, new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(host);
+        sut.SelectModel(OpenAiRealtimeStreamingSession.LiveModelId);
+
+        await using var session = await sut.StartStreamingAsync("en", CancellationToken.None);
+        var options = Assert.IsType<WebSocketConnectionOptions>(transport.ConnectionOptions);
+        Assert.Equal("wss://api.openai.com/v1/realtime?intent=transcription", options.Uri.AbsoluteUri);
+        Assert.Equal("Bearer sk-test", Assert.Single(options.Headers!).Value);
+        Assert.True(options.Headers!.ContainsKey("Authorization"));
+        Assert.IsType<IStreamingSessionHealth>(session, exactMatch: false);
     }
 
     [Fact]

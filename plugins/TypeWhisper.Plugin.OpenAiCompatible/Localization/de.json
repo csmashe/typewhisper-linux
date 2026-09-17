@@ -61,5 +61,16 @@
   "Settings.BatchEndpointDescription": "Standard verwendet /v1/audio/transcriptions. Bereitstellungsspezifisch verwendet /deployments/{model}/audio/transcriptions und benötigt eine datierte API-Version.",
   "Settings.BatchEndpointStandard": "Standard v1",
   "Settings.BatchEndpointDeployment": "Bereitstellungsspezifisch",
-  "Settings.ApiVersionRequired": "Bereitstellungsspezifische Transkription erfordert eine datierte API-Version, zum Beispiel 2025-03-01-preview."
+  "Settings.ApiVersionRequired": "Bereitstellungsspezifische Transkription erfordert eine datierte API-Version, zum Beispiel 2025-03-01-preview.",
+  "Settings.TranscriptionMode": "Transkriptionsmodus",
+  "Settings.TranscriptionModeDescription": "Automatisch verwendet Echtzeit für die Modelle gpt-live-transcribe und gpt-realtime-whisper und Stapelverarbeitung für alle anderen. Echtzeit erzwingt den /v1/realtime-WebSocket für benutzerdefinierte Bereitstellungsaliase; die Stapelverarbeitung lädt immer die Aufnahme hoch.",
+  "Settings.TranscriptionModeAuto": "Automatisch",
+  "Settings.TranscriptionModeBatch": "Stapelverarbeitung",
+  "Settings.TranscriptionModeRealtime": "Echtzeit",
+  "Settings.RealtimeProtocol": "Echtzeitprotokoll",
+  "Settings.RealtimeProtocolDescription": "Automatisch erkennt die Realtime-Whisper-Modellfamilie und behandelt andere Modelle als Live Transcribe. Wählen Sie das Protokoll für benutzerdefinierte Aliase ausdrücklich aus.",
+  "Settings.RealtimeProtocolAuto": "Automatisch",
+  "Settings.RealtimeProtocolLive": "Live Transcribe",
+  "Settings.RealtimeProtocolWhisper": "Realtime Whisper",
+  "Settings.RealtimeNoTranslation": "Echtzeittranskription unterstützt keine Übersetzung. Verwenden Sie die Stapelverarbeitung."
 }

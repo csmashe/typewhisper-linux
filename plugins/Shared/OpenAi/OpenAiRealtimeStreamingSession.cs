@@ -9,16 +9,23 @@ using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.PluginSDK.WebSockets;
 
-namespace TypeWhisper.Plugin.OpenAi;
+namespace TypeWhisper.Plugins.Shared.OpenAi;
 
 internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     internal const string LegacyModelId = "gpt-realtime-whisper";
     internal const string LiveModelId = "gpt-live-transcribe";
 
-    internal static bool IsLiveModel(string modelId) =>
-        modelId.Equals(LiveModelId, StringComparison.OrdinalIgnoreCase)
-        || modelId.StartsWith($"{LiveModelId}-", StringComparison.OrdinalIgnoreCase);
+    internal static bool IsLiveModel(string modelId, string protocol = "auto") => protocol switch
+    {
+        "live" => true,
+        "whisper" => false,
+        _ => !modelId.Equals(LegacyModelId, StringComparison.OrdinalIgnoreCase)
+            && !modelId.StartsWith($"{LegacyModelId}-", StringComparison.OrdinalIgnoreCase),
+    };
+
+    internal static Uri OpenAiRealtimeEndpoint { get; } =
+        new("wss://api.openai.com/v1/realtime?intent=transcription");
     internal const int SourceSampleRate = 16_000;
     internal const int TargetSampleRate = 24_000;
 
@@ -43,26 +50,32 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
     }
 
     public static async Task<OpenAiRealtimeStreamingSession> ConnectAsync(
-        string apiKey,
+        Uri endpoint,
+        IReadOnlyDictionary<string, string> headers,
         string modelId,
         IReadOnlyList<string> languageHints,
         string? prompt,
         bool useServerVad,
-        CancellationToken ct
+        string realtimeProtocol,
+        CancellationToken ct,
+        IWebSocketTransportFactory? transportFactory = null
     )
     {
         var adapter = new OpenAiRealtimeWebSocketAdapter(
-            apiKey,
+            endpoint,
+            headers,
             modelId,
             languageHints,
             prompt,
             useServerVad,
-            sendSessionUpdate: true
+            sendSessionUpdate: true,
+            realtimeProtocol
         );
-        var pump = await WebSocketSessionPump.ConnectAsync(adapter, ct);
+        var pump = await WebSocketSessionPump.ConnectAsync(adapter, ct, transportFactory: transportFactory);
         return new OpenAiRealtimeStreamingSession(pump, adapter);
     }
 
+    // ReSharper disable once UnusedMember.Global -- file-linked into both OpenAI plugins; only the OpenAI plugin and its tests call this
     internal static async Task<OpenAiRealtimeStreamingSession> CreateConnectedSessionForTests(
         WebSocket ws
     )
@@ -71,7 +84,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
             throw new InvalidOperationException("The test WebSocket must already be open.");
 
         var adapter = new OpenAiRealtimeWebSocketAdapter(
-            "",
+            OpenAiRealtimeEndpoint,
+            CreateRealtimeHeaders(""),
             LegacyModelId,
             [],
             null,
@@ -86,22 +100,48 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         return new OpenAiRealtimeStreamingSession(pump, adapter);
     }
 
-    public static async Task<PluginTranscriptionResult> TranscribeWavAsync(
+    // ReSharper disable once UnusedMember.Global -- file-linked into both OpenAI plugins; only the OpenAI plugin and its tests call this
+    public static Task<PluginTranscriptionResult> TranscribeWavAsync(
         string apiKey,
         string modelId,
         byte[] wavAudio,
         IReadOnlyList<string> languageHints,
         string? prompt,
         CancellationToken ct
+    ) =>
+        TranscribeWavAsync(
+            OpenAiRealtimeEndpoint,
+            CreateRealtimeHeaders(apiKey),
+            modelId,
+            wavAudio,
+            languageHints,
+            prompt,
+            realtimeProtocol: "auto",
+            ct
+        );
+
+    public static async Task<PluginTranscriptionResult> TranscribeWavAsync(
+        Uri endpoint,
+        IReadOnlyDictionary<string, string> headers,
+        string modelId,
+        byte[] wavAudio,
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        string realtimeProtocol,
+        CancellationToken ct,
+        IWebSocketTransportFactory? transportFactory = null
     )
     {
         await using var session = await ConnectAsync(
-            apiKey,
+            endpoint,
+            headers,
             modelId,
             languageHints,
             prompt,
             useServerVad: false,
-            ct
+            realtimeProtocol,
+            ct,
+            transportFactory
         );
         var pcm = ExtractPcm16Data(wavAudio);
         const int chunkBytes = SourceSampleRate * sizeof(short) / 5;
@@ -118,14 +158,14 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         );
         return new PluginTranscriptionResult(
             session._adapter.Collector.CurrentText,
-            IsLiveModel(modelId) ? null : languageHints.Count > 0 ? languageHints[0] : null,
+            IsLiveModel(modelId, realtimeProtocol) ? null : languageHints.Count > 0 ? languageHints[0] : null,
             0,
             NoSpeechProbability: null
         );
     }
 
-    internal static Uri BuildRealtimeUri() =>
-        new("wss://api.openai.com/v1/realtime?intent=transcription");
+    // ReSharper disable once UnusedMember.Global -- file-linked into both OpenAI plugins; only the OpenAI plugin and its tests call this
+    internal static Uri BuildRealtimeUri() => OpenAiRealtimeEndpoint;
 
     internal static IReadOnlyDictionary<string, string> CreateRealtimeHeaders(
         string apiKey
@@ -139,7 +179,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         string modelId,
         IReadOnlyList<string> languageHints,
         string? prompt,
-        bool useServerVad
+        bool useServerVad,
+        string realtimeProtocol = "auto"
     )
     {
         var transcription = new Dictionary<string, object?>
@@ -147,7 +188,7 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
             ["model"] = modelId,
         };
 
-        if (IsLiveModel(modelId))
+        if (IsLiveModel(modelId, realtimeProtocol))
         {
             if (languageHints.Count > 0)
                 transcription["languages"] = languageHints;
@@ -313,12 +354,14 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
 }
 
 internal sealed class OpenAiRealtimeWebSocketAdapter(
-    string apiKey,
+    Uri endpoint,
+    IReadOnlyDictionary<string, string> headers,
     string modelId,
     IReadOnlyList<string> languageHints,
     string? prompt,
     bool useServerVad,
-    bool sendSessionUpdate
+    bool sendSessionUpdate,
+    string realtimeProtocol = "auto"
 ) : IWebSocketSessionAdapter
 {
     private readonly Lock _audioStateLock = new();
@@ -347,8 +390,8 @@ internal sealed class OpenAiRealtimeWebSocketAdapter(
     ) =>
         ValueTask.FromResult(
             new WebSocketConnectionOptions(
-                OpenAiRealtimeStreamingSession.BuildRealtimeUri(),
-                OpenAiRealtimeStreamingSession.CreateRealtimeHeaders(apiKey)
+                endpoint,
+                headers
             )
         );
 
@@ -363,7 +406,8 @@ internal sealed class OpenAiRealtimeWebSocketAdapter(
                             modelId,
                             languageHints,
                             prompt,
-                            useServerVad
+                            useServerVad,
+                            realtimeProtocol
                         )
                     ),
                 ]

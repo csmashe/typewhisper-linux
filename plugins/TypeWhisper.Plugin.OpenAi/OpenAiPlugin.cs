@@ -11,6 +11,7 @@ using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.WebSockets;
 using TypeWhisper.Plugins.Shared.OpenAi;
 
 namespace TypeWhisper.Plugin.OpenAi;
@@ -55,6 +56,7 @@ public sealed class OpenAiPlugin
         new() { PropertyNameCaseInsensitive = true };
 
     private readonly HttpClient _httpClient;
+    private readonly IWebSocketTransportFactory? _transportFactory;
     private readonly Lock _catalogCredentialLock = new();
     private long _credentialRevision;
     private IPluginHostServices? _host;
@@ -129,9 +131,10 @@ public sealed class OpenAiPlugin
     {
     }
 
-    internal OpenAiPlugin(HttpClient httpClient)
+    internal OpenAiPlugin(HttpClient httpClient, IWebSocketTransportFactory? transportFactory = null)
     {
         _httpClient = httpClient;
+        _transportFactory = transportFactory;
     }
 
     // ITypeWhisperPlugin
@@ -337,12 +340,15 @@ public sealed class OpenAiPlugin
             throw new NotSupportedException(Loc.L("Settings.StreamingRequiresRealtimeModel"));
 
         return await OpenAiRealtimeStreamingSession.ConnectAsync(
-            ApiKey!,
+            OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
+            OpenAiRealtimeStreamingSession.CreateRealtimeHeaders(ApiKey!),
             entry.ApiModelName,
             NormalizeLanguageHints(languageHints),
             prompt: null,
             useServerVad: true,
-            ct);
+            realtimeProtocol: "auto",
+            ct,
+            _transportFactory);
     }
 
     // ILlmProviderPlugin

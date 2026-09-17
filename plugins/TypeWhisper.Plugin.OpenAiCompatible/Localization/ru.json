@@ -61,5 +61,16 @@
   "Settings.BatchEndpointDescription": "Стандартная использует /v1/audio/transcriptions. Для отдельного развёртывания используется /deployments/{model}/audio/transcriptions и требуется версия API с датой.",
   "Settings.BatchEndpointStandard": "Стандартная v1",
   "Settings.BatchEndpointDeployment": "Для отдельного развёртывания",
-  "Settings.ApiVersionRequired": "Для транскрипции в отдельном развёртывании требуется версия API с датой, например 2025-03-01-preview."
+  "Settings.ApiVersionRequired": "Для транскрипции в отдельном развёртывании требуется версия API с датой, например 2025-03-01-preview.",
+  "Settings.TranscriptionMode": "Режим транскрипции",
+  "Settings.TranscriptionModeDescription": "Автоматический режим использует транскрипцию в реальном времени для моделей gpt-live-transcribe и gpt-realtime-whisper и пакетную обработку для остальных. Режим реального времени принудительно использует WebSocket /v1/realtime для пользовательских псевдонимов развёртываний; пакетный режим всегда загружает запись.",
+  "Settings.TranscriptionModeAuto": "Автоматически",
+  "Settings.TranscriptionModeBatch": "Пакетный",
+  "Settings.TranscriptionModeRealtime": "В реальном времени",
+  "Settings.RealtimeProtocol": "Протокол реального времени",
+  "Settings.RealtimeProtocolDescription": "Автоматический режим распознаёт семейство Realtime Whisper и обрабатывает остальные модели как Live Transcribe. Для пользовательских псевдонимов выберите протокол явно.",
+  "Settings.RealtimeProtocolAuto": "Автоматически",
+  "Settings.RealtimeProtocolLive": "Live Transcribe",
+  "Settings.RealtimeProtocolWhisper": "Realtime Whisper",
+  "Settings.RealtimeNoTranslation": "Транскрипция в реальном времени не поддерживает перевод. Используйте пакетный режим."
 }

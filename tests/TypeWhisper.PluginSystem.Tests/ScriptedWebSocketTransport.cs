@@ -241,3 +241,8 @@ internal sealed class ScriptedWebSocketTransport : IWebSocketTransport
         internal sealed record Fault(Exception Exception) : ReceiveStep;
     }
 }
+
+internal sealed class ScriptedWebSocketTransportFactory(ScriptedWebSocketTransport transport) : IWebSocketTransportFactory
+{
+    public IWebSocketTransport Create() => transport;
+}

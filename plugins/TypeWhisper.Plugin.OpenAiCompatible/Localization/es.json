@@ -61,5 +61,16 @@
   "Settings.BatchEndpointDescription": "Estándar usa /v1/audio/transcriptions. Específico de una implementación usa /deployments/{model}/audio/transcriptions y necesita una versión de la API con fecha.",
   "Settings.BatchEndpointStandard": "Estándar v1",
   "Settings.BatchEndpointDeployment": "Específico de una implementación",
-  "Settings.ApiVersionRequired": "La transcripción específica de una implementación requiere una versión de la API con fecha, como 2025-03-01-preview."
+  "Settings.ApiVersionRequired": "La transcripción específica de una implementación requiere una versión de la API con fecha, como 2025-03-01-preview.",
+  "Settings.TranscriptionMode": "Modo de transcripción",
+  "Settings.TranscriptionModeDescription": "Automático usa tiempo real para los modelos gpt-live-transcribe y gpt-realtime-whisper y procesamiento por lotes para los demás. Tiempo real fuerza el WebSocket /v1/realtime para alias de implementaciones personalizados; por lotes siempre sube la grabación.",
+  "Settings.TranscriptionModeAuto": "Automático",
+  "Settings.TranscriptionModeBatch": "Por lotes",
+  "Settings.TranscriptionModeRealtime": "Tiempo real",
+  "Settings.RealtimeProtocol": "Protocolo de tiempo real",
+  "Settings.RealtimeProtocolDescription": "Automático reconoce la familia Realtime Whisper y trata los demás modelos como Live Transcribe. Elige el protocolo explícitamente para los alias personalizados.",
+  "Settings.RealtimeProtocolAuto": "Automático",
+  "Settings.RealtimeProtocolLive": "Live Transcribe",
+  "Settings.RealtimeProtocolWhisper": "Realtime Whisper",
+  "Settings.RealtimeNoTranslation": "La transcripción en tiempo real no admite traducción. Usa el modo por lotes."
 }
