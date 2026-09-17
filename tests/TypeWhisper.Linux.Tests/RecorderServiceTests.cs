@@ -190,6 +190,21 @@ public sealed class RecorderServiceTests : IDisposable
         Assert.False(audio.IsCaptureReserved);
     }
 
+    [Fact]
+    public async Task Dispose_StopsActiveCaptureAndReleasesReservation()
+    {
+        using var audio = Audio();
+        var recorder = new RecorderService(audio, Settings(), _directory);
+        Assert.True(await recorder.StartAsync());
+        Assert.True(audio.IsRecording);
+        recorder.Dispose();
+        Assert.False(audio.IsRecording);
+        Assert.False(audio.IsCaptureReserved);
+        var session = audio.TryStartRecording(false);
+        Assert.NotNull(session);
+        audio.StopRecording(session);
+    }
+
     private sealed class ManualTimeProvider : TimeProvider
     {
         private long _timestamp;

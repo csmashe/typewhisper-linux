@@ -297,6 +297,7 @@ public sealed class RecorderService : IDisposable
 
     public void Dispose()
     {
+        AudioRecordingService.AudioCaptureSession? capture;
         lock (_snapshotLock)
         {
             if (_disposed)
@@ -304,8 +305,23 @@ public sealed class RecorderService : IDisposable
                 return;
             }
             _disposed = true;
+            capture = _capture;
+            _capture = null;
             _reservation?.Dispose();
             _reservation = null;
+        }
+
+        // A recorder disposed mid-capture must not leave the input stream open.
+        if (capture is not null)
+        {
+            try
+            {
+                _audio.StopRecording(capture);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Trace.WriteLine($"[Recorder] Stopping capture on dispose failed: {ex.Message}");
+            }
         }
 
         _gate.Dispose();
