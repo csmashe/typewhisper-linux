@@ -458,7 +458,8 @@ public sealed class TranscribeCommandTests : IDisposable
     public async Task UnreadableStdinIsLocalInputError()
     {
         await using var stub = new UnixHttpStub();
-        var stdin = new MemoryStream();
+        using var stdin = new MemoryStream();
+        // ReSharper disable once DisposeOnUsingVariable -- disposed up front on purpose so the read fails; `using` satisfies CodeQL's disposal check.
         await stdin.DisposeAsync();
         var result = await RunCommandAsync(stub, new CliOptions { Positionals = ["-"] }, stdin);
         Assert.Equal(1, result.ExitCode);
