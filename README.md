@@ -10,9 +10,9 @@ If the TypeWhisper project releases an official Linux version, or if this port i
 
 Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
 
-## New in 0.15.1
+## New in 0.15.2
 
-This release adds **dictation recovery from History**, **Microsoft AI and Meta providers**, **Gemini transcription and live dictation**, and an **Authenticated CLIs** plugin for using signed-in provider tools for AI text processing. It also adds **optional Sentry crash and performance reporting, off by default**. See the [0.15.1 release notes](docs/releases/v0.15.1.md) for the full changes and upgrade notes.
+This release brings **HTTP API and CLI parity with the Mac client** (subtitle output, translated segments, model control, dictation and history commands, distinct exit codes), **OpenAI Compatible support for Azure deployments, the Responses API, and realtime transcription**, **ElevenLabs live sessions that commit at pauses instead of mid-word**, and a set of correctness fixes for translation requests, newline corrections, Obsidian notes, and SherpaOnnx model unloading. See the [0.15.2 release notes](docs/releases/v0.15.2.md) for the full changes and upgrade notes.
 
 ## Documentation
 
