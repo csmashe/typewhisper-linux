@@ -674,6 +674,82 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task VerboseSegmentsRespectApplyCorrections(bool applyCorrections)
+    {
+        var dictionary = CreateCorrectingDictionaryMock();
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), dictionary: dictionary);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", null, applyCorrections);
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertSegments(json.RootElement, applyCorrections ? "Hallo" : "Hello", "World");
+        dictionary.Verify(service => service.PreviewCorrections("Hello"),
+            applyCorrections ? Times.Once() : Times.Never());
+        dictionary.Verify(service => service.PreviewCorrections("World"),
+            applyCorrections ? Times.Once() : Times.Never());
+        dictionary.Verify(service => service.PreviewCorrections(It.IsAny<string>()),
+            Times.Exactly(applyCorrections ? 2 : 0));
+        dictionary.Verify(service => service.ApplyCorrections(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SrtSegmentsContainDictionaryCorrections()
+    {
+        using var fixture = CreateSegmentFixture(Mock.Of<ITranslationService>(), dictionary: CreateCorrectingDictionaryMock());
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "srt", null);
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("00:00:00,200 --> 00:00:01,300\nHallo\n", body);
+        Assert.DoesNotContain("Hello", body);
+    }
+
+    [Fact]
+    public async Task VerboseTranslationReceivesCorrectedSegments()
+    {
+        var correctedTexts = new[] { "Hallo", "World" };
+        var translation = new Mock<ITranslationService>(MockBehavior.Strict);
+        translation.Setup(service => service.TranslateAsync(
+                "Hello World", "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Hallo Welt");
+        translation.Setup(service => service.TranslateSegmentsAsync(
+                It.Is<IReadOnlyList<string>>(texts => texts.SequenceEqual(correctedTexts)),
+                "en", "de", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["Hallo", "Welt"]);
+        using var fixture = CreateSegmentFixture(translation.Object, dictionary: CreateCorrectingDictionaryMock());
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "verbose_json", "de");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertSegments(json.RootElement, "Hallo", "Welt");
+        translation.Verify(service => service.TranslateSegmentsAsync(
+            It.Is<IReadOnlyList<string>>(texts => texts.SequenceEqual(correctedTexts)),
+            "en", "de", null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    private static Mock<IDictionaryService> CreateCorrectingDictionaryMock()
+    {
+        var dictionary = new Mock<IDictionaryService>(MockBehavior.Strict);
+        dictionary.Setup(service => service.PreviewCorrections(It.IsAny<string>()))
+            .Returns((string text) => text.Replace("Hello", "Hallo"));
+        return dictionary;
+    }
+
     private static Mock<ITranslationService> CreateTranslationMock()
     {
         var translation = new Mock<ITranslationService>(MockBehavior.Strict);
@@ -689,9 +765,15 @@ public sealed class HttpApiUnixSocketTests
     private static ApiFixture CreateSegmentFixture(
         ITranslationService translation,
         IReadOnlyList<PluginTranscriptionSegment>? segments = null,
-        Mock<IPostProcessingPipeline>? pipeline = null)
+        Mock<IPostProcessingPipeline>? pipeline = null,
+        Mock<IDictionaryService>? dictionary = null)
     {
-        var dictionary = new Mock<IDictionaryService>();
+        if (dictionary is null)
+        {
+            dictionary = new Mock<IDictionaryService>();
+            dictionary.Setup(service => service.PreviewCorrections(It.IsAny<string>()))
+                .Returns((string text) => text);
+        }
         dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
         pipeline ??= new Mock<IPostProcessingPipeline>();
         pipeline.Setup(service => service.ProcessAsync(
@@ -706,11 +788,18 @@ public sealed class HttpApiUnixSocketTests
                 ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
     }
 
-    private static StringContent CreateSegmentRequest(ApiFixture fixture, string format, string? target)
+    private static StringContent CreateSegmentRequest(ApiFixture fixture, string format, string? target, bool? applyCorrections = null)
     {
-        var path = fixture.CreateSupportedAudioFile();
+        var payload = new Dictionary<string, object?>
+        {
+            ["path"] = fixture.CreateSupportedAudioFile(),
+            ["response_format"] = format,
+            ["target_language"] = target,
+        };
+        if (applyCorrections.HasValue)
+            payload["apply_corrections"] = applyCorrections.Value;
         return new StringContent(
-            JsonSerializer.Serialize(new { path, response_format = format, target_language = target }),
+            JsonSerializer.Serialize(payload),
             Encoding.UTF8,
             "application/json");
     }

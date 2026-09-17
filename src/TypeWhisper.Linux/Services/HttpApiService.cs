@@ -1941,6 +1941,12 @@ public sealed partial class HttpApiService : IDisposable
                 ? opts.TargetLanguage
                 : result.DetectedLanguage;
         var responseSegments = result.Segments;
+        if (opts.ApplyCorrections && result.Segments.Count > 0)
+        {
+            // Preview avoids double-counting dictionary usage already recorded by the full-text pass.
+            responseSegments = result.Segments.Select(segment =>
+                segment with { Text = _dictionary.PreviewCorrections(segment.Text) }).ToList();
+        }
         if (!string.IsNullOrWhiteSpace(opts.TargetLanguage))
         {
             try
@@ -1977,15 +1983,15 @@ public sealed partial class HttpApiService : IDisposable
                     );
 
                     if (opts.ResponseFormat is "verbose_json" or "srt" or "vtt"
-                        && result.Segments.Count > 0)
+                        && responseSegments.Count > 0)
                     {
                         var translated = await _translation.TranslateSegmentsAsync(
-                            result.Segments.Select(s => s.Text).ToList(),
+                            responseSegments.Select(s => s.Text).ToList(),
                             sourceLanguage,
                             opts.TargetLanguage,
                             ct: ct
                         );
-                        responseSegments = result.Segments.Select((segment, index) =>
+                        responseSegments = responseSegments.Select((segment, index) =>
                         {
                             var text = EnglishOutputNormalizationService.NormalizeText(
                                 translated[index],
