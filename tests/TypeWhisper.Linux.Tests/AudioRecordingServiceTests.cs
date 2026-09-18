@@ -35,9 +35,14 @@ public sealed class AudioRecordingServiceTests
     public void CaptureReservation_DisposeIsIdempotent()
     {
         using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
-        var reservation = audio.TryReserveCapture()!;
-        reservation.Dispose();
-        reservation.Dispose();
+        using (var reservation = audio.TryReserveCapture())
+        {
+            Assert.NotNull(reservation);
+            // ReSharper disable once DisposeOnUsingVariable -- the using block disposes a second time on purpose.
+            reservation.Dispose();
+            Assert.False(audio.IsCaptureReserved);
+        }
+
         Assert.False(audio.IsCaptureReserved);
         using var again = audio.TryReserveCapture();
         Assert.NotNull(again);
