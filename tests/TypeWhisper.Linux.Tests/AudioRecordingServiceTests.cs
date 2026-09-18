@@ -15,9 +15,9 @@ public sealed class AudioRecordingServiceTests
     {
         using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
         var reservation = audio.TryReserveCapture();
-        Assert.NotNull(reservation);
         try
         {
+            Assert.NotNull(reservation);
             Assert.True(audio.IsCaptureReserved);
             Assert.Null(audio.TryReserveCapture());
             Assert.Null(audio.TryStartRecording(false));
@@ -31,7 +31,7 @@ public sealed class AudioRecordingServiceTests
         finally
         {
             // Second dispose on the happy path: release must be idempotent.
-            reservation.Dispose();
+            reservation?.Dispose();
         }
     }
 
