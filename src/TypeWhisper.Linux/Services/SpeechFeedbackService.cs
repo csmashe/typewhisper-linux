@@ -12,6 +12,13 @@ public sealed record TtsProviderOption(string Id, string DisplayName);
 // ReSharper disable once NotAccessedPositionalProperty.Global  LocaleIdentifier carried in the voice-option record's data shape
 public sealed record TtsVoiceOption(string Id, string DisplayName, string? LocaleIdentifier = null);
 
+public interface IManualReadback
+{
+    bool IsActive { get; }
+    Task Completion { get; }
+    void Stop();
+}
+
 internal interface IStartupFeedbackReservation : IDisposable
 {
     Task StopPriorPlaybackAsync();
@@ -154,6 +161,48 @@ public sealed class SpeechFeedbackService : IDisposable
             {
                 Cancellation.Dispose();
             }
+        }
+    }
+
+    private sealed class ManualReadback(
+        SpeechFeedbackService owner,
+        PlaybackRequest request
+    ) : IManualReadback
+    {
+        public bool IsActive
+        {
+            get
+            {
+                lock (owner._lock)
+                {
+                    return ReferenceEquals(owner._playbackRequest, request)
+                        && (owner._isPlaybackPending || owner._playbackSession?.IsActive == true);
+                }
+            }
+        }
+
+        public Task Completion => request.Completion.Task;
+
+        public void Stop()
+        {
+            lock (owner._lock)
+            {
+                // A row can outlive its playback; only its own request may be detached.
+                if (!ReferenceEquals(owner._playbackRequest, request))
+                {
+                    return;
+                }
+
+                owner._playbackRequest = null;
+                owner._playbackSession = null;
+                owner._isPlaybackPending = false;
+            }
+
+            // Called from the UI thread: a blocking plugin Stop() must run on the
+            // stop worker, not freeze the window.
+            var stopWorker = request.LaunchCancelAndStop();
+            request.Complete();
+            ObserveStopWorker(stopWorker, "manual readback stop");
         }
     }
 
@@ -319,8 +368,8 @@ public sealed class SpeechFeedbackService : IDisposable
         );
     }
 
-    // ReSharper disable once UnusedMember.Global  public API surface (manual TTS read-back entry point); not currently called in-tree
-    public void ReadBack(string text, string? language = null)
+    /// <summary>Stop-toggle half of <see cref="ReadBack" />; returns true when speech was stopped.</summary>
+    public bool StopReadBack()
     {
         PlaybackRequest? toggledOffRequest;
         lock (_lock)
@@ -329,37 +378,60 @@ public sealed class SpeechFeedbackService : IDisposable
             // the reservation lock so it cannot cancel the matching start cue.
             if (_startupFeedbackReservation is not null)
             {
-                return;
+                return false;
             }
 
-            if (_isPlaybackPending || _playbackSession?.IsActive == true)
+            if (!_isPlaybackPending && _playbackSession?.IsActive != true)
             {
-                toggledOffRequest = _playbackRequest;
-                _playbackRequest = null;
-                _playbackSession = null;
-                _isPlaybackPending = false;
+                return false;
             }
-            else
-            {
-                toggledOffRequest = null;
-            }
+
+            toggledOffRequest = _playbackRequest;
+            _playbackRequest = null;
+            _playbackSession = null;
+            _isPlaybackPending = false;
         }
 
-        if (toggledOffRequest is not null)
-        {
-            toggledOffRequest.CancelAndStop();
+        toggledOffRequest?.CancelAndStop();
 
-            // Detached with no worker outstanding: complete now so the CTS and its
-            // provider ct.Register registrations are released instead of leaking
-            // once per toggle when the session never raises Completed.
-            toggledOffRequest.Complete();
+        // Detached with no worker outstanding: complete now so the CTS and its
+        // provider ct.Register registrations are released instead of leaking
+        // once per toggle when the session never raises Completed.
+        toggledOffRequest?.Complete();
+        return true;
+    }
+
+    public void ReadBack(string text, string? language = null)
+    {
+        if (StopReadBack())
+        {
             return;
         }
 
+        // BeginPlayback re-checks the startup reservation, so a lease installed
+        // between the two calls still keeps this off the provider.
         SpeakCore(
             new TtsSpeakRequest(text, language, TtsPurpose.ManualReadback),
             false
         );
+    }
+
+    public IManualReadback? StartReadBack(string text, string? language)
+    {
+        // A provider's SpeakAsync prefix can synthesise inline (Supertonic does), so
+        // ownership is claimed here to keep the handle live and the launch goes to the pool.
+        var pending = BeginPlayback(
+            new TtsSpeakRequest(text, language, TtsPurpose.ManualReadback),
+            requireEnabled: false
+        );
+        if (pending is null)
+        {
+            return null;
+        }
+
+        var captured = pending.Value;
+        _ = Task.Run(() => LaunchPlayback(captured));
+        return new ManualReadback(this, captured.Playback);
     }
 
     public void AnnounceRecordingStarted()

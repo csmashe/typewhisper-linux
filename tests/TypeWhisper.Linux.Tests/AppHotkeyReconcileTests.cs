@@ -56,12 +56,13 @@ public sealed class AppHotkeyReconcileTests
     }
 
     [Theory]
-    [InlineData("no fixed setter succeeded (all-failed or mode-only)", false, false, false, false, false, false)]
-    [InlineData("toggle", true, false, false, false, false, true)]
-    [InlineData("prompt palette", false, true, false, false, false, true)]
-    [InlineData("recent transcriptions", false, false, true, false, false, true)]
-    [InlineData("copy last transcription", false, false, false, true, false, true)]
-    [InlineData("transform selection", false, false, false, false, true, true)]
+    [InlineData("no fixed setter succeeded (all-failed or mode-only)", false, false, false, false, false, false, false)]
+    [InlineData("toggle", true, false, false, false, false, false, true)]
+    [InlineData("prompt palette", false, true, false, false, false, false, true)]
+    [InlineData("recent transcriptions", false, false, true, false, false, false, true)]
+    [InlineData("copy last transcription", false, false, false, true, false, false, true)]
+    [InlineData("transform selection", false, false, false, false, true, false, true)]
+    [InlineData("read last transcription", false, false, false, false, false, true, true)]
     public void ShouldReconcileDynamicHotkeys_ReflectsFixedSetterSuccessesOnly(
         string description,
         bool toggleChanged,
@@ -69,6 +70,7 @@ public sealed class AppHotkeyReconcileTests
         bool recentTranscriptionsChanged,
         bool copyLastTranscriptionChanged,
         bool transformSelectionChanged,
+        bool readLastTranscriptionChanged,
         bool expected
     )
     {
@@ -78,7 +80,8 @@ public sealed class AppHotkeyReconcileTests
             promptPaletteChanged,
             recentTranscriptionsChanged,
             copyLastTranscriptionChanged,
-            transformSelectionChanged
+            transformSelectionChanged,
+            readLastTranscriptionChanged
         );
 
         Assert.Equal(expected, actual);

@@ -41,6 +41,9 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly Dictionary<string, HistoryRecordRow> _rows = [];
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
+    private readonly SpeechFeedbackService? _speech;
+    private HistoryRecordRow? _readingRow;
+    private IManualReadback? _readback;
     private readonly TimeZoneInfo _timeZone;
     private readonly Func<DateTime> _utcNow;
 
@@ -68,6 +71,7 @@ public partial class HistorySectionViewModel : ObservableObject
         ISettingsService settings,
         SessionAudioFileService sessionAudioFiles,
         AudioPlaybackService audioPlayback,
+        SpeechFeedbackService speech,
         DictationOrchestrator? recovery = null
     )
         : this(
@@ -78,7 +82,8 @@ public partial class HistorySectionViewModel : ObservableObject
             audioPlayback,
             TimeZoneInfo.Local,
             () => DateTime.UtcNow,
-            recovery is null ? null : recovery.RetryFromHistoryAsync
+            recovery is null ? null : recovery.RetryFromHistoryAsync,
+            speech
         ) { }
 
     internal HistorySectionViewModel(
@@ -89,10 +94,12 @@ public partial class HistorySectionViewModel : ObservableObject
         AudioPlaybackService audioPlayback,
         TimeZoneInfo timeZone,
         Func<DateTime> utcNow,
-        Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null
+        Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
+        SpeechFeedbackService? speech = null
     )
     {
         _history = history;
+        _speech = speech;
         _retry = retry;
         _dictionary = dictionary;
         _settings = settings;
@@ -127,6 +134,11 @@ public partial class HistorySectionViewModel : ObservableObject
 
     public void ClearAll()
     {
+        if (_readingRow is { } reading)
+        {
+            StopReadAloud(reading);
+        }
+
         _history.ClearAll();
     }
 
@@ -338,6 +350,7 @@ public partial class HistorySectionViewModel : ObservableObject
     [RelayCommand]
     private void DeleteRecord(HistoryRecordRow record)
     {
+        StopReadAloud(record);
         _history.DeleteRecord(record.Record.Id);
     }
 
@@ -356,6 +369,68 @@ public partial class HistorySectionViewModel : ObservableObject
         else
         {
             _audioPlayback.Play(record.Record.AudioFileName);
+        }
+    }
+
+    internal bool IsReadingAloud(HistoryRecordRow row)
+    {
+        return ReferenceEquals(_readingRow, row) && _readback?.IsActive == true;
+    }
+
+    [RelayCommand]
+    private void ToggleReadAloud(HistoryRecordRow row)
+    {
+        if (IsReadingAloud(row))
+        {
+            StopReadAloud(row);
+            return;
+        }
+
+        var handle = _speech?.StartReadBack(row.Record.FinalText, row.Record.Language);
+        if (handle is null)
+        {
+            return;
+        }
+
+        _readingRow = row;
+        _readback = handle;
+        RefreshReadAloudState();
+        _ = ObserveReadbackCompletionAsync(handle);
+    }
+
+    internal void StopReadAloud(HistoryRecordRow row)
+    {
+        if (!ReferenceEquals(_readingRow, row))
+        {
+            return;
+        }
+
+        _readback?.Stop();
+        _readback = null;
+        _readingRow = null;
+        RefreshReadAloudState();
+    }
+
+    private async Task ObserveReadbackCompletionAsync(IManualReadback handle)
+    {
+        await handle.Completion.ConfigureAwait(false);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (ReferenceEquals(_readback, handle))
+            {
+                _readback = null;
+                _readingRow = null;
+            }
+
+            RefreshReadAloudState();
+        });
+    }
+
+    private void RefreshReadAloudState()
+    {
+        foreach (var row in _rows.Values)
+        {
+            row.NotifyReadAloudStateChanged();
         }
     }
 
@@ -407,6 +482,14 @@ public partial class HistorySectionViewModel : ObservableObject
         var ids = _history.Records.Select(record => record.Id).ToHashSet();
         foreach (var id in _rows.Keys.Where(id => !ids.Contains(id)).ToList())
             _rows.Remove(id);
+
+        // Clear-all and retention pruning drop the row along with its stop button,
+        // so its readback must not keep playing with no way to stop it.
+        if (_readingRow is not null && !_rows.ContainsKey(_readingRow.Record.Id))
+        {
+            StopReadAloud(_readingRow);
+        }
+
         _shownCount = 0;
 
         Groups.Clear();
@@ -631,6 +714,10 @@ public partial class HistoryRecordRow : ObservableObject
     public bool HasLanguage => !string.IsNullOrWhiteSpace(Record.Language);
     public bool HasSessionAudio => _owner.HasSessionAudio(Record);
     public bool IsPlaying => _owner.IsPlaying(Record);
+    public bool IsReadingAloud => _owner.IsReadingAloud(this);
+    public bool HasTranscript => !string.IsNullOrWhiteSpace(Record.FinalText);
+    public string ReadAloudButtonText =>
+        IsReadingAloud ? Loc.Instance["History.StopReading"] : Loc.Instance["History.ReadAloud"];
     public string PlaybackButtonText =>
         IsPlaying ? Loc.Instance["History.Stop"] : Loc.Instance["History.Play"];
     public bool ShowReadOnlyText => IsExpanded && !IsEditing;
@@ -673,6 +760,7 @@ public partial class HistoryRecordRow : ObservableObject
 
     partial void OnRecordChanged(TranscriptionRecord value)
     {
+        OnPropertyChanged(nameof(HasTranscript));
         OnPropertyChanged(nameof(HasFailure));
         OnPropertyChanged(nameof(FailureMessage));
         OnPropertyChanged(nameof(StatusBadge));
@@ -706,6 +794,12 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(PlaybackButtonText));
     }
 
+    internal void NotifyReadAloudStateChanged()
+    {
+        OnPropertyChanged(nameof(IsReadingAloud));
+        OnPropertyChanged(nameof(ReadAloudButtonText));
+    }
+
     partial void OnIsExpandedChanged(bool value)
     {
         if (value)
@@ -715,6 +809,7 @@ public partial class HistoryRecordRow : ObservableObject
         }
         else
         {
+            _owner.StopReadAloud(this);
             IsEditing = false;
             IsInspectorVisible = false;
             CorrectionSuggestions.Clear();
@@ -748,6 +843,7 @@ public partial class HistoryRecordRow : ObservableObject
     [RelayCommand]
     private void StartEdit()
     {
+        _owner.StopReadAloud(this);
         EditText = Record.FinalText;
         IsEditing = true;
     }
@@ -785,6 +881,12 @@ public partial class HistoryRecordRow : ObservableObject
     private void TogglePlayback()
     {
         _owner.TogglePlaybackCommand.Execute(this);
+    }
+
+    [RelayCommand]
+    private void ToggleReadAloud()
+    {
+        _owner.ToggleReadAloudCommand.Execute(this);
     }
 
     [RelayCommand]

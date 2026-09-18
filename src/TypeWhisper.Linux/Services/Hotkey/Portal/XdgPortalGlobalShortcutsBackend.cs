@@ -22,7 +22,7 @@ namespace TypeWhisper.Linux.Services.Hotkey.Portal;
 ///         1. Add a D-Bus client (e.g. Tmds.DBus.Protocol) and probe <c>org.freedesktop.portal.Desktop</c>.
 ///         2. Call <c>CreateSession</c>, persist the handle across restarts (so binding dialog shows once).
 ///         3. Call <c>BindShortcuts</c> with stable IDs: <c>typewhisper.dictation.toggle</c>,
-///            <c>typewhisper.prompt-palette</c>, <c>typewhisper.recent</c>, <c>typewhisper.copy-last</c>,
+///            <c>typewhisper.prompt-palette</c>, <c>typewhisper.recent</c>, <c>typewhisper.copy-last</c>, <c>typewhisper.read-last</c>,
 ///            <c>typewhisper.transform-selection</c>.
 ///         4. Subscribe to <c>Activated</c> signal. Treat as press-only (portal's <c>Deactivated</c>
 ///            is unreliable); set <see cref="GlobalShortcutRegistrationResult.RequiresToggleMode" />=true.
@@ -106,6 +106,12 @@ public sealed class XdgPortalGlobalShortcutsBackend : IGlobalShortcutBackend
     }
 
     public event EventHandler? CopyLastTranscriptionRequested
+    {
+        add { }
+        remove { }
+    }
+
+    public event EventHandler? ReadLastTranscriptionRequested
     {
         add { }
         remove { }

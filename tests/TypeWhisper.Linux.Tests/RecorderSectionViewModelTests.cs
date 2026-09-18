@@ -1,3 +1,4 @@
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -27,6 +28,291 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         {
             // Best-effort cleanup for temp test directories.
         }
+    }
+
+    [Fact]
+    public async Task PauseResumeCommand_TogglesPausedStateAndButtonTexts()
+    {
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
+        await StartRecordingWithFramesAsync(sut, audio);
+        await sut.PauseResumeCommand.ExecuteAsync(null);
+        Assert.True(sut.IsRecording);
+        Assert.True(sut.IsPaused);
+        Assert.True(sut.IsSessionActive);
+        Assert.Equal(Loc.Instance["Recorder.Resume"], sut.PauseResumeButtonText);
+        Assert.Equal(Loc.Instance["Recorder.Stop"], sut.RecordButtonText);
+        Assert.Equal(Loc.Instance["Recorder.StatusPaused"], sut.StatusText);
+        Assert.Equal(0, sut.AudioLevel);
+        await sut.PauseResumeCommand.ExecuteAsync(null);
+        Assert.False(sut.IsPaused);
+        Assert.Equal(Loc.Instance["Recorder.Pause"], sut.PauseResumeButtonText);
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+        Assert.False(sut.IsSessionActive);
+    }
+
+    [Fact]
+    public void DeleteRecordingCommand_StopsPlaybackBeforeDeleting()
+    {
+        var path = Path.Join(_tempDir, "recording-play.wav");
+        File.WriteAllBytes(path, []);
+        var stopped = false;
+        using var audio = CreateAudioService();
+        using var recorder = new RecorderService(audio, RecorderServiceTests.Settings(), _tempDir);
+        using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { }, () =>
+        {
+            if (!stopped) { Assert.True(File.Exists(path)); }
+            stopped = true;
+        });
+        var sut = CreatePlaybackViewModel(recorder, playback);
+        sut.TogglePlaybackCommand.Execute(sut.Recordings[0]);
+        sut.DeleteRecordingCommand.Execute(sut.Recordings[0]);
+        Assert.True(stopped);
+        Assert.False(File.Exists(path));
+        Assert.Empty(sut.Recordings);
+    }
+
+    [Fact]
+    public async Task ToggleRecordingCommand_StartStopsPlayback()
+    {
+        var stops = 0;
+        using var audio = CreateAudioService();
+        using var recorder = new RecorderService(audio, RecorderServiceTests.Settings(), _tempDir);
+        using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { }, () => stops++);
+        var sut = CreatePlaybackViewModel(recorder, playback);
+        playback.Play("recording-old.wav");
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+        Assert.Equal(1, stops);
+        await sut.PauseResumeCommand.ExecuteAsync(null);
+        await sut.PauseResumeCommand.ExecuteAsync(null);
+        Assert.Equal(2, stops);
+        await sut.ToggleRecordingCommand.ExecuteAsync(null);
+        await sut.QuiesceAsync(s_testGuard);
+        Assert.Equal(3, stops);
+    }
+
+    [Fact]
+    public void TogglePlaybackCommand_PlaysRelativeNameAndStopsWhenPlaying()
+    {
+        string? played = null;
+        var stopped = false;
+        using var audio = CreateAudioService();
+        using var recorder = new RecorderService(audio, RecorderServiceTests.Settings(), _tempDir);
+        using var playback = new AudioPlaybackService(() => { }, () => { }, name => played = name, () => stopped = true);
+        var sut = CreatePlaybackViewModel(recorder, playback);
+        var item = new RecordingItem("recording-play.wav", Path.Join(_tempDir, "recording-play.wav"), DateTime.Now, TimeSpan.Zero, null);
+        sut.Recordings.Add(item);
+        sut.TogglePlaybackCommand.Execute(item);
+        Assert.Equal(Path.GetRelativePath(TypeWhisperEnvironment.AudioPath, item.FilePath), played);
+        // The native delegate seam does not publish playback state.
+        item.IsPlaying = true;
+        Assert.Equal(Loc.Instance["Recorder.Stop"], item.PlaybackButtonText);
+        sut.TogglePlaybackCommand.Execute(item);
+        Assert.True(stopped);
+        Assert.False(item.IsPlaying);
+        Assert.Equal(Loc.Instance["Recorder.Play"], item.PlaybackButtonText);
+    }
+
+    [Fact]
+    public async Task ServiceStopFromApi_InsertsRecordingWithoutTranscribing()
+    {
+        var transcriptions = 0;
+        using var audio = CreateAudioService();
+        using var recorder = new RecorderService(audio, RecorderServiceTests.Settings(), _tempDir);
+        using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
+        var sut = new RecorderSectionViewModel(
+            recorder, playback, RecorderServiceTests.Settings(), _tempDir,
+            (_, _) => { transcriptions++; return Task.FromResult<string?>("unexpected"); },
+            action => action()
+        );
+        await recorder.StartAsync();
+        Assert.True(sut.IsRecording);
+        audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+        var result = await recorder.StopAsync(new object());
+        Assert.NotNull(result);
+        var item = Assert.Single(sut.Recordings);
+        Assert.Equal(result.FilePath, item.FilePath);
+        Assert.Null(item.Transcript);
+        Assert.Equal(0, transcriptions);
+        Assert.False(sut.IsRecording);
+        Assert.Equal(Loc.Instance["Recorder.StatusReady"], sut.StatusText);
+    }
+
+    [Fact]
+    public async Task ActiveLimit_AutomaticallySavesAndTranscribes()
+    {
+        using var audio = CreateAudioService();
+        var clock = new ManualTimeProvider();
+        var settings = RecorderServiceTests.Settings();
+        using var recorder = new RecorderService(audio, settings, _tempDir, clock);
+        using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
+        var transcribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sut = new RecorderSectionViewModel(
+            recorder, playback, settings, _tempDir,
+            (_, _) =>
+            {
+                transcribed.TrySetResult();
+                return Task.FromResult<string?>("At the limit");
+            },
+            action => action()
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+        clock.Advance(RecorderService.MaximumActiveDuration);
+        await transcribed.Task.WaitAsync(s_testGuard);
+        Assert.True(await sut.QuiesceAsync(s_testGuard));
+        var item = Assert.Single(sut.Recordings);
+        Assert.Equal("At the limit", item.Transcript);
+        Assert.True(File.Exists(item.FilePath));
+        Assert.Equal(RecorderState.Ready, recorder.State);
+        Assert.False(audio.IsCaptureReserved);
+    }
+
+    [Fact]
+    public async Task ActiveLimit_ForApiStartedSession_SavesWithoutTranscribing()
+    {
+        using var audio = CreateAudioService();
+        var clock = new ManualTimeProvider();
+        var settings = RecorderServiceTests.Settings();
+        using var recorder = new RecorderService(audio, settings, _tempDir, clock);
+        using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
+        var transcriptions = 0;
+        var sut = new RecorderSectionViewModel(
+            recorder, playback, settings, _tempDir,
+            (_, _) =>
+            {
+                // ReSharper disable once AccessToModifiedClosure -- the counter is only read after the workflow settles.
+                Interlocked.Increment(ref transcriptions);
+                return Task.FromResult<string?>("unexpected");
+            },
+            action => action()
+        );
+
+        Assert.True(await recorder.StartAsync());
+        audio.ProcessAudioBufferForTest([0.1f, -0.1f, 0.2f, -0.2f]);
+        clock.Advance(RecorderService.MaximumActiveDuration);
+
+        var deadline = DateTime.UtcNow + s_testGuard;
+        while (recorder.State != RecorderState.Ready && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.True(await sut.QuiesceAsync(s_testGuard));
+        Assert.Equal(RecorderState.Ready, recorder.State);
+        var item = Assert.Single(sut.Recordings);
+        Assert.True(File.Exists(item.FilePath));
+        Assert.Null(item.Transcript);
+        Assert.False(File.Exists(Path.ChangeExtension(item.FilePath, ".txt")));
+        Assert.Equal(0, Volatile.Read(ref transcriptions));
+        Assert.False(audio.IsCaptureReserved);
+    }
+
+    [Fact]
+    public async Task ActiveLimit_ForApiSession_StopsEvenWhileAnEarlierTranscriptionRuns()
+    {
+        var transcriptionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseTranscription = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var audio = CreateAudioService();
+        var clock = new ManualTimeProvider();
+        var settings = RecorderServiceTests.Settings();
+        using var recorder = new RecorderService(audio, settings, _tempDir, clock);
+        using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
+        var sut = new RecorderSectionViewModel(
+            recorder, playback, settings, _tempDir,
+            async (_, _) =>
+            {
+                transcriptionStarted.TrySetResult();
+                await releaseTranscription.Task;
+                return "first";
+            },
+            action => action()
+        );
+
+        await StartRecordingWithFramesAsync(sut, audio);
+        var uiStop = sut.ToggleRecordingCommand.ExecuteAsync(null);
+        await transcriptionStarted.Task.WaitAsync(s_testGuard);
+        var uiFile = Assert.Single(sut.Recordings).FilePath;
+
+        // The UI workflow lane stays held by the blocked transcription, so the limit
+        // must still stop this API session instead of letting capture grow forever.
+        Assert.True(await recorder.StartAsync());
+        audio.ProcessAudioBufferForTest([0.3f, -0.3f]);
+        clock.Advance(RecorderService.MaximumActiveDuration);
+
+        var deadline = DateTime.UtcNow + s_testGuard;
+        while (recorder.State != RecorderState.Ready && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Equal(RecorderState.Ready, recorder.State);
+        Assert.False(audio.IsCaptureReserved);
+        releaseTranscription.TrySetResult();
+        await uiStop.WaitAsync(s_testGuard);
+        Assert.True(await sut.QuiesceAsync(s_testGuard));
+
+        var apiRecording = Assert.Single(sut.Recordings, item => item.FilePath != uiFile);
+        Assert.True(File.Exists(apiRecording.FilePath));
+        Assert.Null(apiRecording.Transcript);
+        Assert.False(File.Exists(Path.ChangeExtension(apiRecording.FilePath, ".txt")));
+    }
+
+    [Fact]
+    public async Task DeleteDuringTranscription_DoesNotWriteOrphanTranscript()
+    {
+        var transcriptionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseTranscription = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(
+            audio,
+            _tempDir,
+            async (_, _) =>
+            {
+                transcriptionStarted.TrySetResult();
+                await releaseTranscription.Task;
+                return "late transcript";
+            }
+        );
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        var stop = sut.ToggleRecordingCommand.ExecuteAsync(null);
+        await transcriptionStarted.Task.WaitAsync(s_testGuard);
+        var filePath = Assert.Single(sut.Recordings).FilePath;
+        sut.DeleteRecordingCommand.Execute(sut.Recordings[0]);
+        releaseTranscription.TrySetResult();
+        await stop.WaitAsync(s_testGuard);
+
+        Assert.False(File.Exists(filePath));
+        Assert.False(File.Exists(Path.ChangeExtension(filePath, ".txt")));
+        Assert.Empty(sut.Recordings);
+    }
+
+    [Fact]
+    public async Task QuiesceAsync_AwaitsInFlightPause()
+    {
+        using var audio = CreateAudioService();
+        var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
+        await StartRecordingWithFramesAsync(sut, audio);
+        var pause = sut.PauseResumeCommand.ExecuteAsync(null);
+        Assert.True(await sut.QuiesceAsync(s_testGuard));
+        Assert.True(pause.IsCompleted);
+        Assert.True(sut.IsPaused);
+    }
+
+    private RecorderSectionViewModel CreatePlaybackViewModel(RecorderService recorder, AudioPlaybackService playback)
+    {
+        return new RecorderSectionViewModel(
+            recorder, playback, RecorderServiceTests.Settings(), _tempDir,
+            (_, _) => Task.FromResult<string?>(null), action => action()
+        );
     }
 
     [Fact]
@@ -387,7 +673,11 @@ public sealed class RecorderSectionViewModelTests : IDisposable
             new SystemCommandAvailabilityService()
         );
         using var audio = CreateAudioService();
-        var sut = new RecorderSectionViewModel(audio, models, settings, _tempDir);
+        var sut = new RecorderSectionViewModel(
+            new RecorderService(audio, settings, _tempDir),
+            new AudioPlaybackService(() => { }, () => { }, _ => { }),
+            models, settings, _tempDir
+        );
         await StartRecordingWithFramesAsync(sut, audio);
 
         await sut.ToggleRecordingCommand.ExecuteAsync(null);
@@ -629,11 +919,14 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         Func<byte[], CancellationToken, Task<string?>> transcribeAsync
     )
     {
+        var settings = new FakeSettingsService(AppSettings.Default);
         return new RecorderSectionViewModel(
-            audio,
-            new FakeSettingsService(AppSettings.Default),
+            new RecorderService(audio, settings, recordingDirectory),
+            new AudioPlaybackService(() => { }, () => { }, _ => { }),
+            settings,
             recordingDirectory,
-            transcribeAsync
+            transcribeAsync,
+            action => action()
         );
     }
 

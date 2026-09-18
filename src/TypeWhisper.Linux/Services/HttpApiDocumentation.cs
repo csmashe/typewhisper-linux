@@ -38,6 +38,7 @@ internal static class HttpApiDocumentation
         typewhisper transcribe &lt;file&gt;
         typewhisper --help</code></pre>
         <h2>Endpoints</h2>
+        <p>Recorder sessions save a WAV file and do not transcribe it automatically.</p>
         <table><thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead><tbody>
         {{ENDPOINTS}}
         </tbody></table>
@@ -78,7 +79,7 @@ internal static class HttpApiDocumentation
         <tr><td>403</td><td>Forbidden origin or host.</td></tr>
         <tr><td>404</td><td>Unknown route or requested resource.</td></tr>
         <tr><td>405</td><td>Unsupported method for a known path; see Allow.</td></tr>
-        <tr><td>409</td><td>Conflicting profile shortcut or dictation state.</td></tr>
+        <tr><td>409</td><td>Conflicting profile shortcut, dictation or recorder state.</td></tr>
         <tr><td>413</td><td>Request body exceeds the upload or JSON limit.</td></tr>
         <tr><td>422</td><td>Subtitle output requires valid segment timestamps.</td></tr>
         <tr><td>429</td><td>Request queue is full.</td></tr>

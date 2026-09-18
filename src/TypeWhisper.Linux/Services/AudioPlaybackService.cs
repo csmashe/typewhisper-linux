@@ -20,6 +20,7 @@ public sealed class AudioPlaybackService : IDisposable
     private readonly Lock _gate = new();
     private readonly Action _terminateNative;
     private readonly Action<string>? _playNative;
+    private readonly Action? _stopNative;
     private readonly bool _portAudioReady;
     private int _position;
     private float[] _samples = [];
@@ -33,13 +34,15 @@ public sealed class AudioPlaybackService : IDisposable
     internal AudioPlaybackService(
         Action initializeNative,
         Action terminateNative,
-        Action<string>? playNative
+        Action<string>? playNative,
+        Action? stopNative = null
     )
     {
         ArgumentNullException.ThrowIfNull(initializeNative);
         ArgumentNullException.ThrowIfNull(terminateNative);
         _terminateNative = terminateNative;
         _playNative = playNative;
+        _stopNative = stopNative;
 
         // DI resolves this during startup, so a missing native audio stack must not throw
         // here: the exception would unwind out of the app before a window ever shows. Play
@@ -103,6 +106,7 @@ public sealed class AudioPlaybackService : IDisposable
 
         if (toggleOff)
         {
+            _stopNative?.Invoke();
             NotifyPlaybackChanged();
             return;
         }
@@ -169,6 +173,7 @@ public sealed class AudioPlaybackService : IDisposable
         }
 
         DisposeStream(stream);
+        _stopNative?.Invoke();
         NotifyPlaybackChanged();
     }
 
