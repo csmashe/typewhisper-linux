@@ -126,13 +126,14 @@ public sealed class RecorderService : IDisposable
                 return false;
             }
 
+            // The reservation is released on every exit that does not hand it to the session.
+            var started = false;
             try
             {
                 _whisperMode = _settings.Current.WhisperModeEnabled;
                 var capture = _audio.TryStartRecording(_whisperMode, reservation);
                 if (capture is null)
                 {
-                    reservation.Dispose();
                     return false;
                 }
 
@@ -152,12 +153,15 @@ public sealed class RecorderService : IDisposable
                     _sessionOrder.Enqueue(_activeSessionId);
                     _state = RecorderState.Recording;
                     UpdateSessionLocked("recording");
+                    started = true;
                 }
             }
-            catch
+            finally
             {
-                reservation.Dispose();
-                throw;
+                if (!started)
+                {
+                    reservation.Dispose();
+                }
             }
 
             NotifyChanged();
