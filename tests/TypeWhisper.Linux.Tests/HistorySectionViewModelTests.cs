@@ -31,6 +31,228 @@ public sealed class HistorySectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Selection_SurvivesRefreshAndDropsDeletedIds()
+    {
+        var history = CreateHistoryService();
+        var record = CreateRecord("selected");
+        history.AddRecord(record);
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.ToggleSelectingCommand.Execute(null);
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.IsSelected = true;
+
+        history.AddRecord(CreateRecord("later"));
+        RefreshHistory(sut);
+
+        Assert.True(row.IsSelected);
+        Assert.Equal([record.Id], sut.SnapshotSelectedIds());
+        Assert.Equal(1, sut.SelectedCount);
+        history.DeleteRecord(record.Id);
+        RefreshHistory(sut);
+
+        Assert.Empty(sut.SnapshotSelectedIds());
+        Assert.Equal(0, sut.SelectedCount);
+        Assert.False(sut.HasSelection);
+    }
+
+    [Fact]
+    public void SelectAllShown_SelectsOnlyFilteredRecords()
+    {
+        var history = CreateHistoryService();
+        for (var i = 0; i < 45; i++)
+        {
+            history.AddRecord(CreateRecord($"matching {i}"));
+        }
+
+        history.AddRecord(CreateRecord("unrelated"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.SearchQuery = "matching";
+        sut.ToggleSelectingCommand.Execute(null);
+        Assert.True(sut.HasMore);
+
+        sut.SelectAllShownCommand.Execute(null);
+
+        Assert.Equal(45, sut.SelectedCount);
+        Assert.Equal(
+            history.Records.Where(record => record.FinalText.StartsWith("matching", StringComparison.Ordinal))
+                .OrderByDescending(record => record.Timestamp).Select(record => record.Id),
+            sut.SnapshotSelectedIds()
+        );
+        sut.LoadMore();
+        Assert.All(sut.Groups.SelectMany(group => group.Entries), row => Assert.True(row.IsSelected));
+        sut.ClearSelection();
+        Assert.False(sut.HasSelection);
+        Assert.All(sut.Groups.SelectMany(group => group.Entries), row => Assert.False(row.IsSelected));
+    }
+
+    [Fact]
+    public void ToggleSelecting_OffClearsSelection()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("selected"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        sut.ToggleSelectingCommand.Execute(null);
+        row.IsSelected = true;
+        Assert.True(row.IsSelecting);
+        Assert.Equal(Loc.Instance["History.DoneSelecting"], sut.SelectionButtonText);
+        Assert.Equal(Loc.Instance.GetString("History.SelectedCount", 1), sut.SelectionSummary);
+
+        sut.ToggleSelectingCommand.Execute(null);
+
+        Assert.False(sut.IsSelecting);
+        Assert.False(row.IsSelecting);
+        Assert.False(row.IsSelected);
+        Assert.False(sut.HasSelection);
+        Assert.Empty(sut.SnapshotSelectedIds());
+        Assert.Equal(Loc.Instance["History.SelectEntries"], sut.SelectionButtonText);
+    }
+
+    [Fact]
+    public async Task DeleteSelectedAsync_DeletesSnapshotStopsReadbackAndKeepsLaterEntries()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("read this"));
+        var session = new ControlledPlaybackSession();
+        using var speech = new SpeechFeedbackService(
+            CreateSettingsService(),
+            TestPluginManagerFactory.Create(),
+            new ControlledTtsProvider(session)
+        );
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech);
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        sut.ToggleSelectingCommand.Execute(null);
+        row.IsSelected = true;
+        row.ToggleReadAloudCommand.Execute(null);
+        await session.HandlerAttached.Task.WaitAsync(s_readbackGuard);
+        var snapshot = sut.SnapshotSelectedIds();
+        var later = CreateRecord("later");
+        history.AddRecord(later);
+
+        Assert.True(await sut.DeleteSelectedAsync(snapshot));
+
+        Assert.False(row.IsReadingAloud);
+        await session.StopCalled.Task.WaitAsync(s_readbackGuard);
+        Assert.Equal(1, session.StopCount);
+        Assert.Equal(later.Id, Assert.Single(history.Records).Id);
+        Assert.Equal(Loc.Instance.GetString("History.DeletedSelected", 1), sut.Notice);
+        Assert.True(sut.HasNotice);
+        Assert.False(sut.HasSelection);
+    }
+
+    [Fact]
+    public async Task DeleteSelectedAsync_FailureKeepsSelectionAndShowsNotice()
+    {
+        var history = CreateHistoryService();
+        var record = CreateRecord("selected");
+        history.AddRecord(record);
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.ToggleSelectingCommand.Execute(null);
+        sut.SelectAllShownCommand.Execute(null);
+        var path = Path.Join(_tempDir, "history.json");
+        File.Delete(path);
+        Directory.CreateDirectory(path);
+
+        Assert.False(await sut.DeleteSelectedAsync(sut.SnapshotSelectedIds()));
+
+        Assert.Equal(record.Id, Assert.Single(history.Records).Id);
+        Assert.Equal(1, sut.SelectedCount);
+        Assert.Equal(Loc.Instance["History.DeleteSelectedFailed"], sut.Notice);
+        Assert.True(sut.HasNotice);
+    }
+
+    [Theory]
+    [InlineData(".txt")]
+    [InlineData(".csv")]
+    [InlineData(".md")]
+    [InlineData(".json")]
+    public void BuildExportContent_UsesSelectionAndRejectsMissingIds(string extension)
+    {
+        var history = CreateHistoryService();
+        var first = CreateRecord("first selected", timestamp: DateTime.UtcNow.AddMinutes(-2));
+        var second = CreateRecord("second selected", timestamp: DateTime.UtcNow.AddMinutes(-1));
+        history.AddRecord(first);
+        history.AddRecord(second);
+        history.AddRecord(CreateRecord("unselected"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        string[] selected = [first.Id, second.Id, first.Id];
+        Assert.Contains("unselected", sut.BuildExportContent(extension));
+        Assert.Equal(sut.BuildExportContent(extension), sut.BuildExportContent(extension, []));
+        sut.SearchQuery = "unselected";
+        history.UpdateRecord(first.Id, "updated selected");
+
+        var exported = sut.BuildExportContent(extension, selected);
+
+        Assert.Contains("updated selected", exported);
+        Assert.Contains("second selected", exported);
+        Assert.DoesNotContain("unselected", exported);
+        Assert.True(exported.IndexOf("second selected", StringComparison.Ordinal)
+            < exported.IndexOf("updated selected", StringComparison.Ordinal));
+        history.DeleteRecord(first.Id);
+        var destination = Path.Join(_tempDir, "export" + extension);
+        File.WriteAllText(destination, "existing export");
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            File.WriteAllText(destination, sut.BuildExportContent(extension, selected)));
+        Assert.Equal(Loc.Instance["History.ExportSelectionMissing"], exception.Message);
+        Assert.Equal("existing export", File.ReadAllText(destination));
+    }
+
+    [Fact]
+    public void SnapshotSelectedIds_KeepsEntriesHiddenByTheCurrentFilter()
+    {
+        var history = CreateHistoryService();
+        var selected = CreateRecord("alpha selected");
+        history.AddRecord(selected);
+        history.AddRecord(CreateRecord("beta unselected"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.ToggleSelectingCommand.Execute(null);
+        Assert.Single(sut.Groups.SelectMany(group => group.Entries), row => row.Record.Id == selected.Id)
+            .IsSelected = true;
+
+        sut.SearchQuery = "beta";
+
+        Assert.Equal(1, sut.SelectedCount);
+        Assert.True(sut.HasSelection);
+        Assert.Equal([selected.Id], sut.SnapshotSelectedIds());
+        var exported = sut.BuildExportContent(".txt", sut.SnapshotSelectedIds());
+        Assert.Contains("alpha selected", exported);
+        Assert.DoesNotContain("beta unselected", exported);
+    }
+
+    [Fact]
+    public void BuildExportContent_ReportsOnlyTheRecordsTheExportWrites()
+    {
+        var history = CreateHistoryService();
+        var succeeded = CreateRecord("succeeded entry");
+        var failed = CreateRecord("failed entry") with
+        {
+            Status = TranscriptionRecordStatus.TranscriptionFailed,
+        };
+        history.AddRecord(succeeded);
+        history.AddRecord(failed);
+        var sut = CreateViewModel(history, CreateDictionaryService());
+
+        var exported = sut.BuildExportContent(
+            ".txt",
+            [succeeded.Id, failed.Id],
+            out var exportedCount
+        );
+
+        Assert.Equal(1, exportedCount);
+        Assert.Contains("succeeded entry", exported);
+        Assert.DoesNotContain("failed entry", exported);
+    }
+
+    private static void RefreshHistory(HistorySectionViewModel viewModel)
+    {
+        // These tests have no UI event loop to drain the refresh posted by RecordsChanged.
+        typeof(HistorySectionViewModel).GetMethod(
+            "Refresh",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        )!.Invoke(viewModel, null);
+    }
+
+    [Fact]
     public async Task ToggleReadAloud_StartsAndStopsRowReadback()
     {
         var history = CreateHistoryService();

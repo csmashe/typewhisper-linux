@@ -39,6 +39,7 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly IHistoryService _history;
     private readonly Func<string, CancellationToken, Task<TranscriptionRecord>>? _retry;
     private readonly Dictionary<string, HistoryRecordRow> _rows = [];
+    private readonly HashSet<string> _selectedIds = new(StringComparer.Ordinal);
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService? _speech;
@@ -46,6 +47,12 @@ public partial class HistorySectionViewModel : ObservableObject
     private IManualReadback? _readback;
     private readonly TimeZoneInfo _timeZone;
     private readonly Func<DateTime> _utcNow;
+
+    [ObservableProperty]
+    private bool _isSelecting;
+
+    [ObservableProperty]
+    private string _notice = "";
 
     [ObservableProperty]
     private bool _isLoading;
@@ -132,6 +139,106 @@ public partial class HistorySectionViewModel : ObservableObject
     public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
     public bool HasMore => _shownCount < _filtered.Count;
 
+    public int SelectedCount => _selectedIds.Count;
+    public bool HasSelection => SelectedCount > 0;
+    public string SelectionButtonText =>
+        Loc.Instance[IsSelecting ? "History.DoneSelecting" : "History.SelectEntries"];
+    public string SelectionSummary => Loc.Instance.GetString("History.SelectedCount", SelectedCount);
+    public bool HasNotice => !string.IsNullOrEmpty(Notice);
+
+    partial void OnNoticeChanged(string value) => OnPropertyChanged(nameof(HasNotice));
+
+    partial void OnIsSelectingChanged(bool value)
+    {
+        if (!value)
+        {
+            _selectedIds.Clear();
+        }
+
+        NotifySelectionChanged();
+    }
+
+    [RelayCommand]
+    private void ToggleSelecting() => IsSelecting = !IsSelecting;
+
+    [RelayCommand]
+    private void SelectAllShown()
+    {
+        _selectedIds.UnionWith(_filtered.Select(record => record.Id));
+        NotifySelectionChanged();
+    }
+
+    public void ClearSelection()
+    {
+        _selectedIds.Clear();
+        NotifySelectionChanged();
+    }
+
+    internal bool IsSelected(HistoryRecordRow row) => _selectedIds.Contains(row.Record.Id);
+
+    internal void SetSelected(HistoryRecordRow row, bool selected)
+    {
+        if (selected)
+        {
+            _selectedIds.Add(row.Record.Id);
+        }
+        else
+        {
+            _selectedIds.Remove(row.Record.Id);
+        }
+
+        NotifySelectionChanged();
+    }
+
+    /// <summary>
+    ///     Snapshots the whole selection, not just the rows the current filter shows, so that
+    ///     delete and export act on exactly the entries the selection count promises.
+    /// </summary>
+    public IReadOnlyList<string> SnapshotSelectedIds() => _history.Records
+        .Where(record => _selectedIds.Contains(record.Id))
+        .OrderByDescending(record => record.Timestamp)
+        .Select(record => record.Id)
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
+    private void NotifySelectionChanged()
+    {
+        foreach (var row in _rows.Values)
+        {
+            row.NotifySelectionChanged();
+        }
+
+        OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(SelectionButtonText));
+        OnPropertyChanged(nameof(SelectionSummary));
+    }
+
+    public async Task<bool> DeleteSelectedAsync(IReadOnlyCollection<string> ids)
+    {
+        foreach (var id in ids)
+        {
+            if (_rows.TryGetValue(id, out var row) && ReferenceEquals(_readingRow, row))
+            {
+                StopReadAloud(row);
+            }
+        }
+
+        var deleted = await Task.Run(() => _history.TryDeleteRecords(ids));
+        if (deleted)
+        {
+            _selectedIds.ExceptWith(ids);
+            NotifySelectionChanged();
+            Notice = Loc.Instance.GetString("History.DeletedSelected", ids.Count);
+        }
+        else
+        {
+            Notice = Loc.Instance["History.DeleteSelectedFailed"];
+        }
+
+        return deleted;
+    }
+
     public void ClearAll()
     {
         if (_readingRow is { } reading)
@@ -142,9 +249,43 @@ public partial class HistorySectionViewModel : ObservableObject
         _history.ClearAll();
     }
 
-    public string BuildExportContent(string extension)
+    public string BuildExportContent(
+        string extension,
+        IReadOnlyCollection<string>? selectedIds = null
+    ) => BuildExportContent(extension, selectedIds, out _);
+
+    public string BuildExportContent(
+        string extension,
+        IReadOnlyCollection<string>? selectedIds,
+        out int exportedCount
+    )
     {
-        var visibleRecords = GetVisibleRecords().ToList();
+        List<TranscriptionRecord> visibleRecords;
+        if (selectedIds is { Count: > 0 })
+        {
+            var selected = selectedIds.ToHashSet(StringComparer.Ordinal);
+            var records = _history.Records;
+            if (!selected.IsSubsetOf(records.Select(record => record.Id)))
+            {
+                throw new InvalidOperationException(Loc.Instance["History.ExportSelectionMissing"]);
+            }
+
+            visibleRecords = records
+                .Where(record => selected.Contains(record.Id))
+                .OrderByDescending(record => record.Timestamp)
+                .ToList();
+        }
+        else
+        {
+            visibleRecords = GetVisibleRecords().ToList();
+        }
+
+        // Exports carry only successful transcriptions, so the caller's notice must not
+        // count selected failures that never reach the file.
+        exportedCount = visibleRecords.Count(record =>
+            record.Status == TranscriptionRecordStatus.Succeeded
+        );
+
         return extension.ToLowerInvariant() switch
         {
             ".csv" => _history.ExportToCsv(visibleRecords),
@@ -479,7 +620,8 @@ public partial class HistorySectionViewModel : ObservableObject
 
         _filtered.Clear();
         _filtered.AddRange(GetVisibleRecords());
-        var ids = _history.Records.Select(record => record.Id).ToHashSet();
+        var ids = _history.Records.Select(record => record.Id).ToHashSet(StringComparer.Ordinal);
+        _selectedIds.IntersectWith(ids);
         foreach (var id in _rows.Keys.Where(id => !ids.Contains(id)).ToList())
             _rows.Remove(id);
 
@@ -494,6 +636,7 @@ public partial class HistorySectionViewModel : ObservableObject
 
         Groups.Clear();
         AppendNextPage();
+        NotifySelectionChanged();
 
         UpdateSummary();
         OnPropertyChanged(nameof(HasVisibleRecords));
@@ -785,6 +928,24 @@ public partial class HistoryRecordRow : ObservableObject
         }
 
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
+    }
+
+    public bool IsSelected
+    {
+        get => _owner.IsSelected(this);
+        set
+        {
+            _owner.SetSelected(this, value);
+            OnPropertyChanged();
+        }
+    }
+
+    public bool IsSelecting => _owner.IsSelecting;
+
+    internal void NotifySelectionChanged()
+    {
+        OnPropertyChanged(nameof(IsSelected));
+        OnPropertyChanged(nameof(IsSelecting));
     }
 
     internal void NotifyPlaybackStateChanged()
