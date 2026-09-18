@@ -34,6 +34,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private const int FinalizeGracePollMs = 25;
 
     private readonly StringBuilder _finalSegments = new();
+    private readonly HashSet<string> _finalLanguages = new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeSpan _finalizeSenderTimeout;
     private readonly TimeSpan _finalizeSessionTimeout;
     private readonly LanguageSelection _languageSelection;
@@ -52,6 +53,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private bool _disposed;
 
     private bool _finalizing;
+    private bool _finalSegmentWithoutLanguage;
 
     // Once a finalize deadline expires, DisposeAsync must not issue another
     // session FinalizeAsync: a sender that ignored cancellation may still be
@@ -92,6 +94,22 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     }
 
     public bool Faulted { get; private set; }
+
+    // A final segment that reported no language may itself have been multilingual — Deepgram
+    // collapses `languages: ["de","en"]` to none — so one unlabelled segment leaves the whole
+    // transcript ambiguous and the language must not be claimed.
+    public string? DetectedLanguage
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return !_finalSegmentWithoutLanguage && _finalLanguages.Count == 1
+                    ? _finalLanguages.Single()
+                    : null;
+            }
+        }
+    }
 
     // ReSharper disable once UnusedMember.Global  public API surface (final-text availability flag); not currently called in-tree
     public bool HasFinalText
@@ -586,6 +604,14 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             }
 
             _finalSegments.Append(evt.Text.Trim());
+            if (string.IsNullOrWhiteSpace(evt.DetectedLanguage))
+            {
+                _finalSegmentWithoutLanguage = true;
+            }
+            else
+            {
+                _finalLanguages.Add(evt.DetectedLanguage.Trim());
+            }
         }
 
         Volatile.Write(ref _lastFinalTickMs, Environment.TickCount64);

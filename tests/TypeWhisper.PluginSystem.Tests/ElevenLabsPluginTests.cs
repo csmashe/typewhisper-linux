@@ -339,6 +339,62 @@ public class ElevenLabsPluginTests
         Assert.True(doc.RootElement.GetProperty("commit").GetBoolean());
     }
 
+    [Theory]
+    [InlineData("committed_transcript", "committed_transcript_with_timestamps", "deu")]
+    [InlineData("committed_transcript_with_timestamps", "committed_transcript", "deu")]
+    [InlineData("committed_transcript", "committed_transcript_with_timestamps", null)]
+    public void CommittedVariants_SurfaceFirstMessagesLanguage(
+        string firstType, string secondType, string? firstLanguage)
+    {
+        var adapter = new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true);
+        var first = adapter.HandleMessage(System.Net.WebSockets.WebSocketMessageType.Text,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                message_type = firstType,
+                text = "Hallo Welt",
+                language_code = firstLanguage,
+            }));
+        var second = adapter.HandleMessage(System.Net.WebSockets.WebSocketMessageType.Text,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                message_type = secondType,
+                text = "Hallo Welt",
+                language_code = "eng",
+            }));
+
+        Assert.Equal(firstLanguage, Assert.Single(first.Transcripts).DetectedLanguage);
+        Assert.Empty(second.Transcripts);
+    }
+
+    [Theory]
+    [InlineData("partial_transcript", false)]
+    [InlineData("committed_transcript", true)]
+    [InlineData("committed_transcript_with_timestamps", true)]
+    public void TryParseTranscriptEvent_ReportsMessageLanguage(string messageType, bool isFinal)
+    {
+        foreach (var language in new[] { "deu", " deu ", " ", null })
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                message_type = messageType,
+                text = "Hallo Welt",
+                language_code = language,
+            });
+            Assert.True(ElevenLabsStreamingSession.TryParseTranscriptEvent(
+                json, out var transcript, out var error));
+            Assert.Null(error);
+            Assert.NotNull(transcript);
+            Assert.Equal("Hallo Welt", transcript.Text);
+            Assert.Equal(isFinal, transcript.IsFinal);
+            Assert.Equal(string.IsNullOrWhiteSpace(language) ? null : "deu", transcript.DetectedLanguage);
+        }
+
+        Assert.True(ElevenLabsStreamingSession.TryParseTranscriptEvent(
+            $$"""{"message_type":"{{messageType}}","text":"Hallo Welt"}""",
+            out var withoutLanguage, out _));
+        Assert.Null(withoutLanguage!.DetectedLanguage);
+    }
+
     [Fact]
     public void TryParseTranscriptEvent_ParsesPartialCommittedAndErrorMessages()
     {
@@ -363,7 +419,7 @@ public class ElevenLabsPluginTests
         Assert.Null(partialError);
 
         Assert.True(parsedFinal);
-        Assert.Equal(new StreamingTranscriptEvent("Hello world", true), final);
+        Assert.Equal(new StreamingTranscriptEvent("Hello world", true) { DetectedLanguage = "en" }, final);
         Assert.Null(finalError);
 
         Assert.False(parsedError);

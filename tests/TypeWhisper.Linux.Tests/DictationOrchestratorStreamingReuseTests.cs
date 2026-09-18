@@ -33,6 +33,16 @@ public sealed class DictationOrchestratorStreamingReuseTests
             translationTarget
         );
 
+    [Theory]
+    [InlineData("de", false, "en", "de")]
+    [InlineData("de", true, "en", "de")]
+    [InlineData(null, false, "en", "en")]
+    [InlineData(null, true, "en", null)]
+    public void ResolveStreamingResultLanguage_PrefersDetection(
+        string? detected, bool severalLanguages, string? configured, string? expected) =>
+        Assert.Equal(expected, DictationOrchestrator.ResolveStreamingResultLanguage(
+            detected, severalLanguages, configured));
+
     [Fact]
     public void Reuses_WhenEngineSelectionAndHintsMatch() =>
         Assert.True(Reuse(["de", "en"], ["de", "en"]));

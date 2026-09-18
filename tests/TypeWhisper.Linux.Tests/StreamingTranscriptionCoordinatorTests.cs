@@ -10,6 +10,80 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class StreamingTranscriptionCoordinatorTests
 {
+    [Theory]
+    [InlineData("de")]
+    [InlineData("DE")]
+    public async Task DetectedLanguage_IsLatchedFromAgreeingFinalSegments(string secondLanguage)
+    {
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, _) => { }, _ => { });
+        await coord.StartAsync(CancellationToken.None);
+
+        session.RaiseFinal("Hallo", "de");
+        session.RaiseFinal("Welt", secondLanguage);
+        session.RaisePartial("Hello", "en");
+        session.RaiseFinal(" ", "en");
+
+        Assert.Equal("Hallo\nWelt", await coord.FinalizeAsync(CancellationToken.None));
+        Assert.Equal("de", coord.DetectedLanguage);
+    }
+
+    [Fact]
+    public async Task DetectedLanguage_IsNullWhenFinalSegmentsDisagree()
+    {
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, _) => { }, _ => { });
+        await coord.StartAsync(CancellationToken.None);
+
+        session.RaiseFinal("Hallo", "de");
+        Assert.Equal("de", coord.DetectedLanguage);
+        session.RaiseFinal("world", "en");
+        session.RaiseFinal("Ende", "de");
+
+        Assert.Equal("Hallo\nworld\nEnde", await coord.FinalizeAsync(CancellationToken.None));
+        Assert.Null(coord.DetectedLanguage);
+    }
+
+    [Fact]
+    public async Task DetectedLanguage_IsNullWhenAFinalSegmentReportsNoLanguage()
+    {
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, _) => { }, _ => { });
+        await coord.StartAsync(CancellationToken.None);
+
+        session.RaiseFinal("Hallo", "de");
+        // Deepgram reports no language for a segment it heard as multilingual, so "de" must not
+        // stand for the whole transcript — that would let translation skip the other language.
+        session.RaiseFinal("but not this part", null);
+
+        Assert.Equal("Hallo\nbut not this part", await coord.FinalizeAsync(CancellationToken.None));
+        Assert.Null(coord.DetectedLanguage);
+    }
+
+    [Fact]
+    public async Task DetectedLanguage_IgnoresPartialsAndIsNullWithoutLanguage()
+    {
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, _) => { }, _ => { });
+        await coord.StartAsync(CancellationToken.None);
+
+        Assert.Null(coord.DetectedLanguage);
+        session.RaisePartial("Hallo", "de");
+        session.RaiseFinal("Hallo", null);
+        session.RaiseFinal("Welt", " ");
+
+        Assert.Equal("Hallo\nWelt", await coord.FinalizeAsync(CancellationToken.None));
+        Assert.Null(coord.DetectedLanguage);
+    }
+
     [Fact]
     public async Task AcceptAudioFrame_BeforeStartAsync_QueuesInPendingBuffer()
     {
@@ -1266,11 +1340,15 @@ public sealed class StreamingTranscriptionCoordinatorTests
             return OnFinalize?.Invoke(ct) ?? Task.CompletedTask;
         }
 
-        public void RaisePartial(string text) =>
-            TranscriptReceived?.Invoke(new StreamingTranscriptEvent(text, false));
+        public void RaisePartial(string text) => RaisePartial(text, null);
 
-        public void RaiseFinal(string text) =>
-            TranscriptReceived?.Invoke(new StreamingTranscriptEvent(text, true));
+        public void RaisePartial(string text, string? language) =>
+            TranscriptReceived?.Invoke(new StreamingTranscriptEvent(text, false) { DetectedLanguage = language });
+
+        public void RaiseFinal(string text) => RaiseFinal(text, null);
+
+        public void RaiseFinal(string text, string? language) =>
+            TranscriptReceived?.Invoke(new StreamingTranscriptEvent(text, true) { DetectedLanguage = language });
 
         public async ValueTask DisposeAsync()
         {

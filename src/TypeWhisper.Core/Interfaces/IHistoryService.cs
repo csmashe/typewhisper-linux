@@ -52,6 +52,10 @@ public interface IHistoryService
     );
 
     void DeleteRecord(string id);
+
+    /// <summary>Atomically deletes only the specified identities, preserving concurrently added records. False leaves history unchanged.</summary>
+    bool TryDeleteRecords(IReadOnlyCollection<string> ids) => false;
+
     void ClearAll();
 
     /// <summary>Case-insensitive search over record text.</summary>

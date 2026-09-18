@@ -192,8 +192,18 @@ internal sealed class DeepgramWebSocketAdapter(
             root.TryGetProperty("is_final", out var finalElement)
             && finalElement.ValueKind is JsonValueKind.True or JsonValueKind.False
             && finalElement.GetBoolean();
+        var detectedLanguage =
+            alternatives[0].TryGetProperty("languages", out var languages)
+            && languages.ValueKind == JsonValueKind.Array
+            && languages.GetArrayLength() == 1
+            && languages[0].ValueKind == JsonValueKind.String
+                ? languages[0].GetString()?.Trim()
+                : null;
         return new WebSocketInboundResult(
-            [new StreamingTranscriptEvent(transcript, isFinal)]
+            [new StreamingTranscriptEvent(transcript, isFinal)
+            {
+                DetectedLanguage = string.IsNullOrWhiteSpace(detectedLanguage) ? null : detectedLanguage,
+            }]
         );
     }
 

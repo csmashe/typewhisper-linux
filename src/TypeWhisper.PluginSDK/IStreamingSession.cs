@@ -35,4 +35,11 @@ public interface IStreamingSession : IAsyncDisposable
 /// <param name="Text">The transcript text (partial or final segment).</param>
 /// <param name="IsFinal">True if this segment is confirmed and will not change.</param>
 // ReSharper disable once UnusedType.Global
-public sealed record StreamingTranscriptEvent(string Text, bool IsFinal);
+public sealed record StreamingTranscriptEvent(string Text, bool IsFinal)
+{
+    /// <summary>Provider-reported language of this segment, when unambiguous.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public string? DetectedLanguage { get; init; }
+}
