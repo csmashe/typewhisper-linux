@@ -14,8 +14,7 @@ public sealed class AudioRecordingServiceTests
     public void TryStartRecording_IsBlockedWhileCaptureIsReserved()
     {
         using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
-        var reservation = audio.TryReserveCapture();
-        try
+        using (var reservation = audio.TryReserveCapture())
         {
             Assert.NotNull(reservation);
             Assert.True(audio.IsCaptureReserved);
@@ -24,15 +23,24 @@ public sealed class AudioRecordingServiceTests
             var session = audio.TryStartRecording(false, reservation);
             Assert.NotNull(session);
             audio.StopRecording(session);
-            reservation.Dispose();
-            Assert.False(audio.IsCaptureReserved);
-            Assert.NotNull(audio.TryStartRecording(false));
         }
-        finally
-        {
-            // Second dispose on the happy path: release must be idempotent.
-            reservation?.Dispose();
-        }
+
+        Assert.False(audio.IsCaptureReserved);
+        var restarted = audio.TryStartRecording(false);
+        Assert.NotNull(restarted);
+        audio.StopRecording(restarted);
+    }
+
+    [Fact]
+    public void CaptureReservation_DisposeIsIdempotent()
+    {
+        using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+        var reservation = audio.TryReserveCapture()!;
+        reservation.Dispose();
+        reservation.Dispose();
+        Assert.False(audio.IsCaptureReserved);
+        using var again = audio.TryReserveCapture();
+        Assert.NotNull(again);
     }
 
     [Fact]
