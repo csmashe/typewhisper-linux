@@ -263,7 +263,7 @@ public class ElevenLabsPluginTests
                 return JsonResponse(
                     """
                     {
-                      "language_code": "de",
+                      "language_code": "deu",
                       "text": "Hallo Welt",
                       "words": [
                         { "text": "Hallo", "start": 0.1, "end": 0.5, "type": "word" },
@@ -340,11 +340,11 @@ public class ElevenLabsPluginTests
     }
 
     [Theory]
-    [InlineData("committed_transcript", "committed_transcript_with_timestamps", "deu")]
-    [InlineData("committed_transcript_with_timestamps", "committed_transcript", "deu")]
-    [InlineData("committed_transcript", "committed_transcript_with_timestamps", null)]
+    [InlineData("committed_transcript", "committed_transcript_with_timestamps", "deu", "de")]
+    [InlineData("committed_transcript_with_timestamps", "committed_transcript", "deu", "de")]
+    [InlineData("committed_transcript", "committed_transcript_with_timestamps", null, null)]
     public void CommittedVariants_SurfaceFirstMessagesLanguage(
-        string firstType, string secondType, string? firstLanguage)
+        string firstType, string secondType, string? firstLanguage, string? expectedLanguage)
     {
         var adapter = new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true);
         var first = adapter.HandleMessage(System.Net.WebSockets.WebSocketMessageType.Text,
@@ -362,8 +362,22 @@ public class ElevenLabsPluginTests
                 language_code = "eng",
             }));
 
-        Assert.Equal(firstLanguage, Assert.Single(first.Transcripts).DetectedLanguage);
+        Assert.Equal(expectedLanguage, Assert.Single(first.Transcripts).DetectedLanguage);
         Assert.Empty(second.Transcripts);
+    }
+
+    [Theory]
+    [InlineData("deu", "de")]
+    [InlineData("ENG", "en")]
+    [InlineData("cmn", "zh")]
+    [InlineData("de", "de")]
+    [InlineData(" fr ", "fr")]
+    [InlineData("xyz", "xyz")]
+    [InlineData(" ", null)]
+    [InlineData(null, null)]
+    public void LanguageCodes_FoldKnownThreeLetterCodesAndKeepTheRest(string? code, string? expected)
+    {
+        Assert.Equal(expected, ElevenLabsLanguageCodes.Canonicalize(code));
     }
 
     [Theory]
@@ -386,7 +400,7 @@ public class ElevenLabsPluginTests
             Assert.NotNull(transcript);
             Assert.Equal("Hallo Welt", transcript.Text);
             Assert.Equal(isFinal, transcript.IsFinal);
-            Assert.Equal(string.IsNullOrWhiteSpace(language) ? null : "deu", transcript.DetectedLanguage);
+            Assert.Equal(string.IsNullOrWhiteSpace(language) ? null : "de", transcript.DetectedLanguage);
         }
 
         Assert.True(ElevenLabsStreamingSession.TryParseTranscriptEvent(

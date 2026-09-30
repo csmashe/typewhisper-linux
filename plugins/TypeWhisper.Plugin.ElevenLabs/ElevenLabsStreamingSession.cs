@@ -160,10 +160,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreaming
             var detectedLanguage =
                 root.TryGetProperty("language_code", out var languageElement)
                 && languageElement.ValueKind == JsonValueKind.String
-                    ? languageElement.GetString()?.Trim()
+                    ? ElevenLabsLanguageCodes.Canonicalize(languageElement.GetString())
                     : null;
-            if (string.IsNullOrWhiteSpace(detectedLanguage))
-                detectedLanguage = null;
 
             // ReSharper disable once ConvertIfStatementToSwitchStatement -- the middle
             // arm (IsErrorMessageType) is a predicate call, so only the tail could
