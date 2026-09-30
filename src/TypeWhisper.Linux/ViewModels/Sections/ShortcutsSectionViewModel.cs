@@ -70,6 +70,9 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     private string _copyLastTranscriptionHotkeyText = "";
 
     [ObservableProperty]
+    private string _readLastTranscriptionHotkeyText = "";
+
+    [ObservableProperty]
     private string _hotkeyText = "";
 
     [ObservableProperty]
@@ -132,6 +135,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         PromptPaletteHotkeyText = settings.Current.PromptPaletteHotkey;
         RecentTranscriptionsHotkeyText = settings.Current.RecentTranscriptionsHotkey;
         CopyLastTranscriptionHotkeyText = settings.Current.CopyLastTranscriptionHotkey;
+        ReadLastTranscriptionHotkeyText = settings.Current.ReadLastTranscriptionHotkey;
         TransformSelectionHotkeyText = settings.Current.TransformSelectionHotkey;
         Mode = settings.Current.Mode;
         _waylandEvdevHotkeysEnabled = settings.Current.WaylandEvdevHotkeysEnabled;
@@ -813,6 +817,34 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         {
             StatusMessage =
                 Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", CopyLastTranscriptionHotkeyText);
+        }
+    }
+
+    [RelayCommand]
+    private void ApplyReadLastTranscriptionHotkey()
+    {
+        if (_hotkey.TrySetReadLastTranscriptionHotkeyFromString(ReadLastTranscriptionHotkeyText))
+        {
+            _settings.Update(current =>
+                current with
+                {
+                    ReadLastTranscriptionHotkey = _hotkey.CurrentReadLastTranscriptionHotkeyString,
+                }
+            );
+            StatusMessage = string.IsNullOrWhiteSpace(
+                _hotkey.CurrentReadLastTranscriptionHotkeyString
+            )
+                ? Loc.Instance["Shortcuts.ReadLastTranscriptionHotkeyCleared"]
+                : Loc.Instance.GetString(
+                    "Shortcuts.ReadLastTranscriptionHotkeySet",
+                    _hotkey.CurrentReadLastTranscriptionHotkeyString
+                );
+            ReadLastTranscriptionHotkeyText = _hotkey.CurrentReadLastTranscriptionHotkeyString;
+        }
+        else
+        {
+            StatusMessage =
+                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", ReadLastTranscriptionHotkeyText);
         }
     }
 

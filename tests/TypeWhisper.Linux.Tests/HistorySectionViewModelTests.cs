@@ -6,11 +6,14 @@ using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Tests;
 using Xunit;
+using static TypeWhisper.Linux.Tests.SpeechFeedbackServiceTests;
 
 namespace TypeWhisper.Linux.Tests;
 
 public sealed class HistorySectionViewModelTests : IDisposable
 {
+    private static readonly TimeSpan s_readbackGuard = TimeSpan.FromSeconds(5);
+
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.HistorySectionViewModelTests"
     );
@@ -25,6 +28,157 @@ public sealed class HistorySectionViewModelTests : IDisposable
         {
             // Best-effort cleanup for temp test directories.
         }
+    }
+
+    [Fact]
+    public async Task ToggleReadAloud_StartsAndStopsRowReadback()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("read this") with { Language = "de" });
+        var session = new ControlledPlaybackSession();
+        var provider = new ControlledTtsProvider(session);
+        using var speech = new SpeechFeedbackService(
+            CreateSettingsService(),
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech);
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        var changed = new List<string?>();
+        row.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+        Assert.True(row.HasTranscript);
+        Assert.Equal(Loc.Instance["History.ReadAloud"], row.ReadAloudButtonText);
+
+        row.ToggleReadAloudCommand.Execute(null);
+        await session.HandlerAttached.Task.WaitAsync(s_readbackGuard);
+
+        Assert.True(row.IsReadingAloud);
+        Assert.Equal(Loc.Instance["History.StopReading"], row.ReadAloudButtonText);
+        Assert.Contains(nameof(row.IsReadingAloud), changed);
+        Assert.Contains(nameof(row.ReadAloudButtonText), changed);
+        Assert.Equal("de", Assert.Single(provider.Requests).Language);
+        row.ToggleReadAloudCommand.Execute(null);
+
+        Assert.False(row.IsReadingAloud);
+        Assert.Equal(Loc.Instance["History.ReadAloud"], row.ReadAloudButtonText);
+        await session.StopCalled.Task.WaitAsync(s_readbackGuard);
+        Assert.Equal(1, session.StopCount);
+        Assert.Single(provider.Requests);
+    }
+
+    [Theory]
+    [InlineData("collapse")]
+    [InlineData("edit")]
+    [InlineData("delete")]
+    [InlineData("expand-other")]
+    public async Task CollapseEditAndDelete_CancelOnlyThatRowsReadback(string action)
+    {
+        var history = CreateHistoryService();
+        var record = CreateRecord("row A");
+        history.AddRecord(record);
+        var otherRecord = CreateRecord("row B");
+        history.AddRecord(otherRecord);
+        var firstSession = new ControlledPlaybackSession();
+        var newerSession = new ControlledPlaybackSession();
+        var provider = new ControlledTtsProvider(firstSession, newerSession);
+        using var speech = new SpeechFeedbackService(
+            CreateSettingsService(),
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech);
+        var rows = sut.Groups.SelectMany(group => group.Entries).ToArray();
+        var row = rows.Single(entry => entry.Record.Id == record.Id);
+        var other = rows.Single(entry => entry.Record.Id == otherRecord.Id);
+        row.IsExpanded = true;
+        row.ToggleReadAloudCommand.Execute(null);
+        await firstSession.HandlerAttached.Task.WaitAsync(s_readbackGuard);
+        sut.StopReadAloud(other);
+        Assert.True(row.IsReadingAloud);
+
+        switch (action)
+        {
+            case "collapse":
+                row.IsExpanded = false;
+                break;
+            case "edit":
+                row.StartEditCommand.Execute(null);
+                break;
+            case "delete":
+                row.DeleteCommand.Execute(null);
+                break;
+            case "expand-other":
+                other.IsExpanded = true;
+                break;
+        }
+
+        Assert.False(row.IsReadingAloud);
+        await firstSession.StopCalled.Task.WaitAsync(s_readbackGuard);
+        Assert.Equal(1, firstSession.StopCount);
+        speech.ReadBack("newer caller");
+        sut.StopReadAloud(row);
+        Assert.True(newerSession.IsActive);
+        Assert.Equal(0, newerSession.StopCount);
+    }
+
+    [Fact]
+    public async Task ClearAll_StopsRowReadback()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("read this"));
+        var session = new ControlledPlaybackSession();
+        using var speech = new SpeechFeedbackService(
+            CreateSettingsService(),
+            TestPluginManagerFactory.Create(),
+            new ControlledTtsProvider(session)
+        );
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech);
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.ToggleReadAloudCommand.Execute(null);
+        await session.HandlerAttached.Task.WaitAsync(s_readbackGuard);
+        Assert.True(row.IsReadingAloud);
+
+        sut.ClearAll();
+
+        Assert.False(row.IsReadingAloud);
+        await session.StopCalled.Task.WaitAsync(s_readbackGuard);
+        Assert.Equal(1, session.StopCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StaleRowCleanup_DoesNotStopSupersedingSpeech(bool automatic)
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("row A"));
+        var session = new ControlledPlaybackSession();
+        var newerSession = new ControlledPlaybackSession();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings { SpokenFeedbackEnabled = true });
+        using var speech = new SpeechFeedbackService(
+            settings.Object,
+            TestPluginManagerFactory.Create(),
+            new ControlledTtsProvider(session, newerSession)
+        );
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech);
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.ToggleReadAloudCommand.Execute(null);
+        await session.HandlerAttached.Task.WaitAsync(s_readbackGuard);
+        if (automatic)
+        {
+            speech.SpeakAutomaticTranscription("newer transcription");
+        }
+        else
+        {
+            speech.StartReadBack("newer caller", null);
+        }
+
+        await newerSession.HandlerAttached.Task.WaitAsync(s_readbackGuard);
+        sut.StopReadAloud(row);
+
+        Assert.Equal(1, session.StopCount);
+        Assert.True(newerSession.IsActive);
+        Assert.Equal(0, newerSession.StopCount);
     }
 
     [Theory]
@@ -281,7 +435,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
         SettingsService? settings = null,
         TimeZoneInfo? timeZone = null,
         Func<DateTime>? utcNow = null,
-        Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null
+        Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
+        SpeechFeedbackService? speech = null
     ) =>
         new(
             history,
@@ -296,7 +451,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
             FormatterServices.GetUninitializedObject(typeof(AudioPlaybackService)),
             timeZone ?? TimeZoneInfo.Local,
             utcNow ?? (() => DateTime.UtcNow),
-            retry
+            retry,
+            speech
         );
 #pragma warning restore SYSLIB0050
 

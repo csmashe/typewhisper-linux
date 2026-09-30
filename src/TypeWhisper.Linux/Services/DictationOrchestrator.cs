@@ -840,7 +840,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                     goto StartupComplete;
                 }
 
-                var message = BuildRecordingStartFailureMessage(null);
+                var message = _audio.IsCaptureReserved
+                    ? Localization.Loc.Instance["Overlay.RecordStartFailedRecorderActive"]
+                    : BuildRecordingStartFailureMessage(null);
                 ReportStatus(message);
                 ShowFeedback(message, true);
                 goto StartupComplete;

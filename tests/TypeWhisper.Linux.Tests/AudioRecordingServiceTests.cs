@@ -11,6 +11,44 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class AudioRecordingServiceTests
 {
     [Fact]
+    public void TryStartRecording_IsBlockedWhileCaptureIsReserved()
+    {
+        using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+        using (var reservation = audio.TryReserveCapture())
+        {
+            Assert.NotNull(reservation);
+            Assert.True(audio.IsCaptureReserved);
+            Assert.Null(audio.TryReserveCapture());
+            Assert.Null(audio.TryStartRecording(false));
+            var session = audio.TryStartRecording(false, reservation);
+            Assert.NotNull(session);
+            audio.StopRecording(session);
+        }
+
+        Assert.False(audio.IsCaptureReserved);
+        var restarted = audio.TryStartRecording(false);
+        Assert.NotNull(restarted);
+        audio.StopRecording(restarted);
+    }
+
+    [Fact]
+    public void CaptureReservation_DisposeIsIdempotent()
+    {
+        using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+        using (var reservation = audio.TryReserveCapture())
+        {
+            Assert.NotNull(reservation);
+            // ReSharper disable once DisposeOnUsingVariable -- the using block disposes a second time on purpose.
+            reservation.Dispose();
+            Assert.False(audio.IsCaptureReserved);
+        }
+
+        Assert.False(audio.IsCaptureReserved);
+        using var again = audio.TryReserveCapture();
+        Assert.NotNull(again);
+    }
+
+    [Fact]
     public void ApplyWhisperModeGain_BoostsQuietAudio()
     {
         var samples = new[] { 0.01f, -0.01f, 0.01f, -0.01f };

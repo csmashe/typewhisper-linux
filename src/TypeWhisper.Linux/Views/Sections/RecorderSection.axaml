@@ -70,13 +70,19 @@
                                            Classes="row-hint" />
                             </StackPanel>
 
-                            <Button Grid.Column="1"
-                                    Content="{Binding RecordButtonText}"
-                                    Command="{Binding ToggleRecordingCommand}"
-                                    MinWidth="110"
-                                    HorizontalContentAlignment="Center"
-                                    VerticalContentAlignment="Center"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8">
+                                <Button Content="{Binding PauseResumeButtonText}"
+                                        Command="{Binding PauseResumeCommand}"
+                                        IsVisible="{Binding IsSessionActive}" />
+                                <Button Content="{Binding RecordButtonText}"
+                                        Command="{Binding ToggleRecordingCommand}"
+                                        MinWidth="110"
+                                        HorizontalContentAlignment="Center"
+                                        VerticalContentAlignment="Center"
+                                        VerticalAlignment="Center" />
+                            </StackPanel>
                         </Grid>
                     </Border>
 
@@ -133,6 +139,10 @@
                                                 Orientation="Horizontal"
                                                 Spacing="8"
                                                 VerticalAlignment="Center">
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
+                                        <Button Content="{Binding PlaybackButtonText}"
+                                                Command="{Binding $parent[ItemsControl].((vm:RecorderSectionViewModel)DataContext).TogglePlaybackCommand}"
+                                                CommandParameter="{Binding}" />
                                         <Button Content="{loc:Str Common.Copy}"
                                                 Click="OnCopyTranscript"
                                                 Tag="{Binding Transcript}"

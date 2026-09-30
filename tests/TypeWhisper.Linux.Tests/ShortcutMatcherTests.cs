@@ -8,6 +8,22 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class ShortcutMatcherTests
 {
     [Fact]
+    public void CancelCollidesWithAnyBinding_IncludesReadLastTranscription()
+    {
+        var set = DefaultSet() with
+        {
+            ReadLastTranscriptionKey = KeyCode.VcEscape,
+            ReadLastTranscriptionModifiers = ModifierMask.None,
+        };
+
+        Assert.True(ShortcutMatcher.CancelCollidesWithAnyBinding(set));
+        Assert.Equal(
+            ShortcutMatchKind.ReadLastTranscription,
+            ShortcutMatcher.Match(KeyCode.VcEscape, ModifierMask.None, set with { CancelKey = KeyCode.VcUndefined })
+        );
+    }
+
+    [Fact]
     public void Match_DefaultBinding_IdentifiesDictation()
     {
         var kind = ShortcutMatcher.Match(
@@ -44,6 +60,8 @@ public sealed class ShortcutMatcherTests
         var set = new GlobalShortcutSet(
             KeyCode.VcSpace,
             ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
             null,
             ModifierMask.None,
             null,
@@ -103,6 +121,8 @@ public sealed class ShortcutMatcherTests
         // the side information.
         var set = new GlobalShortcutSet(
             KeyCode.VcRightAlt,
+            ModifierMask.None,
+            null,
             ModifierMask.None,
             null,
             ModifierMask.None,
@@ -208,6 +228,8 @@ public sealed class ShortcutMatcherTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             RecordingMode.Toggle,
@@ -222,6 +244,8 @@ public sealed class ShortcutMatcherTests
         return new GlobalShortcutSet(
             KeyCode.VcSpace,
             ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
             null,
             ModifierMask.None,
             null,

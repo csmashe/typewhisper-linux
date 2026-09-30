@@ -9,6 +9,33 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class HotkeyServiceTests
 {
     [Fact]
+    public void TrySetReadLastTranscriptionHotkeyFromString_CollidesWithCopyLast_IsRejected()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
+        Assert.False(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
+        Assert.Empty(hotkey.CurrentReadLastTranscriptionHotkeyString);
+    }
+
+    [Fact]
+    public void TrySetCopyLastTranscriptionHotkeyFromString_CollidesWithReadLast_IsRejected()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
+        Assert.False(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
+        Assert.Empty(hotkey.CurrentCopyLastTranscriptionHotkeyString);
+    }
+
+    [Fact]
+    public void TrySetReadLastTranscriptionHotkeyFromString_CollidesWithDictation_IsRejected()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+R"));
+        Assert.False(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
+        Assert.Empty(hotkey.CurrentReadLastTranscriptionHotkeyString);
+    }
+
+    [Fact]
     public void TrySetHotkeyFromString_ParsesModifiersAndKeys()
     {
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
@@ -1433,6 +1460,7 @@ public sealed class HotkeyServiceTests
         Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Alt+P"));
         Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+Alt+R"));
         Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+Alt+C"));
+        Assert.True(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
         Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+Alt+T"));
         hotkey.SetDynamicHotkeys(
             [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
@@ -1472,8 +1500,16 @@ public sealed class HotkeyServiceTests
             suppressed.CopyLastTranscriptionKey
         );
         Assert.Equal(
+            configured.ReadLastTranscriptionKey,
+            suppressed.ReadLastTranscriptionKey
+        );
+        Assert.Equal(
             configured.CopyLastTranscriptionModifiers,
             suppressed.CopyLastTranscriptionModifiers
+        );
+        Assert.Equal(
+            configured.ReadLastTranscriptionModifiers,
+            suppressed.ReadLastTranscriptionModifiers
         );
         Assert.Equal(configured.TransformSelectionKey, suppressed.TransformSelectionKey);
         Assert.Equal(
@@ -1575,6 +1611,7 @@ public sealed class HotkeyServiceTests
         Assert.True(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+P"));
         Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+R"));
         Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+C"));
+        Assert.True(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
         Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+T"));
         hotkey.SetDynamicHotkeys(
             [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
@@ -1620,8 +1657,16 @@ public sealed class HotkeyServiceTests
             restored.CopyLastTranscriptionKey
         );
         Assert.Equal(
+            configured.ReadLastTranscriptionKey,
+            restored.ReadLastTranscriptionKey
+        );
+        Assert.Equal(
             configured.CopyLastTranscriptionModifiers,
             restored.CopyLastTranscriptionModifiers
+        );
+        Assert.Equal(
+            configured.ReadLastTranscriptionModifiers,
+            restored.ReadLastTranscriptionModifiers
         );
         Assert.Equal(configured.TransformSelectionKey, restored.TransformSelectionKey);
         Assert.Equal(

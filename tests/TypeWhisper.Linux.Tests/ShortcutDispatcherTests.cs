@@ -8,6 +8,27 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class ShortcutDispatcherTests
 {
     [Fact]
+    public void ReadLastTranscription_RaisesOncePerPress()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        const ModifierMask modifiers = ModifierMask.LeftCtrl | ModifierMask.LeftShift;
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle) with
+        {
+            ReadLastTranscriptionKey = KeyCode.VcR,
+            ReadLastTranscriptionModifiers = modifiers,
+        });
+        var calls = 0;
+        dispatcher.ReadLastTranscriptionRequested += () => calls++;
+
+        dispatcher.Handle(KeyCode.VcR, modifiers, true);
+        dispatcher.Handle(KeyCode.VcR, modifiers, true);
+        Assert.Equal(1, calls);
+        dispatcher.Handle(KeyCode.VcR, ModifierMask.None, false);
+        dispatcher.Handle(KeyCode.VcR, modifiers, true);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
     public void PromptAction_WaitsForTriggerAndAllModifiers_ThenFiresWithId()
     {
         var d = new ShortcutDispatcher();
@@ -732,6 +753,8 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             mode,
@@ -754,6 +777,8 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             mode,
@@ -770,6 +795,8 @@ public sealed class ShortcutDispatcherTests
         return new GlobalShortcutSet(
             KeyCode.VcSpace,
             ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
             null,
             ModifierMask.None,
             null,

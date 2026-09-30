@@ -119,6 +119,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
             RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.CopyLastTranscriptionRequested += () =>
             CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.ReadLastTranscriptionRequested += () =>
+            ReadLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.CancelRequested += () => CancelRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.PromptActionRequested += actionId =>
             PromptActionRequested?.Invoke(this, actionId);
@@ -145,6 +147,7 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? TransformSelectionRequested;
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
+    public event EventHandler? ReadLastTranscriptionRequested;
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? PromptActionRequested;
     public event EventHandler<string>? ProfileDictationToggleRequested;

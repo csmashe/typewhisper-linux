@@ -381,6 +381,10 @@
                                                                         Command="{Binding ToggleInspectorCommand}"
                                                                         IsVisible="{Binding ShowInspectorToggle}" />
                                                                 <Button Classes="link-button"
+                                                                        Content="{Binding ReadAloudButtonText}"
+                                                                        Command="{Binding ToggleReadAloudCommand}"
+                                                                        IsVisible="{Binding HasTranscript}" />
+                                                                <Button Classes="link-button"
                                                                         Content="{Binding PlaybackButtonText}"
                                                                         Command="{Binding TogglePlaybackCommand}"
                                                                         IsVisible="{Binding HasSessionAudio}" />

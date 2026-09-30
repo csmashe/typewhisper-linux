@@ -83,6 +83,12 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
         remove { }
     }
 
+    public event EventHandler? ReadLastTranscriptionRequested
+    {
+        add { }
+        remove { }
+    }
+
     public event EventHandler? CancelRequested
     {
         add { }

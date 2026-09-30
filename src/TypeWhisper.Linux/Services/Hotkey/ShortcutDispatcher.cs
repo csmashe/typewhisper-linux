@@ -34,6 +34,7 @@ internal sealed class ShortcutDispatcher
     private readonly TimeProvider _timeProvider;
     private bool _cancelKeyDown;
     private bool _copyLastKeyDown;
+    private bool _readLastKeyDown;
     private (KeyCode Key, RecordingMode Mode, long DownTimestamp)? _mainDictationHeld;
     private bool _recentKeyDown;
 
@@ -62,6 +63,7 @@ internal sealed class ShortcutDispatcher
             _profileDictationKeyDown.Clear();
             _cancelKeyDown = false;
             _copyLastKeyDown = false;
+            _readLastKeyDown = false;
             _mainDictationHeld = null;
             _recentKeyDown = false;
         }
@@ -82,6 +84,7 @@ internal sealed class ShortcutDispatcher
             _pendingSelectionWorkflows.Clear();
             _cancelKeyDown = false;
             _copyLastKeyDown = false;
+            _readLastKeyDown = false;
             _mainDictationHeld = null;
             _recentKeyDown = false;
         }
@@ -123,6 +126,7 @@ internal sealed class ShortcutDispatcher
     public event Action? TransformSelectionRequested;
     public event Action? RecentTranscriptionsRequested;
     public event Action? CopyLastTranscriptionRequested;
+    public event Action? ReadLastTranscriptionRequested;
     public event Action? CancelRequested;
     public event Action<string>? PromptActionRequested;
 
@@ -274,6 +278,15 @@ internal sealed class ShortcutDispatcher
                 Raise(CopyLastTranscriptionRequested, nameof(CopyLastTranscriptionRequested));
                 return;
 
+            case ShortcutMatchKind.ReadLastTranscription:
+                if (!TryClaimKeyDown(ref _readLastKeyDown))
+                {
+                    return;
+                }
+
+                Raise(ReadLastTranscriptionRequested, nameof(ReadLastTranscriptionRequested));
+                return;
+
             case ShortcutMatchKind.TransformSelection:
                 TryClaimSelectionWorkflow(key, SelectionWorkflowKind.TransformSelection);
                 return;
@@ -368,6 +381,14 @@ internal sealed class ShortcutDispatcher
             )
             {
                 _copyLastKeyDown = false;
+            }
+
+            if (
+                set.ReadLastTranscriptionKey is not null
+                && key == set.ReadLastTranscriptionKey.Value
+            )
+            {
+                _readLastKeyDown = false;
             }
 
             if (key == set.CancelKey)
