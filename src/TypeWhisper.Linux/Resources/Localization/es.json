@@ -291,7 +291,7 @@
   "Dictation.Language": "Idioma",
   "Dictation.LanguageAutoDetect": "Detectar automáticamente",
   "Dictation.LanguageSelectionRequired": "El idioma guardado no está disponible para el modelo seleccionado. Elige un idioma explícitamente.",
-  "Dictation.LanguageSelectionRequiredAuto": "El idioma guardado no está disponible para el modelo seleccionado. Este modelo solo admite la detección automática: elige Auto.",
+  "Dictation.LanguageSelectionRequiredAuto": "Este modelo detecta el idioma automáticamente, por lo que el idioma guardado no se utiliza. Elige Auto para quitar este aviso.",
   "Dictation.LiveTranscriptionPreview": "Vista previa de la transcripción en vivo",
   "Dictation.LiveTranscriptionPreviewHint": "Muestra el texto parcial en la superposición de grabación mientras hablas.",
   "Dictation.LoadingModel": "Cargando {0}...",

@@ -291,7 +291,7 @@
   "Dictation.Language": "Language",
   "Dictation.LanguageAutoDetect": "Auto detect",
   "Dictation.LanguageSelectionRequired": "The saved language is unavailable for the selected model. Choose a language explicitly.",
-  "Dictation.LanguageSelectionRequiredAuto": "The saved language is unavailable for the selected model. This model only supports automatic detection — choose Auto.",
+  "Dictation.LanguageSelectionRequiredAuto": "This model detects the language automatically, so the saved language is not used. Choose Auto to clear this note.",
   "Dictation.LiveTranscriptionPreview": "Live transcription preview",
   "Dictation.LiveTranscriptionPreviewHint": "Show partial text in the recording overlay while you speak.",
   "Dictation.LoadingModel": "Loading {0}...",

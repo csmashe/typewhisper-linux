@@ -360,7 +360,75 @@ public sealed class DictationOrchestratorCompositionTests
         });
     }
 
-    private sealed class LanguageConstrainedRole(ITranscriptionEngineRole inner)
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task AutoOnlyEngine_IgnoredSavedLanguage_DoesNotReachPostProcessing()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            var pipeline = new CapturingPipeline();
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("language-app", "Language app — integration"),
+                pipeline: pipeline
+            );
+            // Parakeet-style: auto-detects only, and reports no detected language back.
+            var autoOnly = new LanguageConstrainedRole(
+                fixture.Plugin,
+                LanguageSelectionSupport.Unsupported,
+                supportedLanguages: []
+            );
+            PluginManagerTestAccess.SetTranscriptionEngines(fixture.PluginManager, [autoOnly]);
+            var profiles = fixture.Provider.GetRequiredService<IProfileService>();
+            profiles.AddProfile(
+                new Profile
+                {
+                    Id = "integration-auto-only",
+                    Name = "Saved German",
+                    ProcessNames = ["language-app"],
+                    InputLanguage = "de",
+                }
+            );
+            fixture.Plugin.EnqueueResult(_ =>
+                Task.FromResult(new PluginTranscriptionResult("hallo", null, 1, null))
+            );
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            var result = await BoundedTest.WaitAsync(resultTask);
+
+            Assert.Equal("ready", result.Status);
+            // The ignored "de" must not resurface as the source language translation trusts.
+            Assert.Equal<string?>([null], fixture.Plugin.ReceivedLanguages);
+            Assert.NotNull(pipeline.Options);
+            Assert.Null(pipeline.Options.ConfiguredLanguage);
+            Assert.Null(pipeline.Options.EffectiveSourceLanguage);
+            Assert.Empty(pipeline.Options.ConfiguredLanguageCandidates);
+        });
+    }
+
+    private sealed class CapturingPipeline : IPostProcessingPipeline
+    {
+        public PipelineOptions? Options { get; private set; }
+
+        public Task<PostProcessingResult> ProcessAsync(
+            string rawText,
+            PipelineOptions options,
+            CancellationToken ct = default
+        )
+        {
+            Options = options;
+            return Task.FromResult(new PostProcessingResult { Text = rawText });
+        }
+    }
+
+    private sealed class LanguageConstrainedRole(
+        ITranscriptionEngineRole inner,
+        LanguageSelectionSupport explicitSelectionSupport = LanguageSelectionSupport.Supported,
+        IReadOnlyList<string>? supportedLanguages = null
+    )
         : ITranscriptionEngineRole,
             ITranscriptionLanguageSelectionCapabilities
     {
@@ -371,11 +439,10 @@ public sealed class DictationOrchestratorCompositionTests
         public IReadOnlyList<PluginModelInfo> TranscriptionModels => inner.TranscriptionModels;
         public string? SelectedModelId => inner.SelectedModelId;
         public bool SupportsTranslation => inner.SupportsTranslation;
-        public IReadOnlyList<string> SupportedLanguages => ["en"];
+        public IReadOnlyList<string> SupportedLanguages => supportedLanguages ?? ["en"];
         public LanguageSelectionSupport AutomaticDetectionSupport =>
             LanguageSelectionSupport.Supported;
-        public LanguageSelectionSupport ExplicitSelectionSupport =>
-            LanguageSelectionSupport.Supported;
+        public LanguageSelectionSupport ExplicitSelectionSupport => explicitSelectionSupport;
 
         public void SelectModel(string modelId)
         {

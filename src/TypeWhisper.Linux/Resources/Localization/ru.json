@@ -291,7 +291,7 @@
   "Dictation.Language": "Язык",
   "Dictation.LanguageAutoDetect": "Автоопределение",
   "Dictation.LanguageSelectionRequired": "Сохранённый язык недоступен для выбранной модели. Выберите язык явно.",
-  "Dictation.LanguageSelectionRequiredAuto": "Сохранённый язык недоступен для выбранной модели. Эта модель поддерживает только автоматическое определение — выберите «Авто».",
+  "Dictation.LanguageSelectionRequiredAuto": "Эта модель определяет язык автоматически, поэтому сохранённый язык не используется. Выберите «Авто», чтобы убрать это примечание.",
   "Dictation.LiveTranscriptionPreview": "Предпросмотр транскрипции в реальном времени",
   "Dictation.LiveTranscriptionPreviewHint": "Показывать частичный текст в оверлее записи во время речи.",
   "Dictation.LoadingModel": "Загрузка {0}...",

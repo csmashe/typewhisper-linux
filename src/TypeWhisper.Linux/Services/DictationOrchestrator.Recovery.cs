@@ -254,6 +254,7 @@ public sealed partial class DictationOrchestrator
                     var plugin = lease.Plugin;
                     record = record with { EngineUsed = plugin.ProviderId, ModelUsed = plugin.SelectedModelId };
                     supportsTranslation = plugin.SupportsTranslation;
+                    (selection, languageHints) = plugin.ResolveEffectiveLanguage(selection, languageHints);
                     result = await plugin.TranscribeAsync(wav, selection, languageHints, translate, null, ct);
                 }
                 rawText = SelectRawTextWithPreviewFallback(result.Text, "", out _);

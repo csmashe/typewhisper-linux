@@ -190,10 +190,96 @@ public sealed class LanguageSelectionInvokerTests
     }
 
     [Fact]
-    public async Task ExplicitUnsupported_ThrowsBeforeLegacyRoleIsInvoked()
+    public async Task ExplicitUnsupported_WithAutomaticDetection_FallsBackToAutomatic()
     {
         var role = new RecordingRole(
             LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Unsupported
+        );
+
+        await role.TranscribeAsync(
+            [],
+            LanguageSelection.Explicit("de-DE"),
+            false,
+            null,
+            CancellationToken.None
+        );
+
+        Assert.Equal(1, role.CallCount);
+        Assert.Null(role.ReceivedLanguage);
+    }
+
+    [Fact]
+    public void ResolveEffectiveSelection_ExplicitUnsupportedWithAutomaticDetection_IsAutomatic()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Unsupported
+        );
+
+        var effective = role.ResolveEffectiveSelection(LanguageSelection.Explicit("en"));
+
+        Assert.True(effective.IsAutomatic);
+        Assert.Null(effective.LanguageTag);
+    }
+
+    [Fact]
+    public void ResolveEffectiveLanguage_Degraded_DropsTheIgnoredTagFromHints()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Unsupported
+        );
+
+        var (selection, hints) = role.ResolveEffectiveLanguage(
+            LanguageSelection.Explicit("de"),
+            ["DE", "en"]
+        );
+
+        Assert.True(selection.IsAutomatic);
+        Assert.Equal(["en"], hints);
+    }
+
+    [Fact]
+    public void ResolveEffectiveLanguage_NotDegraded_KeepsSelectionAndHints()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Supported
+        );
+        var selection = LanguageSelection.Explicit("de");
+        IReadOnlyList<string> hints = ["de", "en"];
+
+        var effective = role.ResolveEffectiveLanguage(selection, hints);
+
+        Assert.Same(selection, effective.Selection);
+        Assert.Same(hints, effective.Hints);
+    }
+
+    [Theory]
+    [InlineData(LanguageSelectionSupport.Supported, LanguageSelectionSupport.Supported)]
+    [InlineData(LanguageSelectionSupport.Unsupported, LanguageSelectionSupport.Unsupported)]
+    [InlineData(LanguageSelectionSupport.Unknown, LanguageSelectionSupport.Unknown)]
+    public void ResolveEffectiveSelection_OtherwiseKeepsTheSelection(
+        LanguageSelectionSupport automatic,
+        LanguageSelectionSupport explicitSupport
+    )
+    {
+        var role = new RecordingRole(automatic, explicitSupport);
+        var selection = LanguageSelection.Explicit("de-DE");
+
+        Assert.Same(selection, role.ResolveEffectiveSelection(selection));
+        Assert.Same(
+            LanguageSelection.Automatic,
+            role.ResolveEffectiveSelection(LanguageSelection.Automatic)
+        );
+    }
+
+    [Fact]
+    public async Task ExplicitUnsupported_WithoutAutomaticDetection_ThrowsBeforeLegacyRoleIsInvoked()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Unsupported,
             LanguageSelectionSupport.Unsupported
         );
         var selection = LanguageSelection.Explicit("de-DE");

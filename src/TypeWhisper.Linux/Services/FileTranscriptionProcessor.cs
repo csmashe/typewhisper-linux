@@ -95,7 +95,7 @@ public sealed class FileTranscriptionProcessor(
         var currentSettings = settings.Current;
         var languageHints = ResolveLanguageHints(options, currentSettings);
         var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
-        var configuredLanguage = languageSelection.LanguageTag;
+        string? configuredLanguage;
         var task =
             options?.Task
             ?? (
@@ -119,6 +119,11 @@ public sealed class FileTranscriptionProcessor(
         )
         {
             engineSupportsTranslation = lease.Plugin.SupportsTranslation;
+            (languageSelection, languageHints) = lease.Plugin.ResolveEffectiveLanguage(
+                languageSelection,
+                languageHints
+            );
+            configuredLanguage = languageSelection.LanguageTag;
             pluginResult = await lease.Plugin.TranscribeAsync(
                 wav,
                 languageSelection,
