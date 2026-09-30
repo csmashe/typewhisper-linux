@@ -1824,7 +1824,7 @@ public sealed partial class HttpApiService : IDisposable
 
         var settings = _settings.Current;
         var (languageSelection, languageHints) = ResolveRequestLanguage(opts.Language, opts.LanguageHints, settings);
-        var configuredLanguage = languageSelection.LanguageTag;
+        string? configuredLanguage;
 
         // A recognized extension passes the format gate without ffmpeg, but the
         // conversion below requires it — answer as service-unavailable up front
@@ -1885,6 +1885,8 @@ public sealed partial class HttpApiService : IDisposable
         await using (lease)
         {
             var plugin = lease.Plugin;
+            (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(languageSelection, languageHints);
+            configuredLanguage = languageSelection.LanguageTag;
             // Engines without native hints would otherwise lose every hint the selection
             // does not already express.
             var unexpressedHints = languageHints.Count(hint =>

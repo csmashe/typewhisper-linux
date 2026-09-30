@@ -136,8 +136,10 @@ public sealed class BundledPluginManifestTests
         var pluginsDirectory = Path.GetFullPath(
             Path.Join(testDirectory, "..", "..", "plugins")
         );
+        // A stale build folder left by a removed plugin has no project and is not a bundled plugin.
         return Directory
             .EnumerateDirectories(pluginsDirectory, "TypeWhisper.Plugin.*")
+            .Where(directory => Directory.EnumerateFiles(directory, "*.csproj").Any())
             .Order(StringComparer.Ordinal)
             .ToArray();
     }

@@ -123,6 +123,70 @@ internal static class TranscriptionLanguageSelectionInvoker
         return hints;
     }
 
+    /// <summary>
+    ///     The selection the engine actually runs with: a model that can only auto-detect
+    ///     (Parakeet TDT v3, Cloudflare ASR) cannot be told a language but detects the saved
+    ///     one anyway, so an explicit selection degrades to automatic instead of failing every
+    ///     run after a model switch. Callers derive the configured language from the result,
+    ///     so the ignored tag never doubles as the downstream source-language fallback.
+    /// </summary>
+    // ReSharper disable once ConvertToExtensionBlock -- see the note on the first method above.
+    public static LanguageSelection ResolveEffectiveSelection(
+        this ITranscriptionEngineRole role,
+        LanguageSelection languageSelection
+    )
+    {
+        ArgumentNullException.ThrowIfNull(role);
+        ArgumentNullException.ThrowIfNull(languageSelection);
+
+        if (
+            languageSelection.IsAutomatic
+            || role is not ITranscriptionLanguageSelectionCapabilities
+            {
+                ExplicitSelectionSupport: LanguageSelectionSupport.Unsupported,
+                AutomaticDetectionSupport: not LanguageSelectionSupport.Unsupported,
+            }
+        )
+        {
+            return languageSelection;
+        }
+
+        Trace.WriteLine(
+            $"[LanguageSelection] Provider '{role.ProviderId}' model "
+                + $"'{role.SelectedModelId ?? "<unknown>"}' only auto-detects; "
+                + $"ignoring the explicit selection '{languageSelection.LanguageTag}'."
+        );
+        return LanguageSelection.Automatic;
+    }
+
+    /// <summary>
+    ///     <see cref="ResolveEffectiveSelection" /> with its hint list: when the selection
+    ///     degrades to automatic, the ignored tag leaves the hints too, so post-processing
+    ///     sees the same candidates as under a saved Auto.
+    /// </summary>
+    // ReSharper disable once ConvertToExtensionBlock -- see the note on the first method above.
+    public static (LanguageSelection Selection, IReadOnlyList<string> Hints) ResolveEffectiveLanguage(
+        this ITranscriptionEngineRole role,
+        LanguageSelection languageSelection,
+        IReadOnlyList<string> languageHints
+    )
+    {
+        ArgumentNullException.ThrowIfNull(languageHints);
+
+        var effective = role.ResolveEffectiveSelection(languageSelection);
+        if (ReferenceEquals(effective, languageSelection))
+        {
+            return (languageSelection, languageHints);
+        }
+
+        var hints = languageHints
+            .Where(hint =>
+                !LanguageSelection.TryParse(hint, out var parsed)
+                || !string.Equals(parsed.LanguageTag, languageSelection.LanguageTag, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return (effective, hints);
+    }
+
     internal static string? ToLegacyLanguage(
         this ITranscriptionEngineRole role,
         LanguageSelection languageSelection
@@ -131,6 +195,7 @@ internal static class TranscriptionLanguageSelectionInvoker
         ArgumentNullException.ThrowIfNull(role);
         ArgumentNullException.ThrowIfNull(languageSelection);
 
+        languageSelection = role.ResolveEffectiveSelection(languageSelection);
         var capabilities = role as ITranscriptionLanguageSelectionCapabilities;
         var support = languageSelection.IsAutomatic
             ? capabilities?.AutomaticDetectionSupport ?? LanguageSelectionSupport.Unknown

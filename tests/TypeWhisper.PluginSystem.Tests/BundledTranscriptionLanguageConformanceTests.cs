@@ -172,6 +172,17 @@ public sealed class BundledTranscriptionLanguageConformanceTests
     {
         if (support == LanguageSelectionSupport.Unsupported)
         {
+            var capabilities = (ITranscriptionLanguageSelectionCapabilities)role;
+            if (
+                !selection.IsAutomatic
+                && capabilities.AutomaticDetectionSupport != LanguageSelectionSupport.Unsupported
+            )
+            {
+                // An auto-only model detects the saved language itself, so the explicit choice degrades to automatic.
+                Assert.Null(role.ToLegacyLanguage(selection));
+                return;
+            }
+
             Assert.Throws<LanguageSelectionNotSupportedException>(
                 () => role.ToLegacyLanguage(selection)
             );

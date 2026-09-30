@@ -927,10 +927,17 @@ public sealed partial class DictationOrchestrator : IDisposable
                 var sessionVersion = _partialTranscriptState.StartSession();
 
                 var languageHints = LanguageSelectionResolver.ResolveHints(startupProfile, startupSettings);
+                var startupPlugin = _models.ActiveTranscriptionPlugin;
                 var startupLanguageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
+                if (startupPlugin is not null)
+                {
+                    (startupLanguageSelection, languageHints) = startupPlugin.ResolveEffectiveLanguage(
+                        startupLanguageSelection,
+                        languageHints
+                    );
+                }
                 _streamingLanguageSelection = startupLanguageSelection;
                 _streamingLanguageHints = languageHints;
-                var startupPlugin = _models.ActiveTranscriptionPlugin;
                 var startupMode = LinuxLiveTranscriptionStartupPolicy.Select(
                     startupSettings, startupPlugin);
                 // Streaming doesn't support translation; skip the WebSocket when
@@ -2196,8 +2203,11 @@ public sealed partial class DictationOrchestrator : IDisposable
             // Resolve here, not at startup: the active-window snapshot settles
             // context.Profile asynchronously, so a matched profile's
             // InputLanguage is only known once the recording has stopped.
-            var languageHints = LanguageSelectionResolver.ResolveHints(context.Profile, _settings.Current);
-            var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
+            var resolvedHints = LanguageSelectionResolver.ResolveHints(context.Profile, _settings.Current);
+            var (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(
+                LanguageSelectionResolver.ResolvePrimary(resolvedHints),
+                resolvedHints
+            );
             var configuredLanguage = languageSelection.LanguageTag;
             var translate = string.Equals(
                 ResolveTranscriptionTask(context),
@@ -5092,8 +5102,11 @@ public sealed partial class DictationOrchestrator : IDisposable
         {
             // Read live: the profile snapshot can land mid-recording, and later
             // previews should use the matched profile's language.
-            var languageHints = LanguageSelectionResolver.ResolveHints(_recordingProfile, _settings.Current);
-            var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
+            var resolvedHints = LanguageSelectionResolver.ResolveHints(_recordingProfile, _settings.Current);
+            var (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(
+                LanguageSelectionResolver.ResolvePrimary(resolvedHints),
+                resolvedHints
+            );
             var result = await plugin.TranscribeStreamingAsync(
                 wav,
                 languageSelection,

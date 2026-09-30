@@ -936,8 +936,10 @@ public sealed partial class SettingsBackupService
             guardedSecretFiles
         );
         var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+        // The entry keeps only the wall-clock (DOS time, read back as local), so the
+        // stored value must be local or every restore shifts by the UTC offset.
         var lastWriteTime = new DateTimeOffset(
-            File.GetLastWriteTimeUtc(source.SafeFileHandle)
+            File.GetLastWriteTimeUtc(source.SafeFileHandle).ToLocalTime()
         );
         entry.LastWriteTime = lastWriteTime.Year is < 1980 or > 2107
             ? new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero)

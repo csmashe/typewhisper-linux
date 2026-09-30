@@ -332,8 +332,11 @@ public sealed class TransformSelectionService
             var plugin = lease.Plugin;
 
             PublishStatus("Transcribing transform command...");
-            var languageHints = _settings.Current.GetLanguageHints();
-            var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
+            var resolvedHints = _settings.Current.GetLanguageHints();
+            var (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(
+                LanguageSelectionResolver.ResolvePrimary(resolvedHints),
+                resolvedHints
+            );
             string? command;
             try
             {
