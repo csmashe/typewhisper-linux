@@ -683,6 +683,14 @@
           "TypeWhisper.PluginSDK": "[0.14.1, )"
         }
       },
+      "typewhisper.plugin.parakeetctc": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
+          "SharpCompress": "[0.48.0, )",
+          "TypeWhisper.PluginSDK": "[0.15.2, )"
+        }
+      },
       "typewhisper.plugin.qwen3stt": {
         "type": "Project",
         "dependencies": {

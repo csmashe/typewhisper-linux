@@ -1,0 +1,4 @@
+{
+  "Manifest.Name": "Vocabulario Parakeet CTC",
+  "Manifest.Description": "Corrección acústica local del vocabulario con el modelo CTC inglés Parakeet 110M."
+}

@@ -41,6 +41,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenAiVectorMemory\TypeWhisper.Plugin.OpenAiVectorMemory.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.OpenRouter\TypeWhisper.Plugin.OpenRouter.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Obsidian\TypeWhisper.Plugin.Obsidian.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ParakeetCtc\TypeWhisper.Plugin.ParakeetCtc.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Qwen3Stt\TypeWhisper.Plugin.Qwen3Stt.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Reson8\TypeWhisper.Plugin.Reson8.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Script\TypeWhisper.Plugin.Script.csproj"/>
@@ -68,6 +69,20 @@
         <ProjectReference Include="..\TypeWhisper.FakeProviderCli\TypeWhisper.FakeProviderCli.csproj"/>
         <ProjectReference Include="..\TypeWhisper.ProcessTestChild\TypeWhisper.ProcessTestChild.csproj"/>
     </ItemGroup>
+
+    <!-- Both ORT packages ship runtimes/linux-x64/native/libonnxruntime.so and the flat test
+         output keeps one; retain sherpa's copy beside it from the restored package itself. -->
+    <Target Name="RetainSherpaOnnxRuntime" AfterTargets="CopyFilesToOutputDirectory">
+        <ItemGroup>
+            <_SherpaOnnxRuntime Include="@(RuntimeTargetsCopyLocalItems);@(NativeCopyLocalItems)"
+                                Condition="'%(NuGetPackageId)' == 'org.k2fsa.sherpa.onnx.runtime.linux-x64'"/>
+            <_SherpaOnnxRuntime Remove="@(_SherpaOnnxRuntime)"
+                                Condition="'%(Filename)%(Extension)' != 'libonnxruntime.so'"/>
+        </ItemGroup>
+        <Copy SourceFiles="@(_SherpaOnnxRuntime)"
+              DestinationFolder="$(OutDir)runtimes/linux-x64/native/sherpa"
+              SkipUnchangedFiles="true"/>
+    </Target>
 
     <ItemGroup>
         <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>

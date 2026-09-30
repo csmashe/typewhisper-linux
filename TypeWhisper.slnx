@@ -39,6 +39,7 @@
         <Project Path="plugins/TypeWhisper.Plugin.OpenAiCompatible/TypeWhisper.Plugin.OpenAiCompatible.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.OpenAiVectorMemory/TypeWhisper.Plugin.OpenAiVectorMemory.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.OpenRouter/TypeWhisper.Plugin.OpenRouter.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.ParakeetCtc/TypeWhisper.Plugin.ParakeetCtc.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Qwen3Stt/TypeWhisper.Plugin.Qwen3Stt.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Reson8/TypeWhisper.Plugin.Reson8.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Script/TypeWhisper.Plugin.Script.csproj"/>
