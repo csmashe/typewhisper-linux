@@ -189,49 +189,58 @@ public sealed partial class HistoryService : IHistoryService
         }
     }
 
-    public void DeleteRecord(string id)
+    public void DeleteRecord(string id) => RemoveMatching(record => record.Id == id);
+
+    public void ClearAll() => RemoveMatching(_ => true);
+
+    public bool TryDeleteRecords(IReadOnlyCollection<string> ids)
     {
-        string? removedAudioFileName = null;
-        var changed = false;
-        _store.Update(
-            current =>
-            {
-                var idx = FindIndex(current, r => r.Id == id);
-                if (idx < 0)
-                {
-                    return current;
-                }
-
-                changed = true;
-                removedAudioFileName = current[idx].AudioFileName;
-                return current.RemoveAt(idx);
-            }
-        );
-
-        if (!changed)
+        ArgumentNullException.ThrowIfNull(ids);
+        var selected = ids.ToHashSet(StringComparer.Ordinal);
+        if (selected.Count == 0)
         {
-            return;
+            return true;
         }
 
-        DeleteAudioFile(removedAudioFileName);
-        RaiseRecordsChanged();
+        try
+        {
+            RemoveMatching(record => selected.Contains(record.Id));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Only the bulk caller reports a write failure as a result; DeleteRecord and ClearAll
+            // keep throwing so the HTTP API still answers 500 instead of claiming success.
+            Trace.WriteLine($"[HistoryService] Failed to delete history: {ex.Message}");
+            return false;
+        }
     }
 
-    public void ClearAll()
+    private void RemoveMatching(Func<TranscriptionRecord, bool> remove)
     {
         List<string?> audioFiles = [];
         var changed = false;
         _store.Update(
             current =>
             {
-                if (current.IsEmpty)
+                var removed = current.Where(remove).ToArray();
+                if (removed.Length == 0)
                 {
                     return current;
                 }
 
+                ImmutableArray<TranscriptionRecord> remaining =
+                    [.. current.Where(record => !remove(record))];
+                var references = remaining
+                    .Select(record => record.AudioFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                audioFiles = removed
+                    .Select(record => record.AudioFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name) && !references.Contains(name))
+                    .ToList();
                 changed = true;
-                audioFiles = current.Select(r => r.AudioFileName).ToList();
-                return [];
+                return remaining;
             }
         );
 

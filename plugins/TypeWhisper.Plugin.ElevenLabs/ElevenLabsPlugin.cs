@@ -381,7 +381,7 @@ public sealed class ElevenLabsPlugin
             ? textEl.GetString()?.Trim() ?? ""
             : "";
         var detectedLanguage = root.TryGetProperty("language_code", out var langEl)
-            ? langEl.GetString()
+            ? ElevenLabsLanguageCodes.Canonicalize(langEl.GetString()) ?? fallbackLanguage
             : fallbackLanguage;
 
         var duration = 0.0;

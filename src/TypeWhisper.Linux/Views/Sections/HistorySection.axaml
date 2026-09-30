@@ -106,11 +106,24 @@
                         Padding="12,7" />
             </Grid>
 
-            <TextBlock HorizontalAlignment="Right"
-                       Foreground="#8A9AAE"
-                       FontSize="11.5"
-                       Margin="0,0,0,10"
-                       Text="{Binding Summary}" />
+            <WrapPanel ItemSpacing="8" LineSpacing="8" Margin="0,0,0,8">
+                <Button Content="{Binding SelectionButtonText}" Command="{Binding ToggleSelectingCommand}" />
+                <Button Content="{loc:Str History.SelectAllShown}" Command="{Binding SelectAllShownCommand}"
+                        IsVisible="{Binding IsSelecting}" />
+                <Button Content="{loc:Str History.ExportSelected}" Click="OnExport"
+                        IsVisible="{Binding IsSelecting}" IsEnabled="{Binding HasSelection}" />
+                <Button Content="{loc:Str History.DeleteSelected}" Click="OnDeleteSelected"
+                        IsVisible="{Binding IsSelecting}" IsEnabled="{Binding HasSelection}" Foreground="#F06A6A" />
+                <TextBlock Text="{Binding SelectionSummary}" IsVisible="{Binding IsSelecting}"
+                           Foreground="#8A9AAE" VerticalAlignment="Center" />
+            </WrapPanel>
+
+            <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,10">
+                <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}"
+                           Foreground="#8A9AAE" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,8,0" />
+                <TextBlock Grid.Column="1" HorizontalAlignment="Right"
+                           Foreground="#8A9AAE" FontSize="11.5" Text="{Binding Summary}" />
+            </Grid>
             </StackPanel>
 
             <StackPanel Grid.Row="1"
@@ -183,58 +196,62 @@
                                                         Classes="timeline-card"
                                                         Margin="0,3,10,3">
                                                     <StackPanel>
-                                                        <Button Classes="card-toggle"
-                                                                Command="{Binding ToggleExpandCommand}">
-                                                            <Grid ColumnDefinitions="Auto,*,Auto">
-                                                                <TextBlock Grid.Column="0"
-                                                                           Text="{Binding TimeLabel}"
-                                                                           Foreground="#8A9AAE"
-                                                                           FontSize="12"
-                                                                           VerticalAlignment="Top"
-                                                                           Margin="0,1,10,0" />
+                                                        <Grid ColumnDefinitions="Auto,*">
+                                                            <CheckBox IsChecked="{Binding IsSelected}" IsVisible="{Binding IsSelecting}"
+                                                                      VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                            <Button Grid.Column="1" Classes="card-toggle"
+                                                                    Command="{Binding ToggleExpandCommand}">
+                                                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                                                    <TextBlock Grid.Column="0"
+                                                                               Text="{Binding TimeLabel}"
+                                                                               Foreground="#8A9AAE"
+                                                                               FontSize="12"
+                                                                               VerticalAlignment="Top"
+                                                                               Margin="0,1,10,0" />
 
-                                                                <TextBlock Grid.Column="1"
-                                                                           Text="{Binding Record.Preview}"
-                                                                           FontSize="13"
-                                                                           TextTrimming="CharacterEllipsis"
-                                                                           VerticalAlignment="Top"
-                                                                           MaxLines="2" />
+                                                                    <TextBlock Grid.Column="1"
+                                                                               Text="{Binding Record.Preview}"
+                                                                               FontSize="13"
+                                                                               TextTrimming="CharacterEllipsis"
+                                                                               VerticalAlignment="Top"
+                                                                               MaxLines="2" />
 
-                                                                <WrapPanel Grid.Column="2"
-                                                                           Orientation="Horizontal"
-                                                                           HorizontalAlignment="Right"
-                                                                           VerticalAlignment="Top"
-                                                                           Margin="8,0,0,0">
-                                                                    <Border Classes="badge" IsVisible="{Binding HasFailure}">
-                                                                        <TextBlock Text="{Binding StatusBadge}" Foreground="#FF9C9C" FontSize="11" />
-                                                                    </Border>
-                                                                    <Border Classes="badge"
-                                                                            IsVisible="{Binding IsSpokenCommand}">
-                                                                        <TextBlock Text="{loc:Str History.CommandBadge}"
-                                                                                Foreground="#C9A8FF"
-                                                                                FontSize="11" />
-                                                                    </Border>
-                                                                    <Border Classes="badge"
-                                                                            IsVisible="{Binding HasProfileName}">
-                                                                        <TextBlock Text="{Binding Record.ProfileName}"
-                                                                                Foreground="#8FC0FF"
-                                                                                FontSize="11" />
-                                                                    </Border>
-                                                                    <Border Classes="badge"
-                                                                            IsVisible="{Binding HasAppProcessName}">
-                                                                        <TextBlock
-                                                                            Text="{Binding Record.AppProcessName}"
-                                                                            Foreground="#8A9AAE"
-                                                                            FontSize="11" />
-                                                                    </Border>
-                                                                    <Border Classes="badge">
-                                                                        <TextBlock Text="{Binding DurationLabel}"
+                                                                    <WrapPanel Grid.Column="2"
+                                                                               Orientation="Horizontal"
+                                                                               HorizontalAlignment="Right"
+                                                                               VerticalAlignment="Top"
+                                                                               Margin="8,0,0,0">
+                                                                        <Border Classes="badge" IsVisible="{Binding HasFailure}">
+                                                                            <TextBlock Text="{Binding StatusBadge}" Foreground="#FF9C9C" FontSize="11" />
+                                                                        </Border>
+                                                                        <Border Classes="badge"
+                                                                                IsVisible="{Binding IsSpokenCommand}">
+                                                                            <TextBlock Text="{loc:Str History.CommandBadge}"
+                                                                                    Foreground="#C9A8FF"
+                                                                                    FontSize="11" />
+                                                                        </Border>
+                                                                        <Border Classes="badge"
+                                                                                IsVisible="{Binding HasProfileName}">
+                                                                            <TextBlock Text="{Binding Record.ProfileName}"
+                                                                                    Foreground="#8FC0FF"
+                                                                                    FontSize="11" />
+                                                                        </Border>
+                                                                        <Border Classes="badge"
+                                                                                IsVisible="{Binding HasAppProcessName}">
+                                                                            <TextBlock
+                                                                                Text="{Binding Record.AppProcessName}"
                                                                                 Foreground="#8A9AAE"
                                                                                 FontSize="11" />
-                                                                    </Border>
-                                                                </WrapPanel>
-                                                            </Grid>
-                                                        </Button>
+                                                                        </Border>
+                                                                        <Border Classes="badge">
+                                                                            <TextBlock Text="{Binding DurationLabel}"
+                                                                                    Foreground="#8A9AAE"
+                                                                                    FontSize="11" />
+                                                                        </Border>
+                                                                    </WrapPanel>
+                                                                </Grid>
+                                                            </Button>
+                                                        </Grid>
                                                         <StackPanel Margin="12,0,12,8" Spacing="6"
                                                                     IsVisible="{Binding ShowRetryPanel}">
                                                             <TextBlock Text="{Binding FailureMessage}" IsVisible="{Binding HasFailure}" TextWrapping="Wrap" />
