@@ -1276,9 +1276,16 @@ public sealed class SherpaOnnxPlugin
 
             // chunkSize comes from untrusted WAV bytes — reject anything
             // negative or larger than the remaining buffer before we use it
-            // for allocation or indexing.
-            if (chunkSize < 0 || chunkSize > wavData.Length - (pos + 8))
-                throw new ArgumentException("Invalid WAV data: chunk size out of range");
+            // for allocation or indexing. Except the data chunk: streaming
+            // writers (ffmpeg on pipe:1, as AudioFileService uses it) cannot
+            // seek back and leave -1 there, meaning "to end of stream".
+            var remaining = wavData.Length - (pos + 8);
+            if (chunkSize < 0 || chunkSize > remaining)
+            {
+                if (chunkId != "data")
+                    throw new ArgumentException("Invalid WAV data: chunk size out of range");
+                chunkSize = remaining;
+            }
 
             if (chunkId == "data")
             {
