@@ -1,10 +1,23 @@
 using System.Text.Json;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
-internal delegate string SherpaDecodeDelegate(float[] audioSamples);
+internal sealed record SherpaDecodeChunk(
+    string Text,
+    string[]? Tokens = null,
+    float[]? Timestamps = null,
+    float[]? Durations = null
+);
 
-internal readonly record struct SherpaDecodeResult(string Text, string? DetectedLanguage);
+internal delegate SherpaDecodeChunk SherpaDecodeDelegate(float[] audioSamples);
+
+internal readonly record struct SherpaDecodeResult(
+    string Text,
+    string? DetectedLanguage,
+    IReadOnlyList<VocabularyTokenTiming> TokenTimings
+);
 
 internal sealed class SherpaDecodeCoordinator
 {
@@ -41,18 +54,34 @@ internal sealed class SherpaDecodeCoordinator
 
         string? stitchedText = null;
         string? detectedLanguage = null;
+        IReadOnlyList<VocabularyTokenTiming> tokenTimings = [];
         foreach (var chunk in CreateChunks(audioSamples, ct))
         {
             // sherpa-onnx 1.12.23 exposes only a synchronous Decode call. These
             // checkpoints cannot interrupt that call, but chunking bounds normal
             // uncancellable work and stops before the next native invocation.
             ct.ThrowIfCancellationRequested();
-            var rawText = _decode(chunk);
+            var decoded = _decode(chunk);
             ct.ThrowIfCancellationRequested();
 
+            // A single chunk is the whole recording, so its times need no offset. Chunked
+            // decodes carry no timings: the overlap stitching drops tokens.
+            if (
+                audioSamples.Length <= MaximumChunkSampleCount
+                && !parseCanaryPayload
+                && decoded.Tokens is not null
+                && decoded.Timestamps is not null
+            )
+                tokenTimings = TranscriptionTokenTimings.Create(
+                    decoded.Tokens,
+                    decoded.Timestamps,
+                    decoded.Durations,
+                    audioSamples.Length / (double)SampleRate
+                );
+
             var result = parseCanaryPayload
-                ? ParseCanaryResult(rawText)
-                : new SherpaDecodeResult(rawText.Trim(), null);
+                ? ParseCanaryResult(decoded.Text)
+                : new SherpaDecodeResult(decoded.Text.Trim(), null, []);
             stitchedText = stitchedText is null
                 ? result.Text
                 : StitchTokenOverlap(stitchedText, result.Text);
@@ -62,7 +91,7 @@ internal sealed class SherpaDecodeCoordinator
         // Do not publish a completed aggregate after cancellation raced the final
         // chunk's parsing/stitching work.
         ct.ThrowIfCancellationRequested();
-        return new SherpaDecodeResult(stitchedText ?? string.Empty, detectedLanguage);
+        return new SherpaDecodeResult(stitchedText ?? string.Empty, detectedLanguage, tokenTimings);
     }
 
     private static IEnumerable<float[]> CreateChunks(
@@ -178,13 +207,13 @@ internal sealed class SherpaDecodeCoordinator
     private static SherpaDecodeResult ParseCanaryResult(string rawText)
     {
         if (string.IsNullOrWhiteSpace(rawText))
-            return new SherpaDecodeResult(string.Empty, null);
+            return new SherpaDecodeResult(string.Empty, null, []);
 
         try
         {
             using var json = JsonDocument.Parse(rawText);
             if (json.RootElement.ValueKind != JsonValueKind.Object)
-                return new SherpaDecodeResult(rawText.Trim(), null);
+                return new SherpaDecodeResult(rawText.Trim(), null, []);
 
             // GetString() throws InvalidOperationException on a number or boolean,
             // which the JsonException handler below would not catch.
@@ -207,11 +236,11 @@ internal sealed class SherpaDecodeCoordinator
                     language = parsed;
             }
 
-            return new SherpaDecodeResult(text, language);
+            return new SherpaDecodeResult(text, language, []);
         }
         catch (JsonException)
         {
-            return new SherpaDecodeResult(rawText.Trim(), null);
+            return new SherpaDecodeResult(rawText.Trim(), null, []);
         }
     }
 }
