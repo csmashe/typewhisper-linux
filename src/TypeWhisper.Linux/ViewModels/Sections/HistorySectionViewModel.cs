@@ -224,12 +224,15 @@ public partial class HistorySectionViewModel : ObservableObject
             }
         }
 
+        // Another path (single delete, retention, the API) may have removed part of the
+        // snapshot while the dialog was open; the notice counts what this delete removed.
+        var present = _history.Records.Count(record => ids.Contains(record.Id));
         var deleted = await Task.Run(() => _history.TryDeleteRecords(ids));
         if (deleted)
         {
             _selectedIds.ExceptWith(ids);
             NotifySelectionChanged();
-            Notice = Loc.Instance.GetString("History.DeletedSelected", ids.Count);
+            Notice = Loc.Instance.GetString("History.DeletedSelected", present);
         }
         else
         {

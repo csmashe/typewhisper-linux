@@ -141,6 +141,27 @@ public sealed class HistorySectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteSelectedAsync_NoticeCountsOnlyRecordsThatStillExisted()
+    {
+        var history = CreateHistoryService();
+        var first = CreateRecord("first");
+        var second = CreateRecord("second");
+        history.AddRecord(first);
+        history.AddRecord(second);
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.IsSelecting = true;
+        sut.SelectAllShownCommand.Execute(null);
+        var snapshot = sut.SnapshotSelectedIds();
+        Assert.Equal(2, snapshot.Count);
+        history.DeleteRecord(first.Id);
+
+        Assert.True(await sut.DeleteSelectedAsync(snapshot));
+
+        Assert.Empty(history.Records);
+        Assert.Equal(Loc.Instance.GetString("History.DeletedSelected", 1), sut.Notice);
+    }
+
+    [Fact]
     public async Task DeleteSelectedAsync_FailureKeepsSelectionAndShowsNotice()
     {
         var history = CreateHistoryService();
