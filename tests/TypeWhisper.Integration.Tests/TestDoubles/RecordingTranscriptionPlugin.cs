@@ -26,7 +26,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     public string PluginId => Id;
     public string PluginName => "Integration scripted transcription";
     public string PluginVersion => "1.0.0";
-    public string ProviderId => Id;
+    public string ProviderId { get; set; } = Id;
     public string ProviderDisplayName => "Scripted integration engine";
     public bool IsConfigured => true;
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =

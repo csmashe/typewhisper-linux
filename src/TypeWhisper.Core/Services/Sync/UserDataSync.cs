@@ -63,6 +63,7 @@ public enum UserDataSyncDictionaryEntryType
 /// <param name="UpdatedAt">Updated at supplied to the member.</param>
 /// <param name="IsRegex">Whether Original is a regular expression.</param>
 /// <param name="ExpandEscapes">Whether Replacement escapes are expanded at apply time.</param>
+/// <param name="CtcMinSimilarity">Optional acoustic similarity threshold.</param>
 public sealed record UserDataSyncDictionaryEntry(
     UserDataSyncDictionaryEntryType EntryType,
     string Original,
@@ -72,7 +73,9 @@ public sealed record UserDataSyncDictionaryEntry(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     bool IsRegex = false,
-    bool ExpandEscapes = false);
+    bool ExpandEscapes = false,
+    float? CtcMinSimilarity = null
+);
 
 /// <summary>
 /// Represents user data sync snippet data.

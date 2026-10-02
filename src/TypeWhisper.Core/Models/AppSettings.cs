@@ -149,6 +149,7 @@ public record AppSettings
     // Dictionary
     public string[] EnabledPackIds { get; init; } = [];
     public bool VocabularyBoostingEnabled { get; init; }
+    public bool AcousticVocabularyBoostingEnabled { get; init; } = true;
     public bool AutoAddDictionaryCorrections { get; init; }
 
     // Silently learn corrections when you type over a dictated word in the target app

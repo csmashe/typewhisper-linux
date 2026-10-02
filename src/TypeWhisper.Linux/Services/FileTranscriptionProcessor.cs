@@ -2,6 +2,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -41,6 +42,7 @@ public sealed class FileTranscriptionProcessor(
     AudioFileService audioFile,
     IDictionaryService dictionary,
     IVocabularyBoostingService vocabularyBoosting,
+    IVocabularyRescoringService vocabularyRescoring,
     IPostProcessingPipeline pipeline
 ) : IFileTranscriptionProcessor
 {
@@ -111,6 +113,8 @@ public sealed class FileTranscriptionProcessor(
         // watch-folder transcription from loading a different model.
         PluginTranscriptionResult pluginResult;
         bool engineSupportsTranslation;
+        string engineProviderId;
+        string? engineModelId;
         await using (
             var lease = await modelManager.AcquireTranscriptionAsync(
                 modelId,
@@ -119,6 +123,8 @@ public sealed class FileTranscriptionProcessor(
         )
         {
             engineSupportsTranslation = lease.Plugin.SupportsTranslation;
+            engineProviderId = lease.Plugin.ProviderId;
+            engineModelId = lease.Plugin.SelectedModelId;
             (languageSelection, languageHints) = lease.Plugin.ResolveEffectiveLanguage(
                 languageSelection,
                 languageHints
@@ -146,6 +152,36 @@ public sealed class FileTranscriptionProcessor(
                 ? TranscriptionTask.Translate
                 : TranscriptionTask.Transcribe;
 
+        // Token timings align against the engine text, so rescoring precedes spelling
+        // normalization; the pipeline normalizes the refined text itself.
+        var translate = task == TranscriptionTask.Translate;
+        var rescoreEligible = vocabularyRescoring.IsEligible(
+            pluginResult.TokenTimings,
+            translate,
+            engineProviderId,
+            engineModelId
+        );
+        string? rescoredText = null;
+        if (rescoreEligible)
+        {
+            var refined = await vocabularyRescoring.RefineAsync(
+                new VocabularyRescoringInput(
+                    Guid.NewGuid(),
+                    pluginResult.Text,
+                    wav,
+                    pluginResult.TokenTimings,
+                    translate,
+                    engineProviderId,
+                    engineModelId
+                ),
+                cancellationToken
+            );
+            rescoredText = refined.Text;
+            // The service re-checks eligibility; a model or settings change in between
+            // must not leave the text booster disabled as well.
+            rescoreEligible = refined.Eligible;
+        }
+
         var result = new TranscriptionResult
         {
             Text = pluginResult.Text,
@@ -170,10 +206,10 @@ public sealed class FileTranscriptionProcessor(
         result = GermanOutputNormalizationService.NormalizeResult(result, currentSettings.GermanOutputVariant, effectiveTask, configuredLanguage, configuredLanguageCandidates: languageHints);
 
         var pipelineResult = await pipeline.ProcessAsync(
-            result.Text,
+            rescoredText ?? result.Text,
             new PipelineOptions
             {
-                VocabularyBooster = currentSettings.VocabularyBoostingEnabled
+                VocabularyBooster = !rescoreEligible && currentSettings.VocabularyBoostingEnabled
                     ? vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = dictionary.ApplyCorrections,

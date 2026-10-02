@@ -5,7 +5,9 @@ using System.Collections.ObjectModel;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Vocabulary;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -16,6 +18,8 @@ public partial class DictionarySectionViewModel : ObservableObject
 {
     private readonly IDictionaryService _dict;
     private readonly ISettingsService _settings;
+    private readonly ModelManagerService _models;
+    private readonly IVocabularyRescoringService _rescoring;
 
     [ObservableProperty]
     private bool _caseSensitive;
@@ -49,15 +53,37 @@ public partial class DictionarySectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _vocabularyBoostingEnabled;
 
-    public DictionarySectionViewModel(IDictionaryService dict, ISettingsService settings)
+    [ObservableProperty]
+    private bool _acousticVocabularyBoostingEnabled;
+
+    public DictionarySectionViewModel(
+        IDictionaryService dict,
+        ISettingsService settings,
+        ModelManagerService models,
+        IVocabularyRescoringService rescoring
+    )
     {
         _dict = dict;
         _settings = settings;
+        _models = models;
+        _rescoring = rescoring;
+        _acousticVocabularyBoostingEnabled = settings.Current.AcousticVocabularyBoostingEnabled;
         _vocabularyBoostingEnabled = settings.Current.VocabularyBoostingEnabled;
 
         _dict.EntriesChanged += () => Dispatcher.UIThread.Post(Refresh);
         _settings.SettingsChanged += _ =>
-            Dispatcher.UIThread.Post(ReconcileEnabledPacksFromSettings);
+            Dispatcher.UIThread.Post(() =>
+            {
+                VocabularyBoostingEnabled = _settings.Current.VocabularyBoostingEnabled;
+                AcousticVocabularyBoostingEnabled = _settings
+                    .Current
+                    .AcousticVocabularyBoostingEnabled;
+                ReconcileEnabledPacksFromSettings();
+                RefreshAcousticStatus();
+            });
+        _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(RefreshAcousticStatus);
+        _models.PluginManager.PluginStateChanged += (_, _) =>
+            Dispatcher.UIThread.Post(RefreshAcousticStatus);
         InitializePacks();
         Refresh();
     }
@@ -78,10 +104,36 @@ public partial class DictionarySectionViewModel : ObservableObject
     public string VocabularyBoostingStatusText =>
         ActiveBoostingTermCount == 0
             ? Loc.Instance["Dictionary.NoActiveBoostingTerms"]
-            : Loc.Instance.GetString(
-                "Dictionary.ActiveBoostingTerms",
-                ActiveBoostingTermCount
-            );
+            : Loc.Instance.GetString("Dictionary.ActiveBoostingTerms", ActiveBoostingTermCount);
+
+    public string AcousticBoostingStatusText =>
+        _models.PluginManager.VocabularyRescorer is not { IsReady: true }
+            ? Loc.Instance["Dictionary.AcousticBoostingStatusNoPlugin"]
+        : _rescoring.ActiveEngineBlocker is not null
+            ? Loc.Instance.GetString(
+                "Dictionary.AcousticBoostingStatusEngine",
+                _models.ActiveTranscriptionPlugin?.SelectedModelId
+                    ?? _settings.Current.SelectedModelId
+                    ?? Loc.Instance["Dictation.NoModelLoaded"]
+            )
+        : ActiveBoostingTermCount == 0 ? Loc.Instance["Dictionary.AcousticBoostingStatusNoTerms"]
+        : !_settings.Current.AcousticVocabularyBoostingEnabled ? Loc.Instance["Common.Disabled"]
+        : Loc.Instance["Dictionary.AcousticBoostingStatusActive"];
+
+    private void RefreshAcousticStatus() => OnPropertyChanged(nameof(AcousticBoostingStatusText));
+
+    public static string DescribeCtcSimilarity(float? value) =>
+        value switch
+        {
+            null => Loc.Instance["Dictionary.CtcSimilarityAuto"],
+            .50f => Loc.Instance["Dictionary.CtcSimilarityStrong"],
+            .65f => Loc.Instance["Dictionary.CtcSimilarityBalanced"],
+            .80f => Loc.Instance["Dictionary.CtcSimilarityPrecise"],
+            _ => Loc.Instance.GetString(
+                "Dictionary.CtcSimilarityCustom",
+                (value.Value * 100).ToString("0")
+            ),
+        };
 
     public bool IsAllTabSelected => SelectedTab == 0;
     public bool IsTermsTabSelected => SelectedTab == 1;
@@ -202,6 +254,17 @@ public partial class DictionarySectionViewModel : ObservableObject
         }
 
         _settings.Update(current => current with { VocabularyBoostingEnabled = value });
+    }
+
+    partial void OnAcousticVocabularyBoostingEnabledChanged(bool value)
+    {
+        if (_settings.Current.AcousticVocabularyBoostingEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { AcousticVocabularyBoostingEnabled = value });
+        RefreshAcousticStatus();
     }
 
     partial void OnRegexValidationErrorChanged(string value)
@@ -325,6 +388,24 @@ public partial class DictionarySectionViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void CycleCtcSimilarity(DictionaryEntry entry)
+    {
+        if (entry.EntryType != DictionaryEntryType.Term)
+        {
+            return;
+        }
+
+        float? next = entry.CtcMinSimilarity switch
+        {
+            null or < .50f => .50f,
+            < .65f => .65f,
+            < .80f => .80f,
+            _ => null,
+        };
+        _dict.UpdateEntry(entry with { CtcMinSimilarity = next });
+    }
+
+    [RelayCommand]
     private void IncreasePriority(DictionaryEntry entry)
     {
         _dict.UpdateEntry(entry with { Priority = Math.Min(entry.Priority + 1, 999) });
@@ -410,6 +491,7 @@ public partial class DictionarySectionViewModel : ObservableObject
         OnPropertyChanged(nameof(EntryCount));
         OnPropertyChanged(nameof(ActiveBoostingTermCount));
         OnPropertyChanged(nameof(VocabularyBoostingStatusText));
+        RefreshAcousticStatus();
         OnPropertyChanged(nameof(ShowEntriesList));
         OnPropertyChanged(nameof(ShowPacksList));
         OnPropertyChanged(nameof(ShowEmptyState));

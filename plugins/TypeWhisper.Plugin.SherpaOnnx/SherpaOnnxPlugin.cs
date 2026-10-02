@@ -696,7 +696,13 @@ public sealed class SherpaOnnxPlugin
                         ct.ThrowIfCancellationRequested();
                         _recognizer.Decode(stream);
                         ct.ThrowIfCancellationRequested();
-                        return stream.Result.Text;
+                        var result = stream.Result;
+                        return new SherpaDecodeChunk(
+                            result.Text,
+                            result.Tokens,
+                            result.Timestamps,
+                            result.Durations
+                        );
                     });
                     var decoded = coordinator.Decode(
                         audioSamples,
@@ -710,7 +716,10 @@ public sealed class SherpaOnnxPlugin
                         decoded.DetectedLanguage,
                         audioDuration,
                         NoSpeechProbability: null
-                    );
+                    )
+                    {
+                        TokenTimings = decoded.TokenTimings,
+                    };
                 }
             },
             ct

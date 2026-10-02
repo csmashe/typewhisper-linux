@@ -23,6 +23,7 @@ public sealed partial class DictationOrchestrator
         bool translate,
         bool engineSupportsTranslation,
         bool usedPreviewFallback,
+        bool skipVocabularyBooster,
         string engineProviderId,
         string? engineModelId,
         List<(string Name, TimeSpan Elapsed)>? stepTimings = null
@@ -74,7 +75,7 @@ public sealed partial class DictationOrchestrator
                 usedPreviewFallback,
                 _dictionary.ApplyCorrections
             ),
-            VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
+            VocabularyBooster = !skipVocabularyBooster && _settings.Current.VocabularyBoostingEnabled
                 ? _vocabularyBoosting.Apply
                 : null,
             CleanupHandler =
@@ -271,9 +272,10 @@ public sealed partial class DictationOrchestrator
                 // with the localized message and new raw text, preserving the previous final text.
                 if (IsPromptActionUnavailable(profile?.PromptActionId, ResolvePromptAction(context) is not null))
                     throw new InvalidOperationException(Loc.Instance["History.RetryPromptActionUnavailable"]);
+                // Recovery has no audio timing snapshot, so it keeps the text vocabulary booster.
                 var processed = await _pipeline.ProcessAsync(rawText,
                     BuildPipelineOptions(context, duration, language, selection.LanguageTag,
-                        languageHints, translate, supportsTranslation, false, record.EngineUsed, record.ModelUsed), ct);
+                        languageHints, translate, supportsTranslation, false, false, record.EngineUsed, record.ModelUsed), ct);
                 finalText = ApplyProfileStyleFormatting(context, VoiceCommandParser.Parse(processed.Text).Text);
                 if (string.IsNullOrWhiteSpace(finalText))
                     throw new InvalidOperationException(Loc.Instance["History.RetryEmpty"]);

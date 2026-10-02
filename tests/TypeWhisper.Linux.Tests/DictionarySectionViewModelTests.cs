@@ -1,6 +1,14 @@
+using Moq;
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.PluginSDK;
+using TypeWhisper.Tests;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -8,6 +16,8 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictionarySectionViewModelTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly PluginManager _plugins = TestPluginManagerFactory.Create();
+    private readonly List<ModelManagerService> _models = [];
 
     public DictionarySectionViewModelTests()
     {
@@ -20,6 +30,9 @@ public sealed class DictionarySectionViewModelTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var models in _models)
+            models.Dispose();
+        _plugins.Dispose();
         try
         {
             if (Directory.Exists(_tempDir))
@@ -213,7 +226,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     {
         var dictionary = CreateDictionaryService();
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
-        var sut = new DictionarySectionViewModel(dictionary, settings);
+        var sut = CreateViewModel(dictionary, settings);
         var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
         Assert.False(realEstatePack.IsEnabled);
         Assert.Empty(dictionary.Entries);
@@ -232,7 +245,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
         var dictionary = CreateDictionaryService();
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Save(settings.Current with { EnabledPackIds = ["real-estate"] });
-        var sut = new DictionarySectionViewModel(dictionary, settings);
+        var sut = CreateViewModel(dictionary, settings);
         var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
         Assert.True(realEstatePack.IsEnabled);
 
@@ -246,7 +259,7 @@ public sealed class DictionarySectionViewModelTests : IDisposable
     {
         var dictionary = CreateDictionaryService();
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
-        var sut = new DictionarySectionViewModel(dictionary, settings);
+        var sut = CreateViewModel(dictionary, settings);
         settings.Save(settings.Current with { EnabledPackIds = ["real-estate"] });
         sut.ReconcileEnabledPacksFromSettings();
         var realEstatePack = sut.Packs.Single(p => p.Pack.Id == "real-estate");
@@ -276,13 +289,162 @@ public sealed class DictionarySectionViewModelTests : IDisposable
         Assert.Equal("foo ", entry.Original);
     }
 
+    [Fact]
+    public void CycleCtcSimilarity_CyclesPresetsAndIgnoresCorrections()
+    {
+        var dictionary = CreateDictionaryService();
+        dictionary.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "term",
+                Original = "term",
+                EntryType = DictionaryEntryType.Term,
+            }
+        );
+        var sut = CreateViewModel(dictionary);
+        foreach (var expected in new float?[] { .5f, .65f, .8f, null })
+        {
+            sut.CycleCtcSimilarityCommand.Execute(dictionary.Entries[0]);
+            Assert.Equal(expected, dictionary.Entries[0].CtcMinSimilarity);
+        }
+        dictionary.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "correction",
+                Original = "typo",
+                Replacement = "fixed",
+                EntryType = DictionaryEntryType.Correction,
+            }
+        );
+        var correction = dictionary.Entries[1];
+        sut.CycleCtcSimilarityCommand.Execute(correction);
+        Assert.Equal(correction, dictionary.Entries[1]);
+    }
+
+    [Theory]
+    [InlineData(.4f, .5f)]
+    [InlineData(.6f, .65f)]
+    [InlineData(.7f, .8f)]
+    [InlineData(.95f, null)]
+    public void CycleCtcSimilarity_CustomAdvancesToNextPreset(float current, float? expected)
+    {
+        var dictionary = CreateDictionaryService();
+        dictionary.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "term",
+                Original = "term",
+                EntryType = DictionaryEntryType.Term,
+                CtcMinSimilarity = current,
+            }
+        );
+        CreateViewModel(dictionary).CycleCtcSimilarityCommand.Execute(dictionary.Entries[0]);
+        Assert.Equal(expected, dictionary.Entries[0].CtcMinSimilarity);
+    }
+
+    [Theory]
+    [InlineData(null, "Dictionary.CtcSimilarityAuto")]
+    [InlineData(.5f, "Dictionary.CtcSimilarityStrong")]
+    [InlineData(.65f, "Dictionary.CtcSimilarityBalanced")]
+    [InlineData(.8f, "Dictionary.CtcSimilarityPrecise")]
+    public void DescribeCtcSimilarity_UsesLocalizedPreset(float? value, string key) =>
+        Assert.Equal(Loc.Instance[key], DictionarySectionViewModel.DescribeCtcSimilarity(value));
+
+    [Fact]
+    public void DescribeCtcSimilarity_FormatsCustomPercentage() =>
+        Assert.Equal(
+            Loc.Instance.GetString("Dictionary.CtcSimilarityCustom", "73"),
+            DictionarySectionViewModel.DescribeCtcSimilarity(.734f)
+        );
+
+    [Fact]
+    public void AcousticToggle_PersistsOnlyChanges()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        var sut = CreateViewModel(CreateDictionaryService(), settings);
+        var initial = settings.Current.AcousticVocabularyBoostingEnabled;
+        Assert.Equal(initial, sut.AcousticVocabularyBoostingEnabled);
+        var writes = 0;
+        settings.SettingsChanged += _ => writes++;
+        sut.AcousticVocabularyBoostingEnabled = !initial;
+        Assert.Equal(!initial, settings.Current.AcousticVocabularyBoostingEnabled);
+        sut.AcousticVocabularyBoostingEnabled = !initial;
+        Assert.Equal(1, writes);
+        // The underlying setting may change before the UI reconciles it.
+        settings.Update(current => current with { AcousticVocabularyBoostingEnabled = initial });
+        sut.AcousticVocabularyBoostingEnabled = initial;
+        Assert.Equal(2, writes);
+    }
+
+    [Fact]
+    public void AcousticStatus_ReportsPluginEngineTermsAndReady()
+    {
+        var dictionary = CreateDictionaryService();
+        var sut = CreateViewModel(dictionary);
+        Assert.Equal(
+            Loc.Instance["Dictionary.AcousticBoostingStatusNoPlugin"],
+            sut.AcousticBoostingStatusText
+        );
+        PluginManagerTestAccess.SetVocabularyRescorers(
+            _plugins,
+            [new FakeVocabularyRescorerPlugin()]
+        );
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "Dictionary.AcousticBoostingStatusEngine",
+                Loc.Instance["Dictation.NoModelLoaded"]
+            ),
+            sut.AcousticBoostingStatusText
+        );
+        var engine = new Mock<ITranscriptionEngineRole>();
+        engine.SetupGet(e => e.PluginId).Returns("sherpa");
+        engine.SetupGet(e => e.ProviderId).Returns("sherpa-onnx");
+        engine.SetupGet(e => e.SelectedModelId).Returns("parakeet-tdt-0.6b");
+        PluginManagerTestAccess.SetTranscriptionEngines(_plugins, [engine.Object]);
+        typeof(ModelManagerService)
+            .GetProperty(nameof(ModelManagerService.ActiveModelId))!
+            .SetValue(
+                _models.Single(),
+                ModelManagerService.GetPluginModelId("sherpa", "parakeet-tdt-0.6b")
+            );
+        Assert.Equal(
+            Loc.Instance["Dictionary.AcousticBoostingStatusNoTerms"],
+            sut.AcousticBoostingStatusText
+        );
+        dictionary.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "term",
+                Original = "term",
+                EntryType = DictionaryEntryType.Term,
+            }
+        );
+        Assert.Equal(
+            Loc.Instance["Dictionary.AcousticBoostingStatusActive"],
+            sut.AcousticBoostingStatusText
+        );
+        sut.AcousticVocabularyBoostingEnabled = false;
+        Assert.Equal(Loc.Instance["Common.Disabled"], sut.AcousticBoostingStatusText);
+    }
+
     private DictionaryService CreateDictionaryService()
     {
         return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));
     }
 
-    private DictionarySectionViewModel CreateViewModel(DictionaryService dictionary)
+    private DictionarySectionViewModel CreateViewModel(
+        DictionaryService dictionary,
+        ISettingsService? settings = null
+    )
     {
-        return new DictionarySectionViewModel(dictionary, new SettingsService(Path.Join(_tempDir, "settings.json")));
+        settings ??= new SettingsService(Path.Join(_tempDir, "settings.json"));
+        var models = new ModelManagerService(_plugins, settings);
+        _models.Add(models);
+        return new DictionarySectionViewModel(
+            dictionary,
+            settings,
+            models,
+            new VocabularyRescoringService(_plugins, settings, dictionary, models)
+        );
     }
 }
