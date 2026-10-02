@@ -2,10 +2,14 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
+             xmlns:converters="using:TypeWhisper.Linux.Converters"
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DictionarySection"
              x:DataType="vm:DictionarySectionViewModel">
+    <UserControl.Resources>
+        <converters:CtcSimilarityLabelConverter x:Key="CtcSimilarityLabelConverter" />
+    </UserControl.Resources>
     <UserControl.Styles>
         <Style Selector="TextBlock.page-title">
             <Setter Property="FontSize" Value="16" />
@@ -81,6 +85,33 @@
 
                     <ToggleSwitch Grid.Column="1"
                                   IsChecked="{Binding VocabularyBoostingEnabled}"
+                                  VerticalAlignment="Top" />
+                </Grid>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="14,12"
+                    Margin="0,0,0,12">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="16">
+                    <StackPanel>
+                        <TextBlock Text="{loc:Str Dictionary.EnableAcousticBoosting}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="{loc:Str Dictionary.AcousticBoostingHint}"
+                            FontSize="12"
+                            Foreground="#8A9AAE"
+                            TextWrapping="Wrap"
+                            Margin="0,4,0,0" />
+                        <TextBlock Text="{Binding AcousticBoostingStatusText}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   Margin="0,8,0,0" />
+                    </StackPanel>
+
+                    <ToggleSwitch Grid.Column="1"
+                                  IsChecked="{Binding AcousticVocabularyBoostingEnabled}"
                                   VerticalAlignment="Top" />
                 </Grid>
             </Border>
@@ -257,6 +288,13 @@
                                                         Orientation="Horizontal"
                                                         Spacing="4"
                                                         VerticalAlignment="Center">
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Content="{Binding CtcMinSimilarity, Converter={StaticResource CtcSimilarityLabelConverter}}"
+                                                        IsVisible="{Binding EntryType, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static models:DictionaryEntryType.Term}}"
+                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).CycleCtcSimilarityCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip.Tip="{loc:Str Dictionary.CtcSimilarityTooltip}"
+                                                        Padding="8,6" />
                                                 <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                 <Button Content="−"
                                                         Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DecreasePriorityCommand}"

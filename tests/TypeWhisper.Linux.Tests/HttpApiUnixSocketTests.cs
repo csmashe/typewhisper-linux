@@ -886,7 +886,8 @@ public sealed class HttpApiUnixSocketTests
             );
         using var fixture = new ApiFixture(
             transcriptionEngine: new SegmentedTranscriptionEngine(
-                timings: [new VocabularyTokenTiming("Hello World", 0, 1)]
+                timings: [new VocabularyTokenTiming("Hello World", 0, 1)],
+                parakeet: true
             ),
             dictionary: dictionary.Object,
             pipeline: pipeline.Object,
@@ -977,15 +978,20 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(0.2f, segments[1].GetProperty("no_speech_probability").GetSingle());
     }
 
-    private sealed class SegmentedTranscriptionEngine(IReadOnlyList<PluginTranscriptionSegment>? segments = null, IReadOnlyList<VocabularyTokenTiming>? timings = null) : ITranscriptionEngineRole
+    private sealed class SegmentedTranscriptionEngine(
+        IReadOnlyList<PluginTranscriptionSegment>? segments = null,
+        IReadOnlyList<VocabularyTokenTiming>? timings = null,
+        bool parakeet = false
+    ) : ITranscriptionEngineRole
     {
         public string PluginId => "test-segments";
-        public string ProviderId => "test-segments";
+        public string ProviderId => parakeet ? "sherpa-onnx" : "test-segments";
         public string ProviderDisplayName => "Test segments";
         public bool IsConfigured => true;
-        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test")];
-        public string SelectedModelId => "test";
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new(SelectedModelId, "Test")];
+        public string SelectedModelId => parakeet ? "parakeet-tdt-0.6b" : "test";
         public bool SupportsTranslation => false;
+
         public void SelectModel(string modelId) { }
         public Task<PluginTranscriptionResult> TranscribeAsync(
             byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
@@ -1792,7 +1798,12 @@ public sealed class HttpApiUnixSocketTests
 
             _current = new AppSettings
             {
-                SelectedModelId = transcriptionEngine is null ? null : ModelManagerService.GetPluginModelId(transcriptionEngine.PluginId, "test"),
+                SelectedModelId = transcriptionEngine is null
+                    ? null
+                    : ModelManagerService.GetPluginModelId(
+                        transcriptionEngine.PluginId,
+                        transcriptionEngine.SelectedModelId ?? "test"
+                    ),
                 VocabularyBoostingEnabled = vocabularyBoostingEnabled,
                 ApiServerEnabled = true,
                 ApiServerPort = Port,
@@ -1843,7 +1854,12 @@ public sealed class HttpApiUnixSocketTests
                 _hotkeys,
                 dictionary!,
                 new Mock<IVocabularyBoostingService>().Object,
-                new VocabularyRescoringService(Models.PluginManager, Settings.Object, dictionary!),
+                new VocabularyRescoringService(
+                    Models.PluginManager,
+                    Settings.Object,
+                    dictionary!,
+                    Models
+                ),
                 pipeline!,
                 translation!,
                 null!,

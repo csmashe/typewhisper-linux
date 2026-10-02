@@ -9,6 +9,10 @@ namespace TypeWhisper.Linux.Services.Vocabulary;
 public sealed class VocabularyRescoringService : IVocabularyRescoringService
 {
     private static readonly TimeSpan s_rescoreTimeout = TimeSpan.FromSeconds(10);
+
+    // Local Parakeet TDT is the only engine that produces token timings.
+    private const string ParakeetModelId = "parakeet-tdt-0.6b";
+    private readonly ModelManagerService _models;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
     private readonly IDictionaryService _dictionary;
@@ -19,28 +23,43 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
     public VocabularyRescoringService(
         PluginManager pluginManager,
         ISettingsService settings,
-        IDictionaryService dictionary
+        IDictionaryService dictionary,
+        ModelManagerService models
     )
-        : this(pluginManager, settings, dictionary, s_rescoreTimeout) { }
+        : this(pluginManager, settings, dictionary, models, s_rescoreTimeout) { }
 
     internal VocabularyRescoringService(
         PluginManager pluginManager,
         ISettingsService settings,
         IDictionaryService dictionary,
+        ModelManagerService models,
         TimeSpan timeout
     )
     {
+        _models = models;
         _pluginManager = pluginManager;
         _settings = settings;
         _dictionary = dictionary;
         _timeout = timeout;
     }
 
+    public string? ActiveEngineBlocker =>
+        _models.ActiveTranscriptionPlugin is { } engine
+        && IsParakeet(engine.ProviderId, engine.SelectedModelId)
+            ? null
+            : "engine";
+
+    private static bool IsParakeet(string? providerId, string? modelId) =>
+        providerId == "sherpa-onnx" && modelId == ParakeetModelId;
+
     public bool IsEligible(
         IReadOnlyList<VocabularyTokenTiming> tokenTimings,
-        bool translateRequested
+        bool translateRequested,
+        string? engineProviderId,
+        string? engineModelId
     ) =>
         _settings.Current.AcousticVocabularyBoostingEnabled
+        && IsParakeet(engineProviderId, engineModelId)
         && !translateRequested
         && tokenTimings.Count > 0
         && _pluginManager.VocabularyRescorer is { IsReady: true }
@@ -56,7 +75,14 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
     )
     {
         ct.ThrowIfCancellationRequested();
-        if (!IsEligible(input.TokenTimings, input.TranslateRequested))
+        if (
+            !IsEligible(
+                input.TokenTimings,
+                input.TranslateRequested,
+                input.EngineProviderId,
+                input.EngineModelId
+            )
+        )
             return new VocabularyRescoringOutcome(input.Text, false, false, null);
         var samples = PcmWav.ToMonoSamples16K(input.Wav);
         if (samples.Length == 0)
@@ -66,6 +92,7 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
         // alias, with manual entries outranking packs: the plugin scores every alias and the
         // host writes the canonical spelling.
         var outputs = new Dictionary<string, string>(StringComparer.Ordinal);
+        var termHints = new Dictionary<string, VocabularyTermHint>(StringComparer.Ordinal);
         foreach (
             var entry in _dictionary
                 .Entries.Where(IsEnabledTerm)
@@ -75,12 +102,17 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
             var output = string.IsNullOrWhiteSpace(entry.Replacement)
                 ? entry.Original
                 : entry.Replacement.Trim();
+            termHints.TryAdd(
+                entry.Original,
+                new VocabularyTermHint(entry.Original, entry.CtcMinSimilarity)
+            );
+            termHints.TryAdd(output, new VocabularyTermHint(output, entry.CtcMinSimilarity));
             outputs.TryAdd(entry.Original, output);
             outputs.TryAdd(output, output);
         }
         if (outputs.Count == 0)
             return new VocabularyRescoringOutcome(input.Text, false, false, null);
-        var hints = outputs.Keys.Select(alias => new VocabularyTermHint(alias)).ToArray();
+        var hints = termHints.Values.ToArray();
         var trustedTerms = outputs
             .Values.Distinct(StringComparer.Ordinal)
             .Select(output => new VocabularyTermHint(output))
@@ -157,9 +189,11 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             errorKind = ex.GetType().Name;
+            // A plugin that withdrew readiness while failing (model missing or incompatible)
+            // hands this transcription to the text booster as well.
             return new VocabularyRescoringOutcome(
                 input.Text,
-                true,
+                _pluginManager.VocabularyRescorer is { IsReady: true },
                 false,
                 "Vocabulary rescoring failed: " + errorKind
             );

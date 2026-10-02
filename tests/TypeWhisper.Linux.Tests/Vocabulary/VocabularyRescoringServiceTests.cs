@@ -1,6 +1,7 @@
 using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.PluginSDK;
@@ -18,17 +19,31 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
     private readonly Mock<IDictionaryService> _dictionary = new();
     private readonly FakeVocabularyRescorerPlugin _plugin = new();
     private readonly VocabularyRescoringService _service;
+    private readonly ModelManagerService _models;
+    private readonly Mock<ITranscriptionEngineRole> _engine = new();
     private static readonly string[] s_distinctTerms = ["TypeWhisper", "typewhisper"];
     private static readonly string[] s_aliasAndCanonical = ["type wisper", "TypeWhisper"];
 
     public VocabularyRescoringServiceTests()
     {
+        _engine.SetupGet(e => e.PluginId).Returns("test-sherpa");
+        _engine.SetupGet(e => e.ProviderId).Returns("sherpa-onnx");
+        _engine.SetupGet(e => e.SelectedModelId).Returns("parakeet-tdt-0.6b");
+        PluginManagerTestAccess.SetTranscriptionEngines(_plugins, [_engine.Object]);
+        _models = new ModelManagerService(_plugins, _settings.Object);
+        typeof(ModelManagerService)
+            .GetProperty(nameof(ModelManagerService.ActiveModelId))!
+            .SetValue(
+                _models,
+                ModelManagerService.GetPluginModelId("test-sherpa", "parakeet-tdt-0.6b")
+            );
         _dictionary.SetupGet(d => d.Entries).Returns([Term("TypeWhisper")]);
         PluginManagerTestAccess.SetVocabularyRescorers(_plugins, [_plugin]);
         _service = new VocabularyRescoringService(
             _plugins,
             _settings.Object,
             _dictionary.Object,
+            _models,
             TimeSpan.FromMilliseconds(100)
         );
     }
@@ -54,10 +69,25 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
             "type whisper",
             PcmWavTests.CreateWav([0, 123, -123]),
             [new VocabularyTokenTiming("type whisper", 0, 1)],
-            false
+            false,
+            "sherpa-onnx",
+            "parakeet-tdt-0.6b"
+        );
+
+    private static bool IsEligible(
+        VocabularyRescoringService service,
+        VocabularyRescoringInput input
+    ) =>
+        service.IsEligible(
+            input.TokenTimings,
+            input.TranslateRequested,
+            input.EngineProviderId,
+            input.EngineModelId
         );
 
     [Theory]
+    [InlineData("engine")]
+    [InlineData("model")]
     [InlineData("setting")]
     [InlineData("translate")]
     [InlineData("timings")]
@@ -69,6 +99,12 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         var input = Input();
         switch (reason)
         {
+            case "engine":
+                input = input with { EngineProviderId = "whisper-cpp" };
+                break;
+            case "model":
+                input = input with { EngineModelId = "canary-180m-flash" };
+                break;
             case "setting":
                 _settings.Object.Update(s => s with { AcousticVocabularyBoostingEnabled = false });
                 break;
@@ -93,10 +129,40 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
                     ]);
                 break;
         }
-        Assert.False(_service.IsEligible(input.TokenTimings, input.TranslateRequested));
+        Assert.False(IsEligible(_service, input));
         var result = await _service.RefineAsync(input, CancellationToken.None);
         Assert.Equal(new VocabularyRescoringOutcome(input.Text, false, false, null), result);
         Assert.Equal(0, _plugin.CallCount);
+    }
+
+    [Theory]
+    [InlineData("engine")]
+    [InlineData("model")]
+    [InlineData("inactive")]
+    public async Task LoadedModelOnlyDrivesStatus_ParakeetTranscriptStaysEligible(string reason)
+    {
+        Assert.Null(_service.ActiveEngineBlocker);
+        switch (reason)
+        {
+            case "engine":
+                _engine.SetupGet(e => e.ProviderId).Returns("whisper-cpp");
+                break;
+            case "model":
+                _engine.SetupGet(e => e.SelectedModelId).Returns("canary-180m-flash");
+                break;
+            case "inactive":
+                typeof(ModelManagerService)
+                    .GetProperty(nameof(ModelManagerService.ActiveModelId))!
+                    .SetValue(_models, null);
+                break;
+        }
+        // An HTTP request may load another model after dictation released its lease.
+        Assert.Equal("engine", _service.ActiveEngineBlocker);
+        var input = Input();
+        Assert.True(IsEligible(_service, input));
+        var result = await _service.RefineAsync(input, CancellationToken.None);
+        Assert.Equal(new VocabularyRescoringOutcome("TypeWhisper", true, true, null), result);
+        Assert.Equal(1, _plugin.CallCount);
     }
 
     [Fact]
@@ -134,6 +200,28 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         Assert.Equal(s_distinctTerms, request.Terms.Select(t => t.Text));
         Assert.All(request.Terms, term => Assert.Null(term.MinimumSimilarity));
         Assert.Equal(new VocabularyRescoringOutcome("TypeWhisper", true, true, null), result);
+    }
+
+    [Fact]
+    public async Task HintsCarryThresholdForAliasAndCanonicalAndNullWhenUnset()
+    {
+        _dictionary
+            .SetupGet(d => d.Entries)
+            .Returns([
+                Term("type wisper", replacement: "TypeWhisper") with
+                {
+                    CtcMinSimilarity = .65f,
+                },
+                Term("auto"),
+            ]);
+        Assert.Null(_service.ActiveEngineBlocker);
+        await _service.RefineAsync(Input(), CancellationToken.None);
+        Assert.Collection(
+            _plugin.Request!.Terms,
+            hint => Assert.Equal(.65f, hint.MinimumSimilarity),
+            hint => Assert.Equal(.65f, hint.MinimumSimilarity),
+            hint => Assert.Null(hint.MinimumSimilarity)
+        );
     }
 
     [Fact]
@@ -217,6 +305,26 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         Assert.True(result.Eligible);
         Assert.False(result.Applied);
         Assert.Equal("Vocabulary rescoring failed: InvalidOperationException", result.Error);
+    }
+
+    [Fact]
+    public async Task PluginWithdrawsReadinessWhileFailing_ReportsIneligible()
+    {
+        _plugin.Handler = (_, _) =>
+        {
+            _plugin.IsReady = false;
+            throw new FileNotFoundException("model");
+        };
+        var result = await _service.RefineAsync(Input(), CancellationToken.None);
+        Assert.Equal(
+            new VocabularyRescoringOutcome(
+                "type whisper",
+                false,
+                false,
+                "Vocabulary rescoring failed: FileNotFoundException"
+            ),
+            result
+        );
     }
 
     [Fact]
@@ -361,5 +469,9 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         );
     }
 
-    public void Dispose() => _plugins.Dispose();
+    public void Dispose()
+    {
+        _models.Dispose();
+        _plugins.Dispose();
+    }
 }

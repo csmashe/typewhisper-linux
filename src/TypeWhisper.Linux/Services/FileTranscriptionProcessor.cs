@@ -113,6 +113,8 @@ public sealed class FileTranscriptionProcessor(
         // watch-folder transcription from loading a different model.
         PluginTranscriptionResult pluginResult;
         bool engineSupportsTranslation;
+        string engineProviderId;
+        string? engineModelId;
         await using (
             var lease = await modelManager.AcquireTranscriptionAsync(
                 modelId,
@@ -121,6 +123,8 @@ public sealed class FileTranscriptionProcessor(
         )
         {
             engineSupportsTranslation = lease.Plugin.SupportsTranslation;
+            engineProviderId = lease.Plugin.ProviderId;
+            engineModelId = lease.Plugin.SelectedModelId;
             (languageSelection, languageHints) = lease.Plugin.ResolveEffectiveLanguage(
                 languageSelection,
                 languageHints
@@ -151,7 +155,12 @@ public sealed class FileTranscriptionProcessor(
         // Token timings align against the engine text, so rescoring precedes spelling
         // normalization; the pipeline normalizes the refined text itself.
         var translate = task == TranscriptionTask.Translate;
-        var rescoreEligible = vocabularyRescoring.IsEligible(pluginResult.TokenTimings, translate);
+        var rescoreEligible = vocabularyRescoring.IsEligible(
+            pluginResult.TokenTimings,
+            translate,
+            engineProviderId,
+            engineModelId
+        );
         string? rescoredText = null;
         if (rescoreEligible)
         {
@@ -161,11 +170,16 @@ public sealed class FileTranscriptionProcessor(
                     pluginResult.Text,
                     wav,
                     pluginResult.TokenTimings,
-                    translate
+                    translate,
+                    engineProviderId,
+                    engineModelId
                 ),
                 cancellationToken
             );
             rescoredText = refined.Text;
+            // The service re-checks eligibility; a model or settings change in between
+            // must not leave the text booster disabled as well.
+            rescoreEligible = refined.Eligible;
         }
 
         var result = new TranscriptionResult

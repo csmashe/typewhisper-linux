@@ -7,7 +7,9 @@ public sealed record VocabularyRescoringInput(
     string Text,
     byte[] Wav,
     IReadOnlyList<VocabularyTokenTiming> TokenTimings,
-    bool TranslateRequested
+    bool TranslateRequested,
+    string? EngineProviderId,
+    string? EngineModelId
 );
 
 public sealed record VocabularyRescoringOutcome(
@@ -19,7 +21,15 @@ public sealed record VocabularyRescoringOutcome(
 
 public interface IVocabularyRescoringService
 {
-    bool IsEligible(IReadOnlyList<VocabularyTokenTiming> tokenTimings, bool translateRequested);
+    // The loaded model for the Dictionary panel's status; a transcript is judged by the engine
+    // that produced it, captured under its transcription lease.
+    string? ActiveEngineBlocker { get; }
+    bool IsEligible(
+        IReadOnlyList<VocabularyTokenTiming> tokenTimings,
+        bool translateRequested,
+        string? engineProviderId,
+        string? engineModelId
+    );
     Task<VocabularyRescoringOutcome> RefineAsync(
         VocabularyRescoringInput input,
         CancellationToken ct

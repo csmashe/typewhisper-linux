@@ -83,7 +83,10 @@ public sealed class FileTranscriptionLanguageHintsTests
         var settings = TestPluginManagerFactory.CreateSettings(
             new AppSettings
             {
-                SelectedModelId = ModelManagerService.GetPluginModelId("test-file", "test"),
+                SelectedModelId = ModelManagerService.GetPluginModelId(
+                    "test-file",
+                    "parakeet-tdt-0.6b"
+                ),
                 VocabularyBoostingEnabled = true,
                 EnglishOutputVariant = englishOutputVariant,
             }
@@ -132,7 +135,7 @@ public sealed class FileTranscriptionLanguageHintsTests
             new AudioFileService(commands, runner),
             dictionary.Object,
             Mock.Of<IVocabularyBoostingService>(),
-            new VocabularyRescoringService(plugins, settings.Object, dictionary.Object),
+            new VocabularyRescoringService(plugins, settings.Object, dictionary.Object, models),
             pipeline.Object
         );
         var path = TestPaths.NewTempPath("vocabulary-file.wav");
@@ -151,13 +154,16 @@ public sealed class FileTranscriptionLanguageHintsTests
     private sealed class TimedTranscriptionEngine(string text) : ITranscriptionEngineRole
     {
         public string PluginId => "test-file";
-        public string ProviderId => "test-file";
+        public string ProviderId => "sherpa-onnx";
         public string ProviderDisplayName => "Test file";
         public bool IsConfigured => true;
-        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test")];
-        public string SelectedModelId => "test";
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels =>
+            [new("parakeet-tdt-0.6b", "Test")];
+        public string SelectedModelId => "parakeet-tdt-0.6b";
         public bool SupportsTranslation => false;
+
         public void SelectModel(string modelId) { }
+
         public Task<PluginTranscriptionResult> TranscribeAsync(
             byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct) =>
             Task.FromResult(new PluginTranscriptionResult(text, "en", 1)

@@ -13,20 +13,32 @@ public sealed record CtcEmission(
 public sealed class NemoCtcModel : IDisposable
 {
     internal const int Subsampling = 8;
-    private readonly InferenceSession _session;
-    public IReadOnlyDictionary<string, string> Metadata => _session.ModelMetadata.CustomMetadataMap;
+    private readonly InferenceSession? _session;
+    private readonly Action? _onDispose;
+    public IReadOnlyDictionary<string, string> Metadata { get; }
+
+    internal NemoCtcModel(IReadOnlyDictionary<string, string> metadata, Action onDispose)
+    {
+        Metadata = metadata;
+        _onDispose = onDispose;
+    }
 
     public NemoCtcModel(string path)
     {
+        if (!File.Exists(path))
+            throw new FileNotFoundException("CTC model file is missing.", path);
         OnnxRuntimeNativeLibrary.EnsureRegistered();
         using var options = new SessionOptions();
         options.IntraOpNumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
         options.InterOpNumThreads = 1;
         _session = new InferenceSession(path, options);
+        Metadata = _session.ModelMetadata.CustomMetadataMap;
     }
 
     public CtcEmission Evaluate(ReadOnlyMemory<float> audio, CancellationToken cancellation)
     {
+        if (_session is null)
+            throw new InvalidOperationException("The test model cannot evaluate audio.");
         if (audio.Length > 16000 * 30)
             throw new NotSupportedException("Score a bounded audio window of at most 30 seconds.");
         var (features, frames) = NemoFeatures.Extract(audio.Span, cancellation);
@@ -78,5 +90,9 @@ public sealed class NemoCtcModel : IDisposable
         );
     }
 
-    public void Dispose() => _session.Dispose();
+    public void Dispose()
+    {
+        _session?.Dispose();
+        _onDispose?.Invoke();
+    }
 }

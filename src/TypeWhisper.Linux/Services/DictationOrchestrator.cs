@@ -2497,7 +2497,9 @@ public sealed partial class DictationOrchestrator : IDisposable
             _telemetry.Tag(context.SessionId, "cleanup.level", cleanupLevel.ToString());
             var recordingId = Guid.NewGuid();
             var timings = usedPreviewFallback ? [] : result?.TokenTimings ?? [];
-            var rescoreEligible = _vocabularyRescoring.IsEligible(timings, translate);
+            var rescoreEligible = _vocabularyRescoring.IsEligible(
+                timings, translate, engineProviderId, engineModelId
+            );
             var pipelineText = rawText;
             if (rescoreEligible)
             {
@@ -2511,7 +2513,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                             result?.Text ?? rawText,
                             wav,
                             timings,
-                            translate
+                            translate,
+                            engineProviderId,
+                            engineModelId
                         ),
                         cancelToken
                     );
@@ -2522,6 +2526,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                         Trace.WriteLine("[VocabularyRescoring] " + refined.Error);
                     if (refined.Applied)
                         pipelineText = LinuxDictationFinalTextPolicy.SelectRawText(refined.Text);
+                    // The service re-checks eligibility; a model or settings change in between
+                    // must not leave the text booster disabled as well.
+                    rescoreEligible = refined.Eligible;
                 }
                 catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
                 {

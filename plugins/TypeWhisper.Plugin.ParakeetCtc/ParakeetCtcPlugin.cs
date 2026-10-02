@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -6,10 +7,15 @@ namespace TypeWhisper.Plugin.ParakeetCtc;
 
 public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
 {
+    private static readonly TimeSpan s_idleUnload = TimeSpan.FromMinutes(10);
+    private readonly TimeSpan _idleUnload;
+    private readonly Func<string, NemoCtcModel> _modelFactory;
+    private CancellationTokenSource? _idleTimer;
+    private string? _modelPath;
     private NemoCtcModel? _model;
     private CtcTokenizer? _tokenizer;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private bool _disposed;
+    private volatile bool _disposed;
     private IPluginHostServices? _host;
     private readonly HttpClient _downloads;
     private readonly Lock _activationSync = new();
@@ -19,12 +25,21 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
     public ParakeetCtcPlugin()
         : this(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }) { }
 
-    internal ParakeetCtcPlugin(HttpClient downloads) => _downloads = downloads;
+    internal ParakeetCtcPlugin(
+        HttpClient downloads,
+        TimeSpan? idleUnload = null,
+        Func<string, NemoCtcModel>? modelFactory = null
+    )
+    {
+        _downloads = downloads;
+        _idleUnload = idleUnload ?? s_idleUnload;
+        _modelFactory = modelFactory ?? (path => new NemoCtcModel(path));
+    }
 
     public string PluginId => "com.typewhisper.parakeet-ctc";
     public string PluginName => "Parakeet CTC Vocabulary";
     public string PluginVersion => PluginBuildInfo.Version;
-    public bool IsReady => !_disposed && _model is not null;
+    public bool IsReady => !_disposed && _tokenizer is not null && _modelPath is not null;
 
     public Task ActivateAsync(IPluginHostServices host) =>
         ActivateAsync(host, CancellationToken.None);
@@ -39,7 +54,7 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_model is not null)
+            if (IsReady)
                 return;
             var directory =
                 host.GetSetting<string>("ModelDirectory")
@@ -54,30 +69,9 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
                     .ConfigureAwait(false);
             activation.Token.ThrowIfCancellationRequested();
             var tokenizer = new CtcTokenizer(Path.Join(directory, "tokens.txt"));
-            var model = await Task.Run(
-                    () => new NemoCtcModel(Path.Join(directory, "model.int8.onnx")),
-                    activation.Token
-                )
-                .ConfigureAwait(false);
-            if (activation.IsCancellationRequested)
-            {
-                model.Dispose();
-                activation.Token.ThrowIfCancellationRequested();
-            }
-            if (
-                model.Metadata.GetValueOrDefault("subsampling_factor")
-                    != NemoCtcModel.Subsampling.ToString()
-                || model.Metadata.GetValueOrDefault("normalize_type") != "per_feature"
-                || tokenizer.BlankId != 1024
-            )
-            {
-                model.Dispose();
-                throw new NotSupportedException(
-                    "Expected the Parakeet 110M CTC export and matching tokens."
-                );
-            }
+            activation.Token.ThrowIfCancellationRequested();
             _tokenizer = tokenizer;
-            _model = model;
+            _modelPath = Path.Join(directory, "model.int8.onnx");
             _host = host;
         }
         finally
@@ -107,13 +101,17 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
     )
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var ready = IsReady;
+        var host = _host;
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_model is null || _tokenizer is null)
-                throw new InvalidOperationException("CTC model is not loaded.");
+            if (!ready)
+                throw new InvalidOperationException("CTC assets are not ready.");
+            CancelIdleTimer();
             if (request.SampleRate != 16000)
                 throw new NotSupportedException("CTC requires 16 kHz mono PCM.");
+            await LoadModelAsync(cancellationToken).ConfigureAwait(false);
             var result = await Task.Run(
                     () => Rescore(request, cancellationToken),
                     cancellationToken
@@ -124,8 +122,89 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
         }
         finally
         {
+            if (_model is not null && !_disposed)
+                ResetIdleTimer();
+            // A failed load withdrew the capability; the host learns outside the gate as in activation.
+            var withdrawn = ready && _modelPath is null && !_disposed;
             _gate.Release();
+            if (withdrawn)
+                host?.NotifyCapabilitiesChanged();
         }
+    }
+
+    private async Task LoadModelAsync(CancellationToken cancellation)
+    {
+        if (_model is not null)
+            return;
+        var timer = Stopwatch.StartNew();
+        NemoCtcModel? model = null;
+        try
+        {
+            // A session that finished loading stays for the next request even when this one was
+            // cancelled meanwhile; the host's rescoring timeout would otherwise repeat the cold
+            // load on every call.
+            model = await Task.Run(() => _modelFactory(_modelPath!), cancellation)
+                .ConfigureAwait(false);
+            if (
+                model.Metadata.GetValueOrDefault("subsampling_factor")
+                    != NemoCtcModel.Subsampling.ToString()
+                || model.Metadata.GetValueOrDefault("normalize_type") != "per_feature"
+                || _tokenizer!.BlankId != 1024
+            )
+                throw new NotSupportedException(
+                    "Expected the Parakeet 110M CTC export and matching tokens."
+                );
+        }
+        catch (Exception ex)
+        {
+            model?.Dispose();
+            if (ex is OperationCanceledException)
+                throw;
+            // A missing or incompatible model never recovers on its own; stay unavailable so
+            // the host falls back to text boosting until the plugin is re-enabled.
+            _modelPath = null;
+            _host?.Log(PluginLogLevel.Error, "CTC model failed to load: " + ex.Message);
+            throw;
+        }
+        _model = model;
+        _host?.Log(PluginLogLevel.Info, $"CTC model loaded in {timer.ElapsedMilliseconds} ms");
+    }
+
+    private void CancelIdleTimer()
+    {
+        _idleTimer?.Cancel();
+        _idleTimer?.Dispose();
+        _idleTimer = null;
+    }
+
+    private void ResetIdleTimer()
+    {
+        CancelIdleTimer();
+        _idleTimer = new CancellationTokenSource();
+        _ = UnloadWhenIdleAsync(_idleTimer.Token);
+    }
+
+    private async Task UnloadWhenIdleAsync(CancellationToken cancellation)
+    {
+        try
+        {
+            await Task.Delay(_idleUnload, cancellation).ConfigureAwait(false);
+            await _gate.WaitAsync(cancellation).ConfigureAwait(false);
+            try
+            {
+                // A request may have reset the timer while this callback waited for the gate.
+                cancellation.ThrowIfCancellationRequested();
+                _model?.Dispose();
+                _model = null;
+                CancelIdleTimer();
+                _host?.Log(PluginLogLevel.Info, "CTC model unloaded after idle");
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
     }
 
     private VocabularyRescoreResult Rescore(
@@ -304,6 +383,9 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
         CancellationToken cancellation
     )
     {
+        // Hyphens separate spoken words but are absent from the model's BPE vocabulary.
+        if (variants)
+            value = SpokenForm(value);
         var encodings = variants
             ? new[] { _tokenizer!.Encode(value), _tokenizer!.Encode(value, false) }
             : new[] { _tokenizer!.Encode(value) };
@@ -327,6 +409,9 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
 
     [GeneratedRegex(@"[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*")]
     private static partial Regex WordRegex();
+
+    internal static string SpokenForm(string value) =>
+        value.Replace('-', ' ').Replace('–', ' ').Replace('—', ' ');
 
     internal static bool WindowAlreadyContainsTerm(string original, string term) =>
         Regex.IsMatch(original, $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(term)}(?![\p{{L}}\p{{N}}])");
@@ -400,9 +485,12 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            CancelIdleTimer();
             _model?.Dispose();
             _model = null;
+            _modelPath = null;
             _tokenizer = null;
+            _host = null;
         }
         finally
         {

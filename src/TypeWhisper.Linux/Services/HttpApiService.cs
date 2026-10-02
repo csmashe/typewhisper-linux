@@ -1932,7 +1932,12 @@ public sealed partial class HttpApiService : IDisposable
                 : TranscriptionTask.Transcribe;
 
         var translate = opts.Task == TranscriptionTask.Translate;
-        var rescoreEligible = _vocabularyRescoring.IsEligible(result.TokenTimings, translate);
+        var rescoreEligible = _vocabularyRescoring.IsEligible(
+            result.TokenTimings,
+            translate,
+            engineProviderId,
+            selectedModelId
+        );
         var pipelineText = result.Text;
         if (rescoreEligible)
         {
@@ -1942,11 +1947,16 @@ public sealed partial class HttpApiService : IDisposable
                     pipelineText,
                     wav,
                     result.TokenTimings,
-                    translate
+                    translate,
+                    engineProviderId,
+                    selectedModelId
                 ),
                 ct
             );
             pipelineText = refined.Text;
+            // The service re-checks eligibility; a model or settings change in between
+            // must not leave the text booster disabled as well.
+            rescoreEligible = refined.Eligible;
         }
 
         var processed = await _pipeline.ProcessAsync(

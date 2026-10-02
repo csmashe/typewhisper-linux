@@ -426,12 +426,36 @@ public sealed class DictationOrchestratorCompositionTests
     public Task Rescorer_SeesEngineTextBeforeArtifactCleanup() =>
         RunRescorerAsync(true, false, "type whisper...");
 
-    private static Task RunRescorerAsync(bool hasTimings, bool fails, string engineText = "type whisper")
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task NonParakeetEngine_StageSkipped_BoosterRuns() =>
+        RunRescorerAsync(true, false, parakeet: false);
+
+    private static Task RunRescorerAsync(
+        bool hasTimings,
+        bool fails,
+        string engineText = "type whisper",
+        bool parakeet = true
+    )
     {
         return BoundedTest.RunAsync(async () =>
         {
             var pipeline = new CapturingPipeline();
             await using var fixture = new OrchestratorCompositionFixture(pipeline: pipeline);
+            if (parakeet)
+            {
+                fixture.Plugin.ProviderId = "sherpa-onnx";
+                // ReSharper disable once AccessToDisposedClosure -- runs inside the awaited test body, before the fixture is disposed.
+                fixture.Settings.Update(settings =>
+                    settings with
+                    {
+                        SelectedModelId = ModelManagerService.GetPluginModelId(
+                            fixture.Plugin.PluginId,
+                            "parakeet-tdt-0.6b"
+                        ),
+                    }
+                );
+            }
             fixture.Settings.Update(settings => settings with { VocabularyBoostingEnabled = true });
             fixture
                 .Provider.GetRequiredService<IDictionaryService>()
@@ -464,13 +488,14 @@ public sealed class DictationOrchestratorCompositionTests
             await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
             var result = await BoundedTest.WaitAsync(resultTask);
 
-            var expected = hasTimings && !fails ? "TypeWhisper" : "type whisper";
+            var eligible = hasTimings && parakeet;
+            var expected = eligible && !fails ? "TypeWhisper" : "type whisper";
             Assert.Equal("ready", result.Status);
             Assert.Equal(expected, pipeline.Text);
             Assert.NotNull(pipeline.Options);
-            Assert.Equal(!hasTimings, pipeline.Options.VocabularyBooster is not null);
-            Assert.Equal(hasTimings ? 1 : 0, rescorer.CallCount);
-            if (hasTimings)
+            Assert.Equal(!eligible, pipeline.Options.VocabularyBooster is not null);
+            Assert.Equal(eligible ? 1 : 0, rescorer.CallCount);
+            if (eligible)
                 Assert.Equal(engineText, rescorer.Request?.Text);
             var history = Assert.Single(fixture.History.Records);
             Assert.Equal("type whisper", history.RawText);

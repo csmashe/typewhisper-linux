@@ -173,6 +173,101 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void CtcSimilarity_RoundTripsJson()
+    {
+        _sut.AddEntry(CtcTerm("term", .65f));
+        Assert.Equal(
+            .65f,
+            Assert.Single(new DictionaryService(_filePath).Entries).CtcMinSimilarity
+        );
+    }
+
+    [Theory]
+    [InlineData("1.5")]
+    [InlineData("\"NaN\"")]
+    [InlineData("\"Infinity\"")]
+    public void CtcSimilarity_LoadSanitizesInvalidValues(string value)
+    {
+        File.WriteAllText(
+            _filePath,
+            $$"""[{"Id":"term","EntryType":0,"Original":"term","CtcMinSimilarity":{{value}}}]"""
+        );
+        Assert.Null(Assert.Single(new DictionaryService(_filePath).Entries).CtcMinSimilarity);
+    }
+
+    [Theory]
+    [InlineData(1.5f)]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    [InlineData(.39f)]
+    public void CtcSimilarity_MutationsSanitizeInvalidValues(float value)
+    {
+        _sut.AddEntry(CtcTerm("first", value));
+        _sut.AddEntries([CtcTerm("second", value)]);
+        _sut.UpdateEntry(CtcTerm("first", value));
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.All(_sut.Entries, entry => Assert.Null(entry.CtcMinSimilarity));
+    }
+
+    [Fact]
+    public void CtcSimilarity_CsvRoundTripsAndKeepsExistingTermThreshold()
+    {
+        _sut.AddEntries([
+            CtcTerm("threshold", .65f),
+            CtcTerm("auto", null),
+            CtcTerm("precise", .734f),
+        ]);
+        var csv = _sut.ExportToCsv();
+        Assert.EndsWith(",CtcMinSimilarity", csv.Split('\n')[0].TrimEnd('\r'));
+        Assert.Contains(",False,False,0.65", csv);
+        Assert.Contains(",False,False,0.734", csv);
+        Assert.Contains(",False,False,", csv);
+        var path = Path.Join(Path.GetTempPath(), "ctc-csv-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var imported = new DictionaryService(path);
+            Assert.Equal(3, imported.ImportFromCsv(csv));
+            Assert.Equal(
+                .65f,
+                imported.Entries.Single(e => e.Original == "threshold").CtcMinSimilarity
+            );
+            Assert.Equal(
+                .734f,
+                imported.Entries.Single(e => e.Original == "precise").CtcMinSimilarity
+            );
+            Assert.Null(imported.Entries.Single(e => e.Original == "auto").CtcMinSimilarity);
+            Assert.Equal(0, imported.ImportFromCsv(csv.Replace("0.65", "0.8")));
+            Assert.Equal(
+                .65f,
+                imported.Entries.Single(e => e.Original == "threshold").CtcMinSimilarity
+            );
+            Assert.Equal(
+                1,
+                imported.ImportFromCsv("Term,invalid,,False,True,False,0,Import,False,False,2")
+            );
+            Assert.Null(imported.Entries.Single(e => e.Original == "invalid").CtcMinSimilarity);
+            Assert.Equal(
+                1,
+                imported.ImportFromCsv("Term,legacy,,False,True,False,0,Import,False,False")
+            );
+            Assert.Null(imported.Entries.Single(e => e.Original == "legacy").CtcMinSimilarity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static DictionaryEntry CtcTerm(string original, float? threshold) =>
+        new()
+        {
+            Id = original,
+            Original = original,
+            EntryType = DictionaryEntryType.Term,
+            CtcMinSimilarity = threshold,
+        };
+
+    [Fact]
     public void AddEntry_AppearsInEntries()
     {
         _sut.AddEntry(

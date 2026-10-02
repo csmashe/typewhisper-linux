@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -16,7 +17,11 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public sealed partial class DictionaryService : IDictionaryService
 {
-    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        WriteIndented = true,
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+    };
 
     private static readonly TimeSpan s_correctionRegexTimeout = TimeSpan.FromMilliseconds(250);
 
@@ -48,7 +53,7 @@ public sealed partial class DictionaryService : IDictionaryService
                     );
                     return entries.IsDefault
                         ? throw new JsonException("Dictionary JSON deserialized to null.")
-                        : entries;
+                        : [.. entries.Select(SanitizeEntry)];
                 },
                 Diagnostic = diagnostic =>
                     Trace.WriteLine(
@@ -81,18 +86,24 @@ public sealed partial class DictionaryService : IDictionaryService
 
     public event Action? EntriesChanged;
 
+    private static DictionaryEntry SanitizeEntry(DictionaryEntry entry) =>
+        entry with
+        {
+            CtcMinSimilarity = DictionaryEntry.SanitizeCtcSimilarity(entry.CtcMinSimilarity),
+        };
+
     public void AddEntry(DictionaryEntry entry)
     {
         Commit(entries =>
         {
-            entries.Add(entry);
+            entries.Add(SanitizeEntry(entry));
             return true;
         });
     }
 
     public void AddEntries(IEnumerable<DictionaryEntry> entries)
     {
-        var additions = entries.ToList();
+        var additions = entries.Select(SanitizeEntry).ToList();
         if (additions.Count == 0)
         {
             return;
@@ -115,7 +126,7 @@ public sealed partial class DictionaryService : IDictionaryService
                 return false;
             }
 
-            entries[idx] = entry;
+            entries[idx] = SanitizeEntry(entry);
             return true;
         });
     }

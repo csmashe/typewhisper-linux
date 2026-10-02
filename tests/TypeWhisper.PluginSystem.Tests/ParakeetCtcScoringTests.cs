@@ -9,6 +9,15 @@ public sealed class ParakeetCtcScoringTests
     private static readonly int[] s_boundaryEncoding = [0, 1, 4];
     private static readonly int[] s_unboundedEncoding = [1, 4];
 
+    [Theory]
+    [InlineData("sherpa-onnx", "sherpa onnx")]
+    [InlineData("AT-SPI", "AT SPI")]
+    [InlineData("AT–SPI", "AT SPI")]
+    [InlineData("AT—SPI", "AT SPI")]
+    [InlineData("whisper.cpp", "whisper.cpp")]
+    public void SpokenFormSeparatesHyphenatedWords(string term, string expected) =>
+        Assert.Equal(expected, ParakeetCtcPlugin.SpokenForm(term));
+
     [Fact]
     public void AcousticEvidencePrefersMatchingLabel()
     {
@@ -92,10 +101,14 @@ public sealed class ParakeetCtcScoringTests
                 ["c"] = 3,
                 ["bc"] = 4,
                 ["ab"] = 5,
+                ["t"] = 6,
+                ["s"] = 7,
+                ["p"] = 8,
+                ["i"] = 9,
             };
             File.WriteAllLines(
                 Path.Join(folder, "tokens.txt"),
-                vocab.Select(p => $"{p.Key} {p.Value}").Append("<blk> 6")
+                vocab.Select(p => $"{p.Key} {p.Value}").Append("<blk> 10")
             );
             File.WriteAllText(
                 Path.Join(folder, "tokenizer.json"),
@@ -115,6 +128,8 @@ public sealed class ParakeetCtcScoringTests
             Assert.Equal(s_boundaryEncoding, tokenizer.Encode("ＡBC"));
             Assert.Equal(s_unboundedEncoding, tokenizer.Encode("ABC", false));
             Assert.Empty(tokenizer.Encode("unknown"));
+            Assert.Empty(tokenizer.Encode("AT-SPI"));
+            Assert.NotEmpty(tokenizer.Encode(ParakeetCtcPlugin.SpokenForm("AT-SPI")));
         }
         finally
         {
