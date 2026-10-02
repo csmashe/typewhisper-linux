@@ -23,4 +23,21 @@ internal static class PluginManagerTestAccess
             );
         field.SetValue(pluginManager, engines.ToList());
     }
+
+    public static void SetVocabularyRescorers(
+        PluginManager pluginManager,
+        IReadOnlyList<IVocabularyRescorerPlugin> engines
+    )
+    {
+        var field =
+            typeof(PluginManager).GetField(
+                "_vocabularyRescorers",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )
+            ?? throw new MissingFieldException(
+                typeof(PluginManager).FullName,
+                "_vocabularyRescorers"
+            );
+        field.SetValue(pluginManager, engines.ToList());
+    }
 }

@@ -9,7 +9,9 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class SpeechFeedbackServiceTests
 {
-    private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(2);
+    // A hang guard, not a timing assertion: thread-pool hops stall for seconds when
+    // the whole solution builds and tests alongside, and 2 s failed exactly then.
+    private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(15);
 
     [Fact]
     public async Task Reservation_stops_active_manual_readback()

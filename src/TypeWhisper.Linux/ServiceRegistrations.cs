@@ -5,6 +5,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -81,6 +82,7 @@ internal static class ServiceRegistrations
             new DictionaryService(Path.Join(dataPath, "dictionary.json"))
         );
         services.AddSingleton<IVocabularyBoostingService, VocabularyBoostingService>();
+        services.AddSingleton<IVocabularyRescoringService, VocabularyRescoringService>();
         services.AddSingleton<ISnippetService>(
             new SnippetService(Path.Join(dataPath, "snippets.json"))
         );

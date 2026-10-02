@@ -19,6 +19,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -239,6 +240,7 @@ public sealed partial class HttpApiService : IDisposable
     private readonly ISettingsService _settings;
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly IVocabularyRescoringService _vocabularyRescoring;
     private readonly string? _apiSocketPathOverride;
     private readonly Func<Socket, bool> _validateUnixPeer;
     private readonly string _secretProtectionKeyFilePath;
@@ -265,6 +267,7 @@ public sealed partial class HttpApiService : IDisposable
         HotkeyService hotkeys,
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
+        IVocabularyRescoringService vocabularyRescoring,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
         DictationOrchestrator dictation,
@@ -283,6 +286,7 @@ public sealed partial class HttpApiService : IDisposable
             hotkeys,
             dictionary,
             vocabularyBoosting,
+            vocabularyRescoring,
             pipeline,
             translation,
             dictation,
@@ -306,6 +310,7 @@ public sealed partial class HttpApiService : IDisposable
         HotkeyService hotkeys,
         IDictionaryService dictionary,
         IVocabularyBoostingService vocabularyBoosting,
+        IVocabularyRescoringService vocabularyRescoring,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
         DictationOrchestrator dictation,
@@ -326,6 +331,7 @@ public sealed partial class HttpApiService : IDisposable
         _hotkeys = hotkeys;
         _dictionary = dictionary;
         _vocabularyBoosting = vocabularyBoosting;
+        _vocabularyRescoring = vocabularyRescoring;
         _pipeline = pipeline;
         _translation = translation;
         _dictation = dictation;
@@ -1925,11 +1931,29 @@ public sealed partial class HttpApiService : IDisposable
                 ? TranscriptionTask.Translate
                 : TranscriptionTask.Transcribe;
 
+        var translate = opts.Task == TranscriptionTask.Translate;
+        var rescoreEligible = _vocabularyRescoring.IsEligible(result.TokenTimings, translate);
+        var pipelineText = result.Text;
+        if (rescoreEligible)
+        {
+            var refined = await _vocabularyRescoring.RefineAsync(
+                new VocabularyRescoringInput(
+                    Guid.NewGuid(),
+                    pipelineText,
+                    wav,
+                    result.TokenTimings,
+                    translate
+                ),
+                ct
+            );
+            pipelineText = refined.Text;
+        }
+
         var processed = await _pipeline.ProcessAsync(
-            result.Text,
+            pipelineText,
             new PipelineOptions
             {
-                VocabularyBooster = settings.VocabularyBoostingEnabled
+                VocabularyBooster = !rescoreEligible && settings.VocabularyBoostingEnabled
                     ? _vocabularyBoosting.Apply
                     : null,
                 DictionaryCorrector = opts.ApplyCorrections ? _dictionary.ApplyCorrections : null,

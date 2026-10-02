@@ -346,12 +346,14 @@ public sealed class SettingsServiceTests : IDisposable
     public void SaveAndLoad_RoundTrips()
     {
         var sut = new SettingsService(_filePath);
+        Assert.True(sut.Current.AcousticVocabularyBoostingEnabled);
         var settings = AppSettings.Default with
         {
             Language = "de",
             LanguageHints = ["de", "en"],
             HasCompletedOnboarding = true,
             VocabularyBoostingEnabled = true,
+            AcousticVocabularyBoostingEnabled = false,
             AutoAddDictionaryCorrections = true,
             CleanupLevel = CleanupLevel.Light,
             EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
@@ -378,6 +380,7 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.Equal(["de", "en"], sut2.Current.LanguageHints);
         Assert.True(sut2.Current.HasCompletedOnboarding);
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
+        Assert.False(sut2.Current.AcousticVocabularyBoostingEnabled);
         Assert.True(sut2.Current.AutoAddDictionaryCorrections);
         Assert.Equal(CleanupLevel.Light, sut2.Current.CleanupLevel);
         Assert.Equal(EnglishOutputVariant.UnitedStates, sut2.Current.EnglishOutputVariant);

@@ -11,6 +11,7 @@ using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.SpokenCommand;
 using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -119,6 +120,7 @@ public sealed partial class DictationOrchestrator : IDisposable
     private readonly DictationToggleGate _toggleGate = new();
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly IVocabularyRescoringService _vocabularyRescoring;
     private AudioRecordingService.AudioCaptureSession? _audioCaptureSession;
     private CancellationTokenSource? _activeDictationCts;
 
@@ -196,6 +198,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         IDictionaryService dictionary,
         ISnippetService snippets,
         IVocabularyBoostingService vocabularyBoosting,
+        IVocabularyRescoringService vocabularyRescoring,
         LlmCleanupService cleanup,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
@@ -238,6 +241,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         _dictionary = dictionary;
         _snippets = snippets;
         _vocabularyBoosting = vocabularyBoosting;
+        _vocabularyRescoring = vocabularyRescoring;
         _cleanup = cleanup;
         _pipeline = pipeline;
         var rulesLoader = new SpokenFormattingRulesLoader();
@@ -2491,12 +2495,53 @@ public sealed partial class DictationOrchestrator : IDisposable
             var translationTarget = context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
             var cleanupLevel = ResolveCleanupLevel(context, promptAction);
             _telemetry.Tag(context.SessionId, "cleanup.level", cleanupLevel.ToString());
+            var recordingId = Guid.NewGuid();
+            var timings = usedPreviewFallback ? [] : result?.TokenTimings ?? [];
+            var rescoreEligible = _vocabularyRescoring.IsEligible(timings, translate);
+            var pipelineText = rawText;
+            if (rescoreEligible)
+            {
+                var rescoreOperation = _telemetry.Child(context.SessionId, "vocabulary_rescore");
+                try
+                {
+                    // Timings align against the engine text, so artifact cleanup re-runs afterwards.
+                    var refined = await _vocabularyRescoring.RefineAsync(
+                        new VocabularyRescoringInput(
+                            recordingId,
+                            result?.Text ?? rawText,
+                            wav,
+                            timings,
+                            translate
+                        ),
+                        cancelToken
+                    );
+                    rescoreOperation?.Finish(
+                        refined.Error is null ? DiagnosticsOutcome.Ok : DiagnosticsOutcome.Failed
+                    );
+                    if (refined.Error is not null)
+                        Trace.WriteLine("[VocabularyRescoring] " + refined.Error);
+                    if (refined.Applied)
+                        pipelineText = LinuxDictationFinalTextPolicy.SelectRawText(refined.Text);
+                }
+                catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
+                {
+                    rescoreOperation?.Finish(DiagnosticsOutcome.Cancelled);
+                    ReportStatus(context, "Canceled");
+                    ShowFeedback(context, "Canceled", false, true);
+                    PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
+                    return;
+                }
+            }
+
             var postProcessOperation = _telemetry.Child(context.SessionId, "post_process");
             var stepTimings = new List<(string Name, TimeSpan Elapsed)>();
             var pipelineResult = await _pipeline.ProcessAsync(
-                rawText,
-                BuildPipelineOptions(context, duration, postProcessingLanguage, configuredLanguage,
-                    languageHints, translate, engineSupportsTranslation, usedPreviewFallback, engineProviderId, engineModelId, stepTimings),
+                pipelineText,
+                BuildPipelineOptions(
+                    context, duration, postProcessingLanguage, configuredLanguage,
+                    languageHints, translate, engineSupportsTranslation, usedPreviewFallback,
+                    rescoreEligible, engineProviderId, engineModelId, stepTimings
+                ),
                 cancelToken
             );
 
