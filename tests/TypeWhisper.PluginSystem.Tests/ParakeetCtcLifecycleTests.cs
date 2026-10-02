@@ -118,7 +118,7 @@ public sealed class ParakeetCtcLifecycleTests : IDisposable
     public async Task RequestsResetIdleDeadlineAndDisposeCancelsTimer()
     {
         var disposes = 0;
-        var plugin = new ParakeetCtcPlugin(
+        using var plugin = new ParakeetCtcPlugin(
             new HttpClient(),
             TimeSpan.FromMilliseconds(500),
             _ => new NemoCtcModel(s_metadata, () => Interlocked.Increment(ref disposes))
@@ -131,6 +131,7 @@ public sealed class ParakeetCtcLifecycleTests : IDisposable
             await plugin.RescoreAsync(Request(), CancellationToken.None);
         }
         Assert.Equal(0, disposes);
+        // ReSharper disable once DisposeOnUsingVariable -- the explicit Dispose is the behaviour under test; the using covers the exception path.
         plugin.Dispose();
         Assert.Equal(1, disposes);
         await Task.Delay(600);

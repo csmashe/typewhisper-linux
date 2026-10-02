@@ -140,7 +140,7 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
                 errorKind = "PluginBusy";
                 return new VocabularyRescoringOutcome(
                     input.Text,
-                    true,
+                    false,
                     false,
                     "Vocabulary rescoring skipped: previous call still running"
                 );
@@ -181,7 +181,7 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
             errorKind = "Timeout";
             return new VocabularyRescoringOutcome(
                 input.Text,
-                true,
+                false,
                 false,
                 $"Vocabulary rescoring timed out after {_timeout.TotalSeconds:0.#} s"
             );
@@ -193,7 +193,7 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
             // hands this transcription to the text booster as well.
             return new VocabularyRescoringOutcome(
                 input.Text,
-                _pluginManager.VocabularyRescorer is { IsReady: true },
+                false,
                 false,
                 "Vocabulary rescoring failed: " + errorKind
             );
@@ -222,7 +222,7 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
             errorKind = "PluginUnavailable";
             return new VocabularyRescoringOutcome(
                 input.Text,
-                true,
+                false,
                 false,
                 "Vocabulary rescoring result discarded: plugin unavailable"
             );

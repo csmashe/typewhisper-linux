@@ -1,6 +1,6 @@
 # Parakeet CTC vocabulary add-on
 
-A regular bundled TypeWhisper Linux plugin, discovered by `PluginLoader` from its own top-level plugin directory. Activation prepares the required acoustic model and tokenizer automatically. Host invocation and a host setting to enable the optional vocabulary rescoring stage are planned separately. It uses enabled vocabulary terms and the main recognizer's token timings.
+A regular bundled TypeWhisper Linux plugin, discovered by `PluginLoader` from its own top-level plugin directory. Activation prepares the required acoustic model and tokenizer automatically. The host's `VocabularyRescoringService` invokes it after local Parakeet transcriptions when the Dictionary's **Enable acoustic dictionary boosting** setting is on. It uses enabled vocabulary terms and the main recognizer's token timings.
 
 ## Automatic model setup
 

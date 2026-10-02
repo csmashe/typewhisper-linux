@@ -73,7 +73,7 @@ public sealed class ParakeetCtcSelectionTests
         var missing = Path.Join(Path.GetTempPath(), "ctc-missing-" + Guid.NewGuid());
         var host = new Mock<IPluginHostServices>(MockBehavior.Strict);
         host.Setup(h => h.GetSetting<string>("ModelDirectory")).Returns(missing);
-        var plugin = new ParakeetCtcPlugin();
+        using var plugin = new ParakeetCtcPlugin();
         var request = new VocabularyRescoreRequest(
             Guid.NewGuid(),
             "private transcript",
@@ -95,6 +95,7 @@ public sealed class ParakeetCtcSelectionTests
         host.VerifyGet(h => h.PluginAssetDirectory, Times.Never);
         host.Verify(h => h.NotifyCapabilitiesChanged(), Times.Never);
 
+        // ReSharper disable once DisposeOnUsingVariable -- the explicit Dispose is the behaviour under test; the using covers the exception path.
         plugin.Dispose();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => plugin.ActivateAsync(host.Object));
     }

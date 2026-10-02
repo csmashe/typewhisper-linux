@@ -24,10 +24,10 @@ public sealed class ParakeetCtcNativeCoexistenceTests
             "linux-x64",
             "native"
         );
-        // Preload sherpa's SONAME before its C API binds; the flat test output otherwise supplies ORT 1.24.
-        var sherpaRuntime = NativeLibrary.Load(
-            Path.Join(nativeDirectory, "sherpa", "libonnxruntime.so")
-        );
+        // Preload sherpa's SONAME before its C API binds; the flat test output otherwise supplies
+        // ORT 1.24. Both packages publish the same native path, so sherpa's copy comes from the
+        // restored package rather than the merged output.
+        var sherpaRuntime = NativeLibrary.Load(SherpaOnnxRuntimeFromPackageCache());
         try
         {
             var getApiBase = Marshal.GetDelegateForFunctionPointer<GetPointer>(
@@ -69,6 +69,36 @@ public sealed class ParakeetCtcNativeCoexistenceTests
         {
             NativeLibrary.Free(sherpaRuntime);
         }
+    }
+
+    private static string SherpaOnnxRuntimeFromPackageCache()
+    {
+        var packages =
+            Environment.GetEnvironmentVariable("NUGET_PACKAGES")
+            ?? Path.Join(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".nuget",
+                "packages"
+            );
+        var package = Path.Join(packages, "org.k2fsa.sherpa.onnx.runtime.linux-x64");
+        var version = typeof(SherpaOnnx.OfflineRecognizer).Assembly.GetName().Version!;
+        var candidates = Directory
+            .GetDirectories(package)
+            .OrderByDescending(directory =>
+                string.Equals(
+                    Path.GetFileName(directory),
+                    $"{version.Major}.{version.Minor}.{version.Build}",
+                    StringComparison.Ordinal
+                )
+            )
+            .ThenByDescending(Path.GetFileName, StringComparer.Ordinal);
+        return Path.Join(
+            candidates.First(),
+            "runtimes",
+            "linux-x64",
+            "native",
+            "libonnxruntime.so"
+        );
     }
 
     private static string CreateSessionAndGetVersion()

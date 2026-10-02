@@ -70,20 +70,6 @@
         <ProjectReference Include="..\TypeWhisper.ProcessTestChild\TypeWhisper.ProcessTestChild.csproj"/>
     </ItemGroup>
 
-    <!-- Both ORT packages ship runtimes/linux-x64/native/libonnxruntime.so and the flat test
-         output keeps one; retain sherpa's copy beside it from the restored package itself. -->
-    <Target Name="RetainSherpaOnnxRuntime" AfterTargets="CopyFilesToOutputDirectory">
-        <ItemGroup>
-            <_SherpaOnnxRuntime Include="@(RuntimeTargetsCopyLocalItems);@(NativeCopyLocalItems)"
-                                Condition="'%(NuGetPackageId)' == 'org.k2fsa.sherpa.onnx.runtime.linux-x64'"/>
-            <_SherpaOnnxRuntime Remove="@(_SherpaOnnxRuntime)"
-                                Condition="'%(Filename)%(Extension)' != 'libonnxruntime.so'"/>
-        </ItemGroup>
-        <Copy SourceFiles="@(_SherpaOnnxRuntime)"
-              DestinationFolder="$(OutDir)runtimes/linux-x64/native/sherpa"
-              SkipUnchangedFiles="true"/>
-    </Target>
-
     <ItemGroup>
         <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
     </ItemGroup>

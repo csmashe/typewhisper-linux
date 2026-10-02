@@ -12,6 +12,10 @@ public sealed record VocabularyRescoringInput(
     string? EngineModelId
 );
 
+/// <summary>
+///     <see cref="Eligible" /> is true only when the acoustic stage reached a decision; a busy,
+///     timed-out or failed stage leaves the text-only booster to run.
+/// </summary>
 public sealed record VocabularyRescoringOutcome(
     string Text,
     bool Eligible,

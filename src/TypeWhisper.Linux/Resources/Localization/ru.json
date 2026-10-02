@@ -389,7 +389,7 @@
   "Dictionary.CaseSensitive": "Учитывать регистр",
   "Dictionary.CtcSimilarityAuto": "Усиление: авто",
   "Dictionary.CtcSimilarityBalanced": "Усиление: сбалансированное",
-  "Dictionary.CtcSimilarityCustom": "Boost: {0}%",
+  "Dictionary.CtcSimilarityCustom": "Усиление: {0} %",
   "Dictionary.CtcSimilarityPrecise": "Усиление: точное",
   "Dictionary.CtcSimilarityStrong": "Усиление: сильное",
   "Dictionary.CtcSimilarityTooltip": "Акустическое сходство, которого должно достичь неверно распознанное слово, чтобы стать этим термином. Меньше — больше вариантов написания; авто — значение движка по умолчанию (60 %).",

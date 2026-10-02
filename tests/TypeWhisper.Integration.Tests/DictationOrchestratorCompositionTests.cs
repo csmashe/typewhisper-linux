@@ -415,7 +415,7 @@ public sealed class DictationOrchestratorCompositionTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public Task RescorerFails_KeepsTextAndStillSkipsBooster() => RunRescorerAsync(true, true);
+    public Task RescorerFails_KeepsTextAndRunsTextBooster() => RunRescorerAsync(true, true);
 
     [Fact]
     [Trait("Category", "Integration")]
@@ -493,7 +493,8 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Equal("ready", result.Status);
             Assert.Equal(expected, pipeline.Text);
             Assert.NotNull(pipeline.Options);
-            Assert.Equal(!eligible, pipeline.Options.VocabularyBooster is not null);
+            // A stage that reached no decision hands the transcript back to the text booster.
+            Assert.Equal(!(eligible && !fails), pipeline.Options.VocabularyBooster is not null);
             Assert.Equal(eligible ? 1 : 0, rescorer.CallCount);
             if (eligible)
                 Assert.Equal(engineText, rescorer.Request?.Text);

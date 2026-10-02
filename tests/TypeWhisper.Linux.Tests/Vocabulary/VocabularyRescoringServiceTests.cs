@@ -276,7 +276,7 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         Assert.Equal(
             new VocabularyRescoringOutcome(
                 "type whisper",
-                true,
+                false,
                 false,
                 "Vocabulary rescoring failed: InvalidDataException"
             ),
@@ -302,7 +302,7 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
             throw new InvalidOperationException("private transcript and terms");
         var result = await _service.RefineAsync(Input(), CancellationToken.None);
         Assert.Equal("type whisper", result.Text);
-        Assert.True(result.Eligible);
+        Assert.False(result.Eligible);
         Assert.False(result.Applied);
         Assert.Equal("Vocabulary rescoring failed: InvalidOperationException", result.Error);
     }
@@ -338,7 +338,7 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
             .RefineAsync(Input(), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("type whisper", result.Text);
-        Assert.True(result.Eligible);
+        Assert.False(result.Eligible);
         Assert.False(result.Applied);
         Assert.Equal("Vocabulary rescoring timed out after 0.1 s", result.Error);
         Assert.True(_plugin.Token.IsCancellationRequested);
@@ -348,7 +348,7 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         Assert.Equal(
             new VocabularyRescoringOutcome(
                 "type whisper",
-                true,
+                false,
                 false,
                 "Vocabulary rescoring skipped: previous call still running"
             ),
@@ -461,7 +461,7 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         Assert.Equal(
             new VocabularyRescoringOutcome(
                 "type whisper",
-                true,
+                false,
                 false,
                 "Vocabulary rescoring result discarded: plugin unavailable"
             ),
