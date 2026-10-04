@@ -2,6 +2,7 @@
   "id": "com.typewhisper.sherpa-onnx",
   "name": "Local Models (sherpa-onnx)",
   "version": "1.0.1",
+  "minHostVersion": "0.16.0",
   "author": "TypeWhisper",
   "description": "Offline transcription via sherpa-onnx (NVIDIA NeMo Parakeet + Canary)",
   "networkAccess": "local",
