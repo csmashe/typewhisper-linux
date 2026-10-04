@@ -38,4 +38,10 @@ public sealed record PluginTranscriptionResult(
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public IReadOnlyList<PluginTranscriptionSegment> Segments { get; init; } = [];
+
+    /// <summary>Token intervals supplied by local engines for acoustic vocabulary refinement.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public IReadOnlyList<VocabularyTokenTiming> TokenTimings { get; init; } = [];
 }

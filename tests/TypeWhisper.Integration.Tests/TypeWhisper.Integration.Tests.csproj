@@ -28,5 +28,6 @@
     <ItemGroup>
         <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
         <Compile Include="../PluginManagerTestAccess.cs" Link="PluginManagerTestAccess.cs"/>
+        <Compile Include="../FakeVocabularyRescorerPlugin.cs" Link="FakeVocabularyRescorerPlugin.cs"/>
     </ItemGroup>
 </Project>

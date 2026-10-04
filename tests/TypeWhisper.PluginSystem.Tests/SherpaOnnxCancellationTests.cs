@@ -60,7 +60,7 @@ public sealed class SherpaOnnxCancellationTests
             calls++;
             // ReSharper disable once AccessToDisposedClosure -- lambda runs synchronously inside coordinator.Decode below, before the `using var cts` is disposed at scope end.
             cts.Cancel();
-            return "first chunk";
+            return new SherpaDecodeChunk("first chunk");
         });
         var audio = new float[SherpaDecodeCoordinator.MaximumChunkSampleCount + 1];
 
@@ -89,7 +89,7 @@ public sealed class SherpaOnnxCancellationTests
                     _ =>
                     {
                         cts.Cancel();
-                        return "first chunk";
+                        return new SherpaDecodeChunk("first chunk");
                     },
                     cts.Token
                 )
@@ -104,7 +104,7 @@ public sealed class SherpaOnnxCancellationTests
                 plugin.RunDecodeTransactionForTests(
                     [],
                     parseCanaryPayload: false,
-                    _ => "lock released",
+                    _ => new SherpaDecodeChunk("lock released"),
                     CancellationToken.None
                 )
         );
@@ -123,7 +123,7 @@ public sealed class SherpaOnnxCancellationTests
         var coordinator = new SherpaDecodeCoordinator(chunk =>
         {
             chunkLengths.Add(chunk.Length);
-            return string.Empty;
+            return new SherpaDecodeChunk(string.Empty);
         });
         var audio = new float[SherpaDecodeCoordinator.MaximumChunkSampleCount * 3 + 123];
 
@@ -152,7 +152,9 @@ public sealed class SherpaOnnxCancellationTests
                 """{"text":"brown fox jumps high","lang":"en"}""",
             ]
         );
-        var coordinator = new SherpaDecodeCoordinator(_ => payloads.Dequeue());
+        var coordinator = new SherpaDecodeCoordinator(
+            _ => new SherpaDecodeChunk(payloads.Dequeue())
+        );
         var audio = new float[SherpaDecodeCoordinator.MaximumChunkSampleCount + 1];
 
         var result = coordinator.Decode(
@@ -179,7 +181,7 @@ public sealed class SherpaOnnxCancellationTests
         string? expectedLanguage
     )
     {
-        var coordinator = new SherpaDecodeCoordinator(_ => payload);
+        var coordinator = new SherpaDecodeCoordinator(_ => new SherpaDecodeChunk(payload));
 
         var result = coordinator.Decode(
             new float[16],

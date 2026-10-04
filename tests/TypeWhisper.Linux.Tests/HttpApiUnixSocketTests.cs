@@ -9,6 +9,8 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Vocabulary;
+using TypeWhisper.Linux.Tests.Vocabulary;
 using TypeWhisper.PluginSDK.Processes;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -854,6 +856,72 @@ public sealed class HttpApiUnixSocketTests
         return translation;
     }
 
+    [Fact]
+    public async Task EligibleRescorer_RefinesPipelineAndSkipsBoosterWithoutCorrections()
+    {
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary
+            .SetupGet(d => d.Entries)
+            .Returns([
+                new DictionaryEntry
+                {
+                    Id = "term",
+                    Original = "TypeWhisper",
+                    EntryType = DictionaryEntryType.Term,
+                },
+            ]);
+        dictionary.Setup(d => d.GetEnabledTerms()).Returns(["TypeWhisper"]);
+        var pipeline = new Mock<IPostProcessingPipeline>();
+        pipeline
+            .Setup(p =>
+                p.ProcessAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<PipelineOptions>(),
+                    It.IsAny<CancellationToken>()
+                )
+            )
+            .Returns(
+                (string text, PipelineOptions _, CancellationToken _) =>
+                    Task.FromResult(new PostProcessingResult { Text = text })
+            );
+        using var fixture = new ApiFixture(
+            transcriptionEngine: new SegmentedTranscriptionEngine(
+                timings: [new VocabularyTokenTiming("Hello World", 0, 1)],
+                parakeet: true
+            ),
+            dictionary: dictionary.Object,
+            pipeline: pipeline.Object,
+            vocabularyBoostingEnabled: true,
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.Exited,
+                0,
+                PcmWavTests.CreateWav([0, 123, -123], list: true, dataSize: uint.MaxValue),
+                [],
+                ProcessOutputStatus.Complete,
+                null
+            )
+        );
+        var rescorer = new FakeVocabularyRescorerPlugin();
+        PluginManagerTestAccess.SetVocabularyRescorers(fixture.Models.PluginManager, [rescorer]);
+        fixture.Start();
+        using var client = fixture.CreateUnixClient(withBearer: true);
+        using var content = CreateSegmentRequest(fixture, "json", null, applyCorrections: false);
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        pipeline.Verify(
+            p =>
+                p.ProcessAsync(
+                    "TypeWhisper",
+                    It.Is<PipelineOptions>(o =>
+                        o.VocabularyBooster == null && o.DictionaryCorrector == null
+                    ),
+                    It.IsAny<CancellationToken>()
+                ),
+            Times.Once
+        );
+        Assert.Equal(1, rescorer.CallCount);
+    }
+
     private static ApiFixture CreateSegmentFixture(
         ITranslationService translation,
         IReadOnlyList<PluginTranscriptionSegment>? segments = null,
@@ -910,21 +978,27 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(0.2f, segments[1].GetProperty("no_speech_probability").GetSingle());
     }
 
-    private sealed class SegmentedTranscriptionEngine(IReadOnlyList<PluginTranscriptionSegment>? segments = null) : ITranscriptionEngineRole
+    private sealed class SegmentedTranscriptionEngine(
+        IReadOnlyList<PluginTranscriptionSegment>? segments = null,
+        IReadOnlyList<VocabularyTokenTiming>? timings = null,
+        bool parakeet = false
+    ) : ITranscriptionEngineRole
     {
         public string PluginId => "test-segments";
-        public string ProviderId => "test-segments";
+        public string ProviderId => parakeet ? "sherpa-onnx" : "test-segments";
         public string ProviderDisplayName => "Test segments";
         public bool IsConfigured => true;
-        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new("test", "Test")];
-        public string SelectedModelId => "test";
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new(SelectedModelId, "Test")];
+        public string SelectedModelId => parakeet ? "parakeet-tdt-0.6b" : "test";
         public bool SupportsTranslation => false;
+
         public void SelectModel(string modelId) { }
         public Task<PluginTranscriptionResult> TranscribeAsync(
             byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
         {
             return Task.FromResult(new PluginTranscriptionResult("Hello World", "en", 4)
             {
+                TokenTimings = timings ?? [],
                 Segments = segments ??
                 [
                     new PluginTranscriptionSegment("Hello", 0.2, 1.3) { NoSpeechProbability = 0.1f },
@@ -1705,7 +1779,8 @@ public sealed class HttpApiUnixSocketTests
             IDictionaryService? dictionary = null,
             IPostProcessingPipeline? pipeline = null,
             ITranslationService? translation = null,
-            IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null
+            IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null,
+            bool vocabularyBoostingEnabled = false
         )
         {
             Port = GetFreeTcpPort();
@@ -1723,7 +1798,13 @@ public sealed class HttpApiUnixSocketTests
 
             _current = new AppSettings
             {
-                SelectedModelId = transcriptionEngine is null ? null : ModelManagerService.GetPluginModelId(transcriptionEngine.PluginId, "test"),
+                SelectedModelId = transcriptionEngine is null
+                    ? null
+                    : ModelManagerService.GetPluginModelId(
+                        transcriptionEngine.PluginId,
+                        transcriptionEngine.SelectedModelId ?? "test"
+                    ),
+                VocabularyBoostingEnabled = vocabularyBoostingEnabled,
                 ApiServerEnabled = true,
                 ApiServerPort = Port,
                 ApiServerBearerToken = Token,
@@ -1772,7 +1853,13 @@ public sealed class HttpApiUnixSocketTests
                 PromptActions,
                 _hotkeys,
                 dictionary!,
-                null!,
+                new Mock<IVocabularyBoostingService>().Object,
+                new VocabularyRescoringService(
+                    Models.PluginManager,
+                    Settings.Object,
+                    dictionary!,
+                    Models
+                ),
                 pipeline!,
                 translation!,
                 null!,

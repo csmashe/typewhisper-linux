@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using TypeWhisper.Core.Models;
 
@@ -11,7 +12,7 @@ public sealed partial class DictionaryService
     {
         var sb = new StringBuilder();
         sb.AppendLine(
-            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex"
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex,CtcMinSimilarity"
         );
 
         var entries = _store.Current
@@ -40,6 +41,12 @@ public sealed partial class DictionaryService
             sb.Append(Csv.Escape(entry.ExpandEscapes.ToString()));
             sb.Append(',');
             sb.Append(Csv.Escape(entry.IsRegex.ToString()));
+            sb.Append(',');
+            sb.Append(
+                Csv.Escape(
+                    entry.CtcMinSimilarity?.ToString(CultureInfo.InvariantCulture) ?? string.Empty
+                )
+            );
             sb.AppendLine();
         }
 
@@ -141,6 +148,7 @@ public sealed partial class DictionaryService
                     Source = ReadSource(row, 7),
                     ExpandEscapes = entryType == DictionaryEntryType.Correction && ReadBool(row, 8),
                     IsRegex = isRegex,
+                    CtcMinSimilarity = DictionaryEntry.SanitizeCtcSimilarity(ReadFloat(row, 10)),
                 };
 
                 if (entryType == DictionaryEntryType.Correction)
@@ -175,6 +183,7 @@ public sealed partial class DictionaryService
                     continue;
                 }
 
+                // Re-importing a term preserves its existing threshold.
                 if (!existingKeys.Add(DictionaryEntryKey(entry)))
                 {
                     continue;
@@ -216,6 +225,17 @@ public sealed partial class DictionaryService
     {
         return row.Count > index && bool.TryParse(row[index], out var value) && value;
     }
+
+    private static float? ReadFloat(List<string> row, int index) =>
+        row.Count > index
+        && float.TryParse(
+            row[index],
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value
+        )
+            ? value
+            : null;
 
     private static int ReadInt(List<string> row, int index)
     {

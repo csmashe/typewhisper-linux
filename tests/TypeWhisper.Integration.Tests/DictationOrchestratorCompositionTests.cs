@@ -409,9 +409,105 @@ public sealed class DictationOrchestratorCompositionTests
         });
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task RescorerEligible_RefinesTextAndSkipsTextBooster() => RunRescorerAsync(true, false);
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task RescorerFails_KeepsTextAndRunsTextBooster() => RunRescorerAsync(true, true);
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task NoTokenTimings_StageSkipped_BoosterRuns() => RunRescorerAsync(false, false);
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task Rescorer_SeesEngineTextBeforeArtifactCleanup() =>
+        RunRescorerAsync(true, false, "type whisper...");
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task NonParakeetEngine_StageSkipped_BoosterRuns() =>
+        RunRescorerAsync(true, false, parakeet: false);
+
+    private static Task RunRescorerAsync(
+        bool hasTimings,
+        bool fails,
+        string engineText = "type whisper",
+        bool parakeet = true
+    )
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            var pipeline = new CapturingPipeline();
+            await using var fixture = new OrchestratorCompositionFixture(pipeline: pipeline);
+            if (parakeet)
+            {
+                fixture.Plugin.ProviderId = "sherpa-onnx";
+                // ReSharper disable once AccessToDisposedClosure -- runs inside the awaited test body, before the fixture is disposed.
+                fixture.Settings.Update(settings =>
+                    settings with
+                    {
+                        SelectedModelId = ModelManagerService.GetPluginModelId(
+                            fixture.Plugin.PluginId,
+                            "parakeet-tdt-0.6b"
+                        ),
+                    }
+                );
+            }
+            fixture.Settings.Update(settings => settings with { VocabularyBoostingEnabled = true });
+            fixture
+                .Provider.GetRequiredService<IDictionaryService>()
+                .AddEntry(
+                    new DictionaryEntry
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        Original = "TypeWhisper",
+                        EntryType = DictionaryEntryType.Term,
+                    }
+                );
+            var rescorer = new FakeVocabularyRescorerPlugin();
+            if (fails)
+                rescorer.Handler = (_, _) => throw new InvalidOperationException("private failure");
+            PluginManagerTestAccess.SetVocabularyRescorers(fixture.PluginManager, [rescorer]);
+            fixture.Plugin.EnqueueResult(_ =>
+                Task.FromResult(
+                    new PluginTranscriptionResult(engineText, "en", 1)
+                    {
+                        TokenTimings = hasTimings
+                            ? [new VocabularyTokenTiming(engineText, 0, 1)]
+                            : [],
+                    }
+                )
+            );
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            var result = await BoundedTest.WaitAsync(resultTask);
+
+            var eligible = hasTimings && parakeet;
+            var expected = eligible && !fails ? "TypeWhisper" : "type whisper";
+            Assert.Equal("ready", result.Status);
+            Assert.Equal(expected, pipeline.Text);
+            Assert.NotNull(pipeline.Options);
+            // A stage that reached no decision hands the transcript back to the text booster.
+            Assert.Equal(!(eligible && !fails), pipeline.Options.VocabularyBooster is not null);
+            Assert.Equal(eligible ? 1 : 0, rescorer.CallCount);
+            if (eligible)
+                Assert.Equal(engineText, rescorer.Request?.Text);
+            var history = Assert.Single(fixture.History.Records);
+            Assert.Equal("type whisper", history.RawText);
+            Assert.Equal(expected, history.FinalText);
+        });
+    }
+
     private sealed class CapturingPipeline : IPostProcessingPipeline
     {
         public PipelineOptions? Options { get; private set; }
+        public string? Text { get; private set; }
 
         public Task<PostProcessingResult> ProcessAsync(
             string rawText,
@@ -420,6 +516,7 @@ public sealed class DictationOrchestratorCompositionTests
         )
         {
             Options = options;
+            Text = rawText;
             return Task.FromResult(new PostProcessingResult { Text = rawText });
         }
     }

@@ -8,6 +8,16 @@ namespace TypeWhisper.Core.Models;
 /// </summary>
 public sealed record DictionaryEntry
 {
+    private const float MinCtcSimilarity = .4f;
+    private const float MaxCtcSimilarity = .95f;
+
+    internal static float? SanitizeCtcSimilarity(float? value) =>
+        value is { } threshold
+        && float.IsFinite(threshold)
+        && threshold is >= MinCtcSimilarity and <= MaxCtcSimilarity
+            ? threshold
+            : null;
+
     public required string Id { get; init; }
     public required DictionaryEntryType EntryType { get; init; }
     public required string Original { get; init; }
@@ -33,6 +43,10 @@ public sealed record DictionaryEntry
 
     public int TimesCorrected { get; init; }
     public int Priority { get; init; }
+
+    /// <summary>Optional acoustic similarity threshold for the CTC stage, 0.4–0.95; null uses the engine default.</summary>
+    public float? CtcMinSimilarity { get; init; }
+
     // ReSharper disable once UnusedMember.Global
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? LastUsedAt { get; init; }

@@ -195,6 +195,15 @@
       "sdkAbi": "net10.0"
     },
     {
+      "id": "com.typewhisper.parakeet-ctc",
+      "projectPath": "plugins/TypeWhisper.Plugin.ParakeetCtc/TypeWhisper.Plugin.ParakeetCtc.csproj",
+      "releaseSlug": "parakeet-ctc",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "nativeRuntimes": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
       "id": "com.typewhisper.qwen3-stt",
       "projectPath": "plugins/TypeWhisper.Plugin.Qwen3Stt/TypeWhisper.Plugin.Qwen3Stt.csproj",
       "releaseSlug": "qwen3-stt",

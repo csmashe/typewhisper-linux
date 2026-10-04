@@ -44,6 +44,7 @@ public sealed class PluginManager : IDisposable
     private List<IPostProcessorPlugin> _postProcessors = [];
     private List<ITranscriptionEngineRole> _transcriptionEngines = [];
     private List<ITtsProviderPlugin> _ttsProviders = [];
+    private List<IVocabularyRescorerPlugin> _vocabularyRescorers = [];
 
     public PluginManager(
         PluginLoader loader,
@@ -235,6 +236,7 @@ public sealed class PluginManager : IDisposable
             _postProcessors.Clear();
             _actionPlugins.Clear();
             _ttsProviders.Clear();
+            _vocabularyRescorers.Clear();
         }
     }
 
@@ -662,6 +664,17 @@ public sealed class PluginManager : IDisposable
         return true;
     }
 
+    public IVocabularyRescorerPlugin? VocabularyRescorer
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _vocabularyRescorers.FirstOrDefault();
+            }
+        }
+    }
+
     public ITtsProviderPlugin? GetTtsProvider(string providerId)
     {
         lock (_lock)
@@ -942,6 +955,7 @@ public sealed class PluginManager : IDisposable
                 .ToList();
             _actionPlugins = activePlugins.OfType<IActionPlugin>().ToList();
             _ttsProviders = activePlugins.OfType<ITtsProviderPlugin>().ToList();
+            _vocabularyRescorers = activePlugins.OfType<IVocabularyRescorerPlugin>().ToList();
         }
 
         // Raise outside _lock to avoid deadlock if a handler calls back into PluginManager.
