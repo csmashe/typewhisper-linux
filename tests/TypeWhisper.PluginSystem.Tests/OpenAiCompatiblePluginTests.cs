@@ -480,6 +480,35 @@ public sealed class OpenAiCompatiblePluginTests
         Assert.Equal(1, postCount);
     }
 
+    [Fact]
+    public async Task VerboseJsonNumericStrings_KeepTextAndMetadata()
+    {
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+            request.Method == HttpMethod.Get
+                ? ModelCatalogResponse("whisper")
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                        {"text":"Hello","language":"en","duration":"2.49",
+                         "segments":[{"text":"Hello","start":"0.0","end":"2.49","no_speech_prob":"0.1"}]}
+                        """),
+                }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://gpustack.local");
+        host.SetSetting("selectedModel", "whisper");
+        using var sut = new OpenAiCompatiblePlugin(client);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.TranscribeAsync([], null, false, null, CancellationToken.None);
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal("en", result.DetectedLanguage);
+        Assert.Equal(2.49, result.DurationSeconds);
+        var segment = Assert.Single(result.Segments);
+        Assert.Equal((0.0, 2.49), (segment.Start, segment.End));
+        Assert.Equal(0.1f, result.NoSpeechProbability);
+    }
+
     [Theory]
     [InlineData(false, "chat-completions", false)]
     [InlineData(true, "chat-completions", false)]
