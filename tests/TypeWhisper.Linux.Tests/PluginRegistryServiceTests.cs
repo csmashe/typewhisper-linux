@@ -77,7 +77,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
         var json = JsonSerializer.Serialize(plugins);
         var httpClient = CreateMockHttpClient(json);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        var service = new PluginRegistryService(manager, _settings.Object, httpClient)
         {
             RuntimeRid = "linux-x64",
         };
@@ -186,7 +186,6 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var service = new PluginRegistryService(
             CreateManager(),
-            _loader,
             _settings.Object,
             CreateMockHttpClient(JsonSerializer.Serialize(entries))
         )
@@ -267,7 +266,6 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var service = new PluginRegistryService(
             CreateManager(),
-            _loader,
             _settings.Object,
             CreateMockHttpClient(JsonSerializer.Serialize(new[] { entry }))
         )
@@ -354,7 +352,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = new HttpClient(handler.Object);
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        var service = new PluginRegistryService(manager, _settings.Object, httpClient)
         {
             RuntimeRid = "linux-x64",
         };
@@ -384,7 +382,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        var service = new PluginRegistryService(manager, _settings.Object, httpClient)
         {
             RuntimeRid = "linux-x64",
         };
@@ -402,7 +400,7 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var httpClient = CreateMockHttpClient("[]");
         var manager = CreateManager();
-        var service = new PluginRegistryService(manager, _loader, _settings.Object, httpClient)
+        var service = new PluginRegistryService(manager, _settings.Object, httpClient)
         {
             RuntimeRid = "linux-x64",
         };
@@ -449,7 +447,6 @@ public sealed class PluginRegistryServiceTests : IDisposable
             });
         var service = new PluginRegistryService(
             CreateManager(),
-            _loader,
             _settings.Object,
             new HttpClient(handler.Object)
         )
@@ -490,7 +487,6 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var service = new PluginRegistryService(
             CreateManager(),
-            _loader,
             _settings.Object,
             new HttpClient(handler.Object)
         )
@@ -527,7 +523,6 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var service = new PluginRegistryService(
             CreateManager(),
-            _loader,
             _settings.Object,
             new HttpClient(handler.Object)
         )
@@ -569,7 +564,6 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var service = new PluginRegistryService(
             CreateManager(),
-            _loader,
             _settings.Object,
             new HttpClient(handler.Object)
         )
@@ -631,7 +625,6 @@ public sealed class PluginRegistryServiceTests : IDisposable
 
         var service = new PluginRegistryService(
             CreateManager(),
-            _loader,
             _settings.Object,
             CreateMockHttpClient(JsonSerializer.Serialize(new[] { entry }))
         )

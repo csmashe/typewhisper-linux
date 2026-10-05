@@ -80,7 +80,6 @@ public partial class RecorderSectionViewModel : ObservableObject
         : this(
             recorder,
             audioPlayback,
-            settings,
             TypeWhisperEnvironment.AudioPath,
             CreateTranscriptionDelegate(models, settings)
         )
@@ -97,7 +96,6 @@ public partial class RecorderSectionViewModel : ObservableObject
         : this(
             recorder,
             audioPlayback,
-            settings,
             recordingDirectory,
             CreateTranscriptionDelegate(models, settings)
         )
@@ -107,7 +105,6 @@ public partial class RecorderSectionViewModel : ObservableObject
     internal RecorderSectionViewModel(
         RecorderService recorder,
         AudioPlaybackService audioPlayback,
-        ISettingsService settings,
         string recordingDirectory,
         Func<byte[], CancellationToken, Task<string?>> transcribeAsync,
         Action<Action>? postToUiThread = null
@@ -115,7 +112,6 @@ public partial class RecorderSectionViewModel : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(recorder);
         ArgumentNullException.ThrowIfNull(audioPlayback);
-        ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(recordingDirectory);
         ArgumentNullException.ThrowIfNull(transcribeAsync);
 

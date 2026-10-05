@@ -273,7 +273,6 @@ public sealed class PluginRegistryInstallerTests : IDisposable
     {
         return new PluginRegistryService(
             manager,
-            _loader,
             _settings.Object,
             new HttpClient(_archiveHandler),
             _pluginsRoot
