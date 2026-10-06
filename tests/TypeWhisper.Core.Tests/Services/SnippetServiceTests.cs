@@ -445,6 +445,258 @@ public sealed class SnippetServiceTests : IDisposable
         Assert.Equal("please use sig", _sut.ApplySnippets("please use sig"));
     }
 
+    [Theory]
+    [InlineData("  sig!  ", "Signature")]
+    [InlineData("SIG?", "Signature")]
+    [InlineData("sig\n", "Signature")]
+    [InlineData("sig..", "sig..")]
+    [InlineData("sig sig", "sig sig")]
+    [InlineData("signature", "signature")]
+    public void ApplySnippets_ExactPhraseTrigger_MatchesOnlyTheWholeTrimmedUtterance(string input, string expected)
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "sig",
+                Replacement = "Signature",
+                TriggerMode = SnippetTriggerMode.ExactPhrase,
+            }
+        );
+
+        Assert.Equal(expected, _sut.ApplySnippets(input));
+    }
+
+    [Fact]
+    public void ApplySnippets_ExactPhraseTrigger_YieldsToLongerAnywhereMatch()
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "exact",
+                Trigger = "sig",
+                Replacement = "Exact",
+                TriggerMode = SnippetTriggerMode.ExactPhrase,
+            }
+        );
+        _sut.AddSnippet(new Snippet { Id = "longer", Trigger = "sig.", Replacement = "Longer" });
+
+        Assert.Equal("Longer", _sut.ApplySnippets("sig."));
+        Assert.Equal(0, _sut.Snippets.Single(s => s.Id == "exact").UsageCount);
+    }
+
+    [Theory]
+    [InlineData("btw", "btw", "expanded")]
+    [InlineData("btw", "BTW, please", "expanded, please")]
+    [InlineData("btw", "(btw)\nbtw!", "(expanded)\nexpanded")]
+    [InlineData("btw", "btw. btw? btw!", "expanded expanded expanded")]
+    [InlineData("btw", "abtw btwx abtwx btw", "abtw btwx abtwx expanded")]
+    [InlineData(";sig", ";sig", "expanded")]
+    [InlineData(";sig", "Please ;sig.", "Please expanded")]
+    [InlineData("c++", "(c++)", "(expanded)")]
+    [InlineData("[sig]", "[sig]!", "expanded")]
+    [InlineData("backslash sig", "Please backslash sig.", "Please expanded")]
+    [InlineData("btw", "😀btw😀", "😀expanded😀")]
+    [InlineData("谢谢", "非常谢谢你", "非常expanded你")]
+    [InlineData("ありがとう", "本当にありがとうございます", "本当にexpandedございます")]
+    [InlineData("サイン", "ここにサインしてください", "ここにexpandedしてください")]
+    [InlineData("감사", "감사합니다", "expanded합니다")]
+    [InlineData("𠀀", "𠀁𠀀𠀂", "𠀁expanded𠀂")]
+    [InlineData("foo谢谢", "foo谢谢你", "expanded你")]
+    [InlineData("谢谢bar", "非常谢谢bar", "非常expanded")]
+    [InlineData("ขอบคุณ", "ขอบคุณครับ", "expandedครับ")]
+    [InlineData("สวัสดี", "สวัสดีครับ", "expandedครับ")]
+    [InlineData("ຂອບໃຈ", "ຂອບໃຈຫຼາຍ", "expandedຫຼາຍ")]
+    [InlineData("អរគុណ", "អរគុណច្រើន", "expandedច្រើន")]
+    [InlineData("ကျေးဇူး", "ကျေးဇူးတင်ပါတယ်", "expandedတင်ပါတယ်")]
+    [InlineData("fooขอบคุณ", "fooขอบคุณครับ", "expandedครับ")]
+    [InlineData("email", "我的email是", "我的expanded是")]
+    [InlineData("btw", "メールはbtwです", "メールはexpandedです")]
+    [InlineData("email", "제email은", "제expanded은")]
+    [InlineData("btw", "ขอบคุณbtwครับ", "ขอบคุณexpandedครับ")]
+    [InlineData("btw", "'btw' ‘btw’", "'expanded' ‘expanded’")]
+    [InlineData("btw", "''btw''", "''expanded''")]
+    [InlineData("btw", "\u200Ebtw\u200F", "\u200Eexpanded\u200F")]
+    [InlineData("btw", "a\u200Bbtw\u200Bx", "a\u200Bexpanded\u200Bx")]
+    [InlineData("👍🏽", "👍🏽", "expanded")]
+    [InlineData("฿sig", "฿sig", "expanded")]
+    [InlineData("café", "un café, merci", "un expanded, merci")]
+    [InlineData("cafe\u0301", "un cafe\u0301!", "un expanded")]
+    public void ApplySnippets_StandaloneTriggers_Expand(string trigger, string input, string expected)
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = trigger, Replacement = "expanded" });
+
+        Assert.Equal(expected, _sut.ApplySnippets(input));
+        Assert.Equal(1, _sut.Snippets[0].UsageCount);
+    }
+
+    [Theory]
+    [InlineData("btw", "abtw")]
+    [InlineData("btw", "btwx")]
+    [InlineData("btw", "abtwx")]
+    [InlineData("btw", "1btw btw2 _btw btw_")]
+    [InlineData("btw", "äbtw btwß")]
+    [InlineData("btw", "btw\u0301")]
+    [InlineData("क", "का")]
+    [InlineData("btw", "btw\u20DD")]
+    [InlineData("btw", "𐐀btw")]
+    [InlineData("btw", "btw𐐀")]
+    [InlineData("btw", "btw\U0001D165")]
+    [InlineData("btw", "\U0001D7D8btw")]
+    [InlineData("btw", "Ⅲbtw btw²")]
+    [InlineData("foo谢谢bar", "xfoo谢谢bary")]
+    [InlineData("foo谢谢", "xfoo谢谢你")]
+    [InlineData("谢谢bar", "非常谢谢bary")]
+    [InlineData("fooขอบคุณ", "xfooขอบคุณครับ")]
+    [InlineData("btw", "我abtw btwx是")]
+    [InlineData("btw", "๑btw btw๒")]
+    [InlineData("ขอบคุณbar", "ขอบคุณbary")]
+    [InlineData("๑", "๑๒")]
+    [InlineData("ها", "کتاب\u200Cها")]
+    [InlineData("btw", "a\u200Dbtw btw\u200Dx")]
+    [InlineData("btw", "a\u200Cbtw btw\u200Cx")]
+    [InlineData("can", "can't can’t")]
+    [InlineData("re", "we're we’re")]
+    [InlineData("can", "can'𐐀")]
+    [InlineData("ware", "soft\u00ADware")]
+    [InlineData("soft", "soft\u00ADware")]
+    [InlineData("btw", "a\u200E\u2060btw btw\u2060\u200Fx")]
+    [InlineData("צה", "צה״ל")]
+    [InlineData("ל", "צה״ל")]
+    [InlineData("ג", "ג׳")]
+    [InlineData("฿sig", "a฿sig")]
+    [InlineData("sig฿", "sig฿x")]
+    [InlineData("👍", "👍🏽")]
+    [InlineData("👩", "👩\u200D💻")]
+    [InlineData("か", "か\u3099")]
+    [InlineData(";sig", "a;sig ;signature")]
+    [InlineData("c++", "abc++ c++17")]
+    [InlineData("[sig]", "sig")]
+    [InlineData("backslash sig", "backslash signature")]
+    [InlineData("backslash sig", "abackslash sig")]
+    [InlineData("link", "hyperlink links")]
+    [InlineData("", "normal text")]
+    public void ApplySnippets_NonMatchingTriggers_DoNotExpandOrCountUsage(string trigger, string input)
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = trigger, Replacement = "{clipboard}" });
+        var clipboardReads = 0;
+
+        var result = _sut.ApplySnippets(
+            input,
+            () =>
+            {
+                clipboardReads++;
+                return "expanded";
+            }
+        );
+
+        Assert.Equal(input, result);
+        Assert.Equal(0, clipboardReads);
+        Assert.Equal(0, _sut.Snippets[0].UsageCount);
+        Assert.Equal(0, new SnippetService(_filePath).Snippets[0].UsageCount);
+    }
+
+    [Theory]
+    [InlineData(false, "expanded expanded abtw")]
+    [InlineData(true, "BTW expanded abtw")]
+    public void ApplySnippets_RespectsCaseSensitivityAtWordBoundaries(bool caseSensitive, string expected)
+    {
+        _sut.AddSnippet(
+            new Snippet
+            {
+                Id = "1",
+                Trigger = "btw",
+                Replacement = "expanded",
+                CaseSensitive = caseSensitive,
+            }
+        );
+
+        Assert.Equal(expected, _sut.ApplySnippets("BTW btw abtw"));
+    }
+
+    [Fact]
+    public void ApplySnippets_AdjacentTriggers_UseOriginalBoundaries()
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "hello", Replacement = "Hi" });
+        _sut.AddSnippet(new Snippet { Id = "2", Trigger = "btw", Replacement = "aside" });
+
+        Assert.Equal("Hiaside asideHi", _sut.ApplySnippets("hello.btw btw!hello"));
+        Assert.All(_sut.Snippets, snippet => Assert.Equal(1, snippet.UsageCount));
+    }
+
+    [Fact]
+    public void ApplySnippets_OverlappingTriggers_PreferLongestAndDoNotReprocessReplacement()
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "my signature", Replacement = "sig" });
+        _sut.AddSnippet(new Snippet { Id = "2", Trigger = "signature", Replacement = "{clipboard}" });
+        _sut.AddSnippet(new Snippet { Id = "3", Trigger = "sig", Replacement = "Expanded" });
+        var clipboardReads = 0;
+
+        var result = _sut.ApplySnippets(
+            "my signature sig",
+            () =>
+            {
+                clipboardReads++;
+                return "unexpected";
+            }
+        );
+
+        Assert.Equal("sig Expanded", result);
+        Assert.Equal(0, clipboardReads);
+        Assert.Equal(0, _sut.Snippets[1].UsageCount);
+    }
+
+    [Fact]
+    public void ApplySnippets_ReplacementText_IsNotExpandedByAnotherSnippet()
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "alpha", Replacement = "beta" });
+        _sut.AddSnippet(new Snippet { Id = "2", Trigger = "beta", Replacement = "expanded" });
+
+        Assert.Equal("beta", _sut.ApplySnippets("alpha"));
+        Assert.Equal("beta expanded", _sut.ApplySnippets("alpha beta"));
+    }
+
+    [Fact]
+    public void ApplySnippets_OverlapRejection_DoesNotSkipLaterOccurrence()
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "a b c", Replacement = "X" });
+        _sut.AddSnippet(new Snippet { Id = "2", Trigger = "c d", Replacement = "Y" });
+
+        // "c d" first overlaps the claimed "a b c"; its second occurrence still expands.
+        Assert.Equal("X d Y", _sut.ApplySnippets("a b c d c d"));
+    }
+
+    [Fact]
+    public void ApplySnippets_MultipleOccurrences_ShareOneExpansionAndOneUsageIncrement()
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "paste", Replacement = "[{clipboard}]" });
+        var clipboardReads = 0;
+
+        var result = _sut.ApplySnippets(
+            "paste and paste",
+            () =>
+            {
+                clipboardReads++;
+                return "clip";
+            }
+        );
+
+        Assert.Equal("[clip] and [clip]", result);
+        Assert.Equal(1, clipboardReads);
+        Assert.Equal(1, _sut.Snippets[0].UsageCount);
+    }
+
+    [Theory]
+    [InlineData("$1 off", "Now $1 off today")]
+    [InlineData("$&$$", "Now $&$$ today")]
+    [InlineData("{clipboard}", "Now $0 today")]
+    public void ApplySnippets_DollarSigns_ArePreservedLiterally(string replacement, string expected)
+    {
+        _sut.AddSnippet(new Snippet { Id = "1", Trigger = "price", Replacement = replacement });
+
+        Assert.Equal(expected, _sut.ApplySnippets("Now price today", () => "$0"));
+    }
+
     [Fact]
     public void ApplySnippets_ProfileScopedSnippet_OnlyAppliesToMatchingProfile()
     {
