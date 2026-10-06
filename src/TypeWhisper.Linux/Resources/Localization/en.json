@@ -372,6 +372,7 @@
   "Dictation.StatusReady": "Ready",
   "Dictation.StatusRecording": "Recording… press the hotkey again to stop.",
   "Dictation.StatusStopped": "Stopped. Processing…",
+  "Dictation.TranslationUnsupported": "{0} cannot translate to English. Choose a model that supports translation, or set the task to transcribe.",
   "Dictation.StrategyClipboardPaste": "Clipboard paste",
   "Dictation.StrategyCopyOnly": "Copy only",
   "Dictation.StrategyDirectTyping": "Direct typing",

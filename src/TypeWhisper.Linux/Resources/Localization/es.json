@@ -372,6 +372,7 @@
   "Dictation.StatusReady": "Listo",
   "Dictation.StatusRecording": "Grabando… pulsa el atajo de teclado de nuevo para detener.",
   "Dictation.StatusStopped": "Detenido. Procesando…",
+  "Dictation.TranslationUnsupported": "{0} no puede traducir al inglés. Elige un modelo que admita traducción o cambia la tarea a transcribir.",
   "Dictation.StrategyClipboardPaste": "Pegar desde el portapapeles",
   "Dictation.StrategyCopyOnly": "Solo copiar",
   "Dictation.StrategyDirectTyping": "Escritura directa",

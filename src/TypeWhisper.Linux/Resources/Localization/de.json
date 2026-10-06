@@ -372,6 +372,7 @@
   "Dictation.StatusReady": "Bereit",
   "Dictation.StatusRecording": "Aufnahme… drücken Sie den Hotkey erneut zum Stoppen.",
   "Dictation.StatusStopped": "Gestoppt. Wird verarbeitet…",
+  "Dictation.TranslationUnsupported": "{0} kann nicht ins Englische übersetzen. Wählen Sie ein Modell mit Übersetzungsunterstützung oder stellen Sie die Aufgabe auf Transkribieren.",
   "Dictation.StrategyClipboardPaste": "Aus Zwischenablage einfügen",
   "Dictation.StrategyCopyOnly": "Nur kopieren",
   "Dictation.StrategyDirectTyping": "Direkte Eingabe",

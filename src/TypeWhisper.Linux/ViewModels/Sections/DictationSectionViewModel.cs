@@ -688,7 +688,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
         var language = string.Equals(Language, "auto", StringComparison.OrdinalIgnoreCase) ? "en" : Language;
         var translateRequested = string.Equals(_settings.Current.TranscriptionTask, "translate", StringComparison.OrdinalIgnoreCase);
-        var supportsTranslation = _models.GetTranscriptionPlugin(SelectedModel?.ModelId)?.SupportsTranslation == true;
+        var supportsTranslation = _models.SupportsTranslation(SelectedModel?.ModelId);
         var outputLanguage = DictationOrchestrator.ResolvePostProcessingSourceLanguage(
             null, language, translateRequested, supportsTranslation);
         return DictationOrchestrator.ResolveSpokenFormattingStrategy(

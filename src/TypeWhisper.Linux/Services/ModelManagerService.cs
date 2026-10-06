@@ -125,6 +125,40 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
     }
 
+    /// <summary>
+    ///     Catalog entry for <paramref name="modelId" />, read without selecting or loading the
+    ///     model, or null when the id or its engine is unknown.
+    /// </summary>
+    private PluginModelInfo? GetTranscriptionModelInfo(string? modelId)
+    {
+        if (GetTranscriptionPlugin(modelId) is not { } plugin)
+        {
+            return null;
+        }
+
+        var (_, pluginModelId) = ParsePluginModelId(modelId!);
+        return plugin.TranscriptionModels.FirstOrDefault(model => model.Id == pluginModelId);
+    }
+
+    /// <summary>
+    ///     The localized refusal for a translate task on <paramref name="modelId" />, checked
+    ///     before the model loads, or null when the task may run. Only a model that declares it
+    ///     cannot translate is refused; engines without a per-model declaration keep ignoring
+    ///     the task as before.
+    /// </summary>
+    public string? GetTranslationRejection(string? modelId) =>
+        GetTranscriptionModelInfo(modelId) is { SupportsTranslation: false } model
+            ? Localization.Loc.Instance.GetString("Dictation.TranslationUnsupported", model.DisplayName)
+            : null;
+
+    /// <summary>
+    ///     Translation capability of <paramref name="modelId" /> for display: the model's own
+    ///     declaration, else the engine-level flag.
+    /// </summary>
+    public bool SupportsTranslation(string? modelId) =>
+        GetTranscriptionModelInfo(modelId)?.SupportsTranslation
+        ?? GetTranscriptionPlugin(modelId)?.SupportsTranslation == true;
+
     public void Dispose()
     {
         lock (_timerGate)

@@ -269,7 +269,7 @@ public sealed class WhisperCppPlugin
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     public string? SelectedModelId { get; private set; }
 
-    public bool SupportsTranslation => true;
+    public bool SupportsTranslation => SupportsTranslationFor(SelectedModelId);
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public bool SupportsModelDownload => true;
@@ -301,8 +301,15 @@ public sealed class WhisperCppPlugin
                 EstimatedSizeMB = model.EstimatedSizeMB,
                 IsRecommended = model.IsRecommended,
                 LanguageCount = model.LanguageCount,
+                SupportsTranslation = SupportsTranslationFor(model.Id),
             })
             .ToList();
+
+    // English-only and Turbo weights (including quantized Turbo) were not trained to
+    // translate; Turbo transcribes in the source language instead.
+    internal static bool SupportsTranslationFor(string? modelId) =>
+        s_models.FirstOrDefault(model => model.Id == modelId)?.Type is { } and not (GgmlType.TinyEn
+            or GgmlType.BaseEn or GgmlType.SmallEn or GgmlType.MediumEn or GgmlType.LargeV3Turbo);
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -783,6 +790,17 @@ public sealed class WhisperCppPlugin
         await _gate.WaitAsync(ct);
         try
         {
+            // The decoding model when loaded, else the selected one, so an unsupported task
+            // fails the same way before a load.
+            var taskModelId = _loadedModelId ?? SelectedModelId;
+            if (translate && taskModelId is not null && !SupportsTranslationFor(taskModelId))
+                throw new NotSupportedException(
+                    Loc.L(
+                        "Errors.TranslationUnsupported",
+                        s_models.FirstOrDefault(model => model.Id == taskModelId)?.DisplayName ?? taskModelId
+                    )
+                );
+
             if (_factory is null || _loadedModelId is null)
                 throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
 

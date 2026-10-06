@@ -372,6 +372,7 @@
   "Dictation.StatusReady": "Готово",
   "Dictation.StatusRecording": "Запись… нажмите горячую клавишу ещё раз, чтобы остановить.",
   "Dictation.StatusStopped": "Остановлено. Обработка…",
+  "Dictation.TranslationUnsupported": "{0} не умеет переводить на английский. Выберите модель с поддержкой перевода или переключите задачу на транскрибирование.",
   "Dictation.StrategyClipboardPaste": "Вставка из буфера обмена",
   "Dictation.StrategyCopyOnly": "Только копировать",
   "Dictation.StrategyDirectTyping": "Прямой набор",
