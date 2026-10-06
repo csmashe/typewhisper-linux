@@ -98,7 +98,7 @@ public sealed class WatchFolderService : IDisposable, IAsyncDisposable
     {
     }
 
-    internal WatchFolderService(
+    private WatchFolderService(
         string dataPath,
         Func<Task, TimeSpan, Task> waitForWorkers,
         Action<string, string> atomicWriteAllText,

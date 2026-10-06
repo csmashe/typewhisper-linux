@@ -71,13 +71,11 @@ public sealed class PluginRegistryService
 
     public PluginRegistryService(
         PluginManager pluginManager,
-        PluginLoader pluginLoader,
         ISettingsService settings,
         HttpClient? httpClient = null
     )
         : this(
             pluginManager,
-            pluginLoader,
             settings,
             httpClient ?? new HttpClient(),
             TypeWhisperEnvironment.PluginsPath
@@ -85,14 +83,12 @@ public sealed class PluginRegistryService
 
     internal PluginRegistryService(
         PluginManager pluginManager,
-        PluginLoader pluginLoader,
         ISettingsService settings,
         HttpClient httpClient,
         string pluginsRoot
     )
     {
         ArgumentNullException.ThrowIfNull(pluginManager);
-        ArgumentNullException.ThrowIfNull(pluginLoader);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentException.ThrowIfNullOrWhiteSpace(pluginsRoot);

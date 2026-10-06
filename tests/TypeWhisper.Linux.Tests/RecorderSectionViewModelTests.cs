@@ -121,7 +121,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         using var recorder = new RecorderService(audio, RecorderServiceTests.Settings(), _tempDir);
         using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
         var sut = new RecorderSectionViewModel(
-            recorder, playback, RecorderServiceTests.Settings(), _tempDir,
+            recorder, playback, _tempDir,
             (_, _) => { transcriptions++; return Task.FromResult<string?>("unexpected"); },
             action => action()
         );
@@ -148,7 +148,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
         var transcribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sut = new RecorderSectionViewModel(
-            recorder, playback, settings, _tempDir,
+            recorder, playback, _tempDir,
             (_, _) =>
             {
                 transcribed.TrySetResult();
@@ -177,7 +177,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
         var transcriptions = 0;
         var sut = new RecorderSectionViewModel(
-            recorder, playback, settings, _tempDir,
+            recorder, playback, _tempDir,
             (_, _) =>
             {
                 // ReSharper disable once AccessToModifiedClosure -- the counter is only read after the workflow settles.
@@ -222,7 +222,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         using var recorder = new RecorderService(audio, settings, _tempDir, clock);
         using var playback = new AudioPlaybackService(() => { }, () => { }, _ => { });
         var sut = new RecorderSectionViewModel(
-            recorder, playback, settings, _tempDir,
+            recorder, playback, _tempDir,
             async (_, _) =>
             {
                 transcriptionStarted.TrySetResult();
@@ -310,7 +310,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     private RecorderSectionViewModel CreatePlaybackViewModel(RecorderService recorder, AudioPlaybackService playback)
     {
         return new RecorderSectionViewModel(
-            recorder, playback, RecorderServiceTests.Settings(), _tempDir,
+            recorder, playback, _tempDir,
             (_, _) => Task.FromResult<string?>(null), action => action()
         );
     }
@@ -923,7 +923,6 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         return new RecorderSectionViewModel(
             new RecorderService(audio, settings, recordingDirectory),
             new AudioPlaybackService(() => { }, () => { }, _ => { }),
-            settings,
             recordingDirectory,
             transcribeAsync,
             action => action()

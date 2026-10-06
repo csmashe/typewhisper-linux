@@ -261,7 +261,9 @@ public partial class OpenAiPluginTests
         };
         await sut.ActivateAsync(host);
         sut.SelectModel("gpt-transcribe");
+#pragma warning disable CA1859 // Host-style interface dispatch must reach the override, not the first-hint-only default.
         ITranscriptionEngineRole role = sut;
+#pragma warning restore CA1859
         var result = await role.TranscribeStreamingWithLanguageHintsAsync(
             [0], ["de", "en"], false, null, _ => throw new InvalidOperationException("Unexpected progress"), CancellationToken.None);
         Assert.Equal(["de", "en"], languages);
