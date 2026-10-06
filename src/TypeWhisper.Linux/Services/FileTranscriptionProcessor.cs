@@ -90,7 +90,7 @@ public sealed class FileTranscriptionProcessor(
                     ? TranscriptionTask.Translate
                     : TranscriptionTask.Transcribe
             );
-        // Refuse before decoding audio or loading a model that cannot run the task.
+        // Ahead of decoding, so a refused task costs nothing.
         if (task == TranscriptionTask.Translate && modelManager.GetTranslationRejection(modelId) is { } rejection)
         {
             throw new InvalidOperationException(rejection);

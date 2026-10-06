@@ -786,8 +786,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 goto StartupComplete;
             }
 
-            // Same reasoning for a translate task the forced profile's model cannot run; an
-            // ordinary start is checked after its profile settles, before the model loads.
+            // Same for a translate task the forced profile's model cannot run; an ordinary
+            // start is checked once its profile settles.
             var startupTranslationRejection = startupForcedMatch is null
                 ? null
                 : DescribeTranslationRejection(startupProfile, _settings.Current, _models);

@@ -4,7 +4,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public partial class WhisperCppPluginTests
 {
-    // Every catalog model: English-only and Turbo weights (quantized too) cannot translate.
+    // Covers every catalog model.
     [Theory]
     [InlineData("tiny", true)]
     [InlineData("tiny.en", false)]

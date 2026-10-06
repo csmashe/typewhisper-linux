@@ -49,8 +49,7 @@ public sealed class TranslationCapabilityHostTests
     [Fact]
     public void SupportsTranslation_UsesTheModelDeclarationBeforeTheEngineFlag()
     {
-        // The engine's flag follows its selected model (multilingual → true), but each
-        // declared model answers for itself; the undeclared model inherits the engine flag.
+        // The engine flag follows its selected (multilingual) model; only "legacy" inherits it.
         using var models = CreateModels(new TranslationCapabilityEngine("multilingual"), new AppSettings());
 
         Assert.True(models.SupportsTranslation(s_multilingual));

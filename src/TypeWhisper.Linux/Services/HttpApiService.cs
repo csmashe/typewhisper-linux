@@ -1812,7 +1812,7 @@ public sealed partial class HttpApiService : IDisposable
         var modelId = ResolveRequestedModelId(opts.Engine, opts.Model);
         var resolvedModelId = modelId ?? _settings.Current.SelectedModelId;
 
-        // Checked before any download or load: the model's own catalog entry says it cannot translate.
+        // Ahead of any download, decode or load.
         if (opts.Task == TranscriptionTask.Translate && _models.GetTranslationRejection(resolvedModelId) is not null)
         {
             return (

@@ -141,10 +141,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     The localized refusal for a translate task on <paramref name="modelId" />, checked
-    ///     before the model loads, or null when the task may run. Only a model that declares it
-    ///     cannot translate is refused; engines without a per-model declaration keep ignoring
-    ///     the task as before.
+    ///     The localized refusal for a translate task on <paramref name="modelId" />, or null when
+    ///     it may run. Only a model that declares it cannot translate is refused; undeclared
+    ///     engines keep ignoring the task.
     /// </summary>
     public string? GetTranslationRejection(string? modelId) =>
         GetTranscriptionModelInfo(modelId) is { SupportsTranslation: false } model
