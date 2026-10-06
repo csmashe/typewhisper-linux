@@ -584,6 +584,21 @@ public sealed class ClaudePluginTests
         Assert.Empty(host.GetSetting<List<JsonElement>>("fetchedModels")!);
     }
 
+    [Fact]
+    public async Task ApiKeyChange_FailedCatalogClearKeepsOldKeyAndCatalog()
+    {
+        var host = new TestPluginHostServices();
+        using var sut = await ActivatedAsync(new CapturingHandler((_, _) =>
+            Json("""{"data":[{"id":"claude-account-a"}],"has_more":false}""")), host);
+        Assert.True((await sut.ValidateAsync())!.IsSuccess);
+        host.FailSettingWrites = true;
+
+        await Assert.ThrowsAsync<IOException>(() => sut.SetSettingValueAsync("api-key", "sk-ant-other"));
+
+        Assert.Equal(ValidKey, await sut.GetSettingValueAsync("api-key"));
+        Assert.Equal(["claude-account-a"], Ids(sut));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

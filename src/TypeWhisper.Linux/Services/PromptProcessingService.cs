@@ -425,12 +425,18 @@ public sealed class PromptProcessingService
         var problem = resolved.Provider switch
         {
             // Installed, but its catalog dropped the saved model (e.g. retired): say that, not "missing".
+            // An unready provider is the problem to fix first.
             null when FindInstalledProviderWithoutModel(selection) is { } installed =>
-                Localization.Loc.Instance.GetString(
-                    "Prompts.SelectedModelMissing",
-                    installed.ModelId,
-                    installed.Provider.ProviderName
-                ),
+                installed.Provider.IsAvailable
+                    ? Localization.Loc.Instance.GetString(
+                        "Prompts.SelectedModelMissing",
+                        installed.ModelId,
+                        installed.Provider.ProviderName
+                    )
+                    : Localization.Loc.Instance.GetString(
+                        "Prompts.SelectedProviderUnavailable",
+                        installed.Provider.ProviderName
+                    ),
             null => Localization.Loc.Instance.GetString(
                 "Prompts.SelectedProviderMissing",
                 DescribeSelection(selection)

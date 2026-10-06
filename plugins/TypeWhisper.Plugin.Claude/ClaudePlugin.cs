@@ -432,15 +432,16 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
         var trimmed = apiKey.Trim();
         var normalized = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
-        ApiKey = normalized;
 
-        // A discovered catalog belongs to the account that fetched it.
+        // A discovered catalog belongs to the account that fetched it. Clear it before the new
+        // key takes effect, so a failed write keeps the old key and catalog together.
         if (changed)
         {
             lock (_catalogLock)
             {
-                _catalogGeneration++;
                 _host?.SetSetting(FetchedModelsSettingKey, new List<ClaudeModel>());
+                _catalogGeneration++;
+                ApiKey = normalized;
                 SetCatalog([]);
             }
         }

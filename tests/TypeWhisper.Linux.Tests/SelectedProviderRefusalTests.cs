@@ -76,6 +76,22 @@ public sealed class SelectedProviderRefusalTests : IDisposable
     }
 
     [Fact]
+    public void SelectedModel_OnUnavailableProvider_ReportsUnavailabilityFirst()
+    {
+        var signedOut = new FakeProvider("com.test.cli", "CLI Provider", "model-c") { IsAvailable = false };
+        using var pluginManager = CreatePluginManager(signedOut);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var processing = new PromptProcessingService(
+            pluginManager, settings.Object, new MemoryService(pluginManager)
+        );
+
+        Assert.Equal(
+            Loc.Instance.GetString("Prompts.SelectedProviderUnavailable", "CLI Provider"),
+            processing.TryDescribeSelectedProviderProblem("plugin:com.test.cli:retired-model")
+        );
+    }
+
+    [Fact]
     public void TransformSelection_RefusesUnavailableDefaultProvider_BeforeRecording()
     {
         var signedOut = new FakeProvider("com.test.cli", "CLI Provider", "default")
