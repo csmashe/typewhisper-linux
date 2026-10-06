@@ -758,6 +758,7 @@
   "Prompts.ProviderWarning": "Aktivieren Sie einen Anbieter in den Erweiterungen: API-Schlüssel hinterlegen oder bei einer authentifizierten CLI anmelden.",
   "Prompts.SaveFailed": "Prompt-Aktionen konnten nicht gespeichert werden: {0}",
   "Prompts.SelectedProviderMissing": "Der ausgewählte KI-Anbieter ist nicht mehr installiert: {0}. Wählen Sie unter Prompts einen anderen Anbieter.",
+  "Prompts.SelectedModelMissing": "{1} bietet das ausgewählte Modell {0} nicht mehr an. Aktualisieren Sie die Modelle unter Erweiterungen oder wählen Sie unter Prompts ein anderes Modell.",
   "Prompts.SelectedProviderUnavailable": "Der ausgewählte KI-Anbieter ist nicht bereit: {0}. Prüfen Sie Anmeldung und Konfiguration unter Erweiterungen.",
   "Prompts.Summary": "{0} Prompts, {1} aktiv",
   "Prompts.SystemPrompt": "System-Prompt",

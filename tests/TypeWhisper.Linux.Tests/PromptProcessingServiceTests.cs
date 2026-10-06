@@ -300,6 +300,47 @@ public sealed class PromptProcessingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessAsync_RetiredModelOverride_KeepsSelectionAndNamesTheModel()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.claude", "Claude", "claude-sonnet-5");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(new AppSettings());
+
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessAsync(
+            new PromptAction
+            {
+                Id = "prompt",
+                Name = "Rewrite",
+                SystemPrompt = "Rewrite this",
+                ProviderOverride = "plugin:com.test.claude:claude-sonnet-4-20250514",
+            },
+            "hello",
+            ct: CancellationToken.None
+        ));
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.False(error.IsTransient);
+        Assert.Equal(
+            Loc.Instance.GetString(
+                "Prompts.SelectedModelMissing",
+                "claude-sonnet-4-20250514",
+                "Claude"
+            ),
+            error.Message
+        );
+        Assert.Equal(0, provider.CallCount);
+    }
+
+    [Fact]
     public async Task ProcessAsync_UnavailableProviderOverride_FailsInsteadOfUsingAnotherProvider()
     {
         var unavailable = new FakeLlmProviderPlugin("com.test.signed-out", "Signed Out", "model-s")

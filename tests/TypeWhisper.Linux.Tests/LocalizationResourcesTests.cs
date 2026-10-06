@@ -200,6 +200,7 @@ public sealed class LocalizationResourcesTests
         {
             "Prompts.ProviderUnavailableFormat",
             "Prompts.SelectedProviderMissing",
+            "Prompts.SelectedModelMissing",
             "Prompts.SelectedProviderUnavailable",
         };
 
@@ -209,6 +210,8 @@ public sealed class LocalizationResourcesTests
             Assert.False(string.IsNullOrWhiteSpace(value), $"{language} key is empty: {key}");
             Assert.Contains("{0}", value, StringComparison.Ordinal);
         }
+
+        Assert.Contains("{1}", catalog["Prompts.SelectedModelMissing"], StringComparison.Ordinal);
 
         if (language == CanonicalLanguage)
         {

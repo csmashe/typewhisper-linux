@@ -1,12 +1,16 @@
 {
   "Settings.ApiKey": "API-Schlüssel",
-  "Settings.ApiKeyDescription": "Erforderlich für Claude-LLM-Anfragen.",
+  "Settings.ApiKeyDescription": "Erforderlich für Claude-LLM-Anfragen. Validieren Sie, um die für Ihr Konto verfügbaren Modelle zu laden.",
   "Settings.StreamResponses": "Antworten streamen",
   "Settings.StreamResponsesDescription": "Prompt-Aktions-Ausgabe Token für Token während der Generierung anzeigen, statt auf die vollständige Antwort zu warten.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
-  "Settings.ApiKeyFormatValid": "API-Schlüsselformat sieht gültig aus.",
   "Settings.ApiKeyFormatInvalid": "API-Schlüsselformat ist ungültig.",
   "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
+  "Settings.ApiKeyValidFetchedModels": "API-Schlüssel ist gültig. {0} für dieses Konto verfügbare Claude-Modell(e) geladen.",
+  "Settings.ApiKeyRejected": "Anthropic hat diesen API-Schlüssel abgelehnt. Prüfen Sie den Schlüssel und versuchen Sie es erneut.",
+  "Settings.ModelRefreshFailed": "Claude-Modelle konnten nicht geladen werden: {0} Die gespeicherte Modellliste bleibt unverändert.",
+  "Settings.ModelRefreshStale": "Der API-Schlüssel wurde geändert, während die Modelle geladen wurden. Validieren Sie erneut.",
+  "Errors.ModelNotFound": "Claude konnte das Modell {0} nicht finden. Validieren Sie den API-Schlüssel unter Erweiterungen, um die Modellliste zu aktualisieren, und wählen Sie dann ein verfügbares Modell.",
   "Manifest.Name": "Claude",
   "Manifest.Description": "Anthropic Claude LLM für die Prompt-Verarbeitung"
 }

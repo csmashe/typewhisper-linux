@@ -63,8 +63,11 @@ public sealed class SelectedProviderRefusalTests : IDisposable
         );
 
         Assert.Null(processing.TryDescribeSelectedProviderProblem("plugin:com.test.ready:model-r"));
+        // A model the installed provider no longer offers is named as such, not as a missing provider.
         Assert.Equal(
-            Loc.Instance.GetString("Prompts.SelectedProviderMissing", $"com.test.ready · {modelId}"),
+            string.IsNullOrWhiteSpace(modelId)
+                ? Loc.Instance.GetString("Prompts.SelectedProviderMissing", $"com.test.ready · {modelId}")
+                : Loc.Instance.GetString("Prompts.SelectedModelMissing", modelId, "Ready Provider"),
             processing.TryDescribeSelectedProviderProblem($"plugin:com.test.ready:{modelId}")
         );
 
