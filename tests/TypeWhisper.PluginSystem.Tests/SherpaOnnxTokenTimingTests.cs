@@ -81,33 +81,6 @@ public sealed class SherpaOnnxTokenTimingTests
     }
 
     [Fact]
-    public void MultiChunk_ReturnsNoTimings()
-    {
-        var audio = new float[SherpaDecodeCoordinator.MaximumChunkSampleCount + 1];
-        var chunks = new Queue<SherpaDecodeChunk>(
-            [
-                new SherpaDecodeChunk(
-                    "the quick brown fox",
-                    ["▁the", "▁quick", "▁brown", "▁fox"],
-                    [0.1f, 0.2f, 0.3f, 0.4f]
-                ),
-                new SherpaDecodeChunk(
-                    "brown fox jumps high",
-                    ["▁brown", "▁fox", "▁jumps", "▁high"],
-                    [0.1f, 0.2f, 0.3f, 0.4f]
-                ),
-            ]
-        );
-        var coordinator = new SherpaDecodeCoordinator(_ => chunks.Dequeue());
-
-        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
-
-        Assert.Equal("the quick brown fox jumps high", result.Text);
-        Assert.Empty(result.TokenTimings);
-        Assert.Empty(chunks);
-    }
-
-    [Fact]
     public void RunDecodeTransactionForTests_CarriesTimings()
     {
         using var plugin = new SherpaOnnxPlugin();

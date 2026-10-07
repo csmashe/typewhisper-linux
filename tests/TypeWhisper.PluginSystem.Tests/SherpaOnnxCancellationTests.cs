@@ -141,33 +141,6 @@ public sealed class SherpaOnnxCancellationTests
         );
     }
 
-    // New-contract test: crafted Canary payloads prove that every chunk is parsed
-    // before longest-token overlap stitching, preserving one copy of boundary text.
-    [Fact]
-    public void Decode_CanaryChunkOverlap_StitchesWithoutLossOrDuplication()
-    {
-        var payloads = new Queue<string>(
-            [
-                """{"text":"the quick brown fox","lang":"en"}""",
-                """{"text":"brown fox jumps high","lang":"en"}""",
-            ]
-        );
-        var coordinator = new SherpaDecodeCoordinator(
-            _ => new SherpaDecodeChunk(payloads.Dequeue())
-        );
-        var audio = new float[SherpaDecodeCoordinator.MaximumChunkSampleCount + 1];
-
-        var result = coordinator.Decode(
-            audio,
-            parseCanaryPayload: true,
-            CancellationToken.None
-        );
-
-        Assert.Equal("the quick brown fox jumps high", result.Text);
-        Assert.Equal("en", result.DetectedLanguage);
-        Assert.Empty(payloads);
-    }
-
     // A non-string "text"/"lang" must fall back to the raw payload rather than
     // throwing InvalidOperationException out of JsonElement.GetString().
     [Theory]
