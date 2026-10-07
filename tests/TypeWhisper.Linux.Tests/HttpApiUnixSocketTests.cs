@@ -1374,6 +1374,79 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Fact]
+    public async Task LocalFileTranslateOnModelThatCannotTranslate_IsRefusedBeforeLoading()
+    {
+        var engine = new TranslationCapabilityEngine("english-only");
+        using var fixture = new ApiFixture(
+            transcriptionEngine: engine,
+            audioProbeResult: new ProcessRunOutcome(ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var path = fixture.CreateSupportedAudioFile();
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(path)}},"task":"translate"}""",
+            Encoding.UTF8, "application/json");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("translation_unsupported", json.RootElement.GetProperty("reason").GetString());
+        Assert.Equal((0, 0, 0), (engine.LoadCount, engine.SelectCount, engine.TranscribeCount));
+    }
+
+    [Theory]
+    [InlineData("multilingual")]
+    [InlineData("legacy")]
+    public async Task LocalFileTranslateOnModelWithoutRefusal_PassesTheTaskToTheEngine(string modelId)
+    {
+        var engine = new TranslationCapabilityEngine(modelId);
+        var pipeline = new Mock<IPostProcessingPipeline>();
+        pipeline
+            .Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<PipelineOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PostProcessingResult { Text = "transcribed" });
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
+        using var fixture = new ApiFixture(
+            transcriptionEngine: engine,
+            dictionary: dictionary.Object,
+            pipeline: pipeline.Object,
+            audioProbeResult: new ProcessRunOutcome(ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var path = fixture.CreateSupportedAudioFile();
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(path)}},"task":"translate"}""",
+            Encoding.UTF8, "application/json");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, engine.TranscribeCount);
+        Assert.True(engine.LastTranslate);
+    }
+
+    [Fact]
+    public async Task ModelsEndpointReportsDeclaredTranslationPerModel()
+    {
+        using var fixture = new ApiFixture(transcriptionEngine: new TranslationCapabilityEngine("multilingual"));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        using var response = await client.GetAsync("/v1/models");
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var declared = json.RootElement.GetProperty("models").EnumerateArray().ToDictionary(
+            model => model.GetProperty("id").GetString()!,
+            model => model.TryGetProperty("supports_translation", out var value) && value.ValueKind != JsonValueKind.Null
+                ? value.GetBoolean()
+                : (bool?)null);
+        Assert.Equal(true, declared["multilingual"]);
+        Assert.Equal(false, declared["english-only"]);
+        Assert.Null(declared["legacy"]);
+    }
+
+    [Fact]
     public async Task LocalFileEndpointRejectsUnknownTaskAndFormat()
     {
         using var fixture = new ApiFixture();

@@ -83,6 +83,19 @@ public sealed class FileTranscriptionProcessor(
             throw new InvalidOperationException("No transcription model loaded.");
         }
 
+        var task =
+            options?.Task
+            ?? (
+                settings.Current.TranscriptionTask == "translate"
+                    ? TranscriptionTask.Translate
+                    : TranscriptionTask.Transcribe
+            );
+        // Ahead of decoding, so a refused task costs nothing.
+        if (task == TranscriptionTask.Translate && modelManager.GetTranslationRejection(modelId) is { } rejection)
+        {
+            throw new InvalidOperationException(rejection);
+        }
+
         // Decode audio before acquiring the lease — ffmpeg shells out and must
         // not monopolize the global model lock while no transcription runs.
         var wav = await audioFile.LoadAudioAsWavAsync(filePath, cancellationToken);
@@ -98,13 +111,6 @@ public sealed class FileTranscriptionProcessor(
         var languageHints = ResolveLanguageHints(options, currentSettings);
         var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
         string? configuredLanguage;
-        var task =
-            options?.Task
-            ?? (
-                currentSettings.TranscriptionTask == "translate"
-                    ? TranscriptionTask.Translate
-                    : TranscriptionTask.Transcribe
-            );
 
         var startedAt = DateTime.UtcNow;
 

@@ -1425,6 +1425,8 @@ public sealed partial class HttpApiService : IDisposable
                     sizeDescription = model.SizeDescription
                                       ?? (engine.SupportsModelDownload ? "Local" : "Cloud"),
                     engine = engine.ProviderId,
+                    // Null when the engine declares translation only engine-wide (see /v1/status).
+                    supportsTranslation = model.SupportsTranslation,
                     downloaded = _models.IsDownloaded(id),
                     selected = _settings.Current.SelectedModelId == id,
                     active = _models.ActiveModelId == id,
@@ -1808,12 +1810,27 @@ public sealed partial class HttpApiService : IDisposable
     )
     {
         var modelId = ResolveRequestedModelId(opts.Engine, opts.Model);
+        var resolvedModelId = modelId ?? _settings.Current.SelectedModelId;
+
+        // Ahead of any download, decode or load.
+        if (opts.Task == TranscriptionTask.Translate && _models.GetTranslationRejection(resolvedModelId) is not null)
+        {
+            return (
+                400,
+                Serialize(
+                    new
+                    {
+                        error = "The selected model cannot translate to English",
+                        reason = "translation_unsupported",
+                    }
+                )
+            );
+        }
 
         // Refuse to block on a model download unless the caller opted in via
         // await_download=1 — otherwise the CLI's 5-min budget would be consumed.
         if (!opts.AwaitDownload)
         {
-            var resolvedModelId = modelId ?? _settings.Current.SelectedModelId;
             if (
                 !string.IsNullOrWhiteSpace(resolvedModelId)
                 && !_models.IsDownloaded(resolvedModelId)

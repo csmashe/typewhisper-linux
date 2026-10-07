@@ -786,6 +786,18 @@ public sealed partial class DictationOrchestrator : IDisposable
                 goto StartupComplete;
             }
 
+            // Same for a translate task the forced profile's model cannot run; an ordinary
+            // start is checked once its profile settles.
+            var startupTranslationRejection = startupForcedMatch is null
+                ? null
+                : DescribeTranslationRejection(startupProfile, _settings.Current, _models);
+            if (startupTranslationRejection is not null)
+            {
+                ReportStatus(startupTranslationRejection);
+                ShowFeedback(startupTranslationRejection, true);
+                goto StartupComplete;
+            }
+
             // One immutable view controls cue arbitration and the initial capture
             // mode even if settings change while the bounded cue is playing.
             var startupSettings = _settings.Current;
@@ -1946,6 +1958,20 @@ public sealed partial class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
+    ///     The localized refusal for a translate task (the profile's, else the global one) on
+    ///     the effective model, or null when the task is transcribe or the model can run it.
+    /// </summary>
+    internal static string? DescribeTranslationRejection(
+        Profile? profile,
+        AppSettings settings,
+        ModelManagerService models
+    ) =>
+        string.Equals(profile?.SelectedTask ?? settings.TranscriptionTask, "translate",
+            StringComparison.OrdinalIgnoreCase)
+            ? models.GetTranslationRejection(profile?.TranscriptionModelOverride ?? settings.SelectedModelId)
+            : null;
+
+    /// <summary>
     ///     Selects the raw text for post-processing, falling back to the
     ///     streaming live preview when batch transcription returned nothing.
     ///     Exposed internally for unit testing.
@@ -2144,6 +2170,21 @@ public sealed partial class DictationOrchestrator : IDisposable
 
         var effectiveModelId =
             context.Profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
+
+        // The task and model are only final once the profile has settled, so an ordinary start
+        // can only be refused here, before the model loads. The capture stays in history for retry.
+        if (context.TranscriptionTaskUsed == "translate"
+            && _models.GetTranslationRejection(effectiveModelId) is { } translationRejection)
+        {
+            Trace.WriteLine($"[Dictation] Model '{effectiveModelId}' cannot translate; transcription refused.");
+            AddFailedHistoryRecord(context, wavPath, duration, "", TranscriptionRecordStatus.TranscriptionFailed,
+                translationRejection, _models.GetTranscriptionPlugin(effectiveModelId)?.ProviderId ?? "unknown",
+                effectiveModelId);
+            ReportStatus(context, translationRejection);
+            ShowFeedback(context, translationRejection, true);
+            PublishSessionTerminal(context.SessionId, "failed", translationRejection);
+            return;
+        }
 
         // Exclusive lease serializes model-load + transcribe so a concurrent
         // dictation cannot swap the plugin's native model mid-flight. Held for
@@ -5149,6 +5190,11 @@ public sealed partial class DictationOrchestrator : IDisposable
             "translate",
             StringComparison.OrdinalIgnoreCase
         );
+        // Each poll would fail the same way; the final pass reports the refusal once.
+        if (DescribeTranslationRejection(_recordingProfile, _settings.Current, _models) is not null)
+        {
+            return;
+        }
 
         try
         {

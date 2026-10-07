@@ -246,11 +246,12 @@ public sealed partial class DictationOrchestrator
                 var languageHints = LanguageSelectionResolver.ResolveHints(profile, _settings.Current);
                 var selection = LanguageSelectionResolver.ResolvePrimary(languageHints);
                 var translate = ResolveTranscriptionTask(context) == "translate";
+                var modelId = profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
+                if (translate && _models.GetTranslationRejection(modelId) is { } translationRejection)
+                    throw new InvalidOperationException(translationRejection);
                 PluginTranscriptionResult result;
                 bool supportsTranslation;
-                await using (var lease = await _models.AcquireTranscriptionAsync(
-                    profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId,
-                    cancellationToken: ct))
+                await using (var lease = await _models.AcquireTranscriptionAsync(modelId, cancellationToken: ct))
                 {
                     var plugin = lease.Plugin;
                     record = record with { EngineUsed = plugin.ProviderId, ModelUsed = plugin.SelectedModelId };

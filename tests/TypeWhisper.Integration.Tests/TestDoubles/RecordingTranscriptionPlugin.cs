@@ -29,7 +29,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     public string ProviderId { get; set; } = Id;
     public string ProviderDisplayName => "Scripted integration engine";
     public bool IsConfigured => true;
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; set; } =
         [new(ModelId, "Scripted model")];
     public string? SelectedModelId { get; private set; } = ModelId;
     public bool SupportsTranslation { get; set; }
