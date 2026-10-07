@@ -10,9 +10,9 @@ If the TypeWhisper project releases an official Linux version, or if this port i
 
 Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
 
-## New in 0.16.0
+## New in 0.16.1
 
-This release adds **acoustic dictionary boosting** — a second small model checks misheard dictionary terms against the audio, not just their spelling, after local Parakeet transcriptions (opt-in Parakeet CTC Vocabulary plugin, per-term Boost presets, English-only) — plus **recorder pause/resume and in-app playback**, **recorder routes on the HTTP API**, a **read-last-transcription shortcut** and **Read aloud in History**, **multi-select delete and export in History**, **detected-language reporting for streaming engines**, and fixes for Sherpa file/API transcription, auto-detect-only models with a saved language, and backup timestamps. See the [0.16.0 release notes](docs/releases/v0.16.0.md) for the full changes and upgrade notes.
+This maintenance release **replaces the retired default Claude model** and lets **Validate** load the models your Claude account offers, **refuses translate tasks on Whisper models that cannot translate** (English-only and Large V3 Turbo) instead of returning untranslated text, makes **snippets match whole words only** without re-expanding their own output, cleans up **punctuation after a spoken "new line"**, and **keeps transcripts from OpenAI-compatible servers** that send malformed optional metadata. See the [0.16.1 release notes](docs/releases/v0.16.1.md) for the full changes and upgrade notes, and the [0.16.0 release notes](docs/releases/v0.16.0.md) for acoustic dictionary boosting and the recorder, History and streaming-language additions.
 
 ## Documentation
 

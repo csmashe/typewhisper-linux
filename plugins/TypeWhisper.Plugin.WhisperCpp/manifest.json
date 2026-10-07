@@ -2,6 +2,7 @@
   "id": "com.typewhisper.whisper-cpp",
   "name": "whisper.cpp (Local)",
   "version": "1.0.0",
+  "minHostVersion": "0.16.1",
   "author": "TypeWhisper",
   "description": "Offline transcription via whisper.cpp using Whisper.net",
   "networkAccess": "local",
