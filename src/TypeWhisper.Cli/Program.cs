@@ -83,8 +83,7 @@ public static class Program
                 );
             }
 
-            var socketPath = discovered?.SocketPath;
-            if (string.IsNullOrWhiteSpace(socketPath))
+            if (discovered is not { SocketPath: var socketPath } || string.IsNullOrWhiteSpace(socketPath))
             {
                 return ConsoleOutput.Error(
                     "TypeWhisper API socket not found — is the TypeWhisper app running with the local API enabled?",
@@ -94,7 +93,7 @@ public static class Program
 
             var token = options.TokenWasExplicit
                 ? options.Token
-                : options.Token ?? discovered?.Token;
+                : options.Token ?? discovered.Token;
 
             // Install after synchronous, uncancellable discovery so Ctrl+C still
             // terminates normally if discovery blocks.

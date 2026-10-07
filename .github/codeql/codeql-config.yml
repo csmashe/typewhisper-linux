@@ -65,6 +65,12 @@ query-filters:
   # in the CUDA preload assertions. There is no lookup to fold away.
   - exclude:
       id: cs/inefficient-containskey
+  # Flags parent/row view-model pairs (HistorySectionViewModel and its
+  # HistoryRecordRow items) whose two-way references are the MVVM design: rows
+  # delegate commands to their owning section. Most hits land on generated
+  # CommunityToolkit.Mvvm partials under obj/.
+  - exclude:
+      id: cs/coupled-types
   # P/Invoke is intrinsic to this native-interop Linux desktop app (evdev, X11,
   # PortAudio, libnotify, gsettings, …). Flagging every unmanaged call is noise.
   - exclude:
