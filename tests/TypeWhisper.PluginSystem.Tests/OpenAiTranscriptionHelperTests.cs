@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using TypeWhisper.PluginSDK.Helpers;
@@ -379,6 +380,149 @@ public class OpenAiTranscriptionHelperTests
             """);
 
         Assert.Null(Assert.Single(result.Segments).NoSpeechProbability);
+    }
+
+    [Fact]
+    public void ParseTranscriptionResponse_NumericStrings_MatchNumbers()
+    {
+        var fromNumbers = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+            {"text":"Hello there","language":"en","duration":2.49,"segments":[
+              {"text":"Hello","start":0,"end":1.25,"no_speech_prob":0.8},
+              {"text":" there","start":1.25,"end":2.49,"no_speech_prob":0.05}]}
+            """);
+        var fromStrings = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+            {"text":"Hello there","language":"en","duration":"2.49","segments":[
+              {"text":"Hello","start":"0.0","end":" 1.25 ","no_speech_prob":"8e-1"},
+              {"text":" there","start":"1.25","end":"2.49","no_speech_prob":"0.05"}]}
+            """);
+
+        foreach (var result in new[] { fromNumbers, fromStrings })
+        {
+            Assert.Equal("Hello there", result.Text);
+            Assert.Equal(2.49, result.DurationSeconds);
+            Assert.Equal(0.05f, result.NoSpeechProbability);
+            Assert.Equal(
+                [("Hello", 0.0, 1.25, (float?)0.8f), (" there", 1.25, 2.49, 0.05f)],
+                result.Segments.Select(s => (s.Text, s.Start, s.End, s.NoSpeechProbability)));
+        }
+    }
+
+    [Fact]
+    public void ParseTranscriptionResponse_NumericStrings_IgnoreCurrentCulture()
+    {
+        var previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+        try
+        {
+            var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+                {"text":"Hallo","duration":"2.49","segments":[{"text":"Hallo","start":"0","end":"2,49"}]}
+                """);
+
+            Assert.Equal(2.49, result.DurationSeconds);
+            Assert.Equal(0, Assert.Single(result.Segments).End);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
+    public void ParseTranscriptionResponse_MalformedOptionalMetadata_KeepsText()
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+            {"text":" Hello ","language":[],"duration":"unknown","segments":[null,5,"x",
+              {"text":false,"start":{},"end":null,"no_speech_prob":"no"},
+              {"text":"Hello","start":1,"end":2,"no_speech_prob":0.2}]}
+            """);
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Null(result.DetectedLanguage);
+        Assert.Equal(0, result.DurationSeconds);
+        Assert.Equal(
+            [("", 0.0, 0.0, (float?)null), ("Hello", 1.0, 2.0, 0.2f)],
+            result.Segments.Select(s => (s.Text, s.Start, s.End, s.NoSpeechProbability)));
+        Assert.Null(result.NoSpeechProbability);
+    }
+
+    [Theory]
+    [InlineData("\"NaN\"")]
+    [InlineData("\"Infinity\"")]
+    [InlineData("\"-Infinity\"")]
+    [InlineData("\"1e400\"")]
+    [InlineData("1e400")]
+    [InlineData("\"\"")]
+    [InlineData("true")]
+    [InlineData("null")]
+    public void ParseTranscriptionResponse_NonFiniteOrNonNumericMetadata_IsIgnored(string value)
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse($$"""
+            {"text":"Hello","duration":{{value}},"segments":[
+              {"text":"Hello","start":{{value}},"end":{{value}},"no_speech_prob":{{value}}}]}
+            """);
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(0, result.DurationSeconds);
+        var segment = Assert.Single(result.Segments);
+        Assert.Equal((0.0, 0.0), (segment.Start, segment.End));
+        Assert.Null(segment.NoSpeechProbability);
+        Assert.Null(result.NoSpeechProbability);
+    }
+
+    [Theory]
+    [InlineData("-0.1")]
+    [InlineData("1.5")]
+    [InlineData("\"2\"")]
+    public void ParseTranscriptionResponse_OutOfRangeNoSpeechProb_DoesNotImplySilence(string value)
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse($$"""
+            {"text":"Hello","segments":[
+              {"text":"Hello","no_speech_prob":{{value}}},
+              {"text":"","no_speech_prob":0.9}]}
+            """);
+
+        Assert.Null(result.Segments[0].NoSpeechProbability);
+        Assert.Equal(0.9f, result.Segments[1].NoSpeechProbability);
+        Assert.Null(result.NoSpeechProbability);
+    }
+
+    [Theory]
+    [InlineData("""{"text":" Hello"}""")]
+    [InlineData("""{"text":42,"no_speech_prob":null}""")]
+    [InlineData("""{"no_speech_prob":"NaN"}""")]
+    public void ParseTranscriptionResponse_UnratedSpokenSegment_DoesNotImplySilence(string unrated)
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse($$"""
+            {"text":"Hello. So.","segments":[{{unrated}},{"text":" So.","no_speech_prob":0.95}]}
+            """);
+
+        Assert.Null(result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public void ParseTranscriptionResponse_UnratedBlankSegment_KeepsSilenceProbability()
+    {
+        var result = OpenAiTranscriptionHelper.ParseTranscriptionResponse("""
+            {"text":"So.","segments":[{"text":" "},{"text":" So.","no_speech_prob":0.95}]}
+            """);
+
+        Assert.Equal(0.95f, result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_VerboseJsonWithNumericStrings_ReturnsMetadata()
+    {
+        using var httpClient = new HttpClient(new JsonResponseHandler("""
+            {"text":"Hello","language":"en","duration":"2.49",
+             "segments":[{"text":"Hello","start":"0","end":"2.49","no_speech_prob":"0.1"}]}
+            """));
+
+        var result = await TranscribeAsync(httpClient, "verbose_json");
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(2.49, result.DurationSeconds);
+        Assert.Equal(2.49, Assert.Single(result.Segments).End);
+        Assert.Equal(0.1f, result.NoSpeechProbability);
     }
 
     private static Task<PluginTranscriptionResult> TranscribeAsync(

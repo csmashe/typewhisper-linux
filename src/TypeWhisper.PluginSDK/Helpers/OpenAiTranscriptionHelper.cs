@@ -1,6 +1,7 @@
 // Public plugin-SDK surface. The per-item `disable once` directives below mark members
 // ReSharper/Qodana cannot see used from this project (they are consumed by external plugins/
 // the host). Per-item, not file-level, so a genuinely-unused member added later still surfaces.
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK.Models;
@@ -156,8 +157,11 @@ public static class OpenAiTranscriptionHelper
         }
 
         var text = textEl.GetString() ?? "";
-        var language = root.TryGetProperty("language", out var langEl) ? langEl.GetString() : null;
-        var duration = root.TryGetProperty("duration", out var durEl) ? durEl.GetDouble() : 0;
+        // Only "text" is required; malformed optional metadata is dropped, never the transcript.
+        var language = root.TryGetProperty("language", out var langEl) && langEl.ValueKind == JsonValueKind.String
+            ? langEl.GetString()
+            : null;
+        var duration = ReadNumber(root, "duration") ?? 0;
         var segments = new List<PluginTranscriptionSegment>();
 
         // Use min no_speech_prob so the silence filter only triggers when ALL segments are silence.
@@ -171,16 +175,19 @@ public static class OpenAiTranscriptionHelper
             };
         }
 
+        // An unrated segment that may hold speech makes all-segment silence unknown.
+        var hasUnratedSpeech = false;
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- only the guard converts; the body mutates state and LINQ would box the JsonElement.ArrayEnumerator.
         foreach (var seg in segmentsEl.EnumerateArray())
         {
-            var segmentText = seg.TryGetProperty("text", out var segTextEl)
-                ? segTextEl.GetString() ?? ""
-                : "";
-            var start = seg.TryGetProperty("start", out var startEl) ? startEl.GetDouble() : 0;
-            var end = seg.TryGetProperty("end", out var endEl) ? endEl.GetDouble() : 0;
-            var prob = seg.TryGetProperty("no_speech_prob", out var nspEl)
-                && nspEl.ValueKind == JsonValueKind.Number
-                ? (float?)nspEl.GetDouble()
+            if (seg.ValueKind != JsonValueKind.Object)
+                continue;
+            var hasStringText = seg.TryGetProperty("text", out var segTextEl) && segTextEl.ValueKind == JsonValueKind.String;
+            var segmentText = hasStringText ? segTextEl.GetString() ?? "" : "";
+            var start = ReadNumber(seg, "start") ?? 0;
+            var end = ReadNumber(seg, "end") ?? 0;
+            var prob = ReadNumber(seg, "no_speech_prob") is { } noSpeech and >= 0 and <= 1
+                ? (float?)noSpeech
                 : null;
             segments.Add(new PluginTranscriptionSegment(segmentText, start, end)
             {
@@ -192,12 +199,31 @@ public static class OpenAiTranscriptionHelper
                     ? probability
                     : Math.Min(minNoSpeechProb.Value, probability);
             }
+            else if (!hasStringText || !string.IsNullOrWhiteSpace(segmentText))
+            {
+                hasUnratedSpeech = true;
+            }
         }
 
-        return new PluginTranscriptionResult(text.Trim(), language, duration, minNoSpeechProb)
+        return new PluginTranscriptionResult(text.Trim(), language, duration, hasUnratedSpeech ? null : minNoSpeechProb)
         {
             Segments = segments,
         };
+    }
+
+    // Some servers (e.g. GPUStack) send verbose_json numbers as strings such as "2.49".
+    private static double? ReadNumber(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value))
+            return null;
+        var parsed = value.ValueKind switch
+        {
+            JsonValueKind.Number => value.TryGetDouble(out var number) ? number : (double?)null,
+            JsonValueKind.String => double.TryParse(value.GetString(), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var number) ? number : null,
+            _ => null,
+        };
+        return parsed is { } finite && double.IsFinite(finite) ? finite : null;
     }
 
     private static InvalidOperationException CreateInvalidResponseException(
