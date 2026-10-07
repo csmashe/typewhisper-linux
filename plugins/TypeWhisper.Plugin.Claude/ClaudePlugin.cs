@@ -570,6 +570,7 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
     // Commits only when no key change or deactivation happened since the refresh began.
     private bool TryCommitCatalog(List<ClaudeModel> models, long generation, string apiKey)
     {
+        IPluginHostServices host;
         lock (_catalogLock)
         {
             if (_host is null
@@ -579,12 +580,13 @@ public sealed class ClaudePlugin : ILlmProviderPlugin, IPluginSettingsProvider, 
                 return false;
             }
 
+            host = _host;
             // Persist first so a failed write leaves the live catalog untouched.
-            _host.SetSetting(FetchedModelsSettingKey, models);
+            host.SetSetting(FetchedModelsSettingKey, models);
             SetCatalog(models);
         }
 
-        _host?.NotifyCapabilitiesChanged();
+        host.NotifyCapabilitiesChanged();
         return true;
     }
 
