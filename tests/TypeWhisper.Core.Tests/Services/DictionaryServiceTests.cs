@@ -447,14 +447,27 @@ public sealed class DictionaryServiceTests : IDisposable
     [InlineData("new line.", @"\n\n", "\n\n")]
     [InlineData("new line", @"\n", "\n")]
     [InlineData("new line Hello.", @"\n", "\n Hello.")]
-    [InlineData("Hello new line. Next sentence.", @"\n", "Hello \n. Next sentence.")]
+    [InlineData("Hello new line. Next sentence.", @"\n", "Hello \nNext sentence.")]
+    [InlineData("Hello new line, next item", @"\n", "Hello \nnext item")]
+    [InlineData("Hello new line ; next", @"\n", "Hello \nnext")]
+    [InlineData("Hello new line: next", @"\n", "Hello \nnext")]
+    [InlineData("Hello new line! Next", @"\n", "Hello \nNext")]
+    [InlineData("Is it new line? Next", @"\n", "Is it \nNext")]
+    [InlineData("A new line. B new line. C", @"\n", "A \nB \nC")]
+    [InlineData("Hello new line.. Next", @"\n", "Hello \n.. Next")]
+    [InlineData("Hello new line .NET is supported", @"\n", "Hello \n .NET is supported")]
+    [InlineData("Copy new line .env now", @"\n", "Copy \n .env now")]
+    [InlineData("Use new line !important here", @"\n", "Use \n !important here")]
+    [InlineData("Hello new line.NET", @"\n", "Hello \n.NET")]
+    [InlineData("Hello new line - next", @"\n", "Hello \n - next")]
     [InlineData("Hello new line.", "replacement", "Hello replacement.")]
+    [InlineData("Hello new line, next", "replacement", "Hello replacement, next")]
     [InlineData("Hello new line.", @"\nItem", "Hello \nItem.")]
     [InlineData("Hello new line.", @"\\n", @"Hello \n.")]
     [InlineData("Hello new line.\r\n", @"\n", "Hello \n\r\n")]
     [InlineData("Hello new line.\n\n", @"\n", "Hello \n\n\n")]
-    [InlineData("Hello new line.\nNext", @"\n", "Hello \n.\nNext")]
-    public void ApplyCorrections_RemovesOnlyTrailingCommandPeriodForStructuralNewline(string input, string replacement, string expected)
+    [InlineData("Hello new line.\nNext", @"\n", "Hello \n\nNext")]
+    public void ApplyCorrections_ConsumesCommandPunctuationForStructuralNewline(string input, string replacement, string expected)
     {
         _sut.AddEntry(new DictionaryEntry
         {
@@ -484,10 +497,44 @@ public sealed class DictionaryServiceTests : IDisposable
         });
 
         Assert.Equal("Hello \n.", _sut.ApplyCorrections("Hello new line."));
+        Assert.Equal("Hello \n, next", _sut.ApplyCorrections("Hello new line, next"));
+    }
+
+    [Theory]
+    [InlineData("I use kubernets. It works", "I use Kubernetes. It works")]
+    [InlineData("kubernets, docker and helm", "Kubernetes, docker and helm")]
+    [InlineData("Do you know kubernets? Yes", "Do you know Kubernetes? Yes")]
+    public void ApplyCorrections_OrdinaryCorrectionKeepsFollowingPunctuation(string input, string expected)
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "word",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "kubernets",
+            Replacement = "Kubernetes",
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal(expected, _sut.ApplyCorrections(input));
     }
 
     [Fact]
-    public void ApplyCorrections_LiteralNewlineReplacementKeepsTrailingPeriod()
+    public void ApplyCorrections_SpaceOnlyReplacementKeepsFollowingPunctuation()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "space",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "space bar",
+            Replacement = @"\t",
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal("Hello \t. Next", _sut.ApplyCorrections("Hello space bar. Next"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_LiteralNewlineReplacementKeepsFollowingPunctuation()
     {
         _sut.UpsertCorrection("new line", @"\n", caseSensitive: false);
 
@@ -495,7 +542,7 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
-    public void ApplyCorrections_TrailingPeriodPatternIsNotSharedAcrossReplacements()
+    public void ApplyCorrections_CommandPunctuationPatternIsNotSharedAcrossReplacements()
     {
         _sut.AddEntry(new DictionaryEntry
         {
