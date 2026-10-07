@@ -128,6 +128,9 @@ internal sealed class SherpaDecodeCoordinator
         // chosen by time rather than by matching words. Once any chunk lacks usable
         // timings, the rest of the recording is joined as text and publishes none.
         var words = new List<TimedWord>();
+        // Words the last timed chunk heard whole after its owned region; the untimed
+        // fallback must still be able to stitch the next chunk against them.
+        TimedWord[] unownedTail = [];
         string? untimedText = null;
         foreach (var chunk in CreateChunks(audioSamples, parseCanaryPayload: false, ct))
         {
@@ -139,10 +142,28 @@ internal sealed class SherpaDecodeCoordinator
                 if (chunkWords is not null)
                 {
                     AppendOwnedWords(words, chunkWords, chunk);
+                    var ownedEnd = chunk.OwnedEnd / (double)SampleRate;
+                    // A word sounding up to the chunk's last sample was likely cut off.
+                    var clippedAfter = chunk.End / (double)SampleRate - BoundaryJitterSeconds;
+                    unownedTail = chunkWords
+                        .Where(word =>
+                            word.Start >= ownedEnd && word.EndKnown && word.AcousticEnd < clippedAfter
+                        )
+                        .ToArray();
                     continue;
                 }
 
-                untimedText = JoinWords(words);
+                // The next chunk may restate only part of the tail, or only owned words;
+                // seam on the longest tail prefix it overlaps rather than duplicating.
+                var tailLength = unownedTail.Length;
+                while (
+                    tailLength > 0
+                    && CountTokenOverlap(JoinWords([.. words, .. unownedTail[..tailLength]]), text) == 0
+                )
+                    tailLength--;
+                if (CountTokenOverlap(JoinWords([.. words, .. unownedTail[..tailLength]]), text) == 0)
+                    tailLength = unownedTail.Length;
+                untimedText = JoinWords([.. words, .. unownedTail[..tailLength]]);
             }
 
             untimedText = StitchTokenOverlap(untimedText, text);
@@ -465,14 +486,20 @@ internal sealed class SherpaDecodeCoordinator
         if (string.IsNullOrWhiteSpace(next))
             return accumulated.Trim();
 
+        return string.Join(
+            ' ',
+            SplitTokens(accumulated).Concat(SplitTokens(next).Skip(CountTokenOverlap(accumulated, next)))
+        );
+    }
+
+    private static int CountTokenOverlap(string accumulated, string next)
+    {
         var accumulatedTokens = SplitTokens(accumulated);
         var nextTokens = SplitTokens(next);
         var maximumOverlap = Math.Min(
             MaximumFallbackOverlapWords,
             Math.Min(accumulatedTokens.Length, nextTokens.Length)
         );
-        var overlap = 0;
-
         for (var length = maximumOverlap; length > 0; length--)
         {
             var matches = true;
@@ -494,13 +521,10 @@ internal sealed class SherpaDecodeCoordinator
 
             // ReSharper disable once InvertIf -- the positive form states the "overlap found" case that ends the search.
             if (matches)
-            {
-                overlap = length;
-                break;
-            }
+                return length;
         }
 
-        return string.Join(' ', accumulatedTokens.Concat(nextTokens.Skip(overlap)));
+        return 0;
     }
 
     private static string[] SplitTokens(string text) =>
@@ -518,6 +542,8 @@ internal sealed class SherpaDecodeCoordinator
             tokens.Select(token => token.Timing).ToArray();
         internal double Start => Tokens[0].StartSeconds;
         internal double AcousticEnd { get; } = tokens.Max(token => token.AcousticEnd);
+        // False when the last token's end was only inferred to the chunk's end.
+        internal bool EndKnown { get; } = tokens[^1].AcousticEnd > tokens[^1].Timing.StartSeconds;
         internal string Text { get; } =
             string.Concat(tokens.Select(token => token.Timing.Text)).Replace('▁', ' ').Trim();
         internal string Key => WordKey(Text);

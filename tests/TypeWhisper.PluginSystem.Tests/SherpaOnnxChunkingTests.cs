@@ -413,6 +413,90 @@ public sealed class SherpaOnnxChunkingTests
         Assert.Empty(result.TokenTimings);
     }
 
+    [Theory]
+    [InlineData("jumps high")]
+    // Restates an owned word but still misses "fox".
+    [InlineData("quick jumps high")]
+    public void Transducer_FallbackKeepsTheTimedChunksTrailingContextWords(string untimedText)
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                // "fox" starts after the cut, in the timed chunk's trailing context.
+                ? new SherpaDecodeChunk(
+                    "the quick fox",
+                    ["▁the", "▁quick", "▁fox"],
+                    [(float)(cut - 1.0), (float)(cut - 0.5), (float)(cut + 0.1)],
+                    [0.25f, 0.25f, 0.2f]
+                )
+                // Untimed, and it missed "fox" at its leading edge.
+                : new SherpaDecodeChunk(untimedText)
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal(
+            untimedText.StartsWith("quick", StringComparison.Ordinal)
+                ? "the quick jumps high"
+                : "the quick fox jumps high",
+            result.Text
+        );
+        Assert.Empty(result.TokenTimings);
+    }
+
+    [Fact]
+    public void Transducer_FallbackSeamsOnAPartOfTheTrailingContext()
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                // "can go" is heard whole after the cut.
+                ? new SherpaDecodeChunk(
+                    "we can go",
+                    ["▁we", "▁can", "▁go"],
+                    [(float)(cut - 0.5), (float)(cut + 0.05), (float)(cut + 0.2)],
+                    [0.2f, 0.1f, 0.1f]
+                )
+                : new SherpaDecodeChunk("can continue")
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("we can continue", result.Text);
+        Assert.Empty(result.TokenTimings);
+    }
+
+    [Theory]
+    [InlineData(0.4f)]
+    // Unknown length: it cannot be shown to be complete.
+    [InlineData(0f)]
+    public void Transducer_FallbackDropsATrailingWordTheTimedChunkHeardTruncated(float superDuration)
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                // "super" runs to the end of the chunk's audio, 0.5 s after the cut.
+                ? new SherpaDecodeChunk(
+                    "before super",
+                    ["▁before", "▁super"],
+                    [(float)(cut - 1.0), (float)(cut + 0.1)],
+                    [0.25f, superDuration]
+                )
+                : new SherpaDecodeChunk("supercalifragilistic after")
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("before supercalifragilistic after", result.Text);
+        Assert.Empty(result.TokenTimings);
+    }
+
     [Fact]
     public void Transducer_TokensThatDoNotSpellTheText_FallBackToText()
     {
