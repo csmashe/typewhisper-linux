@@ -759,6 +759,7 @@
   "Prompts.ProviderWarning": "Activa un proveedor en Extensiones: añade una clave de API o inicia sesión en una CLI autenticada.",
   "Prompts.SaveFailed": "No se pudieron guardar tus acciones de prompt: {0}",
   "Prompts.SelectedProviderMissing": "El proveedor de IA seleccionado ya no está instalado: {0}. Elige otro proveedor en Prompts.",
+  "Prompts.SelectedModelMissing": "{1} ya no ofrece el modelo seleccionado {0}. Actualiza sus modelos en Extensiones o elige otro modelo en Prompts.",
   "Prompts.SelectedProviderUnavailable": "El proveedor de IA seleccionado no está listo: {0}. Comprueba su inicio de sesión y su configuración en Extensiones.",
   "Prompts.Summary": "{0} prompts, {1} activados",
   "Prompts.SystemPrompt": "Prompt del sistema",

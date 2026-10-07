@@ -1,12 +1,16 @@
 {
   "Settings.ApiKey": "Clave de API",
-  "Settings.ApiKeyDescription": "Necesaria para las solicitudes al LLM de Claude.",
+  "Settings.ApiKeyDescription": "Necesaria para las solicitudes al LLM de Claude. Valida para cargar los modelos disponibles para tu cuenta.",
   "Settings.StreamResponses": "Transmitir respuestas",
   "Settings.StreamResponsesDescription": "Muestra la salida de la acción del prompt token a token a medida que se genera, en lugar de esperar a la respuesta completa.",
   "Settings.EnterApiKey": "Introduce primero una clave de API.",
-  "Settings.ApiKeyFormatValid": "El formato de la clave de API parece válido.",
   "Settings.ApiKeyFormatInvalid": "El formato de la clave de API no es válido.",
   "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
+  "Settings.ApiKeyValidFetchedModels": "La clave de API es válida. Se cargaron {0} modelo(s) de Claude disponibles para esta cuenta.",
+  "Settings.ApiKeyRejected": "Anthropic rechazó esta clave de API. Comprueba la clave e inténtalo de nuevo.",
+  "Settings.ModelRefreshFailed": "No se pudieron cargar los modelos de Claude: {0} La lista de modelos guardada no ha cambiado.",
+  "Settings.ModelRefreshStale": "La clave de API cambió mientras se cargaban los modelos. Vuelve a validar.",
+  "Errors.ModelNotFound": "Claude no encontró el modelo {0}. Valida la clave de API en Extensiones para actualizar la lista de modelos y luego elige un modelo disponible.",
   "Manifest.Name": "Claude",
   "Manifest.Description": "LLM Claude de Anthropic para el procesamiento de prompts"
 }

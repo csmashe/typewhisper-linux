@@ -63,13 +63,32 @@ public sealed class SelectedProviderRefusalTests : IDisposable
         );
 
         Assert.Null(processing.TryDescribeSelectedProviderProblem("plugin:com.test.ready:model-r"));
+        // A model the installed provider no longer offers is named as such, not as a missing provider.
         Assert.Equal(
-            Loc.Instance.GetString("Prompts.SelectedProviderMissing", $"com.test.ready · {modelId}"),
+            string.IsNullOrWhiteSpace(modelId)
+                ? Loc.Instance.GetString("Prompts.SelectedProviderMissing", $"com.test.ready · {modelId}")
+                : Loc.Instance.GetString("Prompts.SelectedModelMissing", modelId, "Ready Provider"),
             processing.TryDescribeSelectedProviderProblem($"plugin:com.test.ready:{modelId}")
         );
 
         ready.SupportedModels = [];
         Assert.Null(processing.TryDescribeSelectedProviderProblem("plugin:com.test.ready:unfetched"));
+    }
+
+    [Fact]
+    public void SelectedModel_OnUnavailableProvider_ReportsUnavailabilityFirst()
+    {
+        var signedOut = new FakeProvider("com.test.cli", "CLI Provider", "model-c") { IsAvailable = false };
+        using var pluginManager = CreatePluginManager(signedOut);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var processing = new PromptProcessingService(
+            pluginManager, settings.Object, new MemoryService(pluginManager)
+        );
+
+        Assert.Equal(
+            Loc.Instance.GetString("Prompts.SelectedProviderUnavailable", "CLI Provider"),
+            processing.TryDescribeSelectedProviderProblem("plugin:com.test.cli:retired-model")
+        );
     }
 
     [Fact]

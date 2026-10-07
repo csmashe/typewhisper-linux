@@ -376,6 +376,22 @@ public sealed class PromptProcessingService
         return provider is null ? (null, string.Empty) : (provider, modelId);
     }
 
+    private (ILlmProviderRole Provider, string ModelId)? FindInstalledProviderWithoutModel(string selection)
+    {
+        var parts = selection.Split(':', 3);
+        if (parts.Length < 3
+            || !string.Equals(parts[0], "plugin", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(parts[2]))
+        {
+            return null;
+        }
+
+        var provider = _pluginManager.LlmProviders.FirstOrDefault(candidate =>
+            candidate.GetLlmSelectionId() == parts[1]
+        );
+        return provider is null ? null : (provider, parts[2]);
+    }
+
     // An explicitly selected provider never silently falls through to another one: with CLI
     // providers that flip between ready and signed out, that would send the user's text to — and
     // bill — a provider they did not pick.
@@ -397,7 +413,7 @@ public sealed class PromptProcessingService
         return (resolved.Provider!, resolved.ModelId);
     }
 
-    // Single source of the two configuration messages, shared by the up-front guards and the
+    // Single source of the configuration messages, shared by the up-front guards and the
     // throwing path so both name the same problem. Logging here (rather than at each of the four
     // call sites) puts exactly one error-log entry behind every prompt, palette, transform and
     // spoken-command configuration failure.
@@ -406,21 +422,31 @@ public sealed class PromptProcessingService
         string selection
     )
     {
-        string? problem = null;
-        if (resolved.Provider is null)
+        var problem = resolved.Provider switch
         {
-            problem = Localization.Loc.Instance.GetString(
+            // Installed, but its catalog dropped the saved model (e.g. retired): say that, not "missing".
+            // An unready provider is the problem to fix first.
+            null when FindInstalledProviderWithoutModel(selection) is { } installed =>
+                installed.Provider.IsAvailable
+                    ? Localization.Loc.Instance.GetString(
+                        "Prompts.SelectedModelMissing",
+                        installed.ModelId,
+                        installed.Provider.ProviderName
+                    )
+                    : Localization.Loc.Instance.GetString(
+                        "Prompts.SelectedProviderUnavailable",
+                        installed.Provider.ProviderName
+                    ),
+            null => Localization.Loc.Instance.GetString(
                 "Prompts.SelectedProviderMissing",
                 DescribeSelection(selection)
-            );
-        }
-        else if (!resolved.Provider.IsAvailable)
-        {
-            problem = Localization.Loc.Instance.GetString(
+            ),
+            { IsAvailable: false } => Localization.Loc.Instance.GetString(
                 "Prompts.SelectedProviderUnavailable",
                 resolved.Provider.ProviderName
-            );
-        }
+            ),
+            _ => null,
+        };
 
         string? newProblem = null;
         lock (_loggedProviderProblems)
