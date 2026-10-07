@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using TypeWhisper.Plugins.Shared.Cuda;
+using TypeWhisper.Plugins.Shared.Net;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using Whisper.net;
@@ -478,6 +479,15 @@ public sealed class WhisperCppPlugin
                 return;
             }
 
+            // The ggml stream exposes no length, so check against the catalog size.
+            var spaceDescription = $"the {model.DisplayName} model";
+            DownloadSpace.EnsureAvailable(
+                modelDirectory,
+                model.EstimatedSizeMB * 1024L * 1024L,
+                spaceDescription,
+                SpaceProbe
+            );
+
             var tempPath = Path.Join(
                 modelDirectory,
                 $"{Path.GetFileName(modelPath)}.{Guid.NewGuid():N}.tmp"
@@ -534,9 +544,15 @@ public sealed class WhisperCppPlugin
                 File.Move(tempPath, modelPath, overwrite: true);
                 progress?.Report(1.0);
             }
-            catch
+            catch (Exception ex)
             {
                 TryDeleteFile(tempPath);
+                if (
+                    DownloadSpace.TranslateWriteFailure(ex, modelDirectory, spaceDescription)
+                        is { } full
+                    && !ReferenceEquals(full, ex)
+                )
+                    throw full;
                 throw;
             }
         }
@@ -1281,6 +1297,9 @@ public sealed class WhisperCppPlugin
             _gate.Release();
         }
     }
+
+    // Test seam: free-space probe for model downloads (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; set; }
 
     // Test seam: pre-seed the CUDA provisioner + installer with fakes before ActivateAsync
     // (whose ??= lazy-create then skips), so the LoadModelAsync provisioning/fallback state

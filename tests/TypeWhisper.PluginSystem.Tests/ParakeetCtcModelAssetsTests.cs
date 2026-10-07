@@ -247,6 +247,67 @@ public sealed class ParakeetCtcModelAssetsTests : IDisposable
         );
     }
 
+    [Fact]
+    public async Task InsufficientSpaceFailsBeforeExtractionAndKeepsPriorAssets()
+    {
+        Directory.CreateDirectory(Model);
+        var prior = Path.Join(Model, "keep-existing.txt");
+        await File.WriteAllTextAsync(prior, "previous assets");
+        var archive = ValidArchive();
+        var requests = new List<string>();
+        using var client = new HttpClient(
+            new Handler(
+                (request, _) =>
+                {
+                    requests.Add(request.RequestUri!.AbsolutePath);
+                    return Task.FromResult(
+                        Response(request.RequestUri.AbsolutePath == "/model" ? archive : s_tokenizer)
+                    );
+                }
+            )
+        );
+        // Room for the archive itself but not for the extraction staged beside it.
+        var assets = new CtcModelAssets(
+            client,
+            Source("model", archive),
+            Source("tokenizer", s_tokenizer),
+            _ => archive.Length + 256L * 1024 * 1024
+        );
+
+        var ex = await DownloadSpaceAssert.ThrowsInsufficientSpaceAsync(() =>
+            assets.EnsureAsync(Model, CancellationToken.None)
+        );
+
+        Assert.StartsWith("Not enough disk space for the dictionary boosting model:", ex.Message);
+        Assert.Equal(["/model"], requests);
+        Assert.Equal("previous assets", await File.ReadAllTextAsync(prior));
+        Assert.Empty(Directory.GetDirectories(_root, ".ctc-staging-*"));
+        Assert.Empty(Directory.GetDirectories(_root, "model.previous-*"));
+    }
+
+    [Fact]
+    public async Task UnknownFreeSpaceStillInstalls()
+    {
+        var archive = ValidArchive();
+        using var client = new HttpClient(
+            new Handler(
+                (request, _) =>
+                    Task.FromResult(
+                        Response(request.RequestUri!.AbsolutePath == "/model" ? archive : s_tokenizer)
+                    )
+            )
+        );
+
+        await new CtcModelAssets(
+            client,
+            Source("model", archive),
+            Source("tokenizer", s_tokenizer),
+            _ => null
+        ).EnsureAsync(Model, CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Join(Model, "verified-assets.json")));
+    }
+
     private static HttpResponseMessage Response(byte[] bytes) =>
         new(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
 

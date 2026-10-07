@@ -320,6 +320,13 @@ public sealed class SherpaOnnxPlugin
         // Single throttle across all files (MinValue so the first report always fires).
         var lastReport = DateTime.MinValue;
 
+        // Estimate-based check before any request; each file re-checks its exact length.
+        var spaceDescription = $"the {model.DisplayName} model";
+        var missingBytes = model.Files
+            .Where(f => !File.Exists(Path.Join(dir, f.FileName)))
+            .Sum(f => (long)f.EstimatedSizeMB * 1024 * 1024);
+        DownloadSpace.EnsureAvailable(dir, missingBytes, spaceDescription, SpaceProbe);
+
         foreach (var file in model.Files)
         {
             var filePath = Path.Join(dir, file.FileName);
@@ -330,6 +337,8 @@ public sealed class SherpaOnnxPlugin
                 cumulativeBytesRead += new FileInfo(filePath).Length;
                 continue;
             }
+
+            missingBytes -= (long)file.EstimatedSizeMB * 1024 * 1024;
 
             // Model files have no published checksum, so resume can't be made safe.
             // allowResume:false still gives the idle/connect watchdog (a stall aborts and
@@ -359,7 +368,9 @@ public sealed class SherpaOnnxPlugin
                 },
                 verifyComplete: path =>
                     VerifyModelArtifact(path, file.FileName, model.RequiresBlankToken),
-                ct
+                ct,
+                // Leave room for the files after this one as well.
+                new DownloadSpaceRequirement(spaceDescription, missingBytes, SpaceProbe)
             );
 
             cumulativeBytesRead += fileOnDisk;
@@ -790,6 +801,9 @@ public sealed class SherpaOnnxPlugin
         _host = host;
         InitializeCudaDependencies(host);
     }
+
+    // Test seam: free-space probe for model downloads (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; set; }
 
     // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- test seam over the lock-guarded field; the plugin keeps the field.
     internal string? LoadedModelIdForTests => _loadedModelId;

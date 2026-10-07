@@ -43,6 +43,11 @@ internal class SherpaCudaRuntimeInstaller
     // server omits Content-Length.
     private const long ApproxDownloadBytes = 234_120_435L;
 
+    // Extracted beside the archive: ~398 MB (almost all libonnxruntime_providers_cuda.so).
+    private const long ExtractedRuntimeBytes = 400L * 1024 * 1024;
+
+    private const string SpaceDescription = "the sherpa-onnx GPU runtime";
+
     // What we keep out of the tarball's lib/ directory. The TensorRT provider
     // (libonnxruntime_providers_tensorrt.so) is deliberately excluded — we only
     // use the CUDA execution provider, and it adds nothing but bulk.
@@ -76,6 +81,9 @@ internal class SherpaCudaRuntimeInstaller
 
     /// <summary>Directory containing the extracted GPU <c>.so</c> files.</summary>
     public string RuntimeDirectory => Path.Join(_runtimeRoot, "native");
+
+    // Test seam: free-space probe for the runtime download (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; init; }
 
     /// <summary>True when every required GPU library has already been extracted.</summary>
     public bool IsInstalled =>
@@ -123,7 +131,16 @@ internal class SherpaCudaRuntimeInstaller
                         await DownloadAsync(tarballPath, progress, ct).ConfigureAwait(false);
 
                         _log?.Invoke("sherpa-onnx GPU runtime: extracting native libraries");
-                        ExtractCoreRuntimeFiles(tarballPath);
+                        try
+                        {
+                            ExtractCoreRuntimeFiles(tarballPath);
+                        }
+                        catch (Exception ex)
+                            when (DownloadSpace.TranslateWriteFailure(ex, _runtimeRoot, SpaceDescription)
+                                is { } full && !ReferenceEquals(full, ex))
+                        {
+                            throw full;
+                        }
                     }
                     finally
                     {
@@ -218,7 +235,8 @@ internal class SherpaCudaRuntimeInstaller
             allowResume: true,
             onBytesOnDisk: OnBytesOnDisk,
             verifyComplete: path => VerifySha256(path, RuntimeDirectory),
-            ct
+            ct,
+            new DownloadSpaceRequirement(SpaceDescription, ExtractedRuntimeBytes, SpaceProbe)
         );
     }
 

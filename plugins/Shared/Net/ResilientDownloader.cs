@@ -71,6 +71,10 @@ internal static class ResilientDownloader
     ///     the server omits an exact total (Content-Length/Content-Range).
     /// </param>
     /// <param name="ct">Cancellation for the whole operation (user cancel).</param>
+    /// <param name="space">
+    ///     Checked once the body length is declared, before writing. A full disk or
+    ///     quota mid-write surfaces as <see cref="InsufficientDownloadSpaceException" />.
+    /// </param>
     public static async Task DownloadToFileAsync(
         HttpClient client,
         string url,
@@ -81,7 +85,8 @@ internal static class ResilientDownloader
         bool allowResume,
         Action<long>? onBytesOnDisk,
         Action<string>? verifyComplete,
-        CancellationToken ct)
+        CancellationToken ct,
+        DownloadSpaceRequirement? space = null)
     {
         // Invariant: resume with no integrity gate is unrepresentable. Without a
         // full-file hash a corrupt/rotated prefix could be re-appended to forever.
@@ -158,6 +163,14 @@ internal static class ResilientDownloader
                     declaredTotal = response.Content.Headers.ContentLength;
                 }
 
+                // Net growth excludes the existing partial: a 206 appends to it, a 200 truncates it.
+                if (space is not null)
+                    DownloadSpace.EnsureAvailable(
+                        partialPath,
+                        Math.Max(0, (declaredTotal ?? existing) - existing) + space.AdditionalBytes,
+                        space.Description,
+                        space.Probe);
+
                 long onDisk;
                 await using (var contentStream = await response.Content
                     .ReadAsStreamAsync(ct).ConfigureAwait(false))
@@ -219,13 +232,19 @@ internal static class ResilientDownloader
                 break;
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Transient / idle / network / length failure. With resume, we KEEP the
             // partial so the next attempt picks up where this one stopped; without
             // resume a kept partial is useless, so drop it (truncate-restart parity).
             if (!allowResume)
                 TryDelete(partialPath);
+            if (DownloadSpace.TranslateWriteFailure(
+                    ex,
+                    partialPath,
+                    space?.Description ?? Path.GetFileName(destinationPath)) is { } full
+                && !ReferenceEquals(full, ex))
+                throw full;
             throw;
         }
 

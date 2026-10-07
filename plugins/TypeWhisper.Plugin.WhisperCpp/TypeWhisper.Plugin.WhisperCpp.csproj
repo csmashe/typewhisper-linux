@@ -34,6 +34,8 @@
         <!-- Shared resumable/idle-watchdog downloader, compiled into the plugin assembly. -->
         <Compile Include="..\Shared\Net\ResilientDownloader.cs"
                  Link="Shared\Net\ResilientDownloader.cs" />
+        <Compile Include="..\Shared\Net\DownloadSpace.cs"
+                 Link="Shared\Net\DownloadSpace.cs" />
         <!-- Shared cross-process lock guarding the resumable shared-cache staging files. -->
         <Compile Include="..\Shared\Net\InterProcessFileLock.cs"
                  Link="Shared\Net\InterProcessFileLock.cs" />

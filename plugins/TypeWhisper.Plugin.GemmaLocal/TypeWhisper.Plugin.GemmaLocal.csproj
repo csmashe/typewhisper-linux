@@ -12,6 +12,11 @@
         <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
     </ItemGroup>
     <ItemGroup>
+        <!-- Shared download free-space policy, compiled into the plugin assembly. -->
+        <Compile Include="..\Shared\Net\DownloadSpace.cs"
+                 Link="Shared\Net\DownloadSpace.cs" />
+    </ItemGroup>
+    <ItemGroup>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
     </ItemGroup>
     <ItemGroup>
