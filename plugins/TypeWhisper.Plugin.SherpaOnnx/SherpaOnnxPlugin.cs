@@ -697,11 +697,12 @@ public sealed class SherpaOnnxPlugin
                         _recognizer.Decode(stream);
                         ct.ThrowIfCancellationRequested();
                         var result = stream.Result;
+                        // result.Durations is garbage in this binding; see SherpaNativeDurations.
                         return new SherpaDecodeChunk(
                             result.Text,
                             result.Tokens,
                             result.Timestamps,
-                            result.Durations
+                            SherpaNativeDurations.Read(stream, result.Timestamps)
                         );
                     });
                     var decoded = coordinator.Decode(

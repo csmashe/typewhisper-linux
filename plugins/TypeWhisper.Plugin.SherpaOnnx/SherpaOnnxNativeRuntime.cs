@@ -20,7 +20,9 @@ namespace TypeWhisper.Plugin.SherpaOnnx;
 internal static class SherpaOnnxNativeRuntime
 {
     private const int RtldNow = 0x002;
+    private const int RtldNoLoad = 0x004;
     private const int RtldGlobal = 0x100;
+    private const string CApiSoName = "libsherpa-onnx-c-api.so";
 
     // Loaded RTLD_GLOBAL ahead of the C API so its undefined references resolve.
     // The CUDA math libs (cudart/cublas/cufft/curand/cudnn) are preloaded
@@ -52,6 +54,7 @@ internal static class SherpaOnnxNativeRuntime
     private static readonly Lock s_sync = new();
     private static bool s_resolverRegistered;
     private static string? s_cudaRuntimeDirectory;
+    private static IntPtr s_resolvedCApi;
 
     /// <summary>
     ///     Registers the import resolver once. Safe (and cheap) to call even on the
@@ -132,8 +135,29 @@ internal static class SherpaOnnxNativeRuntime
 
         var fileName = ToSoFileName(libraryName);
         var candidate = Path.Join(runtimeDirectory, fileName);
-        return File.Exists(candidate) ? NativeLibrary.Load(candidate) : IntPtr.Zero;
+        if (!File.Exists(candidate))
+            return IntPtr.Zero;
+        var handle = NativeLibrary.Load(candidate);
+        if (fileName == CApiSoName)
+            Interlocked.CompareExchange(ref s_resolvedCApi, handle, IntPtr.Zero);
+        return handle;
     }
+
+    /// <summary>
+    ///     The C API copy the managed binding is bound to: the one this resolver loaded on
+    ///     the CUDA path, otherwise the copy the default loader already has in the process.
+    ///     Never loads a new copy; zero when none is loaded.
+    /// </summary>
+    internal static IntPtr GetLoadedCApi() =>
+        SelectLoadedCApi(
+            Volatile.Read(ref s_resolvedCApi),
+            () => OperatingSystem.IsLinux() ? dlopen(CApiSoName, RtldNow | RtldNoLoad) : IntPtr.Zero
+        );
+
+    // NativeLibrary.Load(name, assembly, ...) bypasses SetDllImportResolver, so it can't
+    // be used to find the resolver's copy.
+    internal static IntPtr SelectLoadedCApi(IntPtr resolverLoaded, Func<IntPtr> alreadyLoaded) =>
+        resolverLoaded != IntPtr.Zero ? resolverLoaded : alreadyLoaded();
 
     // The managed binding P/Invokes the bare name "sherpa-onnx-c-api"; map any
     // requested name to its Linux soname form (lib<name>.so) so we can look it up
