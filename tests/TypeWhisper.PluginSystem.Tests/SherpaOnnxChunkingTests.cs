@@ -858,6 +858,45 @@ public sealed class SherpaOnnxChunkingTests
     }
 
     [Fact]
+    public void Transducer_TerminalTokenStretchedToTheRecordingEnd_KeepsTimings()
+    {
+        // 16.08 s, with a pause steering the cut to where the last chunk's offset plus
+        // its length rounds past the recording's end.
+        float[] audio = [];
+        IReadOnlyList<SherpaChunkWindow> chunks = [];
+        for (var pause = 7 * SampleRate; pause < 9 * SampleRate; pause += SampleRate / 100)
+        {
+            audio = Speech(16 * SampleRate + 1280);
+            Array.Clear(audio, pause, SampleRate / 50);
+            chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+            if (
+                chunks[1].Start / (double)SampleRate + (chunks[1].End - chunks[1].Start) / (double)SampleRate
+                > audio.Length / (double)SampleRate
+            )
+                break;
+        }
+        Assert.True(
+            chunks[1].Start / (double)SampleRate + (chunks[1].End - chunks[1].Start) / (double)SampleRate
+                > audio.Length / (double)SampleRate
+        );
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterSeconds = (chunks[1].End - chunks[1].Start) / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("hello", ["▁hello"], [(float)(cut - 2.0)], [0.3f])
+                // A zero duration stretches "end" to the chunk's last sample.
+                : new SherpaDecodeChunk("end", ["▁end"], [(float)(laterSeconds - 0.3)], [0f])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("hello end", result.Text);
+        Assert.Equal(2, result.TokenTimings.Count);
+        Assert.Equal(audio.Length / (double)SampleRate, result.TokenTimings[^1].EndSeconds);
+    }
+
+    [Fact]
     public void Transducer_SilentChunkWithoutTimingArrays_KeepsTimings()
     {
         var audio = Speech(20 * SampleRate);

@@ -297,10 +297,12 @@ internal sealed class SherpaDecodeCoordinator
         for (var i = 0; i < timings.Length; i++)
         {
             var timing = timings[i];
+            // Clamped: adding the offset can round an end at the chunk's last sample past
+            // the recording's end, which would discard every timing.
             var absolute = timing with
             {
                 StartSeconds = timing.StartSeconds + offset,
-                EndSeconds = timing.EndSeconds + offset,
+                EndSeconds = Math.Min(timing.EndSeconds + offset, chunk.End / (double)SampleRate),
             };
             if (
                 groups.Count == 0
@@ -429,17 +431,19 @@ internal sealed class SherpaDecodeCoordinator
         var scores = new double[a.Count + 1, b.Count + 1];
         var paired = new bool[a.Count, b.Count];
         for (var i = a.Count - 1; i >= 0; i--)
-        for (var j = b.Count - 1; j >= 0; j--)
         {
-            scores[i, j] = Math.Max(scores[i + 1, j], scores[i, j + 1]);
-            if (!IsSameWord(a[i], b[j]))
-                continue;
-            var withPair = scores[i + 1, j + 1] + pairScore - Math.Abs(a[i].Start - b[j].Start);
-            // ReSharper disable once InvertIf -- the positive form records the pairing choice it makes.
-            if (withPair >= scores[i, j])
+            for (var j = b.Count - 1; j >= 0; j--)
             {
-                scores[i, j] = withPair;
-                paired[i, j] = true;
+                scores[i, j] = Math.Max(scores[i + 1, j], scores[i, j + 1]);
+                if (!IsSameWord(a[i], b[j]))
+                    continue;
+                var withPair = scores[i + 1, j + 1] + pairScore - Math.Abs(a[i].Start - b[j].Start);
+                // ReSharper disable once InvertIf -- the positive form records the pairing choice it makes.
+                if (withPair >= scores[i, j])
+                {
+                    scores[i, j] = withPair;
+                    paired[i, j] = true;
+                }
             }
         }
 
