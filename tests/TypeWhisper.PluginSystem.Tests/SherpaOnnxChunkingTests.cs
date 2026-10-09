@@ -12,8 +12,10 @@ public sealed class SherpaOnnxChunkingTests
     [Theory]
     [InlineData(1, false)]
     [InlineData(1, true)]
+    [InlineData(15, false)]
     [InlineData(16, false)]
     [InlineData(16, true)]
+    [InlineData(29, false)]
     [InlineData(61, false)]
     [InlineData(61, true)]
     [InlineData(300, false)]
@@ -45,6 +47,9 @@ public sealed class SherpaOnnxChunkingTests
                 Assert.Equal(context, chunk.OwnedStart - chunk.Start);
             if (i < chunks.Count - 1)
                 Assert.Equal(context, chunk.End - chunk.OwnedEnd);
+            // Parakeet decodes a short chunk of real speech to nothing.
+            if (chunks.Count > 1)
+                Assert.True(chunk.OwnedEnd - chunk.OwnedStart >= 5 * SampleRate);
         }
     }
 
@@ -192,6 +197,7 @@ public sealed class SherpaOnnxChunkingTests
     [InlineData(0.3)]
     // Near the later chunk's first sample, where clipped words are also handled.
     [InlineData(0.4)]
+    [InlineData(0.45)]
     public void Transducer_KeepsALongWordHeardWholeOnlyByTheLaterChunk(double secondsBeforeCut)
     {
         var audio = Speech(20 * SampleRate);
@@ -298,6 +304,19 @@ public sealed class SherpaOnnxChunkingTests
     [Fact]
     public void Transducer_ClippedCopyCancelsOnlyOneLaterRepetition()
     {
+        AssertClippedCopyCancelsOnlyOneRepetition(sharedFox: false);
+    }
+
+    // A shared word after the repetition becomes the anchor instead, and the earlier
+    // chunk, which owns that audio, heard one long "no".
+    [Fact]
+    public void Transducer_BeforeASharedAnchor_TheEarlierChunksReadingWins()
+    {
+        AssertClippedCopyCancelsOnlyOneRepetition(sharedFox: true);
+    }
+
+    private static void AssertClippedCopyCancelsOnlyOneRepetition(bool sharedFox)
+    {
         var audio = Speech(20 * SampleRate);
         var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
         var cut = chunks[0].OwnedEnd / (double)SampleRate;
@@ -305,19 +324,28 @@ public sealed class SherpaOnnxChunkingTests
         var index = 0;
         var coordinator = new SherpaDecodeCoordinator(_ =>
             index++ == 0
-                ? new SherpaDecodeChunk("no", ["▁no"], [(float)(cut - 0.7)], [0.7f])
+                ? sharedFox
+                    ? new SherpaDecodeChunk("no fox", ["▁no", "▁fox"], [(float)(cut - 0.7), (float)(cut + 0.1)], [0.7f, 0.2f])
+                    : new SherpaDecodeChunk("no", ["▁no"], [(float)(cut - 0.7)], [0.7f])
                 // A clipped copy of the kept "no", then a genuine repetition.
-                : new SherpaDecodeChunk(
-                    "no no",
-                    ["▁no", "▁no"],
-                    [0f, (float)(cut - 0.08 - laterStart)],
-                    [0.42f, 0.25f]
-                )
+                : sharedFox
+                    ? new SherpaDecodeChunk(
+                        "no no fox",
+                        ["▁no", "▁no", "▁fox"],
+                        [0f, (float)(cut - 0.08 - laterStart), (float)(cut + 0.1 - laterStart)],
+                        [0.42f, 0.25f, 0.2f]
+                    )
+                    : new SherpaDecodeChunk(
+                        "no no",
+                        ["▁no", "▁no"],
+                        [0f, (float)(cut - 0.08 - laterStart)],
+                        [0.42f, 0.25f]
+                    )
         );
 
         var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
 
-        Assert.Equal("no no", result.Text);
+        Assert.Equal(sharedFox ? "no fox" : "no no", result.Text);
         AssertTimingsValid(result, audio);
     }
 
@@ -344,6 +372,513 @@ public sealed class SherpaOnnxChunkingTests
         var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
 
         Assert.Equal("before supercalifragilistic", result.Text);
+        AssertTimingsValid(result, audio);
+    }
+
+    // Measured on real dictation: the earlier chunk times shared words about 0.16 s
+    // early and the later one about 0.14 s late, so copies can start 0.3 s apart.
+    [Fact]
+    public void Transducer_SharedPhraseTimedApartByBothChunks_IsKeptOnce()
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var words = new[]
+        {
+            new Word("an", cut - 1.5),
+            new Word("account", cut - 1.2),
+            new Word("that", cut - 0.9),
+            new Word("would", cut - 0.45, Duration: 0.2),
+            new Word("just", cut - 0.2, Duration: 0.15),
+            new Word("be", cut - 0.04, Duration: 0.12),
+            new Word("a", cut + 0.1, Duration: 0.1),
+            new Word("drop", cut + 0.22, Duration: 0.2),
+            new Word("at", cut + 0.6),
+        };
+
+        var result = DecodeTransducer(audio, words, chunkIndex => chunkIndex == 0 ? -0.16 : 0.14);
+
+        Assert.Equal("an account that would just be a drop at", result.Text);
+        Assert.Equal(words.Length, result.TokenTimings.Count);
+        AssertTimingsValid(result, audio);
+    }
+
+    [Fact]
+    public void Transducer_RepetitionTimedApartByBothChunks_KeepsBothCopies()
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var words = new[]
+        {
+            new Word("no", cut - 0.3, Duration: 0.15),
+            new Word("no", cut - 0.05, Duration: 0.15),
+            new Word("thanks", cut + 0.15),
+        };
+
+        var result = DecodeTransducer(audio, words, chunkIndex => chunkIndex == 0 ? -0.16 : 0.14);
+
+        Assert.Equal("no no thanks", result.Text);
+        AssertTimingsValid(result, audio);
+    }
+
+    [Fact]
+    public void Transducer_OppositeClockDrift_KeepsWordOrder()
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var words = new[]
+        {
+            new Word("just", cut - 0.25, Duration: 0.08),
+            new Word("be", cut - 0.15, Duration: 0.08),
+            new Word("there", cut + 0.2),
+        };
+
+        var result = DecodeTransducer(audio, words, chunkIndex => chunkIndex == 0 ? 0.07 : -0.07);
+
+        Assert.Equal("just be there", result.Text);
+        Assert.Equal(3, result.TokenTimings.Count);
+        AssertTimingsValid(result, audio);
+    }
+
+    [Fact]
+    public void Transducer_RepetitionHeardOnceByTheLaterChunk_PairsWithItsOwnCopy()
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        // The later chunk starts 0.5 s before the cut, so it hears only the second "no".
+        var words = new[]
+        {
+            new Word("no", cut - 0.65, Duration: 0.1),
+            new Word("no", cut - 0.25, Duration: 0.1),
+            new Word("thanks", cut + 0.5),
+        };
+
+        var result = DecodeTransducer(audio, words, _ => 0);
+
+        Assert.Equal("no no thanks", result.Text);
+        AssertTimingsValid(result, audio);
+    }
+
+    [Fact]
+    public void Transducer_LongWordHeardOnlyLater_SurvivesASmallOverlapWithItsNeighbour()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("before", ["▁before"], [(float)(cut - 0.54)], [0.25f])
+                : new SherpaDecodeChunk(
+                    "supercalifragilistic after",
+                    ["▁supercalifragilistic", "▁after"],
+                    [(float)(cut - 0.35 - laterStart), (float)(cut + 1.0 - laterStart)],
+                    [1.0f, 0.25f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("before supercalifragilistic after", result.Text);
+    }
+
+    [Theory]
+    [InlineData(0.3f)]
+    // Only a short tail: the copies overlap by less than clock drift.
+    [InlineData(0.08f)]
+    public void Transducer_LongWordEndingInTheSharedAudio_IsKeptOnce(float laterCopyDuration)
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("hello", ["▁hello"], [(float)(cut - 1.1)], [1.0f])
+                // The later chunk hears only the end of "hello".
+                : new SherpaDecodeChunk(
+                    "hello world",
+                    ["▁hello", "▁world"],
+                    [(float)(cut - 0.4 - laterStart), (float)(cut + 0.3 - laterStart)],
+                    [laterCopyDuration, 0.3f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("hello world", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_RepetitionBeforeTheSharedAudio_IsNotPairedAway()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                // The first "no" ends before the later chunk's audio begins.
+                ? new SherpaDecodeChunk("no", ["▁no"], [(float)(cut - 0.7)], [0.15f])
+                : new SherpaDecodeChunk("no", ["▁no"], [(float)(cut - 0.25 - laterStart)], [0.8f])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("no no", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_WordOnlyTheNonOwningLaterChunkHeard_IsDropped()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("before", ["▁before"], [(float)(cut - 0.6)], [0.35f])
+                : new SherpaDecodeChunk(
+                    "a test",
+                    ["▁a", "▁test"],
+                    [(float)(cut - 0.3 - laterStart), (float)(cut + 0.4 - laterStart)],
+                    [0.08f, 0.3f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        // The earlier chunk owns the audio before the cut and heard no "a" there.
+        Assert.Equal("before test", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_FullerReadingNearTheLaterEdge_ReplacesATruncatedWord()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                // "super" runs to the end of the earlier chunk's audio.
+                ? new SherpaDecodeChunk(
+                    "before super",
+                    ["▁before", "▁super"],
+                    [(float)(cut - 1.2), (float)(cut - 0.45)],
+                    [0.25f, 0.95f]
+                )
+                // The complete word starts 50 ms into the later chunk.
+                : new SherpaDecodeChunk(
+                    "supercalifragilistic after",
+                    ["▁supercalifragilistic", "▁after"],
+                    [(float)(cut - 0.45 - laterStart), (float)(cut + 1.0 - laterStart)],
+                    [1.2f, 0.25f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("before supercalifragilistic after", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_WordOnlyTheNonOwningEarlierChunkHeard_IsDropped()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("go now", ["▁go", "▁now"], [(float)(cut - 0.3), (float)(cut - 0.03)], [0.3f, 0.25f])
+                // The later chunk owns the audio after "go" and heard nothing there.
+                : new SherpaDecodeChunk("go", ["▁go"], [(float)(cut - 0.15 - laterStart)], [0.3f])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("go", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_LaterCopyDriftingPastTheSharedAudio_IsKeptOnce()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("we go", ["▁we", "▁go"], [(float)(cut - 0.3), (float)(cut + 0.35)], [0.2f, 0.1f])
+                // The later copy of "go" runs 0.2 s late, past the earlier chunk's audio.
+                : new SherpaDecodeChunk(
+                    "we go home",
+                    ["▁we", "▁go", "▁home"],
+                    [(float)(cut - 0.1 - laterStart), (float)(cut + 0.55 - laterStart), (float)(cut + 0.9 - laterStart)],
+                    [0.2f, 0.1f, 0.3f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("we go home", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_OverlappingCopyCancelsOnlyOneRepetition()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("no", ["▁no"], [(float)(cut - 1.1)], [1.1f])
+                // A clipped copy starting 0.6 s later, then a genuine repetition.
+                : new SherpaDecodeChunk(
+                    "no no",
+                    ["▁no", "▁no"],
+                    [(float)(cut - 0.5 - laterStart), (float)(cut - 0.08 - laterStart)],
+                    [0.42f, 0.25f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("no no", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_TruncatedWordGivesWayToTheReadingMostlyAfterTheCut()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk(
+                    "before super",
+                    ["▁before", "▁super"],
+                    [(float)(cut - 0.65), (float)(cut - 0.3)],
+                    [0.3f, 0.8f]
+                )
+                // Starts at the later chunk's edge and overlaps "before".
+                : new SherpaDecodeChunk(
+                    "supercalifragilistic",
+                    ["▁supercalifragilistic"],
+                    [(float)(cut - 0.45 - laterStart)],
+                    [1.2f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("before supercalifragilistic", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_ConflictingUnownedReadings_KeepOnlyTheLaterChunks()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("colour", ["▁colour"], [(float)(cut + 0.05)], [0.3f])
+                : new SherpaDecodeChunk("color", ["▁color"], [(float)(cut - 0.05 - laterStart)], [0.3f])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("color", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_ShortAlternativesOverTheSameAudio_KeepOne()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("a", ["▁a"], [(float)(cut + 0.1)], [0.08f])
+                : new SherpaDecodeChunk("the", ["▁the"], [(float)(cut + 0.1 - laterStart)], [0.08f])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("the", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_PairedWordClippedByTheLaterChunk_KeepsTheCompleteTimings()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("hello", ["▁hello"], [(float)(cut - 1.1)], [1.0f])
+                // The later chunk begins inside "hello".
+                : new SherpaDecodeChunk("hello", ["▁hello"], [0f], [0.4f])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("hello", result.Text);
+        Assert.Equal(cut - 1.1, Assert.Single(result.TokenTimings).StartSeconds, 4);
+    }
+
+    [Theory]
+    // Each reading's midpoint on the other side: both would be rejected.
+    [InlineData(0.05, 0.2, -0.15, 0.2)]
+    // Short readings further apart than the gap drift alone allows.
+    [InlineData(0.10, 0.08, -0.20, 0.08)]
+    // Each on its own side, overlapping by more than drift: both would be kept.
+    [InlineData(-0.3, 0.4, -0.1, 0.4)]
+    public void Transducer_ReadingsDriftingAcrossTheCutBothWays_KeepOne(
+        double earlierStart,
+        double earlierDuration,
+        double laterStart,
+        double laterDuration
+    )
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterChunkStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("colour", ["▁colour"], [(float)(cut + earlierStart)], [(float)earlierDuration])
+                : new SherpaDecodeChunk(
+                    "color",
+                    ["▁color"],
+                    [(float)(cut + laterStart - laterChunkStart)],
+                    [(float)laterDuration]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("color", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_FragmentAtTheLaterEdge_DoesNotReplaceACompleteNeighbour()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk(
+                    "hello super",
+                    ["▁hello", "▁super"],
+                    [(float)(cut - 0.6), (float)(cut - 0.2)],
+                    [0.3f, 0.7f]
+                )
+                // "lo" is the tail of "hello" at the later chunk's first sample.
+                : new SherpaDecodeChunk(
+                    "lo supercalifragilistic",
+                    ["▁lo", "▁supercalifragilistic"],
+                    [(float)(cut - 0.5 - laterStart), (float)(cut - 0.2 - laterStart)],
+                    [0.25f, 1.0f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("hello supercalifragilistic", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_FragmentNextToAnAlreadyReplacedWord_IsNotRescued()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var laterStart = chunks[1].Start / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk(
+                    "hello super",
+                    ["▁hello", "▁super"],
+                    [(float)(cut - 0.65), (float)(cut + 0.01)],
+                    [0.35f, 0.49f]
+                )
+                : new SherpaDecodeChunk(
+                    "lo supercalifragilistic",
+                    ["▁lo", "▁supercalifragilistic"],
+                    [(float)(cut - 0.35 - laterStart), (float)(cut + 0.01 - laterStart)],
+                    [0.23f, 1.0f]
+                )
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("hello supercalifragilistic", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_SuffixAtTheLaterEdge_DoesNotReplaceTheCompleteWord()
+    {
+        var audio = Speech(20 * SampleRate);
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk("international", ["▁international"], [(float)(cut - 0.8)], [1.1f])
+                // The later chunk starts mid-word and hears only its end.
+                : new SherpaDecodeChunk("national", ["▁national"], [0f], [1.0f])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("international", result.Text);
+    }
+
+    [Fact]
+    public void Transducer_SilentChunkWithoutTimingArrays_KeepsTimings()
+    {
+        var audio = Speech(20 * SampleRate);
+        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var index = 0;
+        var coordinator = new SherpaDecodeCoordinator(_ =>
+            index++ == 0
+                ? new SherpaDecodeChunk(
+                    "hello world",
+                    ["▁hello", "▁world"],
+                    [(float)(cut - 3.0), (float)(cut - 2.5)],
+                    [0.3f, 0.3f]
+                )
+                // sherpa's shape for a chunk with no speech.
+                : new SherpaDecodeChunk("", [])
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("hello world", result.Text);
+        Assert.Equal(2, result.TokenTimings.Count);
         AssertTimingsValid(result, audio);
     }
 

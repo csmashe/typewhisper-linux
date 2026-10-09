@@ -35,9 +35,16 @@ internal sealed class SherpaDecodeCoordinator
     internal const int BoundaryContextSampleCount =
         SampleRate * BoundaryContextMilliseconds / 1000;
 
-    // Two Parakeet encoder frames: the same word decoded in neighbouring chunks
-    // may start this far apart. A genuinely repeated word cannot.
-    private const double BoundaryJitterSeconds = 0.16;
+    // Measured on real dictation: the two chunks time a shared word up to 0.44 s apart
+    // (the earlier one early, the later one late), so seams pair words by sequence and
+    // use this only to rule out pairing distant repeats.
+    private const double MaximumSeamShiftSeconds = 0.5;
+
+    // One Parakeet encoder frame: a word this close to a chunk's edge may be cut off.
+    private const double EdgeFrameSeconds = 0.08;
+
+    // Two frames of the drift between the chunks' timings.
+    private const double SeamDriftSeconds = 0.16;
 
     private const int BoundarySearchDurationSeconds = 2;
     private const int BoundarySearchSampleCount = SampleRate * BoundarySearchDurationSeconds;
@@ -124,13 +131,10 @@ internal sealed class SherpaDecodeCoordinator
             return new SherpaDecodeResult(whole.Text.Trim(), null, timings);
         }
 
-        // Words are owned by the chunk whose region they start in, so boundary text is
-        // chosen by time rather than by matching words. Once any chunk lacks usable
-        // timings, the rest of the recording is joined as text and publishes none.
+        // Each seam is reconciled from both chunks' words in the shared audio. Once any
+        // chunk lacks usable timings, the rest is joined as text and publishes none.
         var words = new List<TimedWord>();
-        // Words the last timed chunk heard whole after its owned region; the untimed
-        // fallback must still be able to stitch the next chunk against them.
-        TimedWord[] unownedTail = [];
+        SherpaChunkWindow? previous = null;
         string? untimedText = null;
         foreach (var chunk in CreateChunks(audioSamples, parseCanaryPayload: false, ct))
         {
@@ -141,29 +145,15 @@ internal sealed class SherpaDecodeCoordinator
                 var chunkWords = TryCreateTimedWords(decoded, text, chunk);
                 if (chunkWords is not null)
                 {
-                    AppendOwnedWords(words, chunkWords, chunk);
-                    var ownedEnd = chunk.OwnedEnd / (double)SampleRate;
-                    // A word sounding up to the chunk's last sample was likely cut off.
-                    var clippedAfter = chunk.End / (double)SampleRate - BoundaryJitterSeconds;
-                    unownedTail = chunkWords
-                        .Where(word =>
-                            word.Start >= ownedEnd && word.EndKnown && word.AcousticEnd < clippedAfter
-                        )
-                        .ToArray();
+                    if (previous is { } earlier)
+                        MergeSeam(words, chunkWords, earlier, chunk);
+                    else
+                        words.AddRange(chunkWords);
+                    previous = chunk;
                     continue;
                 }
 
-                // The next chunk may restate only part of the tail, or only owned words;
-                // seam on the longest tail prefix it overlaps rather than duplicating.
-                var tailLength = unownedTail.Length;
-                while (
-                    tailLength > 0
-                    && CountTokenOverlap(JoinWords([.. words, .. unownedTail[..tailLength]]), text) == 0
-                )
-                    tailLength--;
-                if (CountTokenOverlap(JoinWords([.. words, .. unownedTail[..tailLength]]), text) == 0)
-                    tailLength = unownedTail.Length;
-                untimedText = JoinWords([.. words, .. unownedTail[..tailLength]]);
+                untimedText = previous is { } last ? SeedUntimedText(words, last, text) : string.Empty;
             }
 
             untimedText = StitchTokenOverlap(untimedText, text);
@@ -172,7 +162,7 @@ internal sealed class SherpaDecodeCoordinator
         if (untimedText is not null)
             return new SherpaDecodeResult(untimedText, null, []);
 
-        var tokenTimings = words.SelectMany(word => word.Tokens).ToArray();
+        var tokenTimings = KeepStartsInOrder(words.SelectMany(word => word.Tokens));
         return new SherpaDecodeResult(
             JoinWords(words),
             null,
@@ -217,7 +207,16 @@ internal sealed class SherpaDecodeCoordinator
             ct.ThrowIfCancellationRequested();
             // The context after the cut must still fit in this chunk.
             var latestCut = start + MaximumChunkSampleCount - context;
-            var cut = FindLowEnergyCut(audioSamples, ownedStart, latestCut);
+            // Spread what is left evenly: Parakeet decodes a short final chunk of real
+            // speech to nothing.
+            var ownedPerChunk = MaximumChunkSampleCount - 2 * context;
+            var chunksLeft = (audioSamples.Length - ownedStart + ownedPerChunk - 1) / ownedPerChunk;
+            var target = ownedStart + (audioSamples.Length - ownedStart) / chunksLeft;
+            var cut = FindLowEnergyCut(
+                audioSamples,
+                Math.Max(ownedStart + EnergyWindowSampleCount, target - BoundarySearchSampleCount / 2),
+                Math.Min(latestCut, target + BoundarySearchSampleCount / 2)
+            );
             yield return new SherpaChunkWindow(start, cut + context, ownedStart, cut);
             ownedStart = cut;
             start = cut - context;
@@ -227,12 +226,8 @@ internal sealed class SherpaDecodeCoordinator
         yield return new SherpaChunkWindow(start, audioSamples.Length, ownedStart, audioSamples.Length);
     }
 
-    private static int FindLowEnergyCut(float[] audioSamples, int ownedStart, int latestCut)
+    private static int FindLowEnergyCut(float[] audioSamples, int searchStart, int latestCut)
     {
-        var searchStart = Math.Max(
-            ownedStart + EnergyWindowSampleCount,
-            latestCut - BoundarySearchSampleCount
-        );
         const int halfWindow = EnergyWindowSampleCount / 2;
         var bestCut = latestCut;
         var bestEnergy = double.MaxValue;
@@ -272,15 +267,12 @@ internal sealed class SherpaDecodeCoordinator
         SherpaChunkWindow chunk
     )
     {
-        // Reconciling chunks needs decoded word extents; inferred ends are guesses.
-        if (
-            decoded.Tokens is null
-            || decoded.Timestamps is null
-            || decoded.Durations?.Length != decoded.Tokens.Length
-        )
-            return null;
-        if (decoded.Tokens.Length == 0)
+        // sherpa reports a chunk with no speech as no tokens and no timing arrays.
+        if (decoded.Tokens is null || decoded.Tokens.Length == 0)
             return text.Length == 0 ? [] : null;
+        // Reconciling chunks needs decoded word extents; inferred ends are guesses.
+        if (decoded.Timestamps is null || decoded.Durations?.Length != decoded.Tokens.Length)
+            return null;
         if (
             !string.Equals(
                 CollapseWhitespace(string.Concat(decoded.Tokens).Replace('▁', ' ')),
@@ -329,129 +321,207 @@ internal sealed class SherpaDecodeCoordinator
         return groups.Select(group => new TimedWord(group)).Where(word => word.Text.Length > 0).ToList();
     }
 
-    private static void AppendOwnedWords(
-        List<TimedWord> accumulated,
-        List<TimedWord> chunkWords,
-        SherpaChunkWindow chunk
+    // Replaces the earlier chunk's words in the shared audio with one reading of it.
+    // Words both chunks heard are paired by sequence; the earlier chunk keeps the words
+    // before the pair nearest the cut, the later chunk that pair and the rest. With no
+    // pair, the cut divides them. On real dictation, also keeping words only the
+    // non-owning chunk heard added alternative readings and recovered no lost words.
+    private static void MergeSeam(
+        List<TimedWord> words,
+        List<TimedWord> next,
+        SherpaChunkWindow earlier,
+        SherpaChunkWindow later
     )
     {
-        var ownedStart = chunk.OwnedStart / (double)SampleRate;
-        var ownedEnd = chunk.OwnedEnd / (double)SampleRate;
-        var earlierChunkEnd = (chunk.OwnedStart + BoundaryContextSampleCount) / (double)SampleRate;
-        // A word this close to the chunk's first sample may have been clipped there, so
-        // any overlap with a kept word means the earlier chunk heard it whole.
-        var clippedBefore = chunk.Start / (double)SampleRate + BoundaryJitterSeconds;
-        var previousCount = accumulated.Count;
-        var matched = new HashSet<int>();
-        var earliestChanged = double.MaxValue;
-        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the body mutates accumulated and matched as it goes; a filtered query would hide that.
-        foreach (var word in chunkWords)
-        {
-            if (word.Start >= ownedEnd)
-                continue;
-            // A word on the cut can be timed either side of it by the two chunks, so
-            // each word the earlier chunk kept cancels at most one later copy of itself.
-            if (
-                word.Start < ownedStart + BoundaryJitterSeconds
-                && TryMatchBoundaryDuplicate(accumulated, previousCount, matched, word)
-            )
-                continue;
-            // Before the cut, the later chunk only fills gaps or completes a word the
-            // earlier chunk heard truncated.
-            if (word.Start < ownedStart)
-            {
-                var overlapped = FindOverlappingKeptWord(
-                    accumulated,
-                    previousCount,
-                    matched,
-                    word,
-                    word.Start < clippedBefore ? 0 : BoundaryJitterSeconds
-                );
-                if (overlapped >= 0)
-                {
-                    var kept = accumulated[overlapped];
-                    if (
-                        kept.AcousticEnd < earlierChunkEnd - BoundaryJitterSeconds
-                        || word.AcousticEnd <= kept.AcousticEnd
-                    )
-                    {
-                        // The earlier copy stands, and cannot also cancel a later word.
-                        matched.Add(overlapped);
-                        continue;
-                    }
-                    accumulated[overlapped] = word;
-                    matched.Add(overlapped);
-                    earliestChanged = Math.Min(earliestChanged, word.Start);
-                    continue;
-                }
-            }
+        var cut = later.OwnedStart / (double)SampleRate;
+        var sharedStart = later.Start / (double)SampleRate;
+        var earlierEnd = earlier.End / (double)SampleRate;
 
-            accumulated.Add(word);
-            earliestChanged = Math.Min(earliestChanged, word.Start);
-        }
-
-        // A gap-filling or completed word can start before words the earlier chunk kept.
-        var firstOutOfOrder = accumulated.Count;
-        while (firstOutOfOrder > 0 && accumulated[firstOutOfOrder - 1].Start >= earliestChanged)
-            firstOutOfOrder--;
-        var tail = accumulated[firstOutOfOrder..].OrderBy(word => word.Start).ToArray();
-        accumulated.RemoveRange(firstOutOfOrder, tail.Length);
-        accumulated.AddRange(tail);
-    }
-
-    // Matches the earliest unmatched kept copy, so repeated words pair up in order.
-    private static bool TryMatchBoundaryDuplicate(
-        List<TimedWord> accumulated,
-        int previousCount,
-        HashSet<int> matched,
-        TimedWord word
-    )
-    {
-        var first = previousCount;
-        while (first > 0 && accumulated[first - 1].Start >= word.Start - BoundaryJitterSeconds)
+        // By end, so a long word running into the shared audio is reconciled too.
+        var first = words.Count;
+        while (first > 0 && words[first - 1].KnownEnd > sharedStart - MaximumSeamShiftSeconds)
             first--;
-        for (var i = first; i < previousCount; i++)
+        var a = words[first..];
+        var b = next.TakeWhile(word => word.Start < earlierEnd + MaximumSeamShiftSeconds).ToList();
+
+        var pairs = AlignSeam(a, b, sharedStart, earlierEnd);
+        var region = new List<TimedWord>();
+        if (pairs.Count == 0)
         {
-            var kept = accumulated[i];
-            if (
-                Math.Abs(kept.Start - word.Start) <= BoundaryJitterSeconds
-                && string.Equals(kept.Key, word.Key, StringComparison.Ordinal)
-                && matched.Add(i)
-            )
-                return true;
+            // Each word goes to the side of the cut most of it lies on. A later word at
+            // its chunk's first sample, mostly inside a complete earlier word, is its tail.
+            var keptB = b.Where(word =>
+                    word.Midpoint >= cut
+                    && !(
+                        word.Start < sharedStart + EdgeFrameSeconds
+                        && a.Exists(other =>
+                            other.Start < word.Start
+                            && other.EndKnown
+                            && other.AcousticEnd < earlierEnd - EdgeFrameSeconds
+                            && OverlapSeconds(other, word) > (word.KnownEnd - word.Start) / 2
+                        )
+                    )
+                )
+                .ToList();
+            // A word read on both sides, or neither, is kept once from the later chunk,
+            // which times the shared audio more closely.
+            foreach (var rejected in a.Where(word => word.Midpoint >= cut))
+            {
+                // Already read by a word the later chunk kept.
+                if (keptB.Exists(word => OverlapSeconds(rejected, word) > -SeamDriftSeconds))
+                    continue;
+                var rescued = b.Where(word =>
+                        word.Midpoint < cut
+                        && !keptB.Contains(word)
+                        && word.Start >= sharedStart + EdgeFrameSeconds
+                        && Math.Abs(rejected.Start - word.Start) <= MaximumSeamShiftSeconds
+                    )
+                    .MinBy(word => Math.Abs(rejected.Start - word.Start));
+                if (rescued is not null)
+                    keptB.Add(rescued);
+            }
+            keptB = [.. b.Where(keptB.Contains)];
+            region.AddRange(
+                a.Where(word =>
+                    word.Midpoint < cut
+                    && !keptB.Exists(other => OverlapSeconds(word, other) > SeamDriftSeconds)
+                )
+            );
+            region.AddRange(keptB);
+        }
+        else
+        {
+            var anchor = pairs.MinBy(pair => Math.Abs((a[pair.A].Start + b[pair.B].Start) / 2 - cut));
+            region.AddRange(a.Take(anchor.A));
+            region.AddRange(b.Skip(anchor.B));
+
+            // Either copy of a pair is the same word; a copy cut off at its chunk's edge
+            // gives way to the complete one for its timings.
+            foreach (var (i, j) in pairs)
+            {
+                var clippedA = !a[i].EndKnown || a[i].AcousticEnd >= earlierEnd - EdgeFrameSeconds;
+                var clippedB = b[j].Start < sharedStart + EdgeFrameSeconds;
+                if (clippedA == clippedB)
+                    continue;
+                var kept = i < anchor.A ? a[i] : b[j];
+                var complete = clippedA ? b[j] : a[i];
+                region[region.IndexOf(kept)] = complete;
+            }
         }
 
-        return false;
+        words.RemoveRange(first, a.Count);
+        words.AddRange(region);
+        words.AddRange(next.Skip(b.Count));
     }
 
-    private static int FindOverlappingKeptWord(
-        List<TimedWord> accumulated,
-        int previousCount,
-        HashSet<int> matched,
-        TimedWord word,
-        double neighbourOverlapSeconds
+    // Longest common subsequence of the two readings, pairing only the same word timed
+    // close enough to be one utterance. Among equally long alignments, the one whose
+    // pairs are timed closest wins, so a repeat pairs with its own copy.
+    private static List<(int A, int B)> AlignSeam(
+        List<TimedWord> a,
+        List<TimedWord> b,
+        double sharedStart,
+        double earlierEnd
     )
     {
-        for (var i = previousCount - 1; i >= 0; i--)
+        // Each pair scores more than any total timing difference can subtract.
+        const double pairScore = 1000;
+        var scores = new double[a.Count + 1, b.Count + 1];
+        var paired = new bool[a.Count, b.Count];
+        for (var i = a.Count - 1; i >= 0; i--)
+        for (var j = b.Count - 1; j >= 0; j--)
         {
-            var kept = accumulated[i];
-            // No word lasts a whole chunk, so older words cannot reach this one.
-            if (kept.Start < word.Start - MaximumChunkDurationSeconds)
-                return -1;
-            if (matched.Contains(i))
+            scores[i, j] = Math.Max(scores[i + 1, j], scores[i, j + 1]);
+            if (!IsSameWord(a[i], b[j]))
                 continue;
-            // A kept word that already cancelled its copy is accounted for. A small
-            // overlap is a neighbouring word unless it is this word.
-            var overlap =
-                Math.Min(kept.AcousticEnd, word.AcousticEnd) - Math.Max(kept.Start, word.Start);
-            if (
-                overlap > neighbourOverlapSeconds
-                || (overlap > 0 && string.Equals(kept.Key, word.Key, StringComparison.Ordinal))
-            )
-                return i;
+            var withPair = scores[i + 1, j + 1] + pairScore - Math.Abs(a[i].Start - b[j].Start);
+            // ReSharper disable once InvertIf -- the positive form records the pairing choice it makes.
+            if (withPair >= scores[i, j])
+            {
+                scores[i, j] = withPair;
+                paired[i, j] = true;
+            }
         }
 
-        return -1;
+        var pairs = new List<(int A, int B)>();
+        int x = 0, y = 0;
+        while (x < a.Count && y < b.Count)
+        {
+            if (paired[x, y])
+            {
+                pairs.Add((x, y));
+                x++;
+                y++;
+            }
+            else if (scores[x + 1, y] >= scores[x, y + 1])
+                x++;
+            else
+                y++;
+        }
+
+        return pairs;
+
+        // Copies of one utterance must each lie in audio the other chunk also heard;
+        // the later chunk's copies run late by up to the drift tolerance. Copies that
+        // overlap pair however far apart they start, as a clipped copy may.
+        bool IsSameWord(TimedWord earlier, TimedWord later) =>
+            earlier.KnownEnd > sharedStart
+            && later.Start < earlierEnd + SeamDriftSeconds
+            && (
+                Math.Abs(earlier.Start - later.Start) <= MaximumSeamShiftSeconds
+                || OverlapSeconds(earlier, later) > 0
+            )
+            && string.Equals(earlier.Key, later.Key, StringComparison.Ordinal);
+    }
+
+    private static double OverlapSeconds(TimedWord a, TimedWord b) =>
+        Math.Min(a.KnownEnd, b.KnownEnd) - Math.Max(a.Start, b.Start);
+
+    // Text for the untimed fallback: the timed words so far, plus as much of the last
+    // timed chunk's complete words past its cut as the next chunk does not restate.
+    private static string SeedUntimedText(List<TimedWord> words, SherpaChunkWindow last, string next)
+    {
+        var cut = last.OwnedEnd / (double)SampleRate;
+        var lastEnd = last.End / (double)SampleRate;
+        var ownedCount = words.Count;
+        while (ownedCount > 0 && words[ownedCount - 1].Start >= cut)
+            ownedCount--;
+        var owned = words[..ownedCount];
+        // A word sounding up to the chunk's last sample was likely cut off.
+        var tail = words[ownedCount..]
+            .Where(word => word.EndKnown && word.AcousticEnd < lastEnd - EdgeFrameSeconds)
+            .ToArray();
+
+        // The next chunk may restate only part of the tail, or only owned words; seam on
+        // the longest tail prefix it overlaps rather than duplicating.
+        var tailLength = tail.Length;
+        while (tailLength > 0 && CountTokenOverlap(JoinWords([.. owned, .. tail[..tailLength]]), next) == 0)
+            tailLength--;
+        if (CountTokenOverlap(JoinWords([.. owned, .. tail[..tailLength]]), next) == 0)
+            tailLength = tail.Length;
+        return JoinWords([.. owned, .. tail[..tailLength]]);
+    }
+
+    // Each chunk's own timings are ordered, but the two chunks' clocks drift, so a word
+    // after a seam can start a little before the word kept ahead of it. Shifting it to
+    // its predecessor's start keeps the transcript's timings instead of discarding them all.
+    private static VocabularyTokenTiming[] KeepStartsInOrder(IEnumerable<VocabularyTokenTiming> timings)
+    {
+        var ordered = new List<VocabularyTokenTiming>();
+        foreach (var timing in timings)
+        {
+            var start = ordered.Count == 0
+                ? timing.StartSeconds
+                : Math.Max(timing.StartSeconds, ordered[^1].StartSeconds);
+            var shift = start - timing.StartSeconds;
+            ordered.Add(
+                shift <= 0
+                    ? timing
+                    : timing with { StartSeconds = start, EndSeconds = timing.EndSeconds + shift }
+            );
+        }
+
+        return [.. ordered];
     }
 
     private static bool AreOrdered(VocabularyTokenTiming[] timings, double audioSeconds)
@@ -544,6 +614,8 @@ internal sealed class SherpaDecodeCoordinator
         internal double AcousticEnd { get; } = tokens.Max(token => token.AcousticEnd);
         // False when the last token's end was only inferred to the chunk's end.
         internal bool EndKnown { get; } = tokens[^1].AcousticEnd > tokens[^1].Timing.StartSeconds;
+        internal double KnownEnd => EndKnown ? AcousticEnd : tokens[^1].Timing.StartSeconds + EdgeFrameSeconds;
+        internal double Midpoint => (Start + KnownEnd) / 2;
         internal string Text { get; } =
             string.Concat(tokens.Select(token => token.Timing.Text)).Replace('▁', ' ').Trim();
         internal string Key => WordKey(Text);
