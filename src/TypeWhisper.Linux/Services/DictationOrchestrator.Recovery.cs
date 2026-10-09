@@ -257,7 +257,14 @@ public sealed partial class DictationOrchestrator
                     record = record with { EngineUsed = plugin.ProviderId, ModelUsed = plugin.SelectedModelId };
                     supportsTranslation = plugin.SupportsTranslation;
                     (selection, languageHints) = plugin.ResolveEffectiveLanguage(selection, languageHints);
-                    result = await plugin.TranscribeAsync(wav, selection, languageHints, translate, null, ct);
+                    result = await plugin.TranscribeAsync(
+                        wav,
+                        selection,
+                        languageHints,
+                        translate,
+                        TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
+                        ct
+                    );
                 }
                 rawText = SelectRawTextWithPreviewFallback(result.Text, "", out _);
                 if (string.IsNullOrWhiteSpace(rawText))

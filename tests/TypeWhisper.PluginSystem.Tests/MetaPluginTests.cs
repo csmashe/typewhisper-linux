@@ -492,6 +492,40 @@ public sealed class MetaPluginTests
     }
 
     [Fact]
+    public async Task MalformedDictionaryEnvelope_FailsBeforeSending()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, "{}");
+        using var sut = new MetaPlugin(new HttpClient(handler));
+        await sut.ActivateAsync(new FakePluginHostServices());
+        await sut.SetApiKeyAsync("key");
+
+        await Assert.ThrowsAsync<FormatException>(() => sut.TranscribeAsync(
+            CreatePcm16Wav(), null, false, PluginTranscriptionPrompt.EnvelopePrefix + "{}", CancellationToken.None));
+        Assert.Null(handler.RequestUri);
+    }
+
+    [Fact]
+    public async Task Transcription_SendsStructuredTermsAsWholeKeywords()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, """{"transcript":"ok"}""");
+        using var sut = new MetaPlugin(new HttpClient(handler));
+        await sut.ActivateAsync(new FakePluginHostServices());
+        await sut.SetApiKeyAsync("key");
+
+        await sut.TranscribeAsync(
+            CreatePcm16Wav(),
+            null,
+            false,
+            PluginTranscriptionPrompt.Encode("TypeWhisper", ["Washington, D.C.", "Öl"]),
+            CancellationToken.None);
+
+        using var request = JsonDocument.Parse(handler.MultipartRequest!);
+        Assert.Equal(
+            ["TypeWhisper", "Washington, D.C.", "Öl"],
+            request.RootElement.GetProperty("keywords").EnumerateArray().Select(value => value.GetString()));
+    }
+
+    [Fact]
     public async Task UnconfiguredRequests_ReportConfigurationFailure()
     {
         using var sut = new MetaPlugin();

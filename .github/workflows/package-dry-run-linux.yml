@@ -2,6 +2,7 @@ name: Package Dry Run (Linux)
 
 on:
   pull_request:
+    types: [labeled, synchronize, reopened]
     branches:
       - linux
   push:
@@ -13,11 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: package-dry-run-linux-${{ github.event.pull_request.number || github.ref }}
+  group: package-dry-run-linux-${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))) && (github.event.pull_request.number || github.ref) || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   package:
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
     runs-on: ubuntu-24.04
 
     steps:
