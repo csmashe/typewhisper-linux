@@ -6,10 +6,13 @@
 
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Text;
 using LLama;
 using LLama.Common;
-using TypeWhisper.Plugins.Shared.Net;
+using LLama.Exceptions;
+using LLama.Native;
 using LLama.Sampling;
+using TypeWhisper.Plugins.Shared.Net;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
@@ -18,6 +21,8 @@ namespace TypeWhisper.Plugin.GemmaLocal;
 
 public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
+    // Downloads are pinned to one repository revision and verified against its size and SHA-256.
+    // Earlier builds of the same files are accepted when already cached (see GemmaModelVerification).
     private static readonly IReadOnlyList<GemmaModelDefinition> s_models =
     [
         new(
@@ -26,8 +31,16 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             "~3 GB",
             3100,
             true,
-            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
-            "gemma-4-E2B-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf",
+            "gemma-4-E2B-it-Q4_K_M.gguf",
+            new GemmaModelFile(3106738272, "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8"),
+            [
+                new GemmaModelFile(3106736256, "9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d"),
+                new GemmaModelFile(3106735776, "ac0069ebccd39925d836f24a88c0f0c858d20578c29b21ab7cedce66ee576845"),
+                new GemmaModelFile(3106731392, "f3504b387ee0962b2b041cf3691b1520118822642d67c5294f85ea62c68614b3"),
+                new GemmaModelFile(3106731392, "a67d147c4b461fd5ad394acffa954ecc8686970671d2de8562d6db8888181011"),
+                new GemmaModelFile(3106731136, "c8a189e581b1bf2d521792f3a1976358d737937e876c86bcdef1a979766947d6"),
+            ]
         ),
         new(
             "gemma4-e4b-it-q4",
@@ -35,8 +48,16 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             "~5 GB",
             5000,
             false,
-            "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
-            "gemma-4-E4B-it-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf",
+            "gemma-4-E4B-it-Q4_K_M.gguf",
+            new GemmaModelFile(4977171584, "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"),
+            [
+                new GemmaModelFile(4977169568, "519b9793ed6ce0ff530f1b7c96e848e08e49e7af4d57bb97f76215963a54146d"),
+                new GemmaModelFile(4977169088, "dff0ffba4c90b4082d70214d53ce9504a28d4d8d998276dcb3b8881a656c742a"),
+                new GemmaModelFile(4977164672, "e1bc442709fe780aa4b2ec9b22c16a7fcdff542f17f01ed0e3203114d28f9f34"),
+                new GemmaModelFile(4977164672, "da4f2efe4ce09d272fd6f85ce3c5ecdbf282ff841e7b2d01b69106e7d5a1d98c"),
+                new GemmaModelFile(4977164416, "ced37f54b80068fe65e95c6dd79ac88cddc227e179fd1040b8f751b1e5bdf849"),
+            ]
         ),
         new(
             "gemma4-26b-a4b-it-q4",
@@ -44,13 +65,28 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             "~17 GB",
             17000,
             false,
-            "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
-            "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/c099eb48e663fd284577b04978a94ffccb261841/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+            "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+            new GemmaModelFile(16947541728, "f2c28b3dc4776931ac6f879e11f203dec637ea0f14267a86ec8f6165f63f293f"),
+            [
+                new GemmaModelFile(16947539744, "34c746b1d50ab813e29cd46c4796e3f43c741901a582f93a67b55b9fc9687b35"),
+            ]
         ),
     ];
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(2) };
+    private const int ContextSize = 8192;
+
+    // LLamaSharp does not forward cancellation into a native decode, so prefill runs in
+    // small batches and a cancel waits for at most one of them.
+    private const int PrefillBatchTokens = 32;
+
+    private readonly IReadOnlyList<GemmaModelDefinition> _models;
+
+    // The 2 h ceiling covers the whole streamed body; ConnectTimeout bounds a socket that never
+    // connects and ResilientDownloader's idle watchdog bounds a stalled one.
+    private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
+    private readonly SemaphoreSlim _downloadLock = new(1, 1);
     private readonly Action<string, string?> _modelRoutingGuard;
 
     // Guards SelectedModelId only: _inferenceLock is held across the multi-second native load, so
@@ -74,10 +110,24 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         string? loadedModelId,
         Action<string, string?> modelRoutingGuard
     )
+        : this(loadedModelId, modelRoutingGuard, s_models, null) { }
+
+    internal GemmaLocalPlugin(
+        string? loadedModelId,
+        Action<string, string?> modelRoutingGuard,
+        IReadOnlyList<GemmaModelDefinition> models,
+        HttpMessageHandler? httpHandler
+    )
     {
         LoadedModelId = loadedModelId;
         _modelRoutingGuard =
             modelRoutingGuard ?? throw new ArgumentNullException(nameof(modelRoutingGuard));
+        _models = models;
+        _httpClient = new HttpClient(
+            httpHandler ?? new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
+        {
+            Timeout = TimeSpan.FromHours(2),
+        };
     }
 
     public Task ActivateAsync(IPluginHostServices host)
@@ -87,12 +137,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (model={SelectedModelId})");
 
-        // A persisted ID may name a model that no longer exists in s_models
+        // A persisted ID may name a model that no longer exists in the catalog
         // (e.g. after a release that drops a quant). IsModelDownloaded calls
         // GetModelDefinition, which throws — that would surface as a plugin
         // activation failure. Clear the stale setting instead.
         if (!string.IsNullOrEmpty(SelectedModelId)
-            && s_models.All(m => m.Id != SelectedModelId))
+            && _models.All(m => m.Id != SelectedModelId))
         {
             host.Log(
                 PluginLogLevel.Warning,
@@ -187,7 +237,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 Key: "selectedModel",
                 Label: Loc.L("Settings.Model"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: s_models
+                Options: _models
                     .Select(m => new PluginSettingOption(
                         m.Id,
                         $"{m.DisplayName} ({m.SizeDescription})"
@@ -272,12 +322,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     }
 
     /// <summary>
-    /// Lazily downloads (if missing) and loads the given model. Progress is
+    /// Verifies the cached model or downloads it, then loads it. Progress is
     /// reported to the plugin log since there is no progress-bar UI on Linux.
     /// </summary>
     internal async Task EnsureModelReadyAsync(string modelId, CancellationToken ct)
     {
-        if (!IsModelDownloaded(modelId))
+        if (!IsModelVerified(modelId))
         {
             var lastPct = -1;
             var progress = new Progress<double>(p =>
@@ -301,54 +351,25 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     public bool IsAvailable => LoadedModelId is not null;
 
     public IReadOnlyList<PluginModelInfo> SupportedModels =>
-        GetSupportedModels(LoadedModelId);
+        GetSupportedModels(_models, LoadedModelId);
 
-    public async Task<string> ProcessAsync(
+    public Task<string> ProcessAsync(
         string systemPrompt,
         string userText,
         string model,
         CancellationToken ct
-    )
-    {
-        await _inferenceLock.WaitAsync(ct);
-        try
-        {
-            _modelRoutingGuard(model, LoadedModelId);
-
-            if (_context is null || _weights is null)
-                throw new InvalidOperationException(
-                    "No model loaded. Download and load a model first."
-                );
-
-            var prompt = FormatGemmaPrompt(systemPrompt, userText);
-            var promptTokenCount = _context.Tokenize(prompt, addBos: true, special: true).Length;
-
-            var executor = new StatelessExecutor(_weights, _context.Params);
-            var inferenceParams = new InferenceParams
+    ) =>
+        // Keep tokenization and native sampling off the caller's (possibly UI) context.
+        Task.Run(
+            async () =>
             {
-                MaxTokens = LlmOutputTokenBudget.FitToContext(
-                    LlmOutputTokenBudget.Calculate(systemPrompt, userText),
-                    promptTokenCount, checked((int)_context.ContextSize), ProviderName),
-                AntiPrompts = ["<end_of_turn>", "<eos>"],
-                SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.3f },
-            };
-
-            var result = new System.Text.StringBuilder();
-            var generatedPieces = 0;
-            await foreach (var token in executor.InferAsync(prompt, inferenceParams, ct))
-            {
-                generatedPieces++;
-                result.Append(token);
-            }
-
-            ThrowIfTokenBudgetExhausted(generatedPieces, inferenceParams.MaxTokens);
-            return result.ToString().Trim();
-        }
-        finally
-        {
-            _inferenceLock.Release();
-        }
-    }
+                var result = new StringBuilder();
+                await foreach (var piece in GenerateAsync(systemPrompt, userText, model, ct).ConfigureAwait(false))
+                    result.Append(piece);
+                return result.ToString().Trim();
+            },
+            ct
+        );
 
     public async IAsyncEnumerable<string> ProcessStreamingAsync(
         string systemPrompt,
@@ -363,41 +384,100 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             yield break;
         }
 
-        await _inferenceLock.WaitAsync(ct);
+        // The streamed text is not trimmed; Gemma's model-turn output is normally clean.
+        await foreach (var piece in GenerateAsync(systemPrompt, userText, model, ct).ConfigureAwait(false))
+            yield return piece;
+    }
+
+    /// <summary>
+    ///     Runs one turn on the loaded context: clears its KV memory, prefills the prompt in
+    ///     cancellable batches, then samples until an end-of-turn token. Serialized by
+    ///     <see cref="_inferenceLock" />, so the single resident context is reused instead of
+    ///     allocating a second KV cache per request.
+    /// </summary>
+    private async IAsyncEnumerable<string> GenerateAsync(
+        string systemPrompt,
+        string userText,
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+    )
+    {
+        await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             _modelRoutingGuard(model, LoadedModelId);
 
-            if (_context is null || _weights is null)
+            if (_context is not { } context || _weights is not { } weights || Markers is not { } markers)
                 throw new InvalidOperationException(
                     "No model loaded. Download and load a model first."
                 );
 
-            var prompt = FormatGemmaPrompt(systemPrompt, userText);
-            var promptTokenCount = _context.Tokenize(prompt, addBos: true, special: true).Length;
+            var promptTokens = await Task.Run(() => TokenizePrompt(context, markers, systemPrompt, userText), ct)
+                .ConfigureAwait(false);
+            var maxTokens = LlmOutputTokenBudget.FitToContext(
+                LlmOutputTokenBudget.Calculate(systemPrompt, userText),
+                promptTokens.Length, checked((int)context.ContextSize), ProviderName);
 
-            var executor = new StatelessExecutor(_weights, _context.Params);
-            var inferenceParams = new InferenceParams
+            context.NativeHandle.MemoryClear();
+            var batch = new LLamaBatch();
+            var batchSize = Math.Min(PrefillBatchTokens, checked((int)context.BatchSize));
+            for (var offset = 0; offset < promptTokens.Length; offset += batchSize)
             {
-                MaxTokens = LlmOutputTokenBudget.FitToContext(
-                    LlmOutputTokenBudget.Calculate(systemPrompt, userText),
-                    promptTokenCount, checked((int)_context.ContextSize), ProviderName),
-                AntiPrompts = ["<end_of_turn>", "<eos>"],
-                SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.3f },
-            };
-
-            // InferAsync already produces tokens incrementally; yield them straight
-            // through so the overlay renders the local model's output live. (The
-            // batch sibling trims the accumulated result; the streamed text is not
-            // trimmed — Gemma's model-turn output is normally clean.)
-            var generatedPieces = 0;
-            await foreach (var token in executor.InferAsync(prompt, inferenceParams, ct))
-            {
-                generatedPieces++;
-                yield return token;
+                ct.ThrowIfCancellationRequested();
+                batch.Clear();
+                var end = Math.Min(offset + batchSize, promptTokens.Length);
+                for (var position = offset; position < end; position++)
+                    batch.Add(promptTokens[position], position, LLamaSeqId.Zero, position == end - 1);
+                await DecodeAsync(context, batch, ct).ConfigureAwait(false);
             }
 
-            ThrowIfTokenBudgetExhausted(generatedPieces, inferenceParams.MaxTokens);
+            using var sampling = new DefaultSamplingPipeline { Temperature = 0.3f };
+            // Special tokens decode to nothing, so turn and channel markers never reach the output.
+            var decoder = new StreamingTokenDecoder(context);
+            var channel = new GemmaChannelFilter(markers.ChannelStart, markers.ChannelEnd);
+            var visiblePieces = 0;
+            var endOfTurn = false;
+            for (var generated = 0; generated < maxTokens; generated++)
+            {
+                ct.ThrowIfCancellationRequested();
+                // Sample also accepts the token into the sampler; accepting it again would
+                // count it twice in the repetition history.
+                var token = sampling.Sample(context.NativeHandle, batch.TokenCount - 1);
+                // Stop on the end-of-turn token itself; the same characters as text are ordinary output.
+                if (token.IsEndOfGeneration(weights.Vocab) || markers.Stop.Contains(token))
+                {
+                    endOfTurn = true;
+                    break;
+                }
+
+                if (channel.Admit((int)token))
+                {
+                    decoder.Add(token);
+                    var piece = decoder.Read();
+                    if (piece.Length > 0)
+                    {
+                        visiblePieces++;
+                        yield return piece;
+                    }
+                }
+
+                batch.Clear();
+                batch.Add(token, promptTokens.Length + generated, LLamaSeqId.Zero, true);
+                await DecodeAsync(context, batch, ct).ConfigureAwait(false);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            if (!endOfTurn)
+                throw new PluginRequestException(
+                    "Gemma 4 (Local) stopped the response at its output token limit.",
+                    PluginRequestFailureKind.OutputTruncated,
+                    isTransient: false);
+
+            if (channel.InChannel && visiblePieces == 0)
+                throw new PluginRequestException(
+                    "Gemma 4 (Local) ended its turn inside a reasoning block without an answer.",
+                    PluginRequestFailureKind.EmptyResponse,
+                    isTransient: false);
         }
         finally
         {
@@ -405,20 +485,40 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
     }
 
-    // The executor yields one piece per generated token and ends identically on an
-    // anti-prompt or on the cap, so hitting the cap is the only truncation signal.
-    internal static bool IsTokenBudgetExhausted(int generatedPieces, int maxTokens) =>
-        maxTokens > 0 && generatedPieces >= maxTokens;
+    internal LLamaToken[] TokenizeLoadedPrompt(string systemPrompt, string userText) =>
+        TokenizePrompt(
+            _context ?? throw new InvalidOperationException("No model loaded."),
+            Markers!,
+            systemPrompt,
+            userText);
 
-    private static void ThrowIfTokenBudgetExhausted(int generatedPieces, int maxTokens)
+    internal int[] TokenizeLoadedSpecial(string text) =>
+        (_context ?? throw new InvalidOperationException("No model loaded."))
+            .Tokenize(text, addBos: false, special: true)
+            .Select(t => (int)t)
+            .ToArray();
+
+    internal GemmaVocabularyMarkers? Markers { get; private set; }
+
+    // Only template segments are parsed for special tokens, so caller text cannot open or close turns.
+    private static LLamaToken[] TokenizePrompt(
+        LLamaContext context,
+        GemmaVocabularyMarkers markers,
+        string systemPrompt,
+        string userText) =>
+        GemmaChatFormat.Format(systemPrompt, userText)
+            .SelectMany((segment, index) => segment.IsTemplate
+                ? context.Tokenize(segment.Text, addBos: index == 0, special: true)
+                : GemmaChatFormat.SplitLiteralMarkers(segment.Text, markers.MatchedInPlainText)
+                    .SelectMany(piece => context.Tokenize(piece, addBos: false, special: false)))
+            .ToArray();
+
+    private static async Task DecodeAsync(LLamaContext context, LLamaBatch batch, CancellationToken ct)
     {
-        if (IsTokenBudgetExhausted(generatedPieces, maxTokens))
-        {
-            throw new PluginRequestException(
-                "Gemma 4 (Local) stopped the response at its output token limit.",
-                PluginRequestFailureKind.OutputTruncated,
-                isTransient: false);
-        }
+        var status = await context.DecodeAsync(batch, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        if (status != DecodeResult.Ok)
+            throw new LLamaDecodeError(status);
     }
 
     internal string? SelectedModelId { get; private set; }
@@ -437,21 +537,26 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     // ReSharper disable once ConvertToAutoPropertyWhenPossible -- expression-bodied accessor returning the shared static list; not an auto-property candidate.
     internal static IReadOnlyList<GemmaModelDefinition> ModelDefinitions => s_models;
 
-    internal static IReadOnlyList<PluginModelInfo> GetSupportedModels(string? loadedModelId)
+    internal static IReadOnlyList<PluginModelInfo> GetSupportedModels(string? loadedModelId) =>
+        GetSupportedModels(s_models, loadedModelId);
+
+    private static ImmutableArray<PluginModelInfo> GetSupportedModels(
+        IReadOnlyList<GemmaModelDefinition> models,
+        string? loadedModelId)
     {
         if (loadedModelId is null)
-            return ImmutableArray<PluginModelInfo>.Empty;
+            return [];
 
-        var model = GetModelDefinition(loadedModelId);
-        // ReSharper disable once UseCollectionExpression -- a collection expression targets IReadOnlyList and lowers to a ReadOnlySingleElementList; ImmutableArray.Create keeps the concrete ImmutableArray return type both branches (and the tests) rely on.
-        return ImmutableArray.Create(
+        var model = GetModelDefinition(models, loadedModelId);
+        return
+        [
             new PluginModelInfo(model.Id, model.DisplayName)
             {
                 SizeDescription = model.SizeDescription,
                 EstimatedSizeMB = model.EstimatedSizeMB,
                 IsRecommended = model.IsRecommended,
-            }
-        );
+            },
+        ];
     }
 
     internal static void EnsureRequestedModelIsActive(
@@ -509,13 +614,23 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _host?.SetSetting(LlmStreamingSettings.StreamResponsesSettingKey, enabled);
     }
 
+    /// <summary>True when a file of an accepted build's size is cached; its hash is checked on load.</summary>
     internal bool IsModelDownloaded(string modelId)
     {
         var model = GetModelDefinition(modelId);
-        var path = GetModelFilePath(modelId, model.FileName);
-        return File.Exists(path);
+        return GemmaModelVerification.HasAcceptedSize(model, GetModelFilePath(modelId, model.FileName));
     }
 
+    internal bool IsModelVerified(string modelId)
+    {
+        var model = GetModelDefinition(modelId);
+        return GemmaModelVerification.IsVerified(model, GetModelFilePath(modelId, model.FileName));
+    }
+
+    /// <summary>
+    ///     Verifies a cached file or downloads the pinned build, resuming a surviving
+    ///     <c>.partial</c> and publishing it only once it matches the pinned hash.
+    /// </summary>
     internal async Task DownloadModelAsync(
         string modelId,
         IProgress<double>? progress,
@@ -525,104 +640,127 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         var model = GetModelDefinition(modelId);
         var dir = GetModelDirectory(modelId);
         Directory.CreateDirectory(dir);
-
         var filePath = Path.Join(dir, model.FileName);
-        if (File.Exists(filePath))
-        {
-            progress?.Report(1.0);
-            return;
-        }
 
-        // Check the catalog size before any request, then the server's exact length.
         var spaceDescription = $"the {model.DisplayName} model";
-        DownloadSpace.EnsureAvailable(
-            dir,
-            model.EstimatedSizeMB * 1024L * 1024,
-            spaceDescription,
-            SpaceProbe
-        );
-
-        Log(PluginLogLevel.Info, $"Downloading {model.DisplayName} from Hugging Face...");
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, model.DownloadUrl);
-        using var response = await _httpClient.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            ct
-        );
-        response.EnsureSuccessStatusCode();
-
-        if (response.Content.Headers.ContentLength is { } declaredBytes)
-            DownloadSpace.EnsureAvailable(dir, declaredBytes, spaceDescription, SpaceProbe);
-
-        var totalBytes =
-            response.Content.Headers.ContentLength ?? model.EstimatedSizeMB * 1024L * 1024;
-        long bytesRead = 0;
-        var lastReport = DateTime.UtcNow;
-
-        var buffer = new byte[81920];
-        await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        // Per-invocation temp name so a concurrent duplicate download can't
-        // collide with an in-flight writer's FileShare.None open.
-        var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        var completed = false;
+        await _downloadLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await using (
-                var fileStream = new FileStream(
-                    tempPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    81920,
-                    true
-                )
-            )
-            {
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, ct)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                    bytesRead += read;
+            // The stable .partial is shared with any other app instance; serialize writers on it.
+            await using var fileLock = await AcquireDownloadLockAsync(filePath, spaceDescription, ct)
+                .ConfigureAwait(false);
 
-                    var now = DateTime.UtcNow;
-                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-                    if ((now - lastReport).TotalMilliseconds > 250)
-                    {
-                        progress?.Report((double)bytesRead / totalBytes);
-                        lastReport = now;
-                    }
-                }
+            if (await TryUseCachedModelAsync(model, filePath, ct).ConfigureAwait(false))
+            {
+                progress?.Report(1.0);
+                return;
             }
 
-            File.Move(tempPath, filePath, overwrite: true);
-            completed = true;
-        }
-        catch (Exception ex)
-            when (DownloadSpace.TranslateWriteFailure(ex, dir, spaceDescription) is { } full
-                && !ReferenceEquals(full, ex))
-        {
-            throw full;
+            if (File.Exists(filePath))
+            {
+                // It would never load; dropping it first keeps the space check to one copy.
+                Log(PluginLogLevel.Info, $"Removing the unverified {model.DisplayName} model file.");
+                GemmaModelVerification.TryDelete(GemmaModelVerification.StampPath(filePath));
+                GemmaModelVerification.TryDelete(filePath);
+            }
+
+            DeleteAbandonedTempFiles(dir, model.FileName);
+
+            // Check before any request; the downloader re-checks the server's declared remainder.
+            var partialPath = filePath + ".partial";
+            var partialBytes = File.Exists(partialPath) ? new FileInfo(partialPath).Length : 0;
+            DownloadSpace.EnsureAvailable(
+                dir,
+                Math.Max(0, model.Pinned.SizeBytes - partialBytes),
+                spaceDescription,
+                SpaceProbe
+            );
+
+            Log(PluginLogLevel.Info, $"Downloading {model.DisplayName} from Hugging Face...");
+
+            var lastReport = DateTime.MinValue;
+            string? sha256 = null;
+            await ResilientDownloader.DownloadToFileAsync(
+                _httpClient,
+                model.DownloadUrl,
+                filePath,
+                approxTotalBytes: model.Pinned.SizeBytes,
+                idleTimeout: TimeSpan.FromSeconds(60),
+                allowResume: true,
+                onBytesOnDisk: onDisk =>
+                {
+                    var now = DateTime.UtcNow;
+                    if ((now - lastReport).TotalMilliseconds <= 250)
+                        return;
+
+                    lastReport = now;
+                    progress?.Report(Math.Min(0.99, (double)onDisk / model.Pinned.SizeBytes));
+                },
+                verifyComplete: path => sha256 = GemmaModelVerification.VerifyDownloaded(model, path),
+                ct,
+                new DownloadSpaceRequirement(spaceDescription, 0, SpaceProbe)
+            ).ConfigureAwait(false);
+
+            GemmaModelVerification.WriteStamp(filePath, sha256!, GemmaModelVerification.Describe(filePath));
         }
         finally
         {
-            // A cancelled/failed download leaves a partial .tmp behind that
-            // confuses the next attempt (and wastes disk on multi-GB models).
-            if (!completed && File.Exists(tempPath))
-            {
-                try
-                {
-                    File.Delete(tempPath);
-                }
-                catch
-                {
-                    // best effort
-                }
-            }
+            _downloadLock.Release();
         }
 
         progress?.Report(1.0);
         Log(PluginLogLevel.Info, $"Download complete: {model.FileName}");
+    }
+
+    // Creating the sentinel on a full disk must surface as the space error, not a raw errno.
+    private static async Task<FileStream> AcquireDownloadLockAsync(
+        string filePath,
+        string spaceDescription,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await InterProcessFileLock.AcquireAsync(filePath + ".lock", ct).ConfigureAwait(false);
+        }
+        catch (IOException ex) when (DownloadSpace.TranslateWriteFailure(ex, filePath, spaceDescription) is { } noSpace)
+        {
+            throw noSpace;
+        }
+    }
+
+    private async Task<bool> TryUseCachedModelAsync(
+        GemmaModelDefinition model,
+        string filePath,
+        CancellationToken ct)
+    {
+        if (GemmaModelVerification.IsVerified(model, filePath))
+            return true;
+
+        if (!GemmaModelVerification.HasAcceptedSize(model, filePath))
+            return false;
+
+        Log(PluginLogLevel.Info, $"Verifying cached {model.DisplayName} model...");
+        try
+        {
+            await GemmaModelVerification.VerifyCachedAsync(model, filePath, ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (InvalidDataException ex)
+        {
+            Log(PluginLogLevel.Warning, $"{ex.Message} Downloading a fresh copy.");
+            return false;
+        }
+    }
+
+    // Earlier versions downloaded to "<file>.<guid>.tmp" and could leave one behind after a crash.
+    private static void DeleteAbandonedTempFiles(string dir, string fileName)
+    {
+        foreach (var path in Directory.EnumerateFiles(dir, fileName + ".*.tmp"))
+        {
+            var guid = Path.GetFileName(path)[(fileName.Length + 1)..^".tmp".Length];
+            if (Guid.TryParseExact(guid, "N", out _))
+                GemmaModelVerification.TryDelete(path);
+        }
     }
 
     internal Task LoadModelAsync(string modelId, CancellationToken ct)
@@ -636,6 +774,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         return Task.Run(
             async () =>
             {
+                if (!GemmaModelVerification.IsVerified(model, filePath))
+                {
+                    Log(PluginLogLevel.Info, $"Verifying cached {model.DisplayName} model...");
+                    await GemmaModelVerification.VerifyCachedAsync(model, filePath, ct).ConfigureAwait(false);
+                }
+
                 // Serialize with ProcessAsync: unloading + swapping in new weights
                 // must not happen while an inference is reading _context/_weights.
                 // The lock covers the full unload-then-load window so callers can't
@@ -654,7 +798,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
                     var modelParams = new ModelParams(filePath)
                     {
-                        ContextSize = 4096,
+                        ContextSize = ContextSize,
                         GpuLayerCount = 0, // CPU only (Backend.Cpu)
                         Threads = Math.Max(1, Environment.ProcessorCount / 2),
                     };
@@ -663,19 +807,24 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                     // already-loaded native weights would otherwise be stranded
                     // on the field with no owner to dispose them.
                     var newWeights = LLamaWeights.LoadFromFile(modelParams);
-                    LLamaContext newContext;
+                    LLamaContext? newContext = null;
+                    GemmaVocabularyMarkers markers;
                     try
                     {
+                        ct.ThrowIfCancellationRequested();
                         newContext = newWeights.CreateContext(modelParams);
+                        markers = GemmaVocabularyMarkers.Resolve(newWeights, newContext);
                     }
                     catch
                     {
+                        newContext?.Dispose();
                         newWeights.Dispose();
                         throw;
                     }
 
                     _weights = newWeights;
                     _context = newContext;
+                    Markers = markers;
 
                     // The heavy load runs without the lock blocking SelectModel,
                     // so the user can switch selections while we're loading. If
@@ -715,32 +864,11 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         _context = null;
         _weights?.Dispose();
         _weights = null;
+        Markers = null;
         LoadedModelId = null;
     }
 
     // Helpers
-
-    internal static string FormatGemmaPrompt(string systemPrompt, string userText)
-    {
-        // Gemma instruction-tuned chat format with proper system turn
-        var sb = new System.Text.StringBuilder();
-
-        if (!string.IsNullOrWhiteSpace(systemPrompt))
-        {
-            sb.Append("<start_of_turn>system\n");
-            sb.Append(systemPrompt).Append('\n');
-            sb.Append(
-                "Output ONLY the requested result, nothing else. No explanations, no extra text."
-            );
-            sb.Append("<end_of_turn>\n");
-        }
-
-        sb.Append("<start_of_turn>user\n");
-        sb.Append(userText);
-        sb.Append("<end_of_turn>\n");
-        sb.Append("<start_of_turn>model\n");
-        return sb.ToString();
-    }
 
     private string GetModelDirectory(string modelId) =>
         Path.Join(_host?.PluginAssetDirectory ?? ".", "Models", modelId);
@@ -748,8 +876,13 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private string GetModelFilePath(string modelId, string fileName) =>
         Path.Join(GetModelDirectory(modelId), fileName);
 
-    private static GemmaModelDefinition GetModelDefinition(string modelId) =>
-        s_models.FirstOrDefault(m => m.Id == modelId)
+    private GemmaModelDefinition GetModelDefinition(string modelId) =>
+        GetModelDefinition(_models, modelId);
+
+    private static GemmaModelDefinition GetModelDefinition(
+        IReadOnlyList<GemmaModelDefinition> models,
+        string modelId) =>
+        models.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private void Log(PluginLogLevel level, string message)
@@ -795,6 +928,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
 
         _inferenceLock.Dispose();
+        _downloadLock.Dispose();
         _httpClient.Dispose();
     }
 }
@@ -807,5 +941,62 @@ internal sealed record GemmaModelDefinition(
     int EstimatedSizeMB,
     bool IsRecommended,
     string DownloadUrl,
-    string FileName
-);
+    string FileName,
+    GemmaModelFile Pinned,
+    IReadOnlyList<GemmaModelFile> EarlierBuilds
+)
+{
+    internal IReadOnlyList<GemmaModelFile> AcceptedFiles { get; } = [Pinned, .. EarlierBuilds];
+}
+
+/// <summary>Token IDs of the Gemma 4 control markers in a loaded vocabulary.</summary>
+internal sealed record GemmaVocabularyMarkers(
+    IReadOnlySet<LLamaToken> Stop,
+    int ChannelStart,
+    int ChannelEnd,
+    IReadOnlyCollection<string> MatchedInPlainText)
+{
+    internal static GemmaVocabularyMarkers Resolve(LLamaWeights weights, LLamaContext context)
+    {
+        // The prompt depends on <|turn> being one special token; a vocabulary without it is not
+        // a Gemma 4 chat model and would read the template as plain text.
+        if (Single(context, GemmaChatFormat.TurnStart) is null)
+            throw new InvalidDataException(
+                "The model vocabulary has no Gemma 4 turn marker; it is not a Gemma 4 chat model.");
+
+        return new GemmaVocabularyMarkers(
+            GemmaChatFormat.StopMarkers
+                .Select(marker => Single(context, marker))
+                .OfType<LLamaToken>()
+                .ToHashSet(),
+            (int?)Single(context, GemmaChatFormat.ChannelStart) ?? -1,
+            (int?)Single(context, GemmaChatFormat.ChannelEnd) ?? -1,
+            FindMarkersMatchedInPlainText(weights, context));
+    }
+
+    // User-defined control markers (Gemma 4 E2B: <|channel>, <channel|>, <|"|>) are matched by
+    // the tokenizer even with special parsing off. Found once per load by scanning the vocabulary.
+    private static string[] FindMarkersMatchedInPlainText(LLamaWeights weights, LLamaContext context)
+    {
+        var vocab = weights.Vocab;
+        var markers = new List<string>();
+        for (var id = 0; id < vocab.Count; id++)
+        {
+            var token = (LLamaToken)id;
+            if ((token.GetAttributes(vocab) & (LLamaTokenAttr.Control | LLamaTokenAttr.UserDefined)) == 0)
+                continue;
+
+            var text = vocab.LLamaTokenToString(token, true);
+            if (text is not null
+                && GemmaChatFormat.IsControlMarker(text)
+                && context.Tokenize(text, addBos: false, special: false) is [var plain]
+                && plain == token)
+                markers.Add(text);
+        }
+
+        return [.. markers];
+    }
+
+    private static LLamaToken? Single(LLamaContext context, string marker) =>
+        context.Tokenize(marker, addBos: false, special: true) is [var token] ? token : null;
+}

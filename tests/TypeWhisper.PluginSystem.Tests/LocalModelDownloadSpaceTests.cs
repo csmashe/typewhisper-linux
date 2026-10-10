@@ -60,8 +60,11 @@ public sealed class LocalModelDownloadSpaceTests : IDisposable
         );
 
         Assert.Contains("the Gemma 4 E2B (Q4_K_M) model", ex.Message);
-        Assert.Empty(
+        // Only the inter-process lock sentinel, which is never deleted.
+        Assert.Equal(
+            ["gemma-4-E2B-it-Q4_K_M.gguf.lock"],
             Directory.EnumerateFileSystemEntries(Path.Join(_root, "Models", "gemma4-e2b-it-q4"))
+                .Select(Path.GetFileName)
         );
     }
 
