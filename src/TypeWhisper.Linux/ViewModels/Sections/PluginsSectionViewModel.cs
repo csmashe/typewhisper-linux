@@ -515,6 +515,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         if (
             !_pluginById.TryGetValue(row.Id, out var loaded)
             || loaded.Instance is not IPluginSettingsActions provider
+            || !_pluginManager.IsEnabled(row.Id)
             || _runningActions.ContainsKey(row.Id)
             || !action.CanRun
         )
@@ -1342,6 +1343,11 @@ public partial class PluginRow : ObservableObject
 
     partial void OnIsEnabledChanged(bool value)
     {
+        foreach (var action in Actions)
+        {
+            action.NotifyCanRunChanged();
+        }
+
         OnPropertyChanged(nameof(StatusBadge));
         OnPropertyChanged(nameof(StatusBadgeBackground));
         OnPropertyChanged(nameof(StatusBadgeBorder));
@@ -1391,7 +1397,8 @@ public sealed class PluginSettingsActionRow : ObservableObject
     public bool HasDescription => Description.Length > 0;
     private bool IsEnabled { get; }
     public string? ConfirmationMessage { get; }
-    public bool CanRun => IsEnabled && !Owner.IsActionRunning;
+    // A disabled plugin's running action is cancelled on the next refresh, so none may start.
+    public bool CanRun => IsEnabled && Owner is { IsEnabled: true, IsActionRunning: false };
 
     internal void NotifyCanRunChanged() => OnPropertyChanged(nameof(CanRun));
 }

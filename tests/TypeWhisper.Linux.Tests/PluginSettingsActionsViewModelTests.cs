@@ -178,6 +178,19 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task DisabledPlugin_DoesNotStartActions()
+    {
+        var plugin = new FakeActionsPlugin();
+        var (vm, row) = await CreateExpandedAsync(plugin, enabled: false);
+
+        Assert.False(row.Actions[0].CanRun);
+        await vm.RunSettingsActionCommand.ExecuteAsync(row.Actions[0]);
+
+        Assert.DoesNotContain("run download", plugin.Calls);
+        Assert.False(row.IsActionRunning);
+    }
+
+    [Fact]
     public async Task RunAction_IsNotBoundByTheValidationTimeout()
     {
         var plugin = new FakeActionsPlugin { Delay = TimeSpan.FromMilliseconds(200) };
@@ -240,10 +253,13 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
     private async Task<(PluginsSectionViewModel Vm, PluginRow Row)> CreateExpandedAsync(
         FakeActionsPlugin plugin,
         TimeSpan? validationTimeout = null,
-        ErrorLogService? errorLog = null)
+        ErrorLogService? errorLog = null,
+        bool enabled = true)
     {
         var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, TestPluginId, plugin);
-        var manager = TestPluginManagerFactory.Create(loadedPlugins: [loaded], activatedPluginIds: [TestPluginId]);
+        var manager = TestPluginManagerFactory.Create(
+            loadedPlugins: [loaded],
+            activatedPluginIds: enabled ? [TestPluginId] : []);
         var vm = new PluginsSectionViewModel(
             manager,
             errorLog ?? new ErrorLogService(_tempDir),

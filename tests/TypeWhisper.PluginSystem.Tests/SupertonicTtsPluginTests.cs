@@ -295,6 +295,24 @@ public class SupertonicTtsPluginTests
     }
 
     [Fact]
+    public async Task RemoveAction_ReportsTheCapabilityChangeEvenWhenDeletingFails()
+    {
+        var assets = new FakeSupertonicAssets
+        {
+            AreAssetsReadyValue = true,
+            RemoveFailure = new UnauthorizedAccessException("read-only"),
+        };
+        var host = new TestPluginHostServices();
+        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ExecuteSettingsActionAsync(SupertonicTtsPlugin.RemoveActionId, CancellationToken.None);
+
+        Assert.Equal(new PluginSettingsValidationResult(false, "Settings.Error: read-only"), result);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
     public async Task SpeakAsync_RejectsAssetsThatFailVerificationBeforeLoading()
     {
         var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
@@ -531,6 +549,7 @@ public class SupertonicTtsPluginTests
         public bool HasAnyAssetsValue { get; set; }
         public bool? VerifyResult { get; set; }
         public Exception? DownloadFailure { get; set; }
+        public Exception? RemoveFailure { get; init; }
         public int DownloadCount { get; private set; }
         public int VerifyCount { get; private set; }
         public int RemoveCount { get; private set; }
@@ -561,6 +580,8 @@ public class SupertonicTtsPluginTests
         public Task RemoveAssetsAsync(CancellationToken ct)
         {
             RemoveCount++;
+            if (RemoveFailure is not null)
+                throw RemoveFailure;
             AreAssetsReadyValue = false;
             HasAnyAssetsValue = false;
             return Task.CompletedTask;

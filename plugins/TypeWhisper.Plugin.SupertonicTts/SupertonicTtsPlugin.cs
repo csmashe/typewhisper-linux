@@ -505,9 +505,9 @@ public sealed class SupertonicTtsPlugin
             finally
             {
                 _synthesisLock.Release();
+                // Readiness drops even when a delete fails part-way.
+                _host?.NotifyCapabilitiesChanged();
             }
-
-            _host?.NotifyCapabilitiesChanged();
         }
         finally
         {
