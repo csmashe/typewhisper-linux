@@ -141,7 +141,7 @@ public sealed class FileTranscriptionProcessor(
                 languageSelection,
                 languageHints,
                 task == TranscriptionTask.Translate,
-                null,
+                TranscriptionPromptComposer.ForDictation(lease.Plugin, dictionary.GetEnabledTerms()),
                 cancellationToken
             );
         }

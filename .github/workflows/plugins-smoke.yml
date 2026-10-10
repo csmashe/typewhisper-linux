@@ -2,6 +2,7 @@ name: Plugins Smoke
 
 on:
   pull_request:
+    types: [labeled, synchronize, reopened]
     branches:
       - linux
   push:
@@ -13,11 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugins-smoke-${{ github.workflow }}-${{ github.ref }}
+  group: plugins-smoke-${{ github.workflow }}-${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))) && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   discover-plugins:
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
     runs-on: ubuntu-24.04
     outputs:
       projects: ${{ steps.discover.outputs.projects }}
@@ -72,6 +74,7 @@ jobs:
           "scan_mode=$($result.ScanMode)" >> $env:GITHUB_OUTPUT
 
   validate-metadata:
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
     runs-on: ubuntu-24.04
 
     steps:

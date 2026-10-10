@@ -72,13 +72,33 @@ public sealed class FileTranscriptionLanguageHintsTests
         Assert.Equal("colour", result.ProcessedText);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DictionaryTerms_ReachOnlyAStructuredEngine(bool structured)
+    {
+        var engine = new TimedTranscriptionEngine("type whisper") { Structured = structured };
+
+        await ProcessAsync("type whisper", EnglishOutputVariant.AsTranscribed, new FakeVocabularyRescorerPlugin(), engine);
+
+        if (structured)
+        {
+            Assert.Equal(["Washington, D.C."], PluginTranscriptionPrompt.Parse(engine.LastPrompt).DictionaryTerms);
+        }
+        else
+        {
+            Assert.Null(engine.LastPrompt);
+        }
+    }
+
     private static async Task<(FileTranscriptionProcessResult Result, Mock<IPostProcessingPipeline> Pipeline)> ProcessAsync(
         string engineText,
         EnglishOutputVariant englishOutputVariant,
-        FakeVocabularyRescorerPlugin rescorer
+        FakeVocabularyRescorerPlugin rescorer,
+        TimedTranscriptionEngine? engine = null
     )
     {
-        using var plugins = TestPluginManagerFactory.Create(transcriptionEngines: [new TimedTranscriptionEngine(engineText)]);
+        using var plugins = TestPluginManagerFactory.Create(transcriptionEngines: [engine ?? new TimedTranscriptionEngine(engineText)]);
         PluginManagerTestAccess.SetVocabularyRescorers(plugins, [rescorer]);
         var settings = TestPluginManagerFactory.CreateSettings(
             new AppSettings
@@ -102,6 +122,7 @@ public sealed class FileTranscriptionLanguageHintsTests
                     EntryType = DictionaryEntryType.Term,
                 },
             ]);
+        dictionary.Setup(d => d.GetEnabledTerms()).Returns(["Washington, D.C."]);
         var pipeline = new Mock<IPostProcessingPipeline>();
         pipeline
             .Setup(p =>
@@ -161,14 +182,20 @@ public sealed class FileTranscriptionLanguageHintsTests
             [new("parakeet-tdt-0.6b", "Test")];
         public string SelectedModelId => "parakeet-tdt-0.6b";
         public bool SupportsTranslation => false;
+        public bool Structured { get; init; }
+        public bool SupportsStructuredDictionaryTerms => Structured;
+        public string? LastPrompt { get; private set; }
 
         public void SelectModel(string modelId) { }
 
         public Task<PluginTranscriptionResult> TranscribeAsync(
-            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct) =>
-            Task.FromResult(new PluginTranscriptionResult(text, "en", 1)
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        {
+            LastPrompt = prompt;
+            return Task.FromResult(new PluginTranscriptionResult(text, "en", 1)
             {
                 TokenTimings = [new VocabularyTokenTiming(text, 0, 1)],
             });
+        }
     }
 }

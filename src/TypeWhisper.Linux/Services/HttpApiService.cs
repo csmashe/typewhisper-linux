@@ -1914,14 +1914,15 @@ public sealed partial class HttpApiService : IDisposable
             // does not already express.
             var unexpressedHints = languageHints.Count(hint =>
                 !string.Equals(hint, configuredLanguage, StringComparison.OrdinalIgnoreCase));
-            var prompt = MergePrompt(
-                opts.Prompt,
-                !plugin.SupportsLanguageHints && unexpressedHints > 0
-                    ? BuildLanguageHintsPrompt(languageHints)
-                    : null,
-                PluginDictionaryTerms.CreatePrompt(
-                    _dictionary.GetEnabledTerms(),
-                    plugin.DictionaryTermsBudget ?? DictionaryTermsBudget.Default)
+            var prompt = TranscriptionPromptComposer.ForApi(
+                plugin,
+                TranscriptionPromptComposer.MergeText(
+                    opts.Prompt,
+                    !plugin.SupportsLanguageHints && unexpressedHints > 0
+                        ? BuildLanguageHintsPrompt(languageHints)
+                        : null
+                ),
+                _dictionary.GetEnabledTerms()
             );
             result = await plugin.TranscribeAsync(
                 wav,
@@ -2866,15 +2867,6 @@ public sealed partial class HttpApiService : IDisposable
         return languageHints.Count == 0
             ? null
             : $"Likely spoken languages: {string.Join(", ", languageHints)}.";
-    }
-
-    private static string? MergePrompt(params string?[] parts)
-    {
-        var merged = string.Join(
-            Environment.NewLine,
-            parts.Where(part => !string.IsNullOrWhiteSpace(part)).Select(part => part!.Trim())
-        );
-        return string.IsNullOrWhiteSpace(merged) ? null : merged;
     }
 
     private void EnsureBearerToken()

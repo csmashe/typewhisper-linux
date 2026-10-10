@@ -1,7 +1,14 @@
+# Pull requests run CI only while they carry the `ci` label, so the CodeRabbit fix loop doesn't
+# rerun every workflow on each push. Open the PR unlabeled, finish the review loop, then add the
+# label (`gh pr edit <n> --add-label ci`). Pushes while it stays on rerun CI; removing it pauses
+# CI. Unlabeled pushes and other labels produce a free "skipped" run, in their own concurrency
+# group so they never cancel a real one. Pushes to linux, the schedule and manual runs always run.
+# The same gate is in pr-ci-linux, plugins-smoke, package-dry-run-linux and security.
 name: PR CI (Linux)
 
 on:
   pull_request:
+    types: [labeled, synchronize, reopened]
     branches:
       - linux
   push:
@@ -13,11 +20,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr-ci-linux-${{ github.event.pull_request.number || github.ref }}
+  group: pr-ci-linux-${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))) && (github.event.pull_request.number || github.ref) || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   build-and-test:
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 

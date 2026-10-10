@@ -28,6 +28,10 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
     private const string FetchedTranscriptionModelsSettingName = "fetchedTranscriptionModels";
     private const string ReasoningEffortSettingName = "reasoningEffort";
     private const string SpeakerDiarizationSettingName = "speakerDiarizationEnabled";
+    private const int MaxKeywords = 100;
+    private const int MaxKeywordChars = 100;
+    private const int MaxKeywordWords = 8;
+    private const int MaxKeywordTotalChars = 600;
 
     private static readonly IReadOnlyList<PluginModelInfo> s_fallbackLlmModels =
     [
@@ -319,6 +323,11 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
 
     public void SetLocalization(IPluginLocalization localization) => _injectedLocalization = localization;
     public bool SupportsLanguageHints => true;
+    public bool SupportsStructuredDictionaryTerms => true;
+
+    // Whole terms that fit the keyword limits below, so the host drops a term rather than Meta truncating it.
+    public DictionaryTermsBudget DictionaryTermsBudget { get; } =
+        new(MaxTerms: MaxKeywords, MaxCharsPerTerm: MaxKeywordChars, MaxWordsPerTerm: MaxKeywordWords, MaxTotalChars: MaxKeywordTotalChars);
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     internal int FetchedLlmModelCount => _fetchedLlmModels.Count;
@@ -515,31 +524,48 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
             .ToList();
     }
 
-    internal static IReadOnlyList<string> ParseKeywords(string? prompt) => ClipKeywords(prompt);
-
-    private static List<string> ClipKeywords(string? prompt)
+    // Free prompt text (an API caller's prompt) keeps its comma-separated keyword meaning and is
+    // truncated to fit; dictionary terms follow whole, commas included, or are dropped.
+    internal static IReadOnlyList<string> ParseKeywords(string? prompt)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
-            return [];
-
+        var parsed = PluginTranscriptionPrompt.Parse(prompt);
         var keywords = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var totalChars = 0;
-        foreach (var term in prompt.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var term in parsed.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [])
         {
-            var keyword = string.Join(" ", term.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Take(8));
-            keyword = keyword[..Math.Min(keyword.Length, 100)].TrimEnd();
+            var words = term.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            var keyword = string.Join(" ", words.Take(MaxKeywordWords));
+            keyword = keyword[..Math.Min(keyword.Length, MaxKeywordChars)].TrimEnd();
             if (keyword.Length == 0 || !seen.Add(keyword))
                 continue;
-            var remaining = 600 - totalChars;
-            if (remaining == 0 || keywords.Count == 100)
-                break;
+            var remaining = MaxKeywordTotalChars - totalChars;
+            if (remaining == 0 || keywords.Count == MaxKeywords)
+                return keywords;
             keyword = keyword[..Math.Min(keyword.Length, remaining)].TrimEnd();
             if (keyword.Length == 0)
-                break;
+                return keywords;
             keywords.Add(keyword);
             totalChars += keyword.Length;
         }
+
+        foreach (var term in parsed.DictionaryTerms)
+        {
+            if (keywords.Count == MaxKeywords)
+                break;
+            var words = term.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            var keyword = string.Join(" ", words);
+            if (words.Length > MaxKeywordWords
+                || keyword.Length > MaxKeywordChars
+                || keyword.Length > MaxKeywordTotalChars - totalChars
+                || !seen.Add(keyword))
+            {
+                continue;
+            }
+            keywords.Add(keyword);
+            totalChars += keyword.Length;
+        }
+
         return keywords;
     }
 

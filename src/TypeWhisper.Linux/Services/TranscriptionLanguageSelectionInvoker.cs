@@ -71,14 +71,22 @@ internal static class TranscriptionLanguageSelectionInvoker
             : role.TranscribeStreamingWithLanguageHintsAsync(wavAudio, hints, translate, prompt, onProgress, ct);
     }
 
+    // Only the hints-and-prompt call carries a prompt, so a session with one takes it even for a
+    // single explicit language; without a prompt the session opens exactly as before.
     public static Task<IStreamingSession> StartStreamingAsync(
         this ITranscriptionEngineRole role,
         LanguageSelection languageSelection,
         IReadOnlyList<string> languageHints,
+        string? prompt,
         CancellationToken ct
     )
     {
         var hints = role.ToLanguageHints(languageSelection, languageHints);
+        if (prompt is not null)
+        {
+            return role.StartStreamingWithLanguageHintsAndPromptAsync(hints, prompt, ct);
+        }
+
         return UseSingleLanguageCall(languageSelection, hints)
             ? role.StartStreamingAsync(hints.Count == 0 ? null : hints[0], ct)
             : role.StartStreamingWithLanguageHintsAsync(hints, ct);

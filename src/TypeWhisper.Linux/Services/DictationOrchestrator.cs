@@ -2329,7 +2329,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         languageSelection,
                         languageHints,
                         translate,
-                        null,
+                        TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
                         cancelToken
                     );
                     // Trim before the preview fallback and gates so they see the remaining text.
@@ -4850,7 +4850,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Trace.WriteLine(
                     $"[Dictation] Streaming fault: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
-            }
+            },
+            prompt: TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms())
         );
 
         // Wire the audio tap BEFORE StartAsync resolves so frames captured
@@ -5210,7 +5211,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 languageSelection,
                 languageHints,
                 translate,
-                null,
+                TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
                 partial =>
                 {
                     TryPublishPartialTranscript(sessionVersion, captureSession, partial);

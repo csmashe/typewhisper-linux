@@ -59,6 +59,16 @@ public interface ITranscriptionEngineRole
     /// <summary>Limits for dictionary terms added by the host; null uses the SDK default budget.</summary>
     DictionaryTermsBudget? DictionaryTermsBudget => null;
 
+    /// <summary>
+    ///     Whether the engine reads its <c>prompt</c> argument with <see cref="PluginTranscriptionPrompt.Parse" />.
+    ///     When true, the host sends enabled dictionary terms, clipped to <see cref="DictionaryTermsBudget" />,
+    ///     as an envelope on every transcription path, and opens streaming sessions with a prompt through
+    ///     <see cref="StartStreamingWithLanguageHintsAndPromptAsync" />, where a single hint may be an
+    ///     explicitly selected language. Default false: comma-separated terms, from the HTTP API only.
+    /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    bool SupportsStructuredDictionaryTerms => false;
+
     /// <summary>Whether the engine consumes every ordered language hint natively; otherwise the host sends the first hint only.</summary>
     // ReSharper disable once UnusedMember.Global
     bool SupportsLanguageHints => false;

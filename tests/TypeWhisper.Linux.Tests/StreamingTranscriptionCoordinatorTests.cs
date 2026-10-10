@@ -30,6 +30,23 @@ public sealed class StreamingTranscriptionCoordinatorTests
         Assert.Equal("de", coord.DetectedLanguage);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("TypeWhisper.TranscriptionPrompt/1\n{\"dictionaryTerms\":[\"Washington, D.C.\"]}")]
+    public async Task StartAsync_OpensAPromptAwareSessionOnlyWithAPrompt(string? prompt)
+    {
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, _) => { }, _ => { }, prompt: prompt);
+
+        await coord.StartAsync(CancellationToken.None);
+        session.RaiseFinal("done", "en");
+
+        Assert.Equal("done", await coord.FinalizeAsync(CancellationToken.None));
+        Assert.Equal(prompt is null ? [] : [prompt], plugin.PromptedStarts);
+    }
+
     [Fact]
     public async Task DetectedLanguage_IsNullWhenFinalSegmentsDisagree()
     {
@@ -1386,5 +1403,14 @@ public sealed class StreamingTranscriptionCoordinatorTests
 
         public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
             (OnStartStreaming ?? throw new NotSupportedException())(ct);
+
+        public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+            IReadOnlyList<string> languageHints, string? prompt, CancellationToken ct)
+        {
+            PromptedStarts.Add(prompt);
+            return StartStreamingAsync(null, ct);
+        }
+
+        public List<string?> PromptedStarts { get; } = [];
     }
 }

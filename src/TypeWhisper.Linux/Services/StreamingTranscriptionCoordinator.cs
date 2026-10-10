@@ -39,6 +39,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private readonly TimeSpan _finalizeSessionTimeout;
     private readonly LanguageSelection _languageSelection;
     private readonly IReadOnlyList<string> _languageHints;
+    private readonly string? _prompt;
 
     private readonly Lock _lock = new();
     private readonly Action<Exception> _onFault;
@@ -79,11 +80,13 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         Action<int, string> onPartial,
         Action<Exception> onFault,
         TimeSpan? finalizeSenderTimeout = null,
-        TimeSpan? finalizeSessionTimeout = null)
+        TimeSpan? finalizeSessionTimeout = null,
+        string? prompt = null)
     {
         _plugin = plugin;
         _languageSelection = languageSelection;
         _languageHints = languageHints;
+        _prompt = prompt;
         _sessionVersion = sessionVersion;
         _onPartial = onPartial;
         _onFault = onFault;
@@ -216,6 +219,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             var session = await _plugin.StartStreamingAsync(
                 _languageSelection,
                 _languageHints,
+                _prompt,
                 _cts.Token
             );
 

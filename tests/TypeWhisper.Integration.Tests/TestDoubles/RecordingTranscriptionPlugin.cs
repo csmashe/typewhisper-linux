@@ -18,6 +18,9 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     private readonly ConcurrentQueue<string?> _receivedLanguages = new();
     private int _transcriptionCount;
     private readonly ConcurrentQueue<bool> _receivedTranslate = new();
+    private readonly ConcurrentQueue<string?> _receivedPrompts = new();
+
+    internal IReadOnlyList<string?> ReceivedPrompts => [.. _receivedPrompts];
 
     internal IReadOnlyList<bool> ReceivedTranslations => [.. _receivedTranslate];
 
@@ -33,6 +36,8 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
         [new(ModelId, "Scripted model")];
     public string? SelectedModelId { get; private set; } = ModelId;
     public bool SupportsTranslation { get; set; }
+    public bool SupportsStructuredDictionaryTerms { get; set; }
+    public DictionaryTermsBudget? DictionaryTermsBudget { get; set; }
     internal bool? ReceivedTranslate { get; private set; }
     public int TranscriptionCount => Volatile.Read(ref _transcriptionCount);
     public int LoadCount { get; private set; }
@@ -97,6 +102,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     {
         ct.ThrowIfCancellationRequested();
         _receivedLanguages.Enqueue(language);
+        _receivedPrompts.Enqueue(prompt);
         ReceivedTranslate = translate;
         _receivedTranslate.Enqueue(translate);
         Interlocked.Increment(ref _transcriptionCount);

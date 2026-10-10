@@ -1037,8 +1037,39 @@ public sealed class HttpApiUnixSocketTests
         dictionary.Verify(service => service.GetEnabledTerms(), Times.Once);
     }
 
-    private sealed class BudgetTranscriptionEngine : ITranscriptionEngineRole
+    [Fact]
+    public async Task LocalFileEndpointSendsStructuredTermsApartFromThePrompt()
     {
+        var engine = new BudgetTranscriptionEngine(structured: true);
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary.Setup(service => service.GetEnabledTerms())
+            .Returns(["too many words", "D.C.", "Öl,Fa", "Gamma"]);
+        var pipeline = new Mock<IPostProcessingPipeline>();
+        pipeline.Setup(service => service.ProcessAsync(It.IsAny<string>(), It.IsAny<PipelineOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PostProcessingResult { Text = "transcribed" });
+        using var fixture = new ApiFixture(
+            transcriptionEngine: engine,
+            dictionary: dictionary.Object,
+            pipeline: pipeline.Object,
+            audioProbeResult: new ProcessRunOutcome(ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var path = fixture.CreateSupportedAudioFile();
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(path)}},"language":"en","prompt":"Alpha, Beta"}""",
+            Encoding.UTF8, "application/json");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var parsed = PluginTranscriptionPrompt.Parse(engine.LastPrompt);
+        Assert.Equal("Alpha, Beta", parsed.Text);
+        Assert.Equal(["D.C.", "Öl,Fa"], parsed.DictionaryTerms);
+    }
+
+    private sealed class BudgetTranscriptionEngine(bool structured = false) : ITranscriptionEngineRole
+    {
+        public bool SupportsStructuredDictionaryTerms => structured;
         public string PluginId => "test-budget";
         public string ProviderId => "test-budget";
         public string ProviderDisplayName => "Test budget";

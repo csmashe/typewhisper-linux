@@ -2,6 +2,7 @@ name: Security
 
 on:
   pull_request:
+    types: [labeled, synchronize, reopened]
     branches:
       - linux
   push:
@@ -17,12 +18,12 @@ permissions:
   security-events: write
 
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
+  group: security-${{ github.workflow }}-${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))) && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   dependency-review:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -36,6 +37,7 @@ jobs:
       - uses: actions/dependency-review-action@v4
 
   codeql:
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
     runs-on: ubuntu-24.04
 
     steps:
@@ -109,6 +111,7 @@ jobs:
       - uses: github/codeql-action/analyze@v4
 
   dotnet-package-audit:
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
     runs-on: ubuntu-24.04
 
     steps:
