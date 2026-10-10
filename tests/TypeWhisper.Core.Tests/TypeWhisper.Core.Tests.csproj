@@ -32,6 +32,8 @@
         -->
         <Compile Include="../../plugins/Shared/Net/ResilientDownloader.cs"
                  Link="Shared/Net/ResilientDownloader.cs" />
+        <Compile Include="../../plugins/Shared/Net/DownloadSpace.cs"
+                 Link="Shared/Net/DownloadSpace.cs" />
         <Compile Include="../../plugins/Shared/Net/InterProcessFileLock.cs"
                  Link="Shared/Net/InterProcessFileLock.cs" />
     </ItemGroup>

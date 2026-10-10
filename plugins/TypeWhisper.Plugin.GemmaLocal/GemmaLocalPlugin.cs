@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using LLama;
 using LLama.Common;
+using TypeWhisper.Plugins.Shared.Net;
 using LLama.Sampling;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -487,6 +488,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
     }
 
+    // Test seam: free-space probe for model downloads (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; set; }
+
     internal void SelectModel(string modelId)
     {
         _ = GetModelDefinition(modelId);
@@ -529,6 +533,15 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             return;
         }
 
+        // Check the catalog size before any request, then the server's exact length.
+        var spaceDescription = $"the {model.DisplayName} model";
+        DownloadSpace.EnsureAvailable(
+            dir,
+            model.EstimatedSizeMB * 1024L * 1024,
+            spaceDescription,
+            SpaceProbe
+        );
+
         Log(PluginLogLevel.Info, $"Downloading {model.DisplayName} from Hugging Face...");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, model.DownloadUrl);
@@ -538,6 +551,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             ct
         );
         response.EnsureSuccessStatusCode();
+
+        if (response.Content.Headers.ContentLength is { } declaredBytes)
+            DownloadSpace.EnsureAvailable(dir, declaredBytes, spaceDescription, SpaceProbe);
 
         var totalBytes =
             response.Content.Headers.ContentLength ?? model.EstimatedSizeMB * 1024L * 1024;
@@ -581,6 +597,12 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
 
             File.Move(tempPath, filePath, overwrite: true);
             completed = true;
+        }
+        catch (Exception ex)
+            when (DownloadSpace.TranslateWriteFailure(ex, dir, spaceDescription) is { } full
+                && !ReferenceEquals(full, ex))
+        {
+            throw full;
         }
         finally
         {

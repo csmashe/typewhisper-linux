@@ -69,6 +69,56 @@ public class CudaRuntimeProvisionerTests
     }
 
     [Fact]
+    public async Task DownloadAndExtract_BatchDoesNotFit_FailsBeforeAnyWheelDownload()
+    {
+        using var temp = new TempDir();
+        var (handler, http) = WhisperCublasFixture();
+        using var _ = http;
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false,
+            spaceProbe: _ => 0
+        );
+
+        var ex = await DownloadSpaceAssert.ThrowsInsufficientSpaceAsync(() =>
+            provisioner.DownloadAndExtractAsync(
+                CudaRuntimeProfile.WhisperCublas, null, CancellationToken.None)
+        );
+
+        Assert.StartsWith("Not enough disk space for the CUDA runtime libraries:", ex.Message);
+        Assert.Equal(2, handler.JsonRequests);
+        Assert.Equal(0, handler.WheelRequests);
+        Assert.Empty(Directory.GetFiles(provisioner.CacheDirectory));
+    }
+
+    [Fact]
+    public async Task DownloadAndExtract_ExtractionDoesNotFit_LeavesNoPartialLibrariesOrMarker()
+    {
+        using var temp = new TempDir();
+        var (handler, http) = WhisperCublasFixture();
+        using var _ = http;
+        // Probes run for the batch, the first wheel's download, then its extraction.
+        var probes = 0;
+        var provisioner = CreateProvisioner(
+            temp.Path,
+            http,
+            systemLibraryProbe: _ => false,
+            spaceProbe: _ => ++probes == 3 ? 0 : long.MaxValue / 2
+        );
+
+        await DownloadSpaceAssert.ThrowsInsufficientSpaceAsync(() =>
+            provisioner.DownloadAndExtractAsync(
+                CudaRuntimeProfile.WhisperCublas, null, CancellationToken.None)
+        );
+
+        Assert.Equal(3, probes);
+        Assert.Equal(1, handler.WheelRequests);
+        Assert.Empty(Directory.GetFiles(provisioner.CacheDirectory));
+        Assert.False(provisioner.IsProfileSatisfied(CudaRuntimeProfile.WhisperCublas));
+    }
+
+    [Fact]
     public async Task DownloadAndExtract_WarmCache_IsSatisfied_MakesNoSecondRequest()
     {
         using var temp = new TempDir();
@@ -1222,7 +1272,8 @@ public class CudaRuntimeProvisionerTests
         string? legacyCacheRoot = null,
         Action<string, string>? moveDirectory = null,
         TimeSpan? maintenanceLockTimeout = null,
-        DurableFileWrite.SyncHooks? tombstoneSyncHooks = null
+        DurableFileWrite.SyncHooks? tombstoneSyncHooks = null,
+        Func<string, long?>? spaceProbe = null
     ) =>
         new(
             cacheRoot,
@@ -1237,6 +1288,7 @@ public class CudaRuntimeProvisionerTests
             MaintenanceLockTimeoutForTests =
                 maintenanceLockTimeout ?? TimeSpan.FromSeconds(30),
             TombstoneSyncHooksForTests = tombstoneSyncHooks,
+            SpaceProbe = spaceProbe,
         };
 
     private static (FakePyPiHandler Handler, HttpClient Http) WhisperCublasFixture(

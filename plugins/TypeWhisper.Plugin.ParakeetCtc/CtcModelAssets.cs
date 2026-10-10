@@ -13,9 +13,16 @@ public sealed record CtcAssetSource(string Url, string Sha256, long MaximumBytes
 public sealed class CtcModelAssets(
     HttpClient http,
     CtcAssetSource? archive = null,
-    CtcAssetSource? tokenizer = null
+    CtcAssetSource? tokenizer = null,
+    Func<string, long?>? spaceProbe = null
 )
 {
+    private const string SpaceDescription = "the dictionary boosting model";
+
+    // The pinned archive expands to a ~132 MB tar holding the ~132 MB model, both
+    // staged beside the archive before the tar is discarded.
+    private const long ArchiveExtractionBytes = 270L * 1024 * 1024;
+
     private static CtcAssetSource Archive { get; } =
         new(
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2",
@@ -67,11 +74,12 @@ public sealed class CtcModelAssets(
         {
             report?.Invoke("Downloading NVIDIA dictionary boosting model…");
             var archivePath = Path.Join(staging, "model.archive");
-            await DownloadAsync(_archive, archivePath, ct).ConfigureAwait(false);
+            await DownloadAsync(_archive, archivePath, ArchiveExtractionBytes, ct)
+                .ConfigureAwait(false);
             report?.Invoke("Verifying and extracting dictionary boosting model…");
             await ExtractAsync(archivePath, ready, ct).ConfigureAwait(false);
             report?.Invoke("Downloading dictionary tokenizer…");
-            await DownloadAsync(_tokenizer, Path.Join(ready, "tokenizer.json"), ct)
+            await DownloadAsync(_tokenizer, Path.Join(ready, "tokenizer.json"), 0, ct)
                 .ConfigureAwait(false);
             if (new CtcTokenizer(Path.Join(ready, "tokens.txt")).BlankId != 1024)
                 throw new InvalidDataException(
@@ -97,6 +105,14 @@ public sealed class CtcModelAssets(
             throw new TimeoutException(
                 "Dictionary boosting setup timed out. Check your connection and enable vocabulary rescoring again to retry."
             );
+        }
+        catch (Exception ex)
+            when (DownloadSpace.TranslateWriteFailure(ex, parent, SpaceDescription) is { } full)
+        {
+            // Keep the space shortfall visible instead of the generic setup wrapper below.
+            if (ReferenceEquals(full, ex))
+                throw;
+            throw full;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
@@ -150,7 +166,12 @@ public sealed class CtcModelAssets(
         }
     }
 
-    private Task DownloadAsync(CtcAssetSource source, string destination, CancellationToken ct) =>
+    private Task DownloadAsync(
+        CtcAssetSource source,
+        string destination,
+        long extractionBytes,
+        CancellationToken ct
+    ) =>
         ResilientDownloader.DownloadToFileAsync(
             http,
             source.Url,
@@ -167,7 +188,8 @@ public sealed class CtcModelAssets(
                     );
             },
             verifyComplete: path => VerifyAsset(path, source),
-            ct
+            ct,
+            new DownloadSpaceRequirement(SpaceDescription, extractionBytes, spaceProbe)
         );
 
     private static void VerifyAsset(string path, CtcAssetSource source)

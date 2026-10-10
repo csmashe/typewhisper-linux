@@ -158,6 +158,11 @@ public class CudaRuntimeProvisioner
     private readonly Func<IPluginProcessSupervisor>? _processSupervisor;
     private bool _legacyMigrationAttempted;
 
+    private const string SpaceDescription = "the CUDA runtime libraries";
+
+    // Test seam: free-space probe for wheel downloads and extraction (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; init; }
+
     public CudaRuntimeProvisioner(
         string cacheRoot,
         HttpClient httpClient,
@@ -397,6 +402,14 @@ public class CudaRuntimeProvisioner
                 fetchedCount = missing.Count;
                 if (fetchedCount > 0)
                 {
+                    // A lower bound (extracted libraries outlive their wheels); each
+                    // extraction is re-checked with its exact uncompressed size.
+                    DownloadSpace.EnsureAvailable(
+                        CacheDirectory,
+                        missing.Sum(wheel => jobs[wheel].Size),
+                        SpaceDescription,
+                        SpaceProbe
+                    );
                     _log?.Invoke(
                         $"CUDA runtime: fetching {fetchedCount} missing package(s): "
                             + string.Join(", ", missing.Select(w => w.Package))
@@ -845,17 +858,27 @@ public class CudaRuntimeProvisioner
                     onBytesRead(onDisk);
                 },
                 verifyComplete: path => VerifySha256(path, expectedSha256, wheel.Package),
-                ct
+                ct,
+                new DownloadSpaceRequirement(SpaceDescription, Probe: SpaceProbe)
             ).ConfigureAwait(false);
 
-            ExtractSharedObjects(wheelPath);
+            try
+            {
+                ExtractSharedObjects(wheelPath);
 
-            // Stamp completion only after every .so is extracted. A wheel like cuDNN
-            // ships its primary soname (libcudnn.so.9) alongside companion engine
-            // libs; without this marker a crash mid-extract would leave the primary
-            // on disk and the next run's IsWheelSatisfied would wrongly skip the
-            // re-download, then fail when cuDNN dlopens a missing companion.
-            WriteCompletionMarker(wheel);
+                // Stamp completion only after every .so is extracted. A wheel like cuDNN
+                // ships its primary soname (libcudnn.so.9) alongside companion engine
+                // libs; without this marker a crash mid-extract would leave the primary
+                // on disk and the next run's IsWheelSatisfied would wrongly skip the
+                // re-download, then fail when cuDNN dlopens a missing companion.
+                WriteCompletionMarker(wheel);
+            }
+            catch (Exception ex)
+                when (DownloadSpace.TranslateWriteFailure(ex, CacheDirectory, SpaceDescription)
+                    is { } full && !ReferenceEquals(full, ex))
+            {
+                throw full;
+            }
 
             return lastOnDisk;
         }
@@ -920,7 +943,15 @@ public class CudaRuntimeProvisioner
             && IsSharedObject(Path.GetFileName(entry.FullName));
 
         using var archive = ZipFile.OpenRead(wheelPath);
-        foreach (var entry in archive.Entries.Where(IsLibEntry))
+        var libEntries = archive.Entries.Where(IsLibEntry).ToList();
+        // Each library is staged before replacing any existing copy, so all of it must fit.
+        DownloadSpace.EnsureAvailable(
+            CacheDirectory,
+            libEntries.Sum(entry => entry.Length),
+            SpaceDescription,
+            SpaceProbe
+        );
+        foreach (var entry in libEntries)
         {
             var fileName = Path.GetFileName(entry.FullName);
             var destination = Path.Join(CacheDirectory, fileName);

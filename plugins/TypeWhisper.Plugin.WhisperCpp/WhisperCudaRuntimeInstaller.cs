@@ -49,6 +49,11 @@ internal class WhisperCudaRuntimeInstaller
     // Used only as a progress denominator when the server omits Content-Length.
     private const long ApproxDownloadBytes = 167_372_419L;
 
+    // Extracted beside the archive: ~410 MB (almost all libggml-cuda-whisper.so).
+    private const long ExtractedRuntimeBytes = 400L * 1024 * 1024;
+
+    private const string SpaceDescription = "the whisper.cpp GPU runtime";
+
     // Inside the nupkg the libs live under build/linux-x64/; the loader expects
     // them under runtimes/cuda/linux-x64/ relative to LibraryPath.
     private const string PackageLibPrefix = "build/linux-x64/";
@@ -94,6 +99,9 @@ internal class WhisperCudaRuntimeInstaller
     ///     opened — it only has to make the directory resolve to the runtime root.
     /// </summary>
     public string LibraryPath => Path.Join(_runtimeRoot, "whisper");
+
+    // Test seam: free-space probe for the runtime download (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; init; }
 
     /// <summary>True when every required CUDA library has already been extracted.</summary>
     public bool IsInstalled =>
@@ -143,7 +151,16 @@ internal class WhisperCudaRuntimeInstaller
                         await DownloadAsync(nupkgPath, progress, ct).ConfigureAwait(false);
 
                         _log?.Invoke("whisper.cpp GPU runtime: extracting native libraries");
-                        ExtractCoreRuntimeFiles(nupkgPath);
+                        try
+                        {
+                            ExtractCoreRuntimeFiles(nupkgPath);
+                        }
+                        catch (Exception ex)
+                            when (DownloadSpace.TranslateWriteFailure(ex, _runtimeRoot, SpaceDescription)
+                                is { } full && !ReferenceEquals(full, ex))
+                        {
+                            throw full;
+                        }
                     }
                     finally
                     {
@@ -242,7 +259,8 @@ internal class WhisperCudaRuntimeInstaller
             allowResume: true,
             onBytesOnDisk: OnBytesOnDisk,
             verifyComplete: VerifySha256,
-            ct
+            ct,
+            new DownloadSpaceRequirement(SpaceDescription, ExtractedRuntimeBytes, SpaceProbe)
         );
     }
 
