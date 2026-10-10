@@ -17,34 +17,57 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
 
     public SupertonicOnnxSynthesizer(string assetRoot)
     {
+        SupertonicNativeRuntime.RegisterResolver();
         var onnxDir = Path.Join(assetRoot, "onnx");
-        var options = new SessionOptions
-        {
-            IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2),
-            InterOpNumThreads = 1,
-        };
+        using var options = new SessionOptions();
+        options.IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2);
+        options.InterOpNumThreads = 1;
 
         _config = SupertonicConfig.Load(Path.Join(onnxDir, "tts.json"));
         _textProcessor = new SupertonicTextProcessor(Path.Join(onnxDir, "unicode_indexer.json"));
-        _durationPredictor = new InferenceSession(Path.Join(onnxDir, "duration_predictor.onnx"), options);
-        _textEncoder = new InferenceSession(Path.Join(onnxDir, "text_encoder.onnx"), options);
-        _vectorEstimator = new InferenceSession(Path.Join(onnxDir, "vector_estimator.onnx"), options);
-        _vocoder = new InferenceSession(Path.Join(onnxDir, "vocoder.onnx"), options);
+        // A later session can fail to load; release the native sessions already created.
+        var sessions = new List<InferenceSession>();
+        try
+        {
+            _durationPredictor = Load("duration_predictor.onnx");
+            _textEncoder = Load("text_encoder.onnx");
+            _vectorEstimator = Load("vector_estimator.onnx");
+            _vocoder = Load("vocoder.onnx");
+        }
+        catch
+        {
+            foreach (var session in sessions)
+                session.Dispose();
+            throw;
+        }
+
+        return;
+
+        InferenceSession Load(string fileName)
+        {
+            var session = new InferenceSession(Path.Join(onnxDir, fileName), options);
+            sessions.Add(session);
+            return session;
+        }
     }
 
     public SupertonicSynthesisResult Synthesize(SupertonicSynthesisRequest request, CancellationToken ct)
     {
         var style = GetVoiceStyle(request.VoiceStylePath);
         var samples = new List<float>();
+        var maximumSamples = SupertonicAudioLimits.MaximumSamples(_config.SampleRate);
         // ReSharper disable once MergeIntoLogicalPattern -- subjective style; kept as-is.
         var chunks = ChunkText(request.Text, request.Language == "ko" || request.Language == "ja" ? 120 : 300);
 
         foreach (var chunk in chunks)
         {
             ct.ThrowIfCancellationRequested();
-            var result = InferSingle(chunk, request.Language, style, request.DenoisingSteps, (float)request.Speed, ct);
-            if (samples.Count > 0)
-                samples.AddRange(new float[(int)(0.3 * _config.SampleRate)]);
+            var separatorLength = samples.Count > 0 ? (int)(0.3 * _config.SampleRate) : 0;
+            var remainingSamples = maximumSamples - samples.Count - separatorLength;
+            SupertonicAudioLimits.ValidateSampleCount(1, remainingSamples);
+            var result = InferSingle(chunk, request.Language, style, request.DenoisingSteps, (float)request.Speed, remainingSamples, ct);
+            if (separatorLength > 0)
+                samples.AddRange(new float[separatorLength]);
             samples.AddRange(result);
         }
 
@@ -65,6 +88,7 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
         SupertonicVoiceStyle style,
         int totalSteps,
         float speed,
+        long maximumSamples,
         CancellationToken ct)
     {
         var features = _textProcessor.Process([text], [language]);
@@ -96,7 +120,10 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
 
         var latentDim = _config.LatentDim * _config.ChunkCompressFactor;
         var chunkSize = _config.BaseChunkSize * _config.ChunkCompressFactor;
-        var wavLength = Math.Max(1, (long)Math.Ceiling(duration.Max() * _config.SampleRate));
+        // Checked before allocating the latent, which scales with the predicted duration.
+        var predictedSamples = Math.Ceiling((double)duration.Max() * _config.SampleRate);
+        SupertonicAudioLimits.ValidateSampleCount(predictedSamples, maximumSamples);
+        var wavLength = Math.Max(1, (long)predictedSamples);
         var latentLength = Math.Max(1, (int)((wavLength + chunkSize - 1) / chunkSize));
         var latent = SampleNoisyLatent(latentDim, latentLength);
         var latentMask = BuildLatentMask(wavLength, chunkSize, latentLength);
@@ -170,7 +197,7 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
     [GeneratedRegex(@"\n\s*\n+")]
     private static partial Regex ParagraphSplitRegex();
 
-    private static List<string> ChunkText(string text, int maxLength)
+    internal static List<string> ChunkText(string text, int maxLength)
     {
         var chunks = new List<string>();
         foreach (var paragraph in ParagraphSplitRegex().Split(text.Trim()).Where(p => !string.IsNullOrWhiteSpace(p)))
@@ -179,6 +206,9 @@ internal sealed partial class SupertonicOnnxSynthesizer : ISupertonicSynthesizer
             while (remaining.Length > maxLength)
             {
                 var split = FindSplitIndex(remaining, maxLength);
+                // Never cut a surrogate pair (emoji, supplementary CJK) in half.
+                if (split > 0 && split < remaining.Length && char.IsHighSurrogate(remaining[split - 1]) && char.IsLowSurrogate(remaining[split]))
+                    split--;
                 chunks.Add(remaining[..split].Trim());
                 remaining = remaining[split..].Trim();
             }

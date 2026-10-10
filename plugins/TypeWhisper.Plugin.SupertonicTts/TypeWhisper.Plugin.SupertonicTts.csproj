@@ -14,6 +14,11 @@
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
     </ItemGroup>
     <ItemGroup>
+        <Compile Include="..\Shared\Net\ResilientDownloader.cs" Link="Shared\Net\ResilientDownloader.cs" />
+        <Compile Include="..\Shared\Net\DownloadSpace.cs" Link="Shared\Net\DownloadSpace.cs" />
+        <Compile Include="..\Shared\Net\InterProcessFileLock.cs" Link="Shared\Net\InterProcessFileLock.cs" />
+    </ItemGroup>
+    <ItemGroup>
         <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.1" />
     </ItemGroup>
     <ItemGroup>

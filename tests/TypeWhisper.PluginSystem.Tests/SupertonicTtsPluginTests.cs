@@ -1,4 +1,3 @@
-using System.Net;
 using System.Buffers.Binary;
 using System.Text.Json;
 using TypeWhisper.Plugin.SupertonicTts;
@@ -143,44 +142,255 @@ public class SupertonicTtsPluginTests
     }
 
     [Fact]
-    public async Task AssetManager_DownloadsMissingFilesAtomicallyAndWritesSourceMetadata()
+    public async Task ActivateAsync_VerifiesCachedAssets()
     {
-        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var calls = new List<string>();
-        var handler = new CapturingHandler(request =>
-        {
-            calls.Add(request.RequestUri!.ToString());
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent("payload"u8.ToArray()),
-            };
-        });
-        var files = new[]
-        {
-            new SupertonicAssetFile("onnx/a.onnx", "https://example.test/a.onnx", 1),
-            new SupertonicAssetFile("voice_styles/M1.json", "https://example.test/M1.json", 1),
-        };
-        using var httpClient = new HttpClient(handler);
-        var sut = new SupertonicAssetManager(tempDir, httpClient, files, "https://example.test/LICENSE");
-        var progressValues = new List<double>();
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
+        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
+
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        Assert.Equal(1, assets.VerifyCount);
+        Assert.True(sut.IsConfigured);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ReportsStateWithoutDownloading()
+    {
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = false };
+        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        var unlicensed = await sut.ValidateAsync();
+        sut.SetLicenseAccepted(true);
+        var missing = await sut.ValidateAsync();
+        assets.AreAssetsReadyValue = true;
+        var ready = await sut.ValidateAsync();
+
+        Assert.Equal(new PluginSettingsValidationResult(false, "Settings.AcceptLicense"), unlicensed);
+        Assert.Equal(new PluginSettingsValidationResult(false, "Settings.DownloadRequired"), missing);
+        Assert.Equal(new PluginSettingsValidationResult(true, "Settings.Ready"), ready);
+        Assert.Equal(0, assets.DownloadCount);
+    }
+
+    [Fact]
+    public async Task GetSettingsActions_ReflectsAssetState()
+    {
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = false };
+        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        var empty = sut.GetSettingsActions();
+        assets.HasAnyAssetsValue = true;
+        var partial = sut.GetSettingsActions();
+        assets.AreAssetsReadyValue = true;
+        var ready = sut.GetSettingsActions();
+
+        Assert.Equal(
+            [SupertonicTtsPlugin.DownloadActionId, SupertonicTtsPlugin.RemoveActionId],
+            empty.Select(action => action.Id));
+        Assert.Equal([true, false], empty.Select(action => action.IsEnabled));
+        Assert.Equal([true, true], partial.Select(action => action.IsEnabled));
+        Assert.Equal([false, true], ready.Select(action => action.IsEnabled));
+        Assert.Null(empty[0].ConfirmationMessage);
+        Assert.Equal("Settings.RemoveConfirmation", empty[1].ConfirmationMessage);
+        Assert.Contains("383 MB", empty[0].Description);
+    }
+
+    [Fact]
+    public async Task DownloadAction_GatesOnLicenseThenDownloadsWithActivity()
+    {
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = false };
+        var host = new TestPluginHostServices();
+        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
+        await sut.ActivateAsync(host);
+        var activity = new List<string?>();
+        sut.SettingsActivityChanged += activity.Add;
+
+        var blocked = await sut.ExecuteSettingsActionAsync(SupertonicTtsPlugin.DownloadActionId, CancellationToken.None);
+        await sut.SetSettingValueAsync(SupertonicTtsPlugin.LicenseAcceptedSettingName, "true");
+        var downloaded = await sut.ExecuteSettingsActionAsync(SupertonicTtsPlugin.DownloadActionId, CancellationToken.None);
+
+        Assert.Equal(new PluginSettingsValidationResult(false, "Settings.AcceptLicense"), blocked);
+        Assert.Equal(new PluginSettingsValidationResult(true, "Settings.DownloadComplete"), downloaded);
+        Assert.Equal(1, assets.DownloadCount);
+        Assert.True(sut.IsConfigured);
+        Assert.Null(sut.SettingsProgress);
+        Assert.Equal("Settings.Downloading", activity[0]);
+        Assert.Null(activity[^1]);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task DownloadAction_ReportsFailureAndCancellationAndClearsActivity()
+    {
+        var assets = new FakeSupertonicAssets { DownloadFailure = new InvalidDataException("hash mismatch") };
+        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
+        await sut.ActivateAsync(new TestPluginHostServices());
+        sut.SetLicenseAccepted(true);
+
+        var failed = await sut.ExecuteSettingsActionAsync(SupertonicTtsPlugin.DownloadActionId, CancellationToken.None);
+        assets.DownloadFailure = null;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var cancelled = await sut.ExecuteSettingsActionAsync(SupertonicTtsPlugin.DownloadActionId, cts.Token);
+
+        Assert.Equal(new PluginSettingsValidationResult(false, "Settings.Error: hash mismatch"), failed);
+        Assert.Equal(new PluginSettingsValidationResult(false, "Settings.DownloadCancelled"), cancelled);
+        Assert.False(sut.IsConfigured);
+        Assert.Null(sut.SettingsProgress);
+    }
+
+    [Fact]
+    public async Task ExecuteSettingsActionAsync_RejectsUnknownAction()
+    {
+        var sut = new SupertonicTtsPlugin(new FakeSupertonicAssets(), _ => new FakeSupertonicSynthesizer());
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            sut.ExecuteSettingsActionAsync("format-disk", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RemoveAction_WaitsForInFlightSynthesisThenUnloadsAndDeletes()
+    {
+        var gate = new TaskCompletionSource();
+        var synth = new FakeSupertonicSynthesizer { Gate = gate.Task };
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true, HasAnyAssetsValue = true };
+        var host = new TestPluginHostServices { PcmPlayback = new RecordingPcmPlaybackService() };
+        var sut = new SupertonicTtsPlugin(assets, _ => synth);
+        await sut.ActivateAsync(host);
+        Task<PluginSettingsValidationResult>? remove = null;
 
         try
         {
-            await sut.DownloadMissingAssetsAsync(new Progress<double>(progressValues.Add), CancellationToken.None);
+            var speak = sut.SpeakAsync(new TtsSpeakRequest("Hello", "en"), CancellationToken.None);
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard.
+            await synth.Started.WaitAsync(s_coordinationTimeout);
 
-            Assert.True(sut.AreAssetsReady);
-            Assert.Equal(3, calls.Count);
-            Assert.True(File.Exists(Path.Join(tempDir, "onnx", "a.onnx")));
-            Assert.True(File.Exists(Path.Join(tempDir, "voice_styles", "M1.json")));
-            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx.tmp")));
-            Assert.Contains("https://example.test/LICENSE", await File.ReadAllTextAsync(Path.Join(tempDir, "SOURCE.txt")));
-            Assert.Equal(1.0, progressValues.Last(), precision: 3);
+            remove = sut.ExecuteSettingsActionAsync(SupertonicTtsPlugin.RemoveActionId, CancellationToken.None);
+            // ReSharper disable once MethodSupportsCancellation -- fixed settle window proving removal waits for synthesis.
+            await Task.Delay(50);
+            Assert.False(remove.IsCompleted);
+            Assert.Equal(0, assets.RemoveCount);
+            Assert.False(synth.Disposed);
+
+            gate.SetResult();
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard.
+            var session = await speak.WaitAsync(s_coordinationTimeout);
+            // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard.
+            var removed = await remove.WaitAsync(s_coordinationTimeout);
+
+            Assert.True(session.IsActive);
+            Assert.Equal(new PluginSettingsValidationResult(true, "Settings.Removed"), removed);
+            Assert.True(synth.Disposed);
+            Assert.Equal(1, assets.RemoveCount);
+            Assert.False(sut.IsConfigured);
+            Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            gate.TrySetResult();
+            await CompleteBestEffort(remove);
         }
+    }
+
+    [Fact]
+    public async Task RemoveAction_ReportsTheCapabilityChangeEvenWhenDeletingFails()
+    {
+        var assets = new FakeSupertonicAssets
+        {
+            AreAssetsReadyValue = true,
+            RemoveFailure = new UnauthorizedAccessException("read-only"),
+        };
+        var host = new TestPluginHostServices();
+        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ExecuteSettingsActionAsync(SupertonicTtsPlugin.RemoveActionId, CancellationToken.None);
+
+        Assert.Equal(new PluginSettingsValidationResult(false, "Settings.Error: read-only"), result);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task SpeakAsync_RejectsAssetsThatFailVerificationBeforeLoading()
+    {
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
+        var host = new TestPluginHostServices { PcmPlayback = new RecordingPcmPlaybackService() };
+        var factoryCalls = 0;
+        var sut = new SupertonicTtsPlugin(assets, _ =>
+        {
+            factoryCalls++;
+            return new FakeSupertonicSynthesizer();
+        });
+        await sut.ActivateAsync(host);
+        assets.VerifyResult = false;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.SpeakAsync(new TtsSpeakRequest("Hello", "en"), CancellationToken.None));
+
+        Assert.Contains("failed verification", ex.Message);
+        Assert.Equal(0, factoryCalls);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task SpeakAsync_RejectsSpeechLongerThanTwoMinutes()
+    {
+        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = true };
+        var playback = new RecordingPcmPlaybackService();
+        var synth = new FakeSupertonicSynthesizer { Samples = new float[24_000 * 120 + 1] };
+        var sut = new SupertonicTtsPlugin(assets, _ => synth);
+        await sut.ActivateAsync(new TestPluginHostServices { PcmPlayback = playback });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.SpeakAsync(new TtsSpeakRequest("Hello", "en"), CancellationToken.None));
+
+        Assert.Empty(playback.Requests);
+    }
+
+    [Fact]
+    public void PreprocessText_WrapsTextInOpeningAndClosingLanguageTags()
+    {
+        // Matches Supertone's reference helper: f"<{lang}>" + text + f"</{lang}>".
+        Assert.Equal("<en>Hello world.</en>", SupertonicTextProcessor.PreprocessText("Hello world", "EN"));
+        Assert.Equal("<de>Hallo!</de>", SupertonicTextProcessor.PreprocessText("Hallo!", "de"));
+    }
+
+    [Fact]
+    public void ChunkText_NeverSplitsASurrogatePair()
+    {
+        var text = new string('a', 299) + "\U0001F600" + new string('b', 50);
+
+        var chunks = SupertonicOnnxSynthesizer.ChunkText(text, 300);
+
+        Assert.Equal(text, string.Concat(chunks));
+        Assert.All(chunks, chunk =>
+        {
+            Assert.False(char.IsHighSurrogate(chunk[^1]));
+            Assert.False(char.IsLowSurrogate(chunk[0]));
+        });
+    }
+
+    [Fact]
+    public void NativeRuntime_LooksForThePublishedThenTheBuildLayout()
+    {
+        var candidates = SupertonicNativeRuntime.Candidates("/plugins/supertonic");
+
+        Assert.Equal(Path.Join("/plugins/supertonic", "libonnxruntime.so"), candidates[0]);
+        Assert.Matches(@"/plugins/supertonic/runtimes/linux-(x64|arm64)/native/libonnxruntime\.so$", candidates[1]);
+    }
+
+    [Fact]
+    public void AudioLimits_AllowExactlyTwoMinutes()
+    {
+        var maximum = SupertonicAudioLimits.MaximumSamples(44_100);
+
+        Assert.Equal(44_100L * 120, maximum);
+        SupertonicAudioLimits.ValidateSampleCount(maximum, maximum);
+        Assert.Throws<InvalidOperationException>(() => SupertonicAudioLimits.ValidateSampleCount(maximum + 1, maximum));
+        Assert.Throws<InvalidOperationException>(() => SupertonicAudioLimits.ValidateSampleCount(double.NaN, maximum));
+        Assert.Throws<InvalidOperationException>(() => SupertonicAudioLimits.MaximumSamples(0));
     }
 
     [Fact]
@@ -229,64 +439,6 @@ public class SupertonicTtsPluginTests
         Assert.Equal("F2", sut.SelectedVoiceId);
         Assert.Equal(1.25, sut.Speed);
         Assert.Equal(12, sut.DenoisingSteps);
-    }
-
-    [Fact]
-    public async Task ValidateAsync_GatesOnLicenseThenDownloadsAssets()
-    {
-        var assets = new FakeSupertonicAssets { AreAssetsReadyValue = false };
-        var sut = new SupertonicTtsPlugin(assets, _ => new FakeSupertonicSynthesizer());
-        await sut.ActivateAsync(new TestPluginHostServices());
-        var activity = new List<string?>();
-        sut.SettingsActivityChanged += activity.Add;
-
-        var blocked = await sut.ValidateAsync();
-        Assert.NotNull(blocked);
-        Assert.False(blocked.IsSuccess);
-        Assert.Equal(0, assets.DownloadCount);
-
-        await sut.SetSettingValueAsync(SupertonicTtsPlugin.LicenseAcceptedSettingName, "true");
-        var downloaded = await sut.ValidateAsync();
-
-        Assert.NotNull(downloaded);
-        Assert.True(downloaded.IsSuccess);
-        Assert.Equal(1, assets.DownloadCount);
-        Assert.True(sut.IsConfigured);
-        Assert.Null(sut.SettingsProgress);
-        Assert.NotEmpty(activity);
-    }
-
-    [Fact]
-    public async Task AssetManager_RejectsTruncatedDownloadAndLeavesNoPartialFile()
-    {
-        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var handler = new CapturingHandler(_ =>
-        {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent("short"u8.ToArray()),
-            };
-            response.Content.Headers.ContentLength = 4096; // server claims more than it sent
-            return response;
-        });
-        var files = new[] { new SupertonicAssetFile("onnx/a.onnx", "https://example.test/a.onnx", 1) };
-        using var httpClient = new HttpClient(handler);
-        var sut = new SupertonicAssetManager(tempDir, httpClient, files, "https://example.test/LICENSE");
-
-        try
-        {
-            await Assert.ThrowsAsync<IOException>(() =>
-                sut.DownloadMissingAssetsAsync(null, CancellationToken.None));
-
-            Assert.False(sut.AreAssetsReady);
-            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx")));
-            Assert.False(File.Exists(Path.Join(tempDir, "onnx", "a.onnx.tmp")));
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
-        }
     }
 
     [Fact]
@@ -392,19 +544,47 @@ public class SupertonicTtsPluginTests
     private sealed class FakeSupertonicAssets : ISupertonicAssetManager
     {
         public string AssetRoot { get; set; } = Path.GetTempPath();
+        public long TotalSizeBytes => SupertonicAssetManager.DefaultFiles.Sum(file => file.SizeBytes);
         public bool AreAssetsReadyValue { get; set; }
+        public bool HasAnyAssetsValue { get; set; }
+        public bool? VerifyResult { get; set; }
+        public Exception? DownloadFailure { get; set; }
+        public Exception? RemoveFailure { get; init; }
         public int DownloadCount { get; private set; }
+        public int VerifyCount { get; private set; }
+        public int RemoveCount { get; private set; }
         public Task? Gate { get; set; }
         public bool AreAssetsReady => AreAssetsReadyValue;
+        public bool HasAnyAssets => HasAnyAssetsValue || AreAssetsReadyValue;
+
+        public Task<bool> VerifyCachedAssetsAsync(CancellationToken ct)
+        {
+            VerifyCount++;
+            if (VerifyResult is { } result)
+                AreAssetsReadyValue = result;
+            return Task.FromResult(AreAssetsReadyValue);
+        }
 
         public async Task DownloadMissingAssetsAsync(IProgress<double>? progress, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             if (Gate is not null)
                 await Gate;
+            if (DownloadFailure is not null)
+                throw DownloadFailure;
             DownloadCount++;
             AreAssetsReadyValue = true;
             progress?.Report(1.0);
+        }
+
+        public Task RemoveAssetsAsync(CancellationToken ct)
+        {
+            RemoveCount++;
+            if (RemoveFailure is not null)
+                throw RemoveFailure;
+            AreAssetsReadyValue = false;
+            HasAnyAssetsValue = false;
+            return Task.CompletedTask;
         }
     }
 
@@ -413,6 +593,7 @@ public class SupertonicTtsPluginTests
         private readonly TaskCompletionSource _started = new();
         public SupertonicSynthesisRequest? LastRequest { get; private set; }
         public Task? Gate { get; set; }
+        public float[] Samples { get; set; } = [0.1f, -0.1f];
         public bool Disposed { get; private set; }
         public Task Started => _started.Task;
 
@@ -422,21 +603,13 @@ public class SupertonicTtsPluginTests
             LastRequest = request;
             _started.TrySetResult();
             Gate?.Wait(ct);
-            return new SupertonicSynthesisResult([0.1f, -0.1f], 24_000);
+            return new SupertonicSynthesisResult(Samples, 24_000);
         }
 
         public void Dispose() => Disposed = true;
     }
 
-    private sealed class CapturingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(responder(request));
-    }
-
-    private sealed class TestPluginHostServices : IPluginHostServices
+    internal sealed class TestPluginHostServices : IPluginHostServices
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
@@ -458,8 +631,8 @@ public class SupertonicTtsPluginTests
         public void SetSetting<T>(string key, T value) =>
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
-        public string PluginDataDirectory => Path.GetTempPath();
-        public IPluginPcmPlaybackService PcmPlayback { get; set; } =
+        public string PluginDataDirectory { get; init; } = Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } =
             UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
@@ -475,7 +648,8 @@ public class SupertonicTtsPluginTests
         public string CurrentLanguage => "en";
         public IReadOnlyList<string> AvailableLanguages => ["en"];
         public string GetString(string key) => key;
-        public string GetString(string key, params object[] args) => string.Format(key, args);
+        // Keeps the arguments visible so tests can see what a formatted message carried.
+        public string GetString(string key, params object[] args) => $"{key}: {string.Join(" | ", args)}";
     }
 
     private sealed class TestPluginEventBus : IPluginEventBus

@@ -252,6 +252,79 @@
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
 
+                                            <ItemsControl ItemsSource="{Binding Actions}"
+                                                          IsVisible="{Binding HasActions}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:PluginSettingsActionRow">
+                                                        <Grid ColumnDefinitions="*,Auto"
+                                                              ColumnSpacing="12"
+                                                              Margin="0,0,0,8">
+                                                            <TextBlock Grid.Column="0"
+                                                                       Text="{Binding Description}"
+                                                                       IsVisible="{Binding HasDescription}"
+                                                                       TextWrapping="Wrap"
+                                                                       FontSize="11.5"
+                                                                       Foreground="#8A9AAE"
+                                                                       VerticalAlignment="Center" />
+                                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                            <Button Grid.Column="1"
+                                                                    Content="{Binding Label}"
+                                                                    Command="{Binding Owner.Owner.RunSettingsActionCommand}"
+                                                                    CommandParameter="{Binding}"
+                                                                    IsEnabled="{Binding CanRun}" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <Border IsVisible="{Binding HasPendingAction}"
+                                                    Background="#2A1F14"
+                                                    BorderBrush="#80622C"
+                                                    BorderThickness="1"
+                                                    CornerRadius="8"
+                                                    Padding="12">
+                                                <Grid ColumnDefinitions="*,Auto,Auto"
+                                                      ColumnSpacing="8">
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding PendingAction.ConfirmationMessage, FallbackValue=''}"
+                                                               TextWrapping="Wrap"
+                                                               VerticalAlignment="Center" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Grid.Column="1"
+                                                            Content="{Binding PendingAction.Label, FallbackValue=''}"
+                                                            Command="{Binding Owner.ConfirmSettingsActionCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Grid.Column="2"
+                                                            Content="{loc:Str Common.Cancel}"
+                                                            Command="{Binding Owner.DismissSettingsActionConfirmationCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                </Grid>
+                                            </Border>
+
+                                            <Grid IsVisible="{Binding IsActionRunning}"
+                                                  ColumnDefinitions="*,Auto"
+                                                  ColumnSpacing="12">
+                                                <StackPanel Grid.Column="0"
+                                                            Spacing="6"
+                                                            VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ActivityMessage}"
+                                                               TextWrapping="Wrap"
+                                                               FontSize="11.5"
+                                                               Foreground="#D6DEE9" />
+                                                    <ProgressBar Height="6"
+                                                                 Minimum="0"
+                                                                 Maximum="100"
+                                                                 Value="{Binding ActivityPercent}"
+                                                                 IsIndeterminate="{Binding IsActivityIndeterminate}" />
+                                                </StackPanel>
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Grid.Column="1"
+                                                        Content="{loc:Str Common.Cancel}"
+                                                        Command="{Binding Owner.CancelSettingsActionCommand}"
+                                                        CommandParameter="{Binding}" />
+                                            </Grid>
+
                                             <StackPanel Orientation="Horizontal"
                                                         HorizontalAlignment="Right"
                                                         Spacing="8"

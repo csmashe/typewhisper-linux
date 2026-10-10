@@ -7,15 +7,19 @@ using System.Globalization;
 using System.Buffers.Binary;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Plugins.Shared.Net;
 
 namespace TypeWhisper.Plugin.SupertonicTts;
 
-public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsProvider, IPluginSettingsActivity, IPluginLocalizationAware
+public sealed class SupertonicTtsPlugin
+    : ITtsProviderPlugin, IPluginSettingsProvider, IPluginSettingsActions, IPluginSettingsActivity, IPluginLocalizationAware
 {
     internal const string LicenseAcceptedSettingName = "licenseAccepted";
     internal const string SelectedVoiceSettingName = "selectedVoice";
     internal const string SpeedSettingName = "speed";
     internal const string DenoisingStepsSettingName = "denoisingSteps";
+    internal const string DownloadActionId = "download";
+    internal const string RemoveActionId = "remove";
     internal const string DefaultVoiceId = "M1";
     internal const double DefaultSpeed = 1.05;
     internal const int DefaultDenoisingSteps = 8;
@@ -129,7 +133,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     public event Action<string?>? SettingsActivityChanged;
 
-    public Task ActivateAsync(IPluginHostServices host)
+    public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
         _assetManager = _injectedAssetManager
@@ -139,8 +143,17 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         DenoisingSteps = NormalizeDenoisingSteps(host.GetSetting<int?>(DenoisingStepsSettingName) ?? DefaultDenoisingSteps);
         HasAcceptedModelLicense = host.GetSetting<bool?>(LicenseAcceptedSettingName).GetValueOrDefault();
         PersistSettings();
+        try
+        {
+            // Hashes only files without a current verification stamp (first run after an upgrade).
+            await _assetManager.VerifyCachedAssetsAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            host.Log(PluginLogLevel.Warning, $"Supertonic assets could not be verified: {ex.Message}");
+        }
+
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
-        return Task.CompletedTask;
     }
 
     public async Task DeactivateAsync()
@@ -183,15 +196,32 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         await _synthesisLock.WaitAsync(ct);
         try
         {
-            var synthesizer = _synthesizer ??= _synthesizerFactory(_assetManager.AssetRoot);
-            var synthesis = synthesizer.Synthesize(
-                new SupertonicSynthesisRequest(
-                    text,
-                    NormalizeLanguage(request.Language),
-                    SupertonicPaths.VoiceStylePath(_assetManager.AssetRoot, _selectedVoiceId),
-                    DenoisingSteps,
-                    Speed),
-                ct);
+            var assets = _assetManager;
+            // Files can change between sessions; check them before loading native sessions from them.
+            if (_synthesizer is null && !await assets.VerifyCachedAssetsAsync(ct))
+            {
+                host.NotifyCapabilitiesChanged();
+                throw new InvalidOperationException(
+                    "Supertonic 3 model files failed verification. Open plugin settings to download them again.");
+            }
+
+            var voiceStylePath = SupertonicPaths.VoiceStylePath(assets.AssetRoot, _selectedVoiceId);
+            var synthesis = await Task.Run(() =>
+            {
+                var synthesizer = _synthesizer ??= _synthesizerFactory(assets.AssetRoot);
+                return synthesizer.Synthesize(
+                    new SupertonicSynthesisRequest(
+                        text,
+                        NormalizeLanguage(request.Language),
+                        voiceStylePath,
+                        DenoisingSteps,
+                        Speed),
+                    ct);
+            }, ct);
+            ct.ThrowIfCancellationRequested();
+            SupertonicAudioLimits.ValidateSampleCount(
+                synthesis.Samples.LongLength,
+                SupertonicAudioLimits.MaximumSamples(synthesis.SampleRate));
 
             if (synthesis.Samples.Length == 0)
             {
@@ -223,14 +253,7 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         }
     }
 
-    // IPluginSettingsProvider
-    //
-    // Upstream exposed these via the WPF SupertonicSettingsView UserControl;
-    // the fork renders settings generically from the metadata below. The fork's
-    // IPluginSettingsProvider has no explicit "download" button, so the
-    // on-demand model download is triggered from ValidateAsync (the host's
-    // key-test / validation entry point) once the OpenRAIL-M license box is
-    // ticked, and reports progress through IPluginSettingsActivity.
+    // Downloading and removing the model files are settings actions; progress goes through IPluginSettingsActivity.
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
@@ -308,11 +331,43 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
         return Task.CompletedTask;
     }
 
-    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
-    {
-        if (IsConfigured)
-            return new PluginSettingsValidationResult(true, L("Settings.Ready"));
+    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
+        Task.FromResult<PluginSettingsValidationResult?>(
+            IsConfigured
+                ? new PluginSettingsValidationResult(true, L("Settings.Ready"))
+                : new PluginSettingsValidationResult(
+                    false,
+                    L(HasAcceptedModelLicense ? "Settings.DownloadRequired" : "Settings.AcceptLicense")));
 
+    public IReadOnlyList<PluginSettingsAction> GetSettingsActions()
+    {
+        var assets = _assetManager;
+        return
+        [
+            new PluginSettingsAction(
+                DownloadActionId,
+                L("Settings.DownloadAction"),
+                L("Settings.DownloadActionDescription", FormatSize(assets?.TotalSizeBytes ?? 0)),
+                IsEnabled: assets is not null && !assets.AreAssetsReady),
+            new PluginSettingsAction(
+                RemoveActionId,
+                L("Settings.RemoveAction"),
+                L("Settings.RemoveActionDescription"),
+                IsEnabled: assets?.HasAnyAssets == true,
+                ConfirmationMessage: L("Settings.RemoveConfirmation")),
+        ];
+    }
+
+    public Task<PluginSettingsValidationResult> ExecuteSettingsActionAsync(string actionId, CancellationToken ct) =>
+        actionId switch
+        {
+            DownloadActionId => RunDownloadActionAsync(ct),
+            RemoveActionId => RunRemoveActionAsync(ct),
+            _ => throw new ArgumentException($"Unknown Supertonic settings action '{actionId}'.", nameof(actionId)),
+        };
+
+    private async Task<PluginSettingsValidationResult> RunDownloadActionAsync(CancellationToken ct)
+    {
         if (!HasAcceptedModelLicense)
             return new PluginSettingsValidationResult(false, L("Settings.AcceptLicense"));
 
@@ -325,27 +380,52 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
             var progress = new Progress<double>(value =>
                 ReportActivity(L("Settings.Downloading"), Math.Clamp(value, 0.0, 1.0)));
             await DownloadAssetsAsync(progress, ct);
-            CompleteActivity();
             return new PluginSettingsValidationResult(true, L("Settings.DownloadComplete"));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            CompleteActivity();
             return new PluginSettingsValidationResult(false, L("Settings.DownloadCancelled"));
         }
-        catch (Exception ex) when (ex is HttpRequestException
+        catch (Exception ex) when (IsAssetFailure(ex))
+        {
+            _host?.Log(PluginLogLevel.Warning, $"Supertonic asset download failed: {ex.Message}");
+            return new PluginSettingsValidationResult(false, L("Settings.Error", ex.Message));
+        }
+        finally
+        {
+            CompleteActivity();
+        }
+    }
+
+    private async Task<PluginSettingsValidationResult> RunRemoveActionAsync(CancellationToken ct)
+    {
+        try
+        {
+            await RemoveAssetsAsync(ct);
+            return new PluginSettingsValidationResult(true, L("Settings.Removed"));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new PluginSettingsValidationResult(false, L("Settings.RemoveCancelled"));
+        }
+        catch (Exception ex) when (IsAssetFailure(ex))
+        {
+            _host?.Log(PluginLogLevel.Warning, $"Supertonic asset removal failed: {ex.Message}");
+            return new PluginSettingsValidationResult(false, L("Settings.Error", ex.Message));
+        }
+    }
+
+    private static bool IsAssetFailure(Exception ex) =>
+        ex is HttpRequestException
             or IOException
+            or InvalidDataException
             or UnauthorizedAccessException
             or NotSupportedException
             or System.Security.SecurityException
             or InvalidOperationException
-            or OperationCanceledException)
-        {
-            CompleteActivity();
-            _host?.Log(PluginLogLevel.Warning, $"Supertonic asset download failed: {ex.Message}");
-            return new PluginSettingsValidationResult(false, L("Settings.Error", ex.Message));
-        }
-    }
+            or OperationCanceledException
+            or DownloadStalledException
+            or DownloadIncompleteException;
 
     internal void SetLicenseAccepted(bool accepted)
     {
@@ -393,6 +473,41 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
             await _assetManager.DownloadMissingAssetsAsync(progress, ct);
             await ResetSynthesizerAsync();
             _host?.NotifyCapabilitiesChanged();
+        }
+        finally
+        {
+            _downloadLock.Release();
+        }
+    }
+
+    /// <summary>
+    ///     Unloads the synthesizer once any in-flight synthesis finishes, then deletes the model
+    ///     files. Speech already handed to the host keeps playing; it no longer reads the files.
+    /// </summary>
+    internal async Task RemoveAssetsAsync(CancellationToken ct)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (_assetManager is null)
+            throw new InvalidOperationException("Plugin is not activated.");
+
+        await _downloadLock.WaitAsync(ct);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            await _synthesisLock.WaitAsync(ct);
+            try
+            {
+                _synthesizer?.Dispose();
+                _synthesizer = null;
+                await _assetManager.RemoveAssetsAsync(ct);
+            }
+            finally
+            {
+                _synthesisLock.Release();
+                // Readiness drops even when a delete fails part-way.
+                _host?.NotifyCapabilitiesChanged();
+            }
         }
         finally
         {
@@ -480,6 +595,9 @@ public sealed class SupertonicTtsPlugin : ITtsProviderPlugin, IPluginSettingsPro
 
     internal static int NormalizeDenoisingSteps(int steps) =>
         Math.Max(MinDenoisingSteps, Math.Min(MaxDenoisingSteps, steps));
+
+    private static string FormatSize(long bytes) =>
+        (bytes / (1024d * 1024)).ToString("0", CultureInfo.InvariantCulture) + " MB";
 
     private static bool ParseBool(string? value) =>
         bool.TryParse(value, out var parsed) && parsed;
