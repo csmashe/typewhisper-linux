@@ -7,5 +7,5 @@
   "Settings.ModelReady": "Modelo cargado y listo.",
   "Settings.ModelSelectedNotLoaded": "Modelo seleccionado, pero aún no cargado.",
   "Manifest.Name": "Gemma 4 (Local)",
-  "Manifest.Description": "Ejecuta Google Gemma 4 localmente mediante Ollama o cualquier servidor compatible con OpenAI"
+  "Manifest.Description": "Ejecuta Google Gemma 4 localmente en la CPU con llama.cpp"
 }

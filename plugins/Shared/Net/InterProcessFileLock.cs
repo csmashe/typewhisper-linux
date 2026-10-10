@@ -48,7 +48,7 @@ internal static class InterProcessFileLock
                     FileShare.None
                 );
             }
-            catch (IOException)
+            catch (IOException ex) when (IsContention(ex))
             {
                 // Another holder owns the lock; the work it guards (a large download +
                 // extraction) is the long pole, so a coarse poll interval is fine.
@@ -56,4 +56,12 @@ internal static class InterProcessFileLock
             }
         }
     }
+
+    // A refused non-blocking flock surfaces as EWOULDBLOCK (EAGAIN: 11 on Linux, 35 on
+    // macOS/BSD); Windows reports ERROR_SHARING_VIOLATION (32) or ERROR_LOCK_VIOLATION (33).
+    // Anything else (missing directory, ENOSPC, EDQUOT, permissions) never clears by waiting.
+    private static bool IsContention(IOException ex) =>
+        OperatingSystem.IsWindows()
+            ? (ex.HResult & 0xFFFF) is 32 or 33
+            : ex.HResult is 11 or 35;
 }

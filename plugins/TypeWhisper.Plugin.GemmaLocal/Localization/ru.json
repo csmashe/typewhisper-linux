@@ -7,5 +7,5 @@
   "Settings.ModelReady": "Модель загружена и готова.",
   "Settings.ModelSelectedNotLoaded": "Модель выбрана, но ещё не загружена.",
   "Manifest.Name": "Gemma 4 (локально)",
-  "Manifest.Description": "Запуск Google Gemma 4 локально через Ollama или любой OpenAI-совместимый сервер"
+  "Manifest.Description": "Запуск Google Gemma 4 локально на CPU с llama.cpp"
 }

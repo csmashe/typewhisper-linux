@@ -12,16 +12,20 @@
         <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
     </ItemGroup>
     <ItemGroup>
-        <!-- Shared download free-space policy, compiled into the plugin assembly. -->
+        <!-- Shared resumable downloader, file lock and free-space policy, compiled into the plugin assembly. -->
         <Compile Include="..\Shared\Net\DownloadSpace.cs"
                  Link="Shared\Net\DownloadSpace.cs" />
+        <Compile Include="..\Shared\Net\ResilientDownloader.cs"
+                 Link="Shared\Net\ResilientDownloader.cs" />
+        <Compile Include="..\Shared\Net\InterProcessFileLock.cs"
+                 Link="Shared\Net\InterProcessFileLock.cs" />
     </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
     </ItemGroup>
     <ItemGroup>
-        <PackageReference Include="LLamaSharp" Version="0.26.0" />
-        <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.26.0" />
+        <PackageReference Include="LLamaSharp" Version="0.27.0" />
+        <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
     </ItemGroup>
     <ItemGroup>
         <Content Include="manifest.json">

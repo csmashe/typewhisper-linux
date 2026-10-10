@@ -181,8 +181,8 @@
       },
       "CommunityToolkit.HighPerformance": {
         "type": "Transitive",
-        "resolved": "8.4.0",
-        "contentHash": "flxspiBs0G/0GMp7IK2J2ijV9bTG6hEwFc/z6ekHqB6nwRJ4Ry2yLdx+TkbCUYFCl4XhABkAwomeKbT6zM2Zlg=="
+        "resolved": "8.4.2",
+        "contentHash": "2hmtrrU18x6NL3mbuAqwy0KpnoEEJOuK6sH5RKQfD/jHijn2pqvqBUC7WGy9dgNBL9BDA7eOC0kirsNPMp2f4Q=="
       },
       "CommunityToolkit.Mvvm": {
         "type": "Transitive",
@@ -244,20 +244,22 @@
       },
       "LLamaSharp": {
         "type": "Transitive",
-        "resolved": "0.26.0",
-        "contentHash": "saxMnaMMac9xYmQji8g6xZ+LN+xTJbElWsN5B8t1mZ/XmbPEz6ZefA09CqOUj6xUQlwsx4Zn/5oXqjtUv+TNYw==",
+        "resolved": "0.27.0",
+        "contentHash": "y/lkHRIiChk9lP1VGIH+bXUkx7CPFZiAqmmzLmKcphtDS1wk2utVemd5EsSXH6rvKYa/S68/6NzUItHmSrt/Ow==",
         "dependencies": {
-          "CommunityToolkit.HighPerformance": "8.4.0",
-          "Microsoft.Bcl.AsyncInterfaces": "10.0.2",
-          "Microsoft.Extensions.AI.Abstractions": "9.10.1",
-          "Microsoft.Extensions.Logging.Abstractions": "10.0.2",
-          "System.Numerics.Tensors": "9.0.9"
+          "CommunityToolkit.HighPerformance": "8.4.2",
+          "Microsoft.Bcl.AsyncInterfaces": "10.0.5",
+          "Microsoft.Bcl.Memory": "10.0.5",
+          "Microsoft.Extensions.AI.Abstractions": "10.4.1",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.5",
+          "System.Linq.Async": "7.0.0",
+          "System.Numerics.Tensors": "10.0.5"
         }
       },
       "LLamaSharp.Backend.Cpu": {
         "type": "Transitive",
-        "resolved": "0.26.0",
-        "contentHash": "xqWvja7N+Dw5CsIyhM/StQ6Uv5GhE0N27dfGevMVSWYZDsA/D9BDfQrAdgrdrzgK/6HK6bR/E/e3K9b5SbpBSg=="
+        "resolved": "0.27.0",
+        "contentHash": "fZOfnsWKx/kaOqCMSkZ2w5ww++/YGq56T8PWst0KjtmXQBthNAuE11HIaxMK5TBD0EWqoCxqlC8oVCOssF4+MQ=="
       },
       "MicroCom.Runtime": {
         "type": "Transitive",
@@ -266,8 +268,13 @@
       },
       "Microsoft.Bcl.AsyncInterfaces": {
         "type": "Transitive",
-        "resolved": "10.0.2",
-        "contentHash": "qE5JhRoeJbAipLqpUCZyNfNwnpAvUttXgIQDnTiJ15d8ji+/bPgoPkB3xLzK5cQTobN2D2ditUesUlDHb7p3Pg=="
+        "resolved": "10.0.5",
+        "contentHash": "hQB3Hq1LlF0NkGVNyZIvwIQIY3LM7Cw1oYjNiTvdNqmzzipVAWEK1c5sj2H5aFX0udnjgPLxSYKq2fupueS8ow=="
+      },
+      "Microsoft.Bcl.Memory": {
+        "type": "Transitive",
+        "resolved": "10.0.5",
+        "contentHash": "odTrIyDJPgqCKEo6sOOfMzh0TaPufY/SLHrrMkqGlxGWVc5NQbZD5h1fxf/Q+PrGnhct5VWmmfKREA4h6JtTng=="
       },
       "Microsoft.CodeCoverage": {
         "type": "Transitive",
@@ -276,20 +283,20 @@
       },
       "Microsoft.Extensions.AI.Abstractions": {
         "type": "Transitive",
-        "resolved": "9.10.1",
-        "contentHash": "e31P/WT7Pgx/9P6HNBUGEO0v9XyuZj6Dbekz4XeaP6v4GQ7jK1AllBiNTu1k2zx2x6upSeAmA6sRp6C2BgmMwQ=="
+        "resolved": "10.4.1",
+        "contentHash": "ZxhU/wg9BOc3ohibhLl18toPLWm96ysQoE+3OhCgrZ0TUPZd7bsUmGteeatz08yweyuPIEhtyUzEZTF+3bMWEQ=="
       },
       "Microsoft.Extensions.DependencyInjection.Abstractions": {
         "type": "Transitive",
-        "resolved": "10.0.2",
-        "contentHash": "zOIurr59+kUf9vNcsUkCvKWZv+fPosUZXURZesYkJCvl0EzTc9F7maAO4Cd2WEV7ZJJ0AZrFQvuH6Npph9wdBw=="
+        "resolved": "10.0.5",
+        "contentHash": "iVMtq9eRvzyhx8949EGT0OCYJfXi737SbRVzWXE5GrOgGj5AaZ9eUuxA/BSUfmOMALKn/g8KfFaNQw0eiB3lyA=="
       },
       "Microsoft.Extensions.Logging.Abstractions": {
         "type": "Transitive",
-        "resolved": "10.0.2",
-        "contentHash": "RZkez/JjpnO+MZ6efKkSynN6ZztLpw3WbxNzjLCPBd97wWj1S9ZYPWi0nmT4kWBRa6atHsdM1ydGkUr8GudyDQ==",
+        "resolved": "10.0.5",
+        "contentHash": "9HOdqlDtPptVcmKAjsQ/Nr5Rxfq6FMYLdhvZh1lVmeKR738qeYecQD7+ldooXf+u2KzzR1kafSphWngIM3C6ug==",
         "dependencies": {
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.2"
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.5"
         }
       },
       "Microsoft.IO.RecyclableMemoryStream": {
@@ -455,10 +462,23 @@
         "resolved": "6.0.0",
         "contentHash": "lcyUiXTsETK2ALsZrX+nWuHSIQeazhqPphLfaRxzdGaG93+0kELqpgEHtwWOlQe7+jSFnKwaCAgL4kjeZCQJnw=="
       },
+      "System.Interactive.Async": {
+        "type": "Transitive",
+        "resolved": "7.0.0",
+        "contentHash": "Ckj+tg2BVOZ0oLp7FAbjfvRyA/BMkUhVxROLd+x22zncRR6KD7CdFzAYp+9Mo2cedxAMo2X9ZNyhZu68jdDITw=="
+      },
+      "System.Linq.Async": {
+        "type": "Transitive",
+        "resolved": "7.0.0",
+        "contentHash": "A2Wci92Oyuodi8YLMQCJJ0vHqzgRFgEUG1K6tQNcoxHd3w05B1LvGzXvxQnGYPIL4Cr4hicHytpk2F2Jx8TZHg==",
+        "dependencies": {
+          "System.Interactive.Async": "7.0.0"
+        }
+      },
       "System.Numerics.Tensors": {
         "type": "Transitive",
-        "resolved": "9.0.9",
-        "contentHash": "dItAWpchB6lM0oRan/UEFxRMsxq1fwkycjpRGQI/RMHYZVbS57H4LV6BSJF/Z5v+jre/CPW+PpesbGa/ytFByw=="
+        "resolved": "10.0.5",
+        "contentHash": "2Njj2ree91ur3lWNyQrjlVgxtOz8hV7f92ezTdQc//2S1TEQiNJ6DR9/gxM91Sca0Khk28QjYiCy7C2fPgqcCw=="
       },
       "Tmds.DBus.Protocol": {
         "type": "Transitive",
@@ -530,157 +550,160 @@
           "Sentry": "[6.11.0, )",
           "SharpHook": "[5.3.9, )",
           "Tmds.DBus.Protocol": "[0.92.0, )",
-          "TypeWhisper.Core": "[0.14.1, )",
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.Core": "[0.16.1, )",
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.core": {
         "type": "Project"
       },
+      "typewhisper.fakeprovidercli": {
+        "type": "Project"
+      },
       "typewhisper.plugin.assemblyai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.authenticatedcli": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.0, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.cerebras": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.claude": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.cloudflareasr": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.cohere": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.deepgram": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.elevenlabs": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.filememory": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.fillerwords": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.fireworks": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.gemini": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.gemmalocal": {
         "type": "Project",
         "dependencies": {
-          "LLamaSharp": "[0.26.0, )",
-          "LLamaSharp.Backend.Cpu": "[0.26.0, )",
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "LLamaSharp": "[0.27.0, )",
+          "LLamaSharp.Backend.Cpu": "[0.27.0, )",
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.gladia": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.googlecloudstt": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.groq": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.linear": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.meta": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.13.2, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.microsoftai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.obsidian": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.openai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.openaicompatible": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.openaivectormemory": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.openrouter": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.parakeetctc": {
@@ -688,76 +711,76 @@
         "dependencies": {
           "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
           "SharpCompress": "[0.48.0, )",
-          "TypeWhisper.PluginSDK": "[0.15.2, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.qwen3stt": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.reson8": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.script": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.sherpaonnx": {
         "type": "Project",
         "dependencies": {
           "SharpCompress": "[0.48.0, )",
-          "TypeWhisper.PluginSDK": "[0.14.1, )",
+          "TypeWhisper.PluginSDK": "[0.16.1, )",
           "org.k2fsa.sherpa.onnx": "[1.12.23, )"
         }
       },
       "typewhisper.plugin.smallestai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.soniox": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.speechmatics": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.supertonictts": {
         "type": "Project",
         "dependencies": {
           "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.voxtral": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.webhook": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
       },
       "typewhisper.plugin.whispercpp": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )",
+          "TypeWhisper.PluginSDK": "[0.16.1, )",
           "Whisper.net": "[1.8.1, )",
           "Whisper.net.Runtime": "[1.8.1, )"
         }
@@ -765,11 +788,8 @@
       "typewhisper.plugin.xai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.16.1, )"
         }
-      },
-      "typewhisper.fakeprovidercli": {
-        "type": "Project"
       },
       "typewhisper.pluginsdk": {
         "type": "Project"
