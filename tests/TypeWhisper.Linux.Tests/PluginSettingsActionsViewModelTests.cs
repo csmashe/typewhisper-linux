@@ -191,6 +191,23 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task PluginReplacedWhileSettingsSave_IsNotRun()
+    {
+        var saveGate = new TaskCompletionSource();
+        var plugin = new FakeActionsPlugin { SaveGate = saveGate.Task };
+        var (vm, row) = await CreateExpandedAsync(plugin);
+
+        var run = vm.RunSettingsActionCommand.ExecuteAsync(row.Actions[0]);
+        // The manager changes first; the view model's refresh has not run yet.
+        ReplaceLoadedPlugins(vm, new FakeActionsPlugin());
+        saveGate.SetResult();
+        await run.WaitAsync(s_hangGuard);
+
+        Assert.DoesNotContain("run download", plugin.Calls);
+        Assert.Equal(Loc.Instance["Plugins.ActionCancelled"], row.Status);
+    }
+
+    [Fact]
     public async Task RunAction_IsNotBoundByTheValidationTimeout()
     {
         var plugin = new FakeActionsPlugin { Delay = TimeSpan.FromMilliseconds(200) };

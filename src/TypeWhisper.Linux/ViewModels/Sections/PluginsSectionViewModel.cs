@@ -564,6 +564,15 @@ public partial class PluginsSectionViewModel : ObservableObject
 
             // Saved values are the new baseline, so only later edits count as unsaved.
             row.CaptureSettingsBaseline();
+            // The refresh that would cancel a disabled or replaced plugin is posted; ask the manager now.
+            if (
+                !_pluginManager.IsEnabled(row.Id)
+                || !_pluginManager.AllPlugins.Any(plugin => ReferenceEquals(plugin, loaded))
+            )
+            {
+                await cts.CancelAsync();
+            }
+
             cts.Token.ThrowIfCancellationRequested();
             // No time limit: a model download legitimately takes minutes. The user can cancel.
             var result = await Task.Run(
