@@ -438,7 +438,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         var plugin = new FakeSettingsPlugin("com.test.slow-validate")
         {
             // Validation legitimately runs longer than the short boundary timeout
-            // (e.g. SupertonicTts downloading a model on demand).
+            // (e.g. a provider checking a key against a slow service).
             ValidateDelay = TimeSpan.FromMilliseconds(150),
             ValidationResult = new PluginSettingsValidationResult(true, "Validated OK."),
         };

@@ -418,7 +418,7 @@ public sealed class SpeechFeedbackService : IDisposable
 
     public IManualReadback? StartReadBack(string text, string? language)
     {
-        // A provider's SpeakAsync prefix can synthesise inline (Supertonic does), so
+        // A provider's SpeakAsync prefix can run synchronously for a while, so
         // ownership is claimed here to keep the handle live and the launch goes to the pool.
         var pending = BeginPlayback(
             new TtsSpeakRequest(text, language, TtsPurpose.ManualReadback),

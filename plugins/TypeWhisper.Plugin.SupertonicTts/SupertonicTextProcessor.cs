@@ -49,7 +49,7 @@ internal sealed partial class SupertonicTextProcessor
             new DenseTensor<float>(mask, new[] { processed.Length, 1, maxLength }));
     }
 
-    private static string PreprocessText(string text, string language)
+    internal static string PreprocessText(string text, string language)
     {
         if (!SupportedLanguages.Contains(language))
             throw new ArgumentException($"Unsupported Supertonic language: {language}");
@@ -83,7 +83,7 @@ internal sealed partial class SupertonicTextProcessor
         if (!SentenceTerminatorRegex().IsMatch(text))
             text += ".";
 
-        return $"<{language}>{text}";
+        return $"<{language}>{text}</{language}>";
     }
 
     private static string RemoveEmojiCodePoints(string text)

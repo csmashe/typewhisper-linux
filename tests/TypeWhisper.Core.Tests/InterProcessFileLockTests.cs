@@ -94,6 +94,21 @@ public sealed class InterProcessFileLockTests
     }
 
     [Fact]
+    public async Task Acquire_PropagatesStorageFailures_InsteadOfRetrying()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            using var cts = new CancellationTokenSource(s_coordinationTimeout);
+            var lockPath = Path.Join(dir, "missing", "artifact.lock");
+
+            await Assert.ThrowsAsync<DirectoryNotFoundException>(
+                () => InterProcessFileLock.AcquireAsync(lockPath, cts.Token));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
     public async Task Acquire_IsCancellable_WhileWaiting()
     {
         var dir = NewTempDir();
