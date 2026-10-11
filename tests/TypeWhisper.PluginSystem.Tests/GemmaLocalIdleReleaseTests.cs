@@ -39,6 +39,7 @@ public sealed class GemmaLocalIdleReleaseTests : IDisposable
     private Action? _onRequest;
     private string? _persistedSelection;
     private bool _useSystemClock;
+    private bool _hostLacksIdleSetting;
 
     public GemmaLocalIdleReleaseTests()
     {
@@ -297,6 +298,18 @@ public sealed class GemmaLocalIdleReleaseTests : IDisposable
     }
 
     [Fact]
+    public async Task HostWithoutTheIdleSetting_KeepsTheModelLoaded()
+    {
+        _hostLacksIdleSetting = true;
+        using var plugin = await CreateLoadedAsync();
+
+        await RequestAsync(plugin);
+        _time.Advance(TimeSpan.FromDays(1));
+
+        Assert.Equal(ModelId, plugin.LoadedModelId);
+    }
+
+    [Fact]
     public async Task Deactivate_StopsTheIdleWait()
     {
         using var plugin = await CreateLoadedAsync();
@@ -339,7 +352,8 @@ public sealed class GemmaLocalIdleReleaseTests : IDisposable
         };
         _host.Setup(h => h.PluginDataDirectory).Returns(_root);
         _host.Setup(h => h.PluginAssetDirectory).Returns(_root);
-        _host.Setup(h => h.LocalModelIdleTimeout).Returns(() => _idleTimeout);
+        _host.Setup(h => h.LocalModelIdleTimeout).Returns(() =>
+            _hostLacksIdleSetting ? throw new MissingMethodException("older host SDK") : _idleTimeout);
         _host.Setup(h => h.GetSetting<string>("selectedModel")).Returns(() => _persistedSelection);
         await plugin.ActivateAsync(_host.Object);
         return plugin;

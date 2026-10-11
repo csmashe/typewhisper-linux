@@ -6,6 +6,7 @@
 
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using LLama;
 using LLama.Common;
@@ -139,7 +140,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         };
         _idleRelease = new IdleReleaseTimer(
             time ?? TimeProvider.System,
-            () => _host?.LocalModelIdleTimeout,
+            ReadIdleTimeout,
             TryReleaseIdleModel);
     }
 
@@ -426,7 +427,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         string systemPrompt,
         string userText,
         string model,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation] CancellationToken ct
     )
     {
         if (!_streamResponses)
@@ -450,7 +451,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         string systemPrompt,
         string userText,
         string model,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation] CancellationToken ct
     )
     {
         await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
@@ -1038,6 +1039,26 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             _host?.NotifyCapabilitiesChanged();
         return true;
     }
+
+    // Hosts older than the SDK member resolve the plugin's SDK to their own copy, which lacks it;
+    // the missing member fails when the reading method is compiled, so that method is separate.
+    private TimeSpan? ReadIdleTimeout()
+    {
+        if (_host is not { } host)
+            return null;
+
+        try
+        {
+            return ReadHostIdleTimeout(host);
+        }
+        catch (MissingMethodException)
+        {
+            return null;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static TimeSpan? ReadHostIdleTimeout(IPluginHostServices host) => host.LocalModelIdleTimeout;
 
     // Test seam: stands in for the native load (null = load the GGUF file).
     internal Action<string>? NativeLoadOverride { get; init; }
