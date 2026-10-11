@@ -47,7 +47,7 @@
   "Advanced.AutoUnload1Minute": "1 minuto",
   "Advanced.AutoUnload30Seconds": "30 segundos",
   "Advanced.AutoUnload5Minutes": "5 minutos",
-  "Advanced.AutoUnloadModel": "Descargar el modelo automáticamente",
+  "Advanced.AutoUnloadModel": "Descargar automáticamente los modelos inactivos",
   "Advanced.AutoUnloadNever": "Nunca",
   "Advanced.CaptureProvenance": "Capturar procedencia del prompt del LLM",
   "Advanced.CaptureProvenanceHint": "Guarda el prompt exacto, el proveedor y el contexto inyectado que se enviaron al LLM en cada entrada para poder inspeccionarlos después en el Historial. Requiere guardar el historial.",

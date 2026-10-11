@@ -136,6 +136,12 @@ public sealed class PluginHostServices : IPluginHostServices
     public IPluginProcessSupervisor Processes { get; }
     public IPluginPcmPlaybackService PcmPlayback { get; }
 
+    // Local text models share the speech model's idle setting (0 = never).
+    public TimeSpan? LocalModelIdleTimeout =>
+        _settings?.Current.ModelAutoUnloadSeconds is > 0 and var seconds
+            ? TimeSpan.FromSeconds(seconds)
+            : null;
+
     internal PluginProcessSupervisorScope? ProcessScope =>
         Processes as PluginProcessSupervisorScope;
 

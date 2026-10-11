@@ -47,7 +47,7 @@
   "Advanced.AutoUnload1Minute": "1 минута",
   "Advanced.AutoUnload30Seconds": "30 секунд",
   "Advanced.AutoUnload5Minutes": "5 минут",
-  "Advanced.AutoUnloadModel": "Автовыгрузка модели",
+  "Advanced.AutoUnloadModel": "Автовыгрузка неиспользуемых моделей",
   "Advanced.AutoUnloadNever": "Никогда",
   "Advanced.CaptureProvenance": "Записывать происхождение запроса LLM",
   "Advanced.CaptureProvenanceHint": "Сохраняет точный запрос, поставщика и внедрённый контекст, отправленные в LLM для каждой записи, чтобы вы могли просмотреть их позже в истории. Требуется сохранение истории.",

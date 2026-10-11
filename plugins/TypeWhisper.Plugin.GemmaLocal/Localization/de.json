@@ -5,6 +5,7 @@
   "Settings.StreamResponsesDescription": "Prompt-Aktions-Ausgabe Token für Token anzeigen, während das lokale Modell sie generiert, anstatt auf die vollständige Antwort zu warten.",
   "Settings.SelectModel": "Wählen Sie zuerst ein Modell.",
   "Settings.ModelReady": "Modell geladen und bereit.",
+  "Settings.ModelReadyLoadsOnUse": "Modell bereit. Es ist gerade nicht im Speicher und wird bei der nächsten Verwendung geladen.",
   "Settings.ModelSelectedNotLoaded": "Modell ausgewählt, aber noch nicht geladen.",
   "Manifest.Name": "Gemma 4 (Lokal)",
   "Manifest.Description": "Google Gemma 4 lokal mit llama.cpp auf der CPU ausführen"

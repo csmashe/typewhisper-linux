@@ -238,6 +238,26 @@ public sealed class PluginHostServicesTests : IDisposable
         Assert.StartsWith(Path.Join(_tempDir, "PluginData"), services.PluginAssetDirectory);
     }
 
+    [Theory]
+    [InlineData(0, null)]
+    [InlineData(-5, null)]
+    [InlineData(300, 300)]
+    public void LocalModelIdleTimeout_FollowsTheSpeechModelSetting(int seconds, int? expectedSeconds)
+    {
+        var current = new AppSettings { ModelAutoUnloadSeconds = 60 };
+        var settings = new Mock<ISettingsService>();
+        // ReSharper disable once AccessToModifiedClosure -- the test changes the setting afterwards.
+        settings.Setup(s => s.Current).Returns(() => current);
+        var services = CreateServices(settings: settings.Object);
+        Assert.Equal(TimeSpan.FromSeconds(60), services.LocalModelIdleTimeout);
+
+        current = current with { ModelAutoUnloadSeconds = seconds };
+
+        Assert.Equal(
+            expectedSeconds is { } expected ? TimeSpan.FromSeconds(expected) : null,
+            services.LocalModelIdleTimeout);
+    }
+
     [Fact]
     public async Task SettingsAndSecrets_RoundTripAcrossServiceInstances()
     {
