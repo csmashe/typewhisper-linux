@@ -77,15 +77,15 @@ public sealed class LocalModelDownloadSpaceTests : IDisposable
         Directory.CreateDirectory(modelDir);
         var encoder = Path.Join(modelDir, "encoder.int8.onnx");
         await File.WriteAllBytesAsync(encoder, [1, 2, 3]);
-        // The decoder, joiner and tokens are 12 + 6 + 1 MB; the 652 MB encoder is present.
-        plugin.SpaceProbe = _ => 19 * MiB + Reserve - 1;
+        // The pinned decoder, joiner and tokens; the 652 MB encoder is present.
+        plugin.SpaceProbe = _ => 11_845_275 + 6_355_277 + 93_939 + Reserve - 1;
 
         var ex = await DownloadSpaceAssert.ThrowsInsufficientSpaceAsync(() =>
             plugin.DownloadModelAsync("parakeet-tdt-0.6b", null, CancellationToken.None)
         );
 
         Assert.StartsWith(
-            $"Not enough disk space for the Parakeet TDT 0.6B model: 275.0 MB must be free in {modelDir} ",
+            $"Not enough disk space for the Parakeet TDT 0.6B model: 273.5 MB must be free in {modelDir} ",
             ex.Message
         );
         Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(encoder));

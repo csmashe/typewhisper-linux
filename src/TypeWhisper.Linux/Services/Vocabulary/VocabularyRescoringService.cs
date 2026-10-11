@@ -9,9 +9,6 @@ namespace TypeWhisper.Linux.Services.Vocabulary;
 public sealed class VocabularyRescoringService : IVocabularyRescoringService
 {
     private static readonly TimeSpan s_rescoreTimeout = TimeSpan.FromSeconds(10);
-
-    // Local Parakeet TDT is the only engine that produces token timings.
-    private const string ParakeetModelId = "parakeet-tdt-0.6b";
     private readonly ModelManagerService _models;
     private readonly PluginManager _pluginManager;
     private readonly ISettingsService _settings;
@@ -49,8 +46,9 @@ public sealed class VocabularyRescoringService : IVocabularyRescoringService
             ? null
             : "engine";
 
+    // Local Parakeet TDT models are the only engines that produce token timings.
     private static bool IsParakeet(string? providerId, string? modelId) =>
-        providerId == "sherpa-onnx" && modelId == ParakeetModelId;
+        providerId == "sherpa-onnx" && ParakeetModels.IsParakeetTdt(modelId);
 
     public bool IsEligible(
         IReadOnlyList<VocabularyTokenTiming> tokenTimings,
