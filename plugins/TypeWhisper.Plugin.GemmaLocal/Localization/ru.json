@@ -5,6 +5,7 @@
   "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации локальной моделью, не дожидаясь полного ответа.",
   "Settings.SelectModel": "Сначала выберите модель.",
   "Settings.ModelReady": "Модель загружена и готова.",
+  "Settings.ModelReadyLoadsOnUse": "Модель готова. Сейчас она не в памяти и загрузится при следующем использовании.",
   "Settings.ModelSelectedNotLoaded": "Модель выбрана, но ещё не загружена.",
   "Manifest.Name": "Gemma 4 (локально)",
   "Manifest.Description": "Запуск Google Gemma 4 локально на CPU с llama.cpp"

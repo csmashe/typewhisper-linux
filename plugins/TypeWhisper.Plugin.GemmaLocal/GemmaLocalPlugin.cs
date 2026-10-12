@@ -6,6 +6,7 @@
 
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using LLama;
 using LLama.Common;
@@ -88,6 +89,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private readonly SemaphoreSlim _inferenceLock = new(1, 1);
     private readonly SemaphoreSlim _downloadLock = new(1, 1);
     private readonly Action<string, string?> _modelRoutingGuard;
+    private readonly IdleReleaseTimer _idleRelease;
 
     // Guards SelectedModelId only: _inferenceLock is held across the multi-second native load, so
     // it can't also serialize selection without freezing the settings UI. Never held across await.
@@ -98,6 +100,13 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     private bool _streamResponses = true;
     private CancellationTokenSource? _startupCts;
     private Task? _startupTask;
+
+    // Loads in flight, including the hash check before the lock; an idle release waits for them.
+    private int _pendingLoads;
+
+    // The selected model whose last load failed; unavailable until reselected, so requests don't
+    // keep retrying it. Guarded by _selectionLock.
+    private string? _unloadableModelId;
 
     public string PluginId => "com.typewhisper.gemma-local";
     public string PluginName => "Gemma 4 (Local)";
@@ -116,7 +125,8 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         string? loadedModelId,
         Action<string, string?> modelRoutingGuard,
         IReadOnlyList<GemmaModelDefinition> models,
-        HttpMessageHandler? httpHandler
+        HttpMessageHandler? httpHandler,
+        TimeProvider? time = null
     )
     {
         LoadedModelId = loadedModelId;
@@ -128,12 +138,18 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         {
             Timeout = TimeSpan.FromHours(2),
         };
+        _idleRelease = new IdleReleaseTimer(
+            time ?? TimeProvider.System,
+            ReadIdleTimeout,
+            TryReleaseIdleModel);
     }
 
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        SelectedModelId = host.GetSetting<string>("selectedModel");
+        // Clearing the selection persists an empty string.
+        var persisted = host.GetSetting<string>("selectedModel");
+        SelectedModelId = string.IsNullOrWhiteSpace(persisted) ? null : persisted;
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         host.Log(PluginLogLevel.Info, $"Activated (model={SelectedModelId})");
 
@@ -222,6 +238,15 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         await _inferenceLock.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Under the lock: a request finishing first would otherwise re-arm the timer, and one
+            // queued behind us would load the selection again. ActivateAsync restores it.
+            _idleRelease.Cancel();
+            lock (_selectionLock)
+            {
+                SelectedModelId = null;
+                _unloadableModelId = null;
+            }
+
             UnloadModel();
         }
         finally
@@ -290,9 +315,11 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
                 lock (_selectionLock)
                 {
                     SelectedModelId = null;
+                    _unloadableModelId = null;
                 }
 
                 _host?.SetSetting("selectedModel", string.Empty);
+                _idleRelease.Cancel();
                 UnloadModel();
             }
             finally
@@ -317,7 +344,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         return Task.FromResult<PluginSettingsValidationResult?>(
             LoadedModelId == SelectedModelId
                 ? new PluginSettingsValidationResult(true, Loc.L("Settings.ModelReady"))
-                : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelSelectedNotLoaded"))
+                : ReadyModelId == SelectedModelId
+                    ? new PluginSettingsValidationResult(true, Loc.L("Settings.ModelReadyLoadsOnUse"))
+                    : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelSelectedNotLoaded"))
         );
     }
 
@@ -348,10 +377,33 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     }
 
     public string ProviderName => "Gemma 4 (Local)";
-    public bool IsAvailable => LoadedModelId is not null;
+    public bool IsAvailable => ReadyModelId is not null;
 
     public IReadOnlyList<PluginModelInfo> SupportedModels =>
-        GetSupportedModels(_models, LoadedModelId);
+        GetSupportedModels(_models, ReadyModelId);
+
+    /// <summary>
+    ///     The model a request runs on: the resident one, else the selected download, which loads
+    ///     on its next use.
+    /// </summary>
+    internal string? ReadyModelId
+    {
+        get
+        {
+            if (LoadedModelId is { } loaded)
+                return loaded;
+
+            string? selected;
+            lock (_selectionLock)
+            {
+                selected = SelectedModelId;
+                if (selected == _unloadableModelId)
+                    return null;
+            }
+
+            return !string.IsNullOrWhiteSpace(selected) && IsModelDownloaded(selected) ? selected : null;
+        }
+    }
 
     public Task<string> ProcessAsync(
         string systemPrompt,
@@ -375,7 +427,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         string systemPrompt,
         string userText,
         string model,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation] CancellationToken ct
     )
     {
         if (!_streamResponses)
@@ -393,19 +445,23 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
     ///     Runs one turn on the loaded context: clears its KV memory, prefills the prompt in
     ///     cancellable batches, then samples until an end-of-turn token. Serialized by
     ///     <see cref="_inferenceLock" />, so the single resident context is reused instead of
-    ///     allocating a second KV cache per request.
+    ///     allocating a second KV cache per request. A model released while idle loads first.
     /// </summary>
     private async IAsyncEnumerable<string> GenerateAsync(
         string systemPrompt,
         string userText,
         string model,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
+        [EnumeratorCancellation] CancellationToken ct
     )
     {
         await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _modelRoutingGuard(model, LoadedModelId);
+            var readyModelId = ReadyModelId;
+            _modelRoutingGuard(model, readyModelId);
+
+            if (LoadedModelId is null && readyModelId is not null)
+                await LoadOnDemandLockedAsync(readyModelId, ct).ConfigureAwait(false);
 
             if (_context is not { } context || _weights is not { } weights || Markers is not { } markers)
                 throw new InvalidOperationException(
@@ -481,7 +537,15 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
         finally
         {
-            _inferenceLock.Release();
+            try
+            {
+                if (LoadedModelId is not null)
+                    _idleRelease.Touch();
+            }
+            finally
+            {
+                _inferenceLock.Release();
+            }
         }
     }
 
@@ -602,6 +666,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         lock (_selectionLock)
         {
             SelectedModelId = modelId;
+            _unloadableModelId = null;
         }
 
         _host?.SetSetting("selectedModel", modelId);
@@ -774,89 +839,231 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         return Task.Run(
             async () =>
             {
-                if (!GemmaModelVerification.IsVerified(model, filePath))
-                {
-                    Log(PluginLogLevel.Info, $"Verifying cached {model.DisplayName} model...");
-                    await GemmaModelVerification.VerifyCachedAsync(model, filePath, ct).ConfigureAwait(false);
-                }
-
-                // Serialize with ProcessAsync: unloading + swapping in new weights
-                // must not happen while an inference is reading _context/_weights.
-                // The lock covers the full unload-then-load window so callers can't
-                // observe a torn state (e.g. _weights set but _context still old).
-                await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
-                bool loaded;
+                Interlocked.Increment(ref _pendingLoads);
                 try
                 {
-                    // If the user has switched models OR cleared the selection while we
-                    // were queued behind the lock, abort: a late finish here would
-                    // overwrite the newer state and load a model the user no longer wants.
-                    if (SelectedModelId != modelId)
-                        return;
+                    await VerifyBeforeLoadAsync(model, filePath, ct).ConfigureAwait(false);
 
-                    UnloadModel();
-
-                    var modelParams = new ModelParams(filePath)
-                    {
-                        ContextSize = ContextSize,
-                        GpuLayerCount = 0, // CPU only (Backend.Cpu)
-                        Threads = Math.Max(1, Environment.ProcessorCount / 2),
-                    };
-
-                    // Load into a local first: if CreateContext throws, the
-                    // already-loaded native weights would otherwise be stranded
-                    // on the field with no owner to dispose them.
-                    var newWeights = LLamaWeights.LoadFromFile(modelParams);
-                    LLamaContext? newContext = null;
-                    GemmaVocabularyMarkers markers;
+                    // Serialize with ProcessAsync: unloading + swapping in new weights
+                    // must not happen while an inference is reading _context/_weights.
+                    // The lock covers the full unload-then-load window so callers can't
+                    // observe a torn state (e.g. _weights set but _context still old).
+                    await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
+                    bool loaded;
                     try
                     {
-                        ct.ThrowIfCancellationRequested();
-                        newContext = newWeights.CreateContext(modelParams);
-                        markers = GemmaVocabularyMarkers.Resolve(newWeights, newContext);
+                        // If the user has switched models OR cleared the selection while we
+                        // were queued behind the lock, abort: a late finish here would
+                        // overwrite the newer state and load a model the user no longer wants.
+                        // A request may also have loaded it on demand while we waited.
+                        if (SelectedModelId != modelId || LoadedModelId == modelId)
+                            return;
+
+                        loaded = LoadLocked(model, filePath, ct);
                     }
-                    catch
+                    finally
                     {
-                        newContext?.Dispose();
-                        newWeights.Dispose();
-                        throw;
+                        _inferenceLock.Release();
                     }
 
-                    _weights = newWeights;
-                    _context = newContext;
-                    Markers = markers;
-
-                    // The heavy load runs without the lock blocking SelectModel,
-                    // so the user can switch selections while we're loading. If
-                    // that happened, drop what we just loaded instead of letting
-                    // the late finish silently roll back their newer choice.
-                    lock (_selectionLock)
+                    if (loaded)
                     {
-                        loaded = SelectedModelId == modelId;
-                        if (loaded)
-                            LoadedModelId = modelId;
+                        _host?.NotifyCapabilitiesChanged();
+                        Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
                     }
-
-                    if (!loaded)
-                    {
-                        UnloadModel();
-                        return;
-                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    MarkUnloadable(modelId, ex);
+                    throw;
                 }
                 finally
                 {
-                    _inferenceLock.Release();
-                }
-
-                if (loaded)
-                {
-                    _host?.NotifyCapabilitiesChanged();
-                    Log(PluginLogLevel.Info, $"Model loaded: {model.DisplayName}");
+                    Interlocked.Decrement(ref _pendingLoads);
                 }
             },
             ct
         );
     }
+
+    /// <summary>Loads the ready model for a request; the caller holds <see cref="_inferenceLock" />.</summary>
+    private async Task LoadOnDemandLockedAsync(string modelId, CancellationToken ct)
+    {
+        var model = GetModelDefinition(modelId);
+        var filePath = GetModelFilePath(modelId, model.FileName);
+        Log(PluginLogLevel.Info, $"Loading {model.DisplayName} for this request...");
+        try
+        {
+            // A streaming caller may enumerate on the UI thread, and every await before the
+            // native load can complete synchronously.
+            await Task.Run(
+                async () =>
+                {
+                    await VerifyBeforeLoadAsync(model, filePath, ct).ConfigureAwait(false);
+                    LoadLocked(model, filePath, ct);
+                },
+                ct
+            ).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            MarkUnloadable(modelId, ex);
+            throw;
+        }
+    }
+
+    private async Task VerifyBeforeLoadAsync(GemmaModelDefinition model, string filePath, CancellationToken ct)
+    {
+        if (GemmaModelVerification.IsVerified(model, filePath))
+            return;
+
+        Log(PluginLogLevel.Info, $"Verifying cached {model.DisplayName} model...");
+        await GemmaModelVerification.VerifyCachedAsync(model, filePath, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Replaces the resident model; the caller holds <see cref="_inferenceLock" />. Returns
+    ///     false when the selection moved on during the load, which then discards it.
+    /// </summary>
+    private bool LoadLocked(GemmaModelDefinition model, string filePath, CancellationToken ct)
+    {
+        UnloadModel();
+
+        if (NativeLoadOverride is not null)
+        {
+            NativeLoadOverride(model.Id);
+        }
+        else
+        {
+            var modelParams = new ModelParams(filePath)
+            {
+                ContextSize = ContextSize,
+                GpuLayerCount = 0, // CPU only (Backend.Cpu)
+                Threads = Math.Max(1, Environment.ProcessorCount / 2),
+            };
+
+            // Load into a local first: if CreateContext throws, the
+            // already-loaded native weights would otherwise be stranded
+            // on the field with no owner to dispose them.
+            var newWeights = LLamaWeights.LoadFromFile(modelParams);
+            LLamaContext? newContext = null;
+            GemmaVocabularyMarkers markers;
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                newContext = newWeights.CreateContext(modelParams);
+                markers = GemmaVocabularyMarkers.Resolve(newWeights, newContext);
+            }
+            catch
+            {
+                newContext?.Dispose();
+                newWeights.Dispose();
+                throw;
+            }
+
+            _weights = newWeights;
+            _context = newContext;
+            Markers = markers;
+        }
+
+        // The heavy load runs without the lock blocking SelectModel,
+        // so the user can switch selections while we're loading. If
+        // that happened, drop what we just loaded instead of letting
+        // the late finish silently roll back their newer choice.
+        bool loaded;
+        lock (_selectionLock)
+        {
+            loaded = SelectedModelId == model.Id;
+            if (loaded)
+            {
+                LoadedModelId = model.Id;
+                _unloadableModelId = null;
+            }
+        }
+
+        if (!loaded)
+        {
+            UnloadModel();
+            return false;
+        }
+
+        // Touch under the lock, so an idle release already waiting for it sees this load.
+        _idleRelease.Touch();
+        return true;
+    }
+
+    // A model that cannot load must not keep advertising itself as ready.
+    private void MarkUnloadable(string modelId, Exception ex)
+    {
+        lock (_selectionLock)
+        {
+            if (SelectedModelId != modelId)
+                return;
+
+            _unloadableModelId = modelId;
+        }
+
+        Log(
+            PluginLogLevel.Warning,
+            $"Model '{modelId}' could not be loaded and stays unavailable until it is selected again: {ex.Message}");
+        _host?.NotifyCapabilitiesChanged();
+    }
+
+    /// <summary>
+    ///     Releases the resident model after inactivity; it stays selected and loads again on the
+    ///     next request. Returns false, to be retried, while a load, download or inference runs.
+    /// </summary>
+    private bool TryReleaseIdleModel(Func<bool> stillIdle)
+    {
+        if (Volatile.Read(ref _pendingLoads) > 0 || _downloadLock.CurrentCount == 0 || !_inferenceLock.Wait(0))
+            return false;
+
+        bool readinessChanged;
+        try
+        {
+            if (!stillIdle() || LoadedModelId is not { } modelId)
+                return true;
+
+            // Normally the released model stays ready, but a resident model left over from a
+            // failed switch is not the selection, so releasing it changes what is advertised.
+            UnloadModel();
+            readinessChanged = ReadyModelId != modelId;
+            Log(PluginLogLevel.Info, $"Released idle model '{modelId}'; the next request loads it again.");
+        }
+        finally
+        {
+            _inferenceLock.Release();
+        }
+
+        if (readinessChanged)
+            _host?.NotifyCapabilitiesChanged();
+        return true;
+    }
+
+    // Hosts older than the SDK member resolve the plugin's SDK to their own copy, which lacks it;
+    // the missing member fails when the reading method is compiled, so that method is separate.
+    private TimeSpan? ReadIdleTimeout()
+    {
+        if (_host is not { } host)
+            return null;
+
+        try
+        {
+            return ReadHostIdleTimeout(host);
+        }
+        catch (MissingMethodException)
+        {
+            return null;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static TimeSpan? ReadHostIdleTimeout(IPluginHostServices host) => host.LocalModelIdleTimeout;
+
+    // Test seam: stands in for the native load (null = load the GGUF file).
+    internal Action<string>? NativeLoadOverride { get; init; }
+
+    internal bool IdleReleaseArmed => _idleRelease.IsArmed;
 
     internal void UnloadModel()
     {
@@ -913,6 +1120,7 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         }
 
         startupCts?.Dispose();
+        _idleRelease.Dispose();
 
         // Mirror DeactivateAsync: serialize teardown with any in-flight
         // ProcessAsync so we don't dispose _context/_weights mid-inference.

@@ -47,7 +47,7 @@
   "Advanced.AutoUnload1Minute": "1 Minute",
   "Advanced.AutoUnload30Seconds": "30 Sekunden",
   "Advanced.AutoUnload5Minutes": "5 Minuten",
-  "Advanced.AutoUnloadModel": "Modell automatisch entladen",
+  "Advanced.AutoUnloadModel": "Inaktive Modelle automatisch entladen",
   "Advanced.AutoUnloadNever": "Nie",
   "Advanced.CaptureProvenance": "LLM-Prompt-Herkunft erfassen",
   "Advanced.CaptureProvenanceHint": "Speichert den genauen Prompt, den Anbieter und den eingefügten Kontext, die für jeden Eintrag an das LLM gesendet wurden, damit du sie später im Verlauf einsehen kannst. Erfordert das Speichern des Verlaufs.",

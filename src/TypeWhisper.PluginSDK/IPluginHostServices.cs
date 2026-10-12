@@ -60,6 +60,14 @@ public interface IPluginHostServices
     IPluginPcmPlaybackService PcmPlayback =>
         UnavailablePluginPcmPlaybackService.Instance;
 
+    /// <summary>
+    ///     How long a local model may stay idle before its plugin releases it from memory, or
+    ///     null to keep it loaded. A released model must load again on its next use, so its
+    ///     role stays available. The setting can change, so read it each time.
+    /// </summary>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    TimeSpan? LocalModelIdleTimeout => null;
+
     /// <summary>Stores a secret value using the platform secret store, scoped to the plugin.</summary>
     /// <remarks>
     ///     Throws an <see cref="IOException"/> or similar exception if persistence fails; the

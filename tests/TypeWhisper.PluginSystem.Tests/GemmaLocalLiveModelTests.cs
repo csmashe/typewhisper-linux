@@ -88,6 +88,29 @@ public sealed class GemmaLocalLiveModelTests
     }
 
     [GemmaLiveModelFact]
+    public async Task IdleRelease_FreesTheModelAndTheNextRequestLoadsItAgain()
+    {
+        using var plugin = new GemmaLocalPlugin();
+        await LoadAsync(plugin, idleTimeout: TimeSpan.FromSeconds(1));
+        await plugin.ProcessAsync(CleanupPrompt, "hello world how are you", ModelId, CancellationToken.None);
+
+        var deadline = Stopwatch.StartNew();
+        while (plugin.LoadedModelId is not null && deadline.Elapsed < TimeSpan.FromSeconds(30))
+            await Task.Delay(100);
+        Assert.Null(plugin.LoadedModelId);
+        Assert.True(plugin.IsAvailable);
+
+        var reload = Stopwatch.StartNew();
+        var answer = await plugin.ProcessAsync(
+            CleanupPrompt, "i went to the store yesterday and buyed three apple", ModelId, CancellationToken.None);
+        reload.Stop();
+
+        Assert.Contains("bought", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ModelId, plugin.LoadedModelId);
+        Console.WriteLine($"Reload and answer after idle release: {reload.Elapsed.TotalSeconds:F1} s");
+    }
+
+    [GemmaLiveModelFact]
     public async Task PromptBeyondTheContextWindow_IsRejectedAsTooLarge()
     {
         using var plugin = new GemmaLocalPlugin();
@@ -131,12 +154,13 @@ public sealed class GemmaLocalLiveModelTests
         loaded.Instance.Dispose();
     }
 
-    private static async Task LoadAsync(GemmaLocalPlugin plugin)
+    private static async Task LoadAsync(GemmaLocalPlugin plugin, TimeSpan? idleTimeout = null)
     {
         var assetDir = Environment.GetEnvironmentVariable(GemmaLiveModelFactAttribute.AssetDirVariable)!;
         var host = new Mock<IPluginHostServices>();
         host.Setup(h => h.PluginDataDirectory).Returns(assetDir);
         host.Setup(h => h.PluginAssetDirectory).Returns(assetDir);
+        host.Setup(h => h.LocalModelIdleTimeout).Returns(idleTimeout);
         await plugin.ActivateAsync(host.Object);
         plugin.SelectModel(ModelId);
         await plugin.LoadModelAsync(ModelId, CancellationToken.None);

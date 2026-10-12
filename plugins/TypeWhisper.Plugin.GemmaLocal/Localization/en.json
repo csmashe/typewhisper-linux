@@ -5,6 +5,7 @@
   "Settings.StreamResponsesDescription": "Render prompt-action output token-by-token as the local model generates it, instead of waiting for the full reply.",
   "Settings.SelectModel": "Select a model first.",
   "Settings.ModelReady": "Model loaded and ready.",
+  "Settings.ModelReadyLoadsOnUse": "Model ready. It is not in memory now and loads on its next use.",
   "Settings.ModelSelectedNotLoaded": "Model selected but not loaded yet.",
   "Manifest.Name": "Gemma 4 (Local)",
   "Manifest.Description": "Run Google Gemma 4 locally on the CPU with llama.cpp"
