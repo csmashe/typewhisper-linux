@@ -33,9 +33,10 @@ public sealed class GeminiPlugin
     private const string TranscriptionModeSettingName = "transcriptionMode";
     private const string SmartModeSettingValue = "smart";
     private const string VerbatimModeSettingValue = "verbatim";
-    private const int MaxVocabularyTerms = 100;
-    private const int MaxVocabularyChars = 4_000;
-    private const int MaxVocabularyWordsPerTerm = 8;
+    // Google accepts 1,000 terms but recommends at most 100; the total bounds the request.
+    private static readonly DictionaryTermsBudget s_vocabularyBudget = new(MaxTerms: 100, MaxTotalChars: 4_000);
+    // Only applies to the caller's prompt text: a sentence there is an instruction, not a term.
+    private const int MaxPromptTextWordsPerTerm = 8;
     private const int MaxCatalogPageCount = 100;
     // Gemini models answer with visible text plus hidden reasoning; 8192 leaves room for
     // both at low effort without asking a Flash model for more than it can return.
@@ -83,6 +84,7 @@ public sealed class GeminiPlugin
     };
 
     private readonly HttpClient _httpClient;
+    private readonly Func<GeminiLiveConnectionOptions, CancellationToken, Task<IStreamingSession>> _connectStream;
     private readonly SemaphoreSlim _configurationGate = new(1, 1);
     // SelectModel is a synchronous interface member, so the transcription selection and mode
     // need a plain lock rather than the async configuration gate a catalog refresh holds.
@@ -101,9 +103,19 @@ public sealed class GeminiPlugin
     {
     }
 
-    internal GeminiPlugin(HttpClient httpClient)
+    internal GeminiPlugin(
+        HttpClient httpClient,
+        Func<GeminiLiveConnectionOptions, CancellationToken, Task<IStreamingSession>>? connectStream = null)
     {
         _httpClient = httpClient;
+        _connectStream = connectStream
+            ?? (async (options, ct) => await GeminiStreamingSession.ConnectAsync(
+                options.ApiKey,
+                options.LiveModelId,
+                options.LanguageHints,
+                options.CustomVocabulary,
+                options.Mode,
+                ct));
     }
 
     public string PluginId => "com.typewhisper.gemini";
@@ -180,6 +192,9 @@ public sealed class GeminiPlugin
 
     // Without this the host drops every advisory hint and never calls the hint-aware overloads.
     public bool SupportsLanguageHints => true;
+
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_vocabularyBudget;
 
     public bool SupportsStreaming =>
         IsConfigured && SelectedTranscriptionModel?.LiveModelId is not null;
@@ -263,8 +278,14 @@ public sealed class GeminiPlugin
         StartStreamingWithLanguageHintsAsync(
             NormalizeLanguage(language) is { } normalized ? [normalized] : [], ct);
 
-    public async Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
         IReadOnlyList<string> languageHints,
+        CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAndPromptAsync(languageHints, null, ct);
+
+    public async Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
         CancellationToken ct)
     {
         if (!IsConfigured)
@@ -280,13 +301,13 @@ public sealed class GeminiPlugin
                 "The selected Gemini transcription model has no live sibling.");
         }
 
-        return await GeminiStreamingSession.ConnectAsync(
-            ApiKey!,
-            liveModelId,
-            NormalizeLanguageHints(languageHints),
-            // Live sessions carry no prompt, so there are no dictionary terms to pass on.
-            customVocabulary: [],
-            TranscriptionMode,
+        return await _connectStream(
+            new GeminiLiveConnectionOptions(
+                ApiKey!,
+                liveModelId,
+                NormalizeLanguageHints(languageHints),
+                ExtractVocabulary(prompt),
+                TranscriptionMode),
             ct);
     }
 
@@ -1216,38 +1237,18 @@ public sealed class GeminiPlugin
         return normalized;
     }
 
-    // Only the HTTP API sends a prompt; dictation passes none, so this is usually empty.
+    // Dictionary terms stay whole. An API caller's prompt text has no Gemini field of its own,
+    // so its comma-separated items are sent as terms ahead of the dictionary, as before.
     internal static IReadOnlyList<string> ExtractVocabulary(string? prompt)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
-            return [];
-
-        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        List<string> terms = [];
-        var totalChars = 0;
-        foreach (var rawTerm in prompt.Split(
-            [',', '\r', '\n'],
-            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (!seen.Add(rawTerm) || CountWords(rawTerm) > MaxVocabularyWordsPerTerm)
-                continue;
-
-            // The separators count toward the provider's total-length budget.
-            var nextTotal = totalChars + (terms.Count == 0 ? 0 : 2) + rawTerm.Length;
-            if (nextTotal > MaxVocabularyChars)
-                break;
-
-            terms.Add(rawTerm);
-            totalChars = nextTotal;
-            if (terms.Count == MaxVocabularyTerms)
-                break;
-        }
-
-        return terms;
+        var parsed = PluginTranscriptionPrompt.Parse(prompt);
+        var promptTerms = parsed.Text?.Split(
+                [',', '\r', '\n'],
+                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(term => CountWords(term) <= MaxPromptTextWordsPerTerm) ?? [];
+        return PluginDictionaryTerms.Clip(promptTerms.Concat(parsed.DictionaryTerms), s_vocabularyBudget);
     }
 
-    // The HTTP API merges the caller's free-form prompt into the dictionary terms, and a
-    // sentence is a biasing instruction, not a vocabulary entry.
     private static int CountWords(string term) =>
         term.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
@@ -1518,6 +1519,13 @@ internal enum GeminiTranscriptionMode
     Smart,
     Verbatim,
 }
+
+internal sealed record GeminiLiveConnectionOptions(
+    string ApiKey,
+    string LiveModelId,
+    IReadOnlyList<string> LanguageHints,
+    IReadOnlyList<string> CustomVocabulary,
+    GeminiTranscriptionMode Mode);
 
 internal sealed record GeminiFetchedModel(string Id, string? DisplayName);
 
