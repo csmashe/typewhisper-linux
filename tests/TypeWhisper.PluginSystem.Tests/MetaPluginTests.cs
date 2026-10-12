@@ -220,7 +220,7 @@ public sealed class MetaPluginTests
         Assert.Equal("Meta", sut.PluginName);
         Assert.Equal("Meta", sut.ProviderDisplayName);
         Assert.Equal("Meta", sut.ProviderName);
-        Assert.Equal("1.0.0", sut.PluginVersion);
+        Assert.Equal("1.1.0", sut.PluginVersion);
         Assert.True(sut.SupportsStreaming);
     }
 
@@ -397,7 +397,7 @@ public sealed class MetaPluginTests
 
         Assert.Equal("com.typewhisper.meta", root.GetProperty("id").GetString());
         Assert.Equal("Meta", root.GetProperty("name").GetString());
-        Assert.Equal("1.0.0", root.GetProperty("version").GetString());
+        Assert.Equal("1.1.0", root.GetProperty("version").GetString());
         Assert.Equal("TypeWhisper.Plugin.Meta.MetaPlugin", root.GetProperty("pluginClass").GetString());
         Assert.Contains(
             "transcription",

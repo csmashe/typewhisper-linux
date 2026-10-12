@@ -10,9 +10,9 @@ If the TypeWhisper project releases an official Linux version, or if this port i
 
 Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
 
-## New in 0.16.1
+## New in 0.17.0
 
-This maintenance release **replaces the retired default Claude model** and lets **Validate** load the models your Claude account offers, **refuses translate tasks on Whisper models that cannot translate** (English-only and Large V3 Turbo) instead of returning untranslated text, makes **snippets match whole words only** without re-expanding their own output, cleans up **punctuation after a spoken "new line"**, and **keeps transcripts from OpenAI-compatible servers** that send malformed optional metadata. See the [0.16.1 release notes](docs/releases/v0.16.1.md) for the full changes and upgrade notes, and the [0.16.0 release notes](docs/releases/v0.16.0.md) for acoustic dictionary boosting and the recorder, History and streaming-language additions.
+This release adds **Parakeet Ultra 0.6B**, a more accurate local Parakeet model, **makes Supertonic speech work** with new **Download / Remove model files** buttons, **fixes the Gemma 4 (Local) prompt format**, keeps **words and token timings in long Sherpa recordings**, and lets **Auto-unload idle models** release the Gemma model too while it stays ready for the next request. Local model downloads now **check free disk space first, resume after an interruption and verify every file**, and the **Meta** plugin receives whole dictionary terms during dictation. See the [0.17.0 release notes](docs/releases/v0.17.0.md) for the full changes and upgrade notes, and the [0.16.1 release notes](docs/releases/v0.16.1.md) for the previous maintenance release.
 
 ## Documentation
 
