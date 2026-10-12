@@ -51,7 +51,6 @@ public sealed class OpenAiPlugin
     private const string TemperatureModeCustom = "custom";
 
     private static readonly DictionaryTermsBudget s_dictionaryBudget = new(MaxTotalChars: 600);
-    private static readonly char[] s_invalidKeywordChars = ['<', '>', '\r', '\n'];
 
     private static readonly JsonSerializerOptions s_jsonReadOptions =
         new() { PropertyNameCaseInsensitive = true };
@@ -367,6 +366,7 @@ public sealed class OpenAiPlugin
 
     // GPT Transcribe and GPT Live Transcribe take terms as keywords; older models read only the prompt.
     // OpenAI rejects keywords containing '<', '>' or a line break, so those terms go into the prompt.
+    // Control characters and Unicode line/paragraph separators are treated as line breaks.
     private static (string? Prompt, IReadOnlyList<string> Keywords) SplitPrompt(
         TranscriptionModelEntry entry,
         string? prompt)
@@ -378,13 +378,18 @@ public sealed class OpenAiPlugin
         var keywords = new List<string>();
         var promptTerms = new List<string>();
         foreach (var term in parsed.DictionaryTerms)
-            (term.IndexOfAny(s_invalidKeywordChars) < 0 ? keywords : promptTerms).Add(term);
+            (term.Any(IsInvalidKeywordChar) ? promptTerms : keywords).Add(term);
 
         var promptText = promptTerms.Count == 0 ? parsed.Text
             : parsed.Text is null ? string.Join(", ", promptTerms)
             : parsed.Text + Environment.NewLine + string.Join(", ", promptTerms);
         return (promptText, keywords);
     }
+
+    private static bool IsInvalidKeywordChar(char c) =>
+        c is '<' or '>'
+        || char.IsControl(c)
+        || char.GetUnicodeCategory(c) is UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
 
     // ILlmProviderPlugin
 

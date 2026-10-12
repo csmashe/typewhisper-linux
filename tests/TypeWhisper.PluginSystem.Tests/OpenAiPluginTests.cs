@@ -1006,6 +1006,31 @@ public partial class OpenAiPluginTests
     }
 
     [Theory]
+    [InlineData("tab\tterm")]
+    [InlineData("line\u2028separator")]
+    [InlineData("paragraph\u2029separator")]
+    [InlineData("nul\0term")]
+    public async Task GPTTranscribe_ControlOrSeparatorTerm_GoesIntoPrompt(string term)
+    {
+        var fields = new List<(string Name, string Value)>();
+        using var client = new HttpClient(new CapturingHandler(async (request, _) =>
+        {
+            foreach (var part in Assert.IsType<MultipartFormDataContent>(request.Content))
+                fields.Add((part.Headers.ContentDisposition!.Name!.Trim('"'), await part.ReadAsStringAsync()));
+            return JsonResponse("""{"text":"hello"}""");
+        }));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        sut.SelectModel("gpt-transcribe");
+
+        await sut.TranscribeWithLanguageHintsAsync(
+            [0], ["en"], false, PluginTranscriptionPrompt.Encode(null, [term, "AC-42"]), CancellationToken.None);
+
+        Assert.Equal("AC-42", fields.Single(field => field.Name == "keywords[]").Value);
+        Assert.Equal(term, fields.Single(field => field.Name == "prompt").Value);
+    }
+
+    [Theory]
     [InlineData("whisper-1")]
     [InlineData("gpt-4o-transcribe")]
     [InlineData("gpt-4o-mini-transcribe")]
