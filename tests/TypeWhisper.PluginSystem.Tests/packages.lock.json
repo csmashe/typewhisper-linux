@@ -495,6 +495,11 @@
         "resolved": "1.8.1",
         "contentHash": "DW2JhlBbt0W5W+cIP8Uevt5+7XnjPIsG9b5FyAdeB9taNk9w1WFw9W7TYSNaqgyEbEHHPNOXA6hl+yrmBwOfsQ=="
       },
+      "Whisper.net.Runtime.Vulkan": {
+        "type": "Transitive",
+        "resolved": "1.8.1",
+        "contentHash": "hZmqxZZ6foU3WVmrewuFguIrodMkfb/7uyitBBPrZipo55jK16t/xxKUsWMLETYgEgGVwkZ33YNu8i3+4Kbjpg=="
+      },
       "xunit.abstractions": {
         "type": "Transitive",
         "resolved": "2.0.3",
@@ -782,7 +787,8 @@
         "dependencies": {
           "TypeWhisper.PluginSDK": "[0.16.1, )",
           "Whisper.net": "[1.8.1, )",
-          "Whisper.net.Runtime": "[1.8.1, )"
+          "Whisper.net.Runtime": "[1.8.1, )",
+          "Whisper.net.Runtime.Vulkan": "[1.8.1, )"
         }
       },
       "typewhisper.plugin.xai": {

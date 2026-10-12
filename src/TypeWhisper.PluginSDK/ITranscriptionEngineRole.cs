@@ -167,7 +167,7 @@ public interface ITranscriptionEngineRole
 
     /// <summary>
     ///     Sets the resolved acceleration preference. The host resolves <c>Auto</c>
-    ///     before calling, so plugins only ever see <c>Cpu</c> or <c>NvidiaCuda</c>.
+    ///     before calling, so plugins only ever see a concrete CPU or GPU preference.
     /// </summary>
     void SetAccelerationPreference(TranscriptionAccelerationPreference preference) { }
 

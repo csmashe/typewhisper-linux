@@ -13,6 +13,7 @@ using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -477,6 +478,10 @@ public partial class DictationSectionViewModel : ObservableObject
                 : _commands.HasCudaRuntimeLibraries
         );
 
+    public bool CanUseVulkan => SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+        TranscriptionAccelerationBackend.Vulkan
+    ) == true;
+
     // The engine that owns the model selected in the Dictation UI — the one a CUDA download
     // must target. Distinct from ActiveTranscriptionPlugin (the loaded engine), which is null
     // before any model loads (e.g. at startup) and can lag a freshly selected model.
@@ -535,6 +540,7 @@ public partial class DictationSectionViewModel : ObservableObject
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
+                    AppSettings.LocalModelAccelerationVulkan => "Vulkan selected",
                     _ => Loc.Instance["Dictation.AccelAutoStatus"],
                 };
             }
@@ -1123,6 +1129,7 @@ public partial class DictationSectionViewModel : ObservableObject
             new(AppSettings.LocalModelAccelerationAuto, Loc.Instance["Dictation.AccelerationAuto"]),
             new(AppSettings.LocalModelAccelerationCpu, Loc.Instance["Dictation.AccelerationCpu"]),
             new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"]),
+            new(AppSettings.LocalModelAccelerationVulkan, Loc.Instance["Dictation.AccelerationVulkan"]),
         ];
     }
 
@@ -1490,6 +1497,18 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
+
+        if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
+        {
+            const string message = "Vulkan acceleration is available only for local models that support Vulkan.";
+            Dispatcher.UIThread.Post(() =>
+            {
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
+                OnPropertyChanged(nameof(SelectedAccelerationOption));
+                StatusText = message;
+            });
+            return;
+        }
 
         // Guard: CUDA can't be selected when unavailable; Auto always works and resolves to CPU.
         if (normalized == AppSettings.LocalModelAccelerationNvidiaCuda && !CanUseCuda)

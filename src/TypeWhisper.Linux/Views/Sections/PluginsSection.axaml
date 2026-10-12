@@ -329,6 +329,14 @@
                                                         HorizontalAlignment="Right"
                                                         Spacing="8"
                                                         Margin="0,0,0,14">
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException -->
+                                                <Button Content="⟳"
+                                                        ToolTip.Tip="{loc:Str Common.Refresh}"
+                                                        Width="32"
+                                                        Command="{Binding Owner.RefreshModelCatalogCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        IsEnabled="{Binding CanRefreshModels}"
+                                                        IsVisible="{Binding HasModelCatalogProvider}" />
                                                 <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                 <Button Content="{loc:Str Common.Save}"
                                                         Command="{Binding Owner.SaveSettingsCommand}"
