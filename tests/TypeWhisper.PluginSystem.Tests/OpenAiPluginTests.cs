@@ -1010,7 +1010,8 @@ public partial class OpenAiPluginTests
     [InlineData("line\u2028separator")]
     [InlineData("paragraph\u2029separator")]
     [InlineData("nul\0term")]
-    public async Task GPTTranscribe_ControlOrSeparatorTerm_GoesIntoPrompt(string term)
+    [InlineData("a>b")]
+    public async Task GPTTranscribe_InvalidKeywordTerm_GoesIntoPrompt(string term)
     {
         var fields = new List<(string Name, string Value)>();
         using var client = new HttpClient(new CapturingHandler(async (request, _) =>
