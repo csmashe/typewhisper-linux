@@ -746,6 +746,8 @@
   "Prompts.CommandModeToggle": "Enable spoken commands",
   "Prompts.CommandModel": "Command model",
   "Prompts.CommandModelHelp": "Model used for spoken commands. Leave on \"Use default provider\" to follow your default LLM.",
+  "Prompts.CleanupProvider": "LLM for cleanup",
+  "Prompts.CleanupProviderHelp": "Medium and High cleanup send the locally transcribed text to this provider and model. None and Light cleanup stay local. Choose a specific model to keep cleanup consistent.",
   "Prompts.EditPrompt": "Edit Prompt",
   "Prompts.EmptyState": "No prompts yet.",
   "Prompts.Hint": "AI prompts for the Prompt Palette. Select text + hotkey = AI processes the text.",
