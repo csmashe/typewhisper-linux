@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using SherpaOnnx;
 using TypeWhisper.Plugins.Shared.Cuda;
@@ -14,10 +15,17 @@ public sealed class SherpaOnnxPlugin
     : ITranscriptionEnginePlugin,
         ITranscriptionLanguageSelectionCapabilities
 {
+    // csukuangfj's sherpa-onnx exports, pinned to a commit (main on 2026-10-10) and each file to its
+    // size and SHA-256 (the LFS oids; tokens.txt, not in LFS, hashed from a download).
     private const string ParakeetRepo =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78";
     private const string CanaryRepo =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/main";
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/9077164e0d3dd1d5353743e89ceaa1d3a770838c";
+
+    // Upstream TypeWhisper's export of moondream/parakeet-ultra (retrained parakeet-tdt-0.6b-v3)
+    // with the sherpa-onnx v3 script, mirrored unchanged; it shares the TDT tokenizer.
+    private const string ParakeetUltraRepo =
+        "https://github.com/csmashe/typewhisper-linux/releases/download/model-parakeet-ultra-int8-v1";
 
     private static readonly IReadOnlyList<string> s_canarySupportedLanguages =
     [
@@ -50,8 +58,8 @@ public sealed class SherpaOnnxPlugin
     private static readonly IReadOnlyList<ModelDefinition> s_models =
     [
         new(
-            "parakeet-tdt-0.6b",
-            "Parakeet TDT 0.6B",
+            "parakeet-ultra-0.6b",
+            "Parakeet Ultra 0.6B",
             "~670 MB",
             670,
             25,
@@ -59,10 +67,66 @@ public sealed class SherpaOnnxPlugin
             false,
             true,
             [
-                new ModelFileDefinition("encoder.int8.onnx", $"{ParakeetRepo}/encoder.int8.onnx", 652),
-                new ModelFileDefinition("decoder.int8.onnx", $"{ParakeetRepo}/decoder.int8.onnx", 12),
-                new ModelFileDefinition("joiner.int8.onnx", $"{ParakeetRepo}/joiner.int8.onnx", 6),
-                new ModelFileDefinition("tokens.txt", $"{ParakeetRepo}/tokens.txt", 1),
+                new ModelFileDefinition(
+                    "encoder.int8.onnx",
+                    $"{ParakeetUltraRepo}/encoder.int8.onnx",
+                    652_282_332,
+                    "b42621d3c0f40fe0236a629fd6c3fad13575e5f9d22ed1a5addba14091931211"
+                ),
+                new ModelFileDefinition(
+                    "decoder.int8.onnx",
+                    $"{ParakeetUltraRepo}/decoder.int8.onnx",
+                    11_845_274,
+                    "1fab98fe6c12aded87d2da66272cc9e148d0a0044ce3850a12fe56302ec4a922"
+                ),
+                new ModelFileDefinition(
+                    "joiner.int8.onnx",
+                    $"{ParakeetUltraRepo}/joiner.int8.onnx",
+                    6_355_277,
+                    "8a71aaccfdba3d451775507a889afd2257d2e754463fd81095a8c8f290f924c2"
+                ),
+                new ModelFileDefinition(
+                    "tokens.txt",
+                    $"{ParakeetUltraRepo}/tokens.txt",
+                    93_939,
+                    "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"
+                ),
+            ]
+        ),
+        new(
+            "parakeet-tdt-0.6b",
+            "Parakeet TDT 0.6B",
+            "~670 MB",
+            670,
+            25,
+            false,
+            false,
+            true,
+            [
+                new ModelFileDefinition(
+                    "encoder.int8.onnx",
+                    $"{ParakeetRepo}/encoder.int8.onnx",
+                    652_184_281,
+                    "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247"
+                ),
+                new ModelFileDefinition(
+                    "decoder.int8.onnx",
+                    $"{ParakeetRepo}/decoder.int8.onnx",
+                    11_845_275,
+                    "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e"
+                ),
+                new ModelFileDefinition(
+                    "joiner.int8.onnx",
+                    $"{ParakeetRepo}/joiner.int8.onnx",
+                    6_355_277,
+                    "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3"
+                ),
+                new ModelFileDefinition(
+                    "tokens.txt",
+                    $"{ParakeetRepo}/tokens.txt",
+                    93_939,
+                    "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"
+                ),
             ]
         ),
         new(
@@ -75,9 +139,24 @@ public sealed class SherpaOnnxPlugin
             true,
             false,
             [
-                new ModelFileDefinition("encoder.int8.onnx", $"{CanaryRepo}/encoder.int8.onnx", 127),
-                new ModelFileDefinition("decoder.int8.onnx", $"{CanaryRepo}/decoder.int8.onnx", 71),
-                new ModelFileDefinition("tokens.txt", $"{CanaryRepo}/tokens.txt", 1),
+                new ModelFileDefinition(
+                    "encoder.int8.onnx",
+                    $"{CanaryRepo}/encoder.int8.onnx",
+                    132_678_643,
+                    "7a75b4e2a5857a6dcc0819503bbe3fad66943db4a3ccf21d3f27c633667d303f"
+                ),
+                new ModelFileDefinition(
+                    "decoder.int8.onnx",
+                    $"{CanaryRepo}/decoder.int8.onnx",
+                    74_437_848,
+                    "e41a2ab9c0c2fe81a1e8ade5a45fb02a74bc4db7d1f91b89a54a25e2cf79cba2"
+                ),
+                new ModelFileDefinition(
+                    "tokens.txt",
+                    $"{CanaryRepo}/tokens.txt",
+                    53_555,
+                    "2dae6fc7815f9640645e0c765522b278ee0cef49b482d91f6913e334628d3e77"
+                ),
             ]
         ),
     ];
@@ -90,11 +169,12 @@ public sealed class SherpaOnnxPlugin
     // large fetches mid-stream; use a generous 2 h ceiling and rely on the per-call token
     // for cancellation. ConnectTimeout bounds a socket that never establishes, and
     // ResilientDownloader's idle watchdog bounds a half-open socket mid-body to seconds.
-    private readonly HttpClient _httpClient =
+    private HttpClient _httpClient =
         new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
         {
             Timeout = TimeSpan.FromHours(2),
         };
+    private IReadOnlyList<ModelDefinition> _models = s_models;
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
     private Func<string, string, OfflineRecognizer> _parakeetRecognizerFactory =
@@ -315,68 +395,125 @@ public sealed class SherpaOnnxPlugin
         var dir = GetModelDirectory(modelId);
         Directory.CreateDirectory(dir);
 
-        var totalBytes = model.Files.Sum(f => (long)f.EstimatedSizeMB * 1024 * 1024);
+        // Another app or CLI process would append to the same resumable partials.
+        await using var lease = await InterProcessFileLock
+            .AcquireAsync(Path.Join(Path.GetDirectoryName(dir), $".{modelId}.download.lock"), ct)
+            .ConfigureAwait(false);
+        RemoveAbandonedUniquePartials(model, dir);
+
+        var totalBytes = model.Files.Sum(f => f.SizeBytes);
         long cumulativeBytesRead = 0;
         // Single throttle across all files (MinValue so the first report always fires).
         var lastReport = DateTime.MinValue;
 
-        // Estimate-based check before any request; each file re-checks its exact length.
+        // Checked before any request; each file re-checks its declared remainder.
         var spaceDescription = $"the {model.DisplayName} model";
         var missingBytes = model.Files
             .Where(f => !File.Exists(Path.Join(dir, f.FileName)))
-            .Sum(f => (long)f.EstimatedSizeMB * 1024 * 1024);
+            .Sum(f => RemainingBytes(f, Path.Join(dir, f.FileName)));
         DownloadSpace.EnsureAvailable(dir, missingBytes, spaceDescription, SpaceProbe);
 
-        foreach (var file in model.Files)
+        try
         {
-            var filePath = Path.Join(dir, file.FileName);
-            if (File.Exists(filePath))
+            foreach (var file in model.Files)
             {
-                // Credit an already-downloaded file's size so a resumed multi-file
-                // download starts the bar where it really is instead of at 0.
-                cumulativeBytesRead += new FileInfo(filePath).Length;
-                continue;
-            }
-
-            missingBytes -= (long)file.EstimatedSizeMB * 1024 * 1024;
-
-            // Model files have no published checksum, so resume can't be made safe.
-            // allowResume:false still gives the idle/connect watchdog (a stall aborts and
-            // restarts clean instead of hanging) but each file re-downloads from zero.
-            long fileOnDisk = 0;
-            await ResilientDownloader.DownloadToFileAsync(
-                _httpClient,
-                file.DownloadUrl,
-                filePath,
-                approxTotalBytes: null,
-                idleTimeout: TimeSpan.FromSeconds(60),
-                allowResume: false,
-                onBytesOnDisk: onDisk =>
+                var filePath = Path.Join(dir, file.FileName);
+                if (File.Exists(filePath))
                 {
-                    fileOnDisk = onDisk;
-                    var now = DateTime.UtcNow;
-                    // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-                    if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
-                    {
-                        // Clamp: real on-disk sizes sum against an estimated total, so a
-                        // slight overshoot past 1.0 is possible.
-                        progress?.Report(
-                            Math.Min(1.0, (double)(cumulativeBytesRead + onDisk) / totalBytes)
-                        );
-                        lastReport = now;
-                    }
-                },
-                verifyComplete: path =>
-                    VerifyModelArtifact(path, file.FileName, model.RequiresBlankToken),
-                ct,
-                // Leave room for the files after this one as well.
-                new DownloadSpaceRequirement(spaceDescription, missingBytes, SpaceProbe)
-            );
+                    // Kept whichever version downloaded it; the load still checks its structure.
+                    cumulativeBytesRead += new FileInfo(filePath).Length;
+                    continue;
+                }
 
-            cumulativeBytesRead += fileOnDisk;
+                missingBytes -= RemainingBytes(file, filePath);
+
+                long fileOnDisk = 0;
+                await ResilientDownloader.DownloadToFileAsync(
+                    _httpClient,
+                    file.DownloadUrl,
+                    filePath,
+                    approxTotalBytes: file.SizeBytes,
+                    idleTimeout: TimeSpan.FromSeconds(60),
+                    allowResume: true,
+                    onBytesOnDisk: onDisk =>
+                    {
+                        fileOnDisk = onDisk;
+                        var now = DateTime.UtcNow;
+                        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+                        if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                        {
+                            progress?.Report(
+                                Math.Min(1.0, (double)(cumulativeBytesRead + onDisk) / totalBytes)
+                            );
+                            lastReport = now;
+                        }
+                    },
+                    verifyComplete: path =>
+                    {
+                        VerifyPinnedFile(path, file);
+                        VerifyModelArtifact(path, file.FileName, model.RequiresBlankToken);
+                    },
+                    ct,
+                    // Leave room for the files after this one as well.
+                    new DownloadSpaceRequirement(spaceDescription, missingBytes, SpaceProbe)
+                );
+
+                cumulativeBytesRead += fileOnDisk;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // A dropped connection keeps its partials to resume; a user who cancels gets the
+            // space back, since the app offers no delete until a model is complete.
+            foreach (var file in model.Files)
+                TryDeleteFile(Path.Join(dir, file.FileName) + ".partial");
+            throw;
         }
 
         progress?.Report(1.0);
+    }
+
+    private static long RemainingBytes(ModelFileDefinition file, string filePath)
+    {
+        var partial = new FileInfo(filePath + ".partial");
+        return Math.Max(0, file.SizeBytes - (partial.Exists ? partial.Length : 0));
+    }
+
+    // Before downloads were pinned they could not resume, so each attempt staged into
+    // <file>.<guid>.partial; an interrupted one stays behind forever.
+    private static void RemoveAbandonedUniquePartials(ModelDefinition model, string dir)
+    {
+        foreach (var file in model.Files)
+        foreach (var path in Directory.EnumerateFiles(dir, file.FileName + ".*.partial"))
+        {
+            var guid = Path.GetFileName(path)[(file.FileName.Length + 1)..^".partial".Length];
+            if (Guid.TryParseExact(guid, "N", out _))
+                TryDeleteFile(path);
+        }
+    }
+
+    // A file that cannot be deleted now is retried on the next download.
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static void VerifyPinnedFile(string path, ModelFileDefinition file)
+    {
+        using var stream = File.OpenRead(path);
+        if (stream.Length != file.SizeBytes)
+            throw new InvalidDataException(
+                $"The downloaded {file.FileName} is {stream.Length} bytes; expected {file.SizeBytes}."
+            );
+        var actual = Convert.ToHexStringLower(SHA256.HashData(stream));
+        if (!string.Equals(actual, file.Sha256, StringComparison.Ordinal))
+            throw new InvalidDataException(
+                $"The downloaded {file.FileName} does not match its pinned SHA-256."
+            );
     }
 
     public Task LoadModelAsync(string modelId, CancellationToken ct) =>
@@ -834,7 +971,21 @@ public sealed class SherpaOnnxPlugin
     // Test seam: run the structural preflight without the native loader, so per-model
     // token/ONNX acceptance (e.g. Canary carries no blank token) is testable in isolation.
     internal static void RunArtifactPreflightForTests(string modelId, string modelDir) =>
-        VerifyModelArtifacts(GetModelDefinition(modelId), modelDir);
+        VerifyModelArtifacts(s_models.First(m => m.Id == modelId), modelDir);
+
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- a test-only view; the catalog stays a private field beside the other static data.
+    internal static IReadOnlyList<ModelDefinition> DefaultModelsForTests => s_models;
+
+    // Test seam: download a catalog whose hashes the test controls from a fake server.
+    internal void SetDownloadSourceForTests(
+        HttpMessageHandler handler,
+        IReadOnlyList<ModelDefinition> models
+    )
+    {
+        _httpClient.Dispose();
+        _httpClient = new HttpClient(handler);
+        _models = models;
+    }
 
     internal string ComputeBackendForTests
     {
@@ -862,8 +1013,8 @@ public sealed class SherpaOnnxPlugin
             );
     }
 
-    private static ModelDefinition GetModelDefinition(string modelId) =>
-        s_models.FirstOrDefault(m => m.Id == modelId)
+    private ModelDefinition GetModelDefinition(string modelId) =>
+        _models.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private void UnloadRecognizer()
@@ -900,7 +1051,7 @@ public sealed class SherpaOnnxPlugin
     //   tokens.txt — non-empty, strict UTF-8 token/id rows with non-negative unique IDs;
     //                transducer models (requireBlankToken) must also carry sherpa's blank
     //                symbol, which attention encoder-decoder models (Canary) do not use.
-    // These are structural gates, not authenticity checks; upstream publishes no hashes.
+    // These are structural gates for files on disk; new downloads are also pinned by hash.
     private static void VerifyModelArtifact(string path, string fileName, bool requireBlankToken)
     {
         if (fileName.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
@@ -1356,7 +1507,7 @@ public sealed class SherpaOnnxPlugin
         if (!Directory.Exists(oldModelsDir))
             return;
 
-        foreach (var model in s_models)
+        foreach (var model in _models)
         {
             var oldDir = Path.Join(oldModelsDir, model.Id);
             if (!Directory.Exists(oldDir))
@@ -1405,7 +1556,7 @@ public sealed class SherpaOnnxPlugin
         }
     }
 
-    private sealed record ModelDefinition(
+    internal sealed record ModelDefinition(
         string Id,
         string DisplayName,
         string SizeDescription,
@@ -1421,10 +1572,11 @@ public sealed class SherpaOnnxPlugin
         IReadOnlyList<ModelFileDefinition> Files
     );
 
-    private sealed record ModelFileDefinition(
+    // A file is published only when it has exactly this size and SHA-256 (lowercase hex).
+    internal sealed record ModelFileDefinition(
         string FileName,
         string DownloadUrl,
-        // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
-        int EstimatedSizeMB
+        long SizeBytes,
+        string Sha256
     );
 }

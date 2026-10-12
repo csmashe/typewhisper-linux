@@ -165,6 +165,21 @@ public sealed class VocabularyRescoringServiceTests : IDisposable
         Assert.Equal(1, _plugin.CallCount);
     }
 
+    // Ultra is a retrained Parakeet TDT 0.6B v3 with the same tokenizer and token timings.
+    [Fact]
+    public async Task ParakeetUltra_IsEligibleAndUnblocksTheActiveEngine()
+    {
+        _engine.SetupGet(e => e.SelectedModelId).Returns("parakeet-ultra-0.6b");
+        Assert.Null(_service.ActiveEngineBlocker);
+
+        var input = Input() with { EngineModelId = "parakeet-ultra-0.6b" };
+        Assert.True(IsEligible(_service, input));
+        var result = await _service.RefineAsync(input, CancellationToken.None);
+
+        Assert.Equal(new VocabularyRescoringOutcome("TypeWhisper", true, true, null), result);
+        Assert.Equal(1, _plugin.CallCount);
+    }
+
     [Fact]
     public async Task InvalidWav_IsNotEligible()
     {

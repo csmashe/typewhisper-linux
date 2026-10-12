@@ -4,7 +4,7 @@
   "version": "1.0.1",
   "minHostVersion": "0.16.0",
   "author": "TypeWhisper",
-  "description": "Offline transcription via sherpa-onnx (NVIDIA NeMo Parakeet + Canary)",
+  "description": "Offline transcription via sherpa-onnx (NVIDIA NeMo Parakeet, Parakeet Ultra + Canary)",
   "networkAccess": "local",
   "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.SherpaOnnx.dll",

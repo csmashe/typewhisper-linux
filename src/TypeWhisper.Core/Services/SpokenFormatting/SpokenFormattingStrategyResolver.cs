@@ -71,7 +71,7 @@ public sealed class SpokenFormattingStrategyResolver
     private static SpokenFormattingVerificationState DefaultVerificationState(
         string? modelId,
         string languageCode) =>
-        string.Equals(modelId, "parakeet-tdt-0.6b", StringComparison.OrdinalIgnoreCase)
+        ParakeetModels.IsParakeetTdt(modelId)
         && string.Equals(languageCode, "de", StringComparison.OrdinalIgnoreCase)
             ? SpokenFormattingVerificationState.VendorHint
             : SpokenFormattingVerificationState.Unknown;
