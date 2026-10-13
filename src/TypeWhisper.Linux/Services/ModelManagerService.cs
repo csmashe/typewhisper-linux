@@ -769,6 +769,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 TranscriptionAccelerationPreference.NvidiaCuda,
             AppSettings.LocalModelAccelerationVulkan =>
                 TranscriptionAccelerationPreference.Vulkan,
+            AppSettings.LocalModelAccelerationAmdMigraphx =>
+                TranscriptionAccelerationPreference.AmdMigraphx,
             AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
             _ => TranscriptionAccelerationPreference.Auto,
         };

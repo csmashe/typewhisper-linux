@@ -215,6 +215,7 @@
   "Dictation.AccelerationCpu": "CPU",
   "Dictation.AccelerationNvidiaCuda": "NVIDIA CUDA",
   "Dictation.AccelerationVulkan": "Vulkan (AMD/Intel)",
+  "Dictation.AccelerationAmdMigraphx": "AMD MIGraphX (sherpa-onnx)",
   "Dictation.ActiveModel": "Active: {0}",
   "Dictation.AddLanguage": "Add",
   "Dictation.AddedStrategy": "Added insertion strategy for {0}.",

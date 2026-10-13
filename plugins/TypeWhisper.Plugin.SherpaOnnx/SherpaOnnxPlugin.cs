@@ -180,14 +180,15 @@ public sealed class SherpaOnnxPlugin
     private Func<string, string, OfflineRecognizer> _parakeetRecognizerFactory =
         CreateParakeetRecognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
+    private SherpaMigraphxRuntimeInstaller? _migraphxRuntimeInstaller;
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _loadedModelId;
     private string? _loadedModelDir;
     private string _computeBackend = "cpu";
 
     // The WIRED ORT native runtime, pinned to whichever loads first in the process
-    // ("cuda" once the CUDA ORT runtime is wired in, else "cpu"). It can't be
-    // hot-swapped, so reaching CUDA from a CPU-only-wired runtime requires a restart.
+    // ("cuda", "migraphx", or "cpu"). It can't be hot-swapped, so changing between
+    // native runtimes after a recognizer loads requires a restart.
     // Distinct from the recognizer's active provider (_computeBackend): a CUDA-wired
     // runtime can still run a CPU recognizer, and swapping between them needs no restart.
     private string? _loadedNativeProvider;
@@ -222,7 +223,8 @@ public sealed class SherpaOnnxPlugin
             : LanguageSelectionSupport.Unsupported;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
-        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
+        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda,
+            TranscriptionAccelerationBackend.AmdMigraphx];
 
     // LoadModelAsync downloads + preloads the CUDA runtime on demand and falls back to
     // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
@@ -260,6 +262,7 @@ public sealed class SherpaOnnxPlugin
 
         // Lazily provisioned on demand; the ?? lets tests inject fakes before activate.
         InitializeCudaDependencies(host);
+        _migraphxRuntimeInstaller ??= new SherpaMigraphxRuntimeInstaller(host.PluginAssetDirectory, _httpClient);
 
         // Register the import resolver now; until CUDA is configured it defers to
         // the default loader, which picks up the CPU runtime from the managed nuget.
@@ -305,9 +308,7 @@ public sealed class SherpaOnnxPlugin
 
     public Task ConfigureComputeBackendAsync(string backend)
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
-            ? "cuda"
-            : "cpu";
+        var normalized = backend.ToLowerInvariant() switch { "cuda" => "cuda", "migraphx" => "migraphx", _ => "cpu" };
 
         // Serialize backend switches with model load/unload: without the lock,
         // a LoadModelAsync running on another thread could observe the old
@@ -324,10 +325,12 @@ public sealed class SherpaOnnxPlugin
             // restart to reach CUDA. Refuse just that one case so it surfaces as
             // restart-required via the acceleration status (and a reload can't silently
             // rebuild on a backend the runtime can't provide).
-            if (
-                string.Equals(_loadedNativeProvider, "cpu", StringComparison.Ordinal)
-                && string.Equals(normalized, "cuda", StringComparison.Ordinal)
-            )
+            if (_loadedNativeProvider is not null
+                && !string.Equals(_loadedNativeProvider, normalized, StringComparison.Ordinal)
+                && !(string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal)
+                    && normalized == "cpu")
+                && !(string.Equals(_loadedNativeProvider, "migraphx", StringComparison.Ordinal)
+                    && normalized == "cpu"))
                 return Task.CompletedTask;
 
             _computeBackend = normalized;
@@ -342,7 +345,12 @@ public sealed class SherpaOnnxPlugin
     {
         AccelerationPreference = preference;
 
-        var desired = preference == TranscriptionAccelerationPreference.NvidiaCuda ? "cuda" : "cpu";
+        var desired = preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
+            TranscriptionAccelerationPreference.AmdMigraphx => "migraphx",
+            _ => "cpu",
+        };
 
         // ConfigureComputeBackendAsync completes synchronously for SherpaOnnx (no
         // awaits in the body) and refuses to switch once the native provider is
@@ -536,7 +544,7 @@ public sealed class SherpaOnnxPlugin
         // (the host resolves it before calling us and never passes Auto), so rather
         // than hard-fail an explicit CUDA request we always fall back to a working
         // CPU load and surface the reason in the acceleration status.
-        string? cudaUnavailableDetail = null;
+        string? gpuUnavailableDetail = null;
 
         // Provision + wire the GPU runtime before touching the recognizer. Done
         // outside the lock because it may download hundreds of MB on first use.
@@ -559,10 +567,25 @@ public sealed class SherpaOnnxPlugin
                             ? $" Shared CUDA runtime cache: {provisioner.CacheDirectory}."
                             : "")
                 );
-                cudaUnavailableDetail = ex.Message;
+                gpuUnavailableDetail = ex.Message;
                 desiredProvider = "cpu";
                 lock (_sync)
                     _computeBackend = "cpu";
+            }
+        }
+        else if (desiredProvider == "migraphx")
+        {
+            try
+            {
+                await EnsureMigraphxRuntimeReadyAsync(progress, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _host?.Log(PluginLogLevel.Warning, $"sherpa-onnx MIGraphX runtime unavailable ({ex.Message}); falling back to CPU.");
+                gpuUnavailableDetail = ex.Message;
+                desiredProvider = "cpu";
+                lock (_sync) _computeBackend = "cpu";
             }
         }
 
@@ -595,7 +618,7 @@ public sealed class SherpaOnnxPlugin
                                 : _parakeetRecognizerFactory(dir, activeProvider);
                         }
                         catch (Exception ex)
-                            when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
+                            when (activeProvider is "cuda" or "migraphx")
                         {
                             // Recreate with the CPU execution provider. The GPU ONNX
                             // Runtime is already wired in by ConfigureCudaRuntime and runs
@@ -603,9 +626,9 @@ public sealed class SherpaOnnxPlugin
                             // transcription rather than failing the load outright.
                             _host?.Log(
                                 PluginLogLevel.Warning,
-                                $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
+                                $"sherpa-onnx {activeProvider} recognizer creation failed ({ex.Message}); falling back to CPU."
                             );
-                            cudaUnavailableDetail = ex.Message;
+                            gpuUnavailableDetail = ex.Message;
                             activeProvider = "cpu";
                             _computeBackend = "cpu";
                             _recognizer = model.SupportsTranslation
@@ -629,10 +652,10 @@ public sealed class SherpaOnnxPlugin
                         // provisioning failure). A CUDA-wired runtime whose recognizer fell back
                         // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
                         // restart (matches CreateLoadedAccelerationStatus / the swap logic).
-                        AccelerationStatus = cudaUnavailableDetail is null
+                        AccelerationStatus = gpuUnavailableDetail is null
                             ? CreateLoadedAccelerationStatus(activeProvider, AccelerationPreference)
-                            : CreateCudaUnavailableStatus(
-                                cudaUnavailableDetail,
+                            : CreateGpuUnavailableStatus(
+                                gpuUnavailableDetail,
                                 requiresRestart: string.Equals(
                                     _loadedNativeProvider,
                                     "cpu",
@@ -653,6 +676,39 @@ public sealed class SherpaOnnxPlugin
         {
             DeleteInvalidModelArtifacts(model, dir, ex);
             throw;
+        }
+    }
+
+    private async Task EnsureMigraphxRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("AMD MIGraphX acceleration requires Linux x64.");
+        var installer = _migraphxRuntimeInstaller
+            ?? throw new InvalidOperationException("MIGraphX runtime installer is not initialized.");
+        await installer.EnsureInstalledAsync(progress, ct).ConfigureAwait(false);
+        var capiDirectory = Path.Join(Path.GetDirectoryName(typeof(SherpaOnnxPlugin).Assembly.Location), "Runtimes", "linux-x64", "sherpa-migraphx");
+        if (!File.Exists(Path.Join(capiDirectory, "libsherpa-onnx-c-api.so")))
+            throw new FileNotFoundException("The plugin package does not include the MIGraphX-enabled Sherpa native runtime.", capiDirectory);
+
+        // Fail cleanly before native session creation when system ROCm is absent.
+        if (!NativeLibrary.TryLoad("libamdhip64.so.7", out var hip))
+            throw new InvalidOperationException("ROCm HIP runtime libamdhip64.so.7 is missing; install a supported ROCm stack.");
+        if (!NativeLibrary.TryLoad("libmigraphx_c.so.3", out var migraphx))
+        {
+            NativeLibrary.Free(hip);
+            throw new InvalidOperationException("MIGraphX libmigraphx_c.so.3 is missing; install a supported ROCm/MIGraphX stack.");
+        }
+        NativeLibrary.Free(hip);
+        NativeLibrary.Free(migraphx);
+
+        lock (_sync)
+        {
+            if (_loadedNativeProvider is not null && _loadedNativeProvider != "migraphx")
+                throw new InvalidOperationException("sherpa-onnx native runtime is already pinned to another provider; restart TypeWhisper to switch to MIGraphX.");
+            if (_computeBackend != "migraphx")
+                throw new InvalidOperationException("Compute backend changed during MIGraphX runtime setup.");
+            SherpaOnnxNativeRuntime.ConfigureMigraphxRuntime(capiDirectory, installer.RuntimeDirectory);
+            _loadedNativeProvider = "migraphx";
         }
     }
 
@@ -1335,23 +1391,33 @@ public sealed class SherpaOnnxPlugin
         TranscriptionAccelerationPreference preference
     )
     {
-        var active = string.Equals(effectiveProvider, "cuda", StringComparison.Ordinal)
-            ? TranscriptionAccelerationBackend.NvidiaCuda
-            : TranscriptionAccelerationBackend.Cpu;
-        var displayText =
-            active == TranscriptionAccelerationBackend.NvidiaCuda ? "Using NVIDIA CUDA" : "Using CPU";
+        var active = effectiveProvider switch
+        {
+            "cuda" => TranscriptionAccelerationBackend.NvidiaCuda,
+            "migraphx" => TranscriptionAccelerationBackend.AmdMigraphx,
+            _ => TranscriptionAccelerationBackend.Cpu,
+        };
+        var displayText = active switch
+        {
+            TranscriptionAccelerationBackend.NvidiaCuda => "Using NVIDIA CUDA",
+            TranscriptionAccelerationBackend.AmdMigraphx => "Using AMD MIGraphX",
+            _ => "Using CPU",
+        };
 
-        // The only toggle that needs a restart is reaching CUDA on a CPU-only-wired
-        // runtime. CPU↔CUDA on a CUDA-wired runtime is a reload, not a restart.
+    // Runtime changes need a restart because the managed import resolver is process-wide.
         var requiresRestart =
-            string.Equals(_loadedNativeProvider, "cpu", StringComparison.Ordinal)
-            && preference == TranscriptionAccelerationPreference.NvidiaCuda;
+            (_loadedNativeProvider == "cpu" && preference is TranscriptionAccelerationPreference.NvidiaCuda or TranscriptionAccelerationPreference.AmdMigraphx)
+            || ((_loadedNativeProvider is "cuda" or "migraphx")
+                && preference == TranscriptionAccelerationPreference.AmdMigraphx
+                && _loadedNativeProvider != "migraphx")
+            || (_loadedNativeProvider == "migraphx"
+                && preference == TranscriptionAccelerationPreference.NvidiaCuda);
 
         if (requiresRestart)
             return new TranscriptionAccelerationStatus(
                 active,
                 displayText,
-                "Restart TypeWhisper to switch sherpa-onnx to NVIDIA CUDA.",
+                "Restart TypeWhisper to switch the sherpa-onnx native runtime.",
                 true
             );
 
@@ -1368,6 +1434,11 @@ public sealed class SherpaOnnxPlugin
                 "Preparing NVIDIA CUDA",
                 "The GPU runtime downloads on the next model load."
             ),
+            TranscriptionAccelerationPreference.AmdMigraphx => new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.AmdMigraphx,
+                "Preparing AMD MIGraphX",
+                "Requires a supported ROCm/MIGraphX system runtime. The ONNX Runtime package downloads on the next model load."
+            ),
             _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing CPU",
@@ -1379,14 +1450,14 @@ public sealed class SherpaOnnxPlugin
     // WIRED runtime: if provisioning failed the runtime is CPU-only-wired and reaching CUDA
     // needs a restart, but if the CUDA ORT runtime was wired and only the recognizer fell
     // back, CUDA is reachable again by a reload — no restart (the point of M6).
-    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(
+    private static TranscriptionAccelerationStatus CreateGpuUnavailableStatus(
         string detail,
         bool requiresRestart
     ) =>
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
-            $"CUDA unavailable: {detail}",
+            $"GPU acceleration unavailable: {detail}",
             RequiresRestart: requiresRestart
         );
 

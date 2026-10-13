@@ -61,6 +61,10 @@ jobs:
         timeout-minutes: 15
         run: dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release -p:DeployBundledLinuxPlugins=false --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
 
+      - name: Build Sherpa MIGraphX native runtime
+        if: env.PLUGIN_NAME == 'sherpa-onnx'
+        run: ./scripts/build-sherpa-migraphx.sh
+
       - name: Patch manifest version
         shell: pwsh
         run: |
@@ -132,6 +136,15 @@ jobs:
             New-Item -ItemType Directory -Path (Split-Path $runtimeStagingDir -Parent) -Force | Out-Null
             Copy-Item -Path $runtimeRidDir -Destination $runtimeStagingDir -Recurse
             Write-Host "  Included native runtime: $env:PLUGIN_RID"
+          }
+
+          # The MIGraphX-enabled Sherpa C API is built from the pinned Sherpa source and
+          # shipped in the plugin archive. ROCm and AMD's matching ORT runtime stay on-demand.
+          $migraphxRuntimeDir = Join-Path $env:PROJECT_DIRECTORY 'Runtimes/linux-x64/sherpa-migraphx'
+          if (Test-Path $migraphxRuntimeDir) {
+            New-Item -ItemType Directory -Path "$stagingDir/Runtimes/linux-x64/sherpa-migraphx" -Force | Out-Null
+            Copy-Item -Path "$migraphxRuntimeDir/*" -Destination "$stagingDir/Runtimes/linux-x64/sherpa-migraphx" -Recurse
+            Write-Host 'Included Sherpa MIGraphX native runtime'
           }
 
           # Fail closed: if the plugin ships a Scripts/ dir but it didn't reach

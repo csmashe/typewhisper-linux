@@ -1,0 +1,64 @@
+diff --git a/sherpa-onnx/csrc/provider-config.cc b/sherpa-onnx/csrc/provider-config.cc
+index dc93723..827f730 100644
+--- a/sherpa-onnx/csrc/provider-config.cc
++++ b/sherpa-onnx/csrc/provider-config.cc
+@@ -109,7 +109,7 @@ void ProviderConfig::Register(ParseOptions *po) {
+
+   po->Register("device", &device, "GPU device index for CUDA and Trt EP");
+   po->Register("provider", &provider,
+-               "Specify a provider to use: cpu, cuda, coreml");
++               "Specify a provider to use: cpu, cuda, migraphx, coreml");
+ }
+
+ bool ProviderConfig::Validate() const {
+diff --git a/sherpa-onnx/csrc/provider.cc b/sherpa-onnx/csrc/provider.cc
+index 8f7fe31..c087023 100644
+--- a/sherpa-onnx/csrc/provider.cc
++++ b/sherpa-onnx/csrc/provider.cc
+@@ -31,6 +31,8 @@ Provider StringToProvider(std::string s) {
+     return Provider::kDirectML;
+   } else if (s == "spacemit") {
+     return Provider::kSpacemiT;
++  } else if (s == "migraphx") {
++    return Provider::kMIGraphX;
+   } else {
+     SHERPA_ONNX_LOGE("Unsupported string: %s. Fallback to cpu", s.c_str());
+     return Provider::kCPU;
+diff --git a/sherpa-onnx/csrc/provider.h b/sherpa-onnx/csrc/provider.h
+index 8842c79..80a5c13 100644
+--- a/sherpa-onnx/csrc/provider.h
++++ b/sherpa-onnx/csrc/provider.h
+@@ -22,6 +22,7 @@ enum class Provider {
+   kTRT = 5,       // TensorRTExecutionProvider
+   kDirectML = 6,  // DmlExecutionProvider
+   kSpacemiT = 7,  // SpacemiTExecutionProvider
++  kMIGraphX = 8,  // MIGraphXExecutionProvider
+ };
+
+ /**
+diff --git a/sherpa-onnx/csrc/session.cc b/sherpa-onnx/csrc/session.cc
+index 5e31165..f07e819 100755
+--- a/sherpa-onnx/csrc/session.cc
++++ b/sherpa-onnx/csrc/session.cc
+@@ -186,4 +186,20 @@ Ort::SessionOptions GetSessionOptionsImpl(
+       }
+       break;
+     }
++    case Provider::kMIGraphX: {
++      if (std::find(available_providers.begin(), available_providers.end(),
++                    "MIGraphXExecutionProvider") != available_providers.end()) {
++        std::unordered_map<std::string, std::string> options;
++        options.emplace(
++            "device_id",
++            std::to_string(provider_config == nullptr ? 0 : provider_config->device));
++        sess_opts.AppendExecutionProvider("MIGraphX", options);
++      } else {
++        SHERPA_ONNX_LOGE(
++            "MIGraphX execution provider is unavailable. Available providers: %s. "
++            "Fallback to cpu!",
++            os.str().c_str());
++      }
++      break;
++    }
+     case Provider::kDirectML: {
+*** End Patch

@@ -5,12 +5,12 @@ using SherpaOnnx;
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
 /// <summary>
-///     Routes the managed sherpa-onnx P/Invokes to the downloaded GPU native
-///     build and preloads its ONNX Runtime dependencies.
+///     Routes the managed sherpa-onnx P/Invokes to the selected native build
+///     and preloads its ONNX Runtime dependencies.
 ///     <para>
 ///         On Linux the managed binding's only direct P/Invoke target is
 ///         <c>libsherpa-onnx-c-api.so</c>; a <see cref="NativeLibrary.SetDllImportResolver" />
-///         redirects that to the GPU directory when CUDA is active. But the GPU
+///         redirects that to the GPU directory when acceleration is active. But the GPU
 ///         libraries carry no rpath, so the transitive dependencies
 ///         (<c>libonnxruntime.so</c> and the CUDA execution provider) won't be
 ///         found by the loader on their own. We therefore <c>dlopen</c> them
@@ -54,6 +54,8 @@ internal static class SherpaOnnxNativeRuntime
     private static readonly Lock s_sync = new();
     private static bool s_resolverRegistered;
     private static string? s_cudaRuntimeDirectory;
+    private static string? s_migraphxCapiDirectory;
+    private static string? s_migraphxRuntimeDirectory;
     private static IntPtr s_resolvedCApi;
 
     /// <summary>
@@ -123,17 +125,60 @@ internal static class SherpaOnnxNativeRuntime
         }
     }
 
+    /// <summary>Wires the bundled MIGraphX-enabled Sherpa C API to AMD's ORT runtime.</summary>
+    public static void ConfigureMigraphxRuntime(string capiDirectory, string runtimeDirectory)
+    {
+        lock (s_sync)
+        {
+            if (!s_resolverRegistered)
+            {
+                NativeLibrary.SetDllImportResolver(typeof(OfflineRecognizer).Assembly, ResolveNativeLibrary);
+                s_resolverRegistered = true;
+            }
+
+            foreach (var (directory, soname) in new[]
+            {
+                (runtimeDirectory, "libonnxruntime_providers_shared.so"),
+                (runtimeDirectory, "libonnxruntime.so.1"),
+                (capiDirectory, CApiSoName),
+                (capiDirectory, "libsherpa-onnx-cxx-api.so"),
+            })
+            {
+                var path = Path.Join(directory, soname);
+                if (!File.Exists(path))
+                    throw new FileNotFoundException($"Missing MIGraphX runtime library: {path}");
+                var handle = dlopen(path, RtldNow | RtldGlobal);
+                if (handle == IntPtr.Zero)
+                {
+                    var error = Marshal.PtrToStringAnsi(dlerror());
+                    throw new InvalidOperationException($"Failed to preload '{soname}': {error ?? "unknown error"}");
+                }
+            }
+
+            // ORT loads the MIGraphX provider itself after setting its ProviderHost.
+            s_migraphxCapiDirectory = capiDirectory;
+            s_migraphxRuntimeDirectory = runtimeDirectory;
+            s_cudaRuntimeDirectory = null;
+            s_resolvedCApi = IntPtr.Zero;
+        }
+    }
+
     private static IntPtr ResolveNativeLibrary(
         string libraryName,
         Assembly assembly,
         DllImportSearchPath? searchPath
     )
     {
-        var runtimeDirectory = s_cudaRuntimeDirectory;
-        if (string.IsNullOrWhiteSpace(runtimeDirectory))
+        var capiDirectory = s_migraphxCapiDirectory ?? s_cudaRuntimeDirectory;
+        if (string.IsNullOrWhiteSpace(capiDirectory))
             return IntPtr.Zero; // CPU path: let the default loader find the nuget runtime.
 
         var fileName = ToSoFileName(libraryName);
+        var runtimeDirectory = fileName.Contains("onnxruntime", StringComparison.Ordinal)
+            ? s_migraphxRuntimeDirectory ?? s_cudaRuntimeDirectory
+            : capiDirectory;
+        if (string.IsNullOrWhiteSpace(runtimeDirectory))
+            return IntPtr.Zero;
         var candidate = Path.Join(runtimeDirectory, fileName);
         if (!File.Exists(candidate))
             return IntPtr.Zero;

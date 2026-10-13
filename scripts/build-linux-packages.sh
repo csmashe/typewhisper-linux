@@ -12,7 +12,7 @@
 #   typewhisper_<version>_amd64.deb
 #   typewhisper-<version>-1.x86_64.rpm
 #
-# Tooling required: dotnet, ffmpeg-free tools not required, plus:
+# Tooling required: dotnet, git, curl, python3, cmake, and a C/C++ build toolchain, plus:
 #   tar gzip                 (tar.gz)
 #   sha256sum sort readelf   (plugin identity + dependency floors — hard required, checked up front)
 #   wget, appstreamcli       (AppImage helpers — only wget is hard required)
@@ -50,6 +50,10 @@ for required in sha256sum sort readelf; do
   command -v "$required" >/dev/null 2>&1 \
     || { echo "ERROR: $required is required for plugin identity and dependency floors" >&2; exit 1; }
 done
+
+# Package the same pinned, patched Sherpa native runtime that plugin releases ship.
+# The AMD ORT execution provider itself remains an on-demand download at runtime.
+"$ROOT/scripts/build-sherpa-migraphx.sh"
 
 compute_bundle_identity() {
   local plugin_root="$1"

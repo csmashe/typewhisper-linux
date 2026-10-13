@@ -482,6 +482,10 @@ public partial class DictationSectionViewModel : ObservableObject
         TranscriptionAccelerationBackend.Vulkan
     ) == true;
 
+    public bool CanUseAmdMigraphx => SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+        TranscriptionAccelerationBackend.AmdMigraphx
+    ) == true;
+
     // The engine that owns the model selected in the Dictation UI — the one a CUDA download
     // must target. Distinct from ActiveTranscriptionPlugin (the loaded engine), which is null
     // before any model loads (e.g. at startup) and can lag a freshly selected model.
@@ -541,6 +545,7 @@ public partial class DictationSectionViewModel : ObservableObject
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
                     AppSettings.LocalModelAccelerationVulkan => "Vulkan selected",
+                    AppSettings.LocalModelAccelerationAmdMigraphx => "AMD MIGraphX selected",
                     _ => Loc.Instance["Dictation.AccelAutoStatus"],
                 };
             }
@@ -1130,6 +1135,7 @@ public partial class DictationSectionViewModel : ObservableObject
             new(AppSettings.LocalModelAccelerationCpu, Loc.Instance["Dictation.AccelerationCpu"]),
             new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"]),
             new(AppSettings.LocalModelAccelerationVulkan, Loc.Instance["Dictation.AccelerationVulkan"]),
+            new(AppSettings.LocalModelAccelerationAmdMigraphx, Loc.Instance["Dictation.AccelerationAmdMigraphx"]),
         ];
     }
 
@@ -1501,6 +1507,18 @@ public partial class DictationSectionViewModel : ObservableObject
         if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
         {
             const string message = "Vulkan acceleration is available only for local models that support Vulkan.";
+            Dispatcher.UIThread.Post(() =>
+            {
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
+                OnPropertyChanged(nameof(SelectedAccelerationOption));
+                StatusText = message;
+            });
+            return;
+        }
+
+        if (normalized == AppSettings.LocalModelAccelerationAmdMigraphx && !CanUseAmdMigraphx)
+        {
+            const string message = "AMD MIGraphX is available only for sherpa-onnx local models.";
             Dispatcher.UIThread.Post(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
