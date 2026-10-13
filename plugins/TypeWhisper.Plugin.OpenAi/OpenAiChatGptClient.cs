@@ -23,6 +23,12 @@ internal sealed class OpenAiChatGptClient
         _accessToken = accessToken;
     }
 
+    public OpenAiChatGptClient(HttpClient httpClient, string accessToken, string? ignoredAccountId)
+        : this(httpClient, accessToken)
+    {
+        _ = ignoredAccountId;
+    }
+
     public async Task<string> ProcessAsync(
         string systemPrompt,
         string userText,

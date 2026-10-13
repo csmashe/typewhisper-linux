@@ -51,6 +51,9 @@ internal sealed record OpenAiVerifiedIdentity(string Subject);
 internal static class OpenAiOAuthClient
 {
     public const string DynamicClientId = "dynamic_agent_client";
+    // Compatibility alias for existing plugin consumers. First-time SIWC
+    // registration uses this value; returning accounts use their issued ID.
+    public const string ClientId = DynamicClientId;
     public const string Issuer = "https://auth.openai.com";
     public const string RedirectUri = "http://127.0.0.1:1455/auth/callback";
     public const int CallbackPort = 1455;
