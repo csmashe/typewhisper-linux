@@ -18,8 +18,11 @@ public sealed class SpeechmaticsPlugin
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://asr.api.speechmatics.com/v2";
+    // Speechmatics silently drops entries over 6 words; the other caps match upstream.
+    private static readonly DictionaryTermsBudget s_vocabularyBudget =
+        new(MaxTerms: 100, MaxWordsPerTerm: 6, MaxTotalChars: 4_000);
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiKey;
 
@@ -27,6 +30,16 @@ public sealed class SpeechmaticsPlugin
     [
         new("enhanced", "Speechmatics Enhanced"),
     ];
+
+    public SpeechmaticsPlugin()
+        : this(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+    {
+    }
+
+    internal SpeechmaticsPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+    }
 
     public string PluginId => "com.typewhisper.speechmatics";
     public string PluginName => "Speechmatics";
@@ -57,10 +70,30 @@ public sealed class SpeechmaticsPlugin
     public bool SupportsTranslation => false;
 
     public bool SupportsStreaming => true;
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_vocabularyBudget;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Unsupported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
-    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        StartStreamingAsync(language, [], ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct
+    ) =>
+        StartStreamingAsync(
+            languageHints.FirstOrDefault(static hint => !string.IsNullOrWhiteSpace(hint)),
+            ExtractVocabulary(prompt),
+            ct
+        );
+
+    private async Task<IStreamingSession> StartStreamingAsync(
+        string? language,
+        IReadOnlyList<string> vocabulary,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
@@ -73,7 +106,7 @@ public sealed class SpeechmaticsPlugin
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
 
-        return await SpeechmaticsStreamingSession.ConnectAsync(_apiKey!, normalized, ct);
+        return await SpeechmaticsStreamingSession.ConnectAsync(_apiKey!, normalized, vocabulary, ct);
     }
 
     public void SelectModel(string modelId)
@@ -103,11 +136,17 @@ public sealed class SpeechmaticsPlugin
                 "Speechmatics does not support automatic language detection. Choose an explicit language for this profile."
             );
 
+        var transcriptionConfig = new Dictionary<string, object>
+        {
+            ["language"] = normalized,
+            ["operating_point"] = "enhanced",
+        };
+        AddAdditionalVocab(transcriptionConfig, ExtractVocabulary(prompt));
         var config = JsonSerializer.Serialize(
-            new
+            new Dictionary<string, object>
             {
-                type = "transcription",
-                transcription_config = new { language = normalized, operating_point = "enhanced" },
+                ["type"] = "transcription",
+                ["transcription_config"] = transcriptionConfig,
             }
         );
 
@@ -263,6 +302,20 @@ public sealed class SpeechmaticsPlugin
             duration,
             NoSpeechProbability: null
         );
+    }
+
+    // Speechmatics has no prompt field; API prompt text (possibly the host's language-hint sentence)
+    // is not vocabulary, so it stays unsent as before.
+    internal static IReadOnlyList<string> ExtractVocabulary(string? prompt) =>
+        PluginDictionaryTerms.Clip(PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms, s_vocabularyBudget);
+
+    // Batch jobs and live StartRecognition both take the terms inside transcription_config.
+    internal static void AddAdditionalVocab(Dictionary<string, object> transcriptionConfig, IReadOnlyList<string> vocabulary)
+    {
+        if (vocabulary.Count > 0)
+            transcriptionConfig["additional_vocab"] = vocabulary
+                .Select(static term => new Dictionary<string, string> { ["content"] = term })
+                .ToArray();
     }
 
     public void Dispose()

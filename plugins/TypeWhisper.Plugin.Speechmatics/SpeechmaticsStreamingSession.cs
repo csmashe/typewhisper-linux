@@ -28,11 +28,12 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
     public static async Task<SpeechmaticsStreamingSession> ConnectAsync(
         string apiKey,
         string? language,
+        IReadOnlyList<string> vocabulary,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new SpeechmaticsWebSocketAdapter(apiKey, language),
+            new SpeechmaticsWebSocketAdapter(apiKey, language, vocabulary),
             ct
         );
         return new SpeechmaticsStreamingSession(pump);
@@ -45,7 +46,11 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
 
     public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
-    internal static string BuildStartRecognition(string? language, int sampleRate)
+    internal static string BuildStartRecognition(
+        string? language,
+        IReadOnlyList<string> vocabulary,
+        int sampleRate
+    )
     {
         var normalizedLanguage =
             !string.IsNullOrWhiteSpace(language)
@@ -55,6 +60,15 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
                     "Speechmatics requires an explicit language.",
                     nameof(language)
                 );
+
+        var transcriptionConfig = new Dictionary<string, object>
+        {
+            ["language"] = normalizedLanguage,
+            ["operating_point"] = "enhanced",
+            ["enable_partials"] = true,
+            ["max_delay"] = 2,
+        };
+        SpeechmaticsPlugin.AddAdditionalVocab(transcriptionConfig, vocabulary);
 
         return JsonSerializer.Serialize(
             new Dictionary<string, object>
@@ -66,13 +80,7 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
                     ["encoding"] = "pcm_s16le",
                     ["sample_rate"] = sampleRate,
                 },
-                ["transcription_config"] = new Dictionary<string, object>
-                {
-                    ["language"] = normalizedLanguage,
-                    ["operating_point"] = "enhanced",
-                    ["enable_partials"] = true,
-                    ["max_delay"] = 2,
-                },
+                ["transcription_config"] = transcriptionConfig,
             }
         );
     }
@@ -159,7 +167,8 @@ internal sealed class SpeechmaticsStreamingSession : IStreamingSession, IStreami
 
 internal sealed class SpeechmaticsWebSocketAdapter(
     string apiKey,
-    string? language
+    string? language,
+    IReadOnlyList<string> vocabulary
 ) : IWebSocketSessionAdapter
 {
     private readonly SpeechmaticsTranscriptAggregator _aggregator = new();
@@ -200,6 +209,7 @@ internal sealed class SpeechmaticsWebSocketAdapter(
                     Encoding.UTF8.GetBytes(
                         SpeechmaticsStreamingSession.BuildStartRecognition(
                             language,
+                            vocabulary,
                             16000
                         )
                     ),
