@@ -66,6 +66,13 @@ public sealed partial class DictionaryService : IDictionaryService
 
     public IReadOnlyList<DictionaryEntry> Entries => ReadEntries().ToArray();
 
+    public bool TryGetEntries(out IReadOnlyList<DictionaryEntry> entries)
+    {
+        var available = ReadEntries(out var read, out var reset);
+        entries = read.ToArray();
+        return available && !reset;
+    }
+
     /// <summary>
     ///     A read failure must not break dictation, so it degrades to empty — same contract as
     ///     <c>HistoryService.ReadRecords</c> and <c>ErrorLogService.ReadEntries</c>. Writes still
@@ -73,14 +80,23 @@ public sealed partial class DictionaryService : IDictionaryService
     /// </summary>
     private ImmutableArray<DictionaryEntry> ReadEntries()
     {
+        ReadEntries(out var entries, out _);
+        return entries;
+    }
+
+    private bool ReadEntries(out ImmutableArray<DictionaryEntry> entries, out bool resetAfterCorruption)
+    {
+        resetAfterCorruption = false;
         try
         {
-            return _store.Current;
+            entries = _store.GetCurrent(out resetAfterCorruption);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             Trace.WriteLine($"[DictionaryService] Could not load the dictionary: {ex.Message}");
-            return [];
+            entries = [];
+            return false;
         }
     }
 

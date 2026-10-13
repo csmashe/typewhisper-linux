@@ -24,6 +24,18 @@ public sealed class PromptActionServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetActions_ReportsACorruptFileResetToEmpty()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+
+        Assert.False(new PromptActionService(_filePath).TryGetActions(out _));
+
+        File.Delete(_filePath);
+
+        Assert.True(new PromptActionService(_filePath).TryGetActions(out _));
+    }
+
+    [Fact]
     public void AddAction_PersistsAndLoads()
     {
         _sut.AddAction(

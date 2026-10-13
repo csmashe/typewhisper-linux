@@ -162,6 +162,38 @@
             </Border>
 
             <Border Classes="panel"
+                    Padding="16">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="10">
+                    <StackPanel Spacing="4">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10">
+                            <TextBlock Text="{loc:Str About.SupportReport}"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ProgressBar Width="90"
+                                         Height="4"
+                                         IsIndeterminate="True"
+                                         IsVisible="{Binding IsSupportReportBusy}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding SupportReportStatusText}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{loc:Str About.SupportReportPrivacy}"
+                                   FontSize="12"
+                                   Foreground="#8A9AAE"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            Content="{loc:Str About.ExportSupportReport}"
+                            IsEnabled="{Binding IsSupportReportBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
+                            VerticalAlignment="Center"
+                            Click="OnExportSupportReport" />
+                </Grid>
+            </Border>
+
+            <Border Classes="panel"
                     Height="386">
                 <Grid RowDefinitions="Auto,*">
                     <Border Padding="16,12"

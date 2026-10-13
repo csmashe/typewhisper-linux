@@ -53,6 +53,12 @@ public sealed class ProfileService : IProfileService
 
     public IReadOnlyList<Profile> Profiles => _store.Current.ToArray();
 
+    public bool TryGetProfiles(out IReadOnlyList<Profile> profiles)
+    {
+        profiles = _store.GetCurrent(out var reset).ToArray();
+        return !reset;
+    }
+
     public event Action? ProfilesChanged;
 
     public void SeedFirstRunDefaultsIfMissing()

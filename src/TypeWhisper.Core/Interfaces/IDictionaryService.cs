@@ -12,6 +12,14 @@ public interface IDictionaryService
 {
     IReadOnlyList<DictionaryEntry> Entries { get; }
 
+    /// <summary>Reads the entries and reports whether the read succeeded; an unreadable store yields none.</summary>
+    /// <returns><c>false</c> when the store was unreadable or reset after corruption, not merely empty.</returns>
+    bool TryGetEntries(out IReadOnlyList<DictionaryEntry> entries)
+    {
+        entries = Entries;
+        return true;
+    }
+
     void AddEntry(DictionaryEntry entry);
     // ReSharper disable once UnusedMemberInSuper.Global
     void AddEntries(IEnumerable<DictionaryEntry> entries);

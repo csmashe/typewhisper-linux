@@ -30,6 +30,42 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetEntries_DistinguishesAnUnreadableDictionaryFromAnEmptyOne()
+    {
+        var directory = Path.Join(Path.GetTempPath(), $"tw_dictionary_unreadable_{Guid.NewGuid():N}");
+        Assert.True(new DictionaryService(Path.Join(directory, "missing.json")).TryGetEntries(out var empty));
+        Assert.Empty(empty);
+
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var unreadable = new DictionaryService(directory);
+
+            Assert.False(unreadable.TryGetEntries(out var entries));
+            Assert.Empty(entries);
+        }
+        finally
+        {
+            Directory.Delete(directory);
+        }
+    }
+
+    [Fact]
+    public void TryGetEntries_TreatsACorruptDictionaryResetToEmptyAsUnreadable()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+        var corrupt = new DictionaryService(_filePath);
+
+        Assert.False(corrupt.TryGetEntries(out var entries));
+        Assert.Empty(entries);
+
+        corrupt.AddEntry(new DictionaryEntry { Id = "term", EntryType = DictionaryEntryType.Term, Original = "Avalonia" });
+
+        Assert.True(corrupt.TryGetEntries(out var healed));
+        Assert.Single(healed);
+    }
+
+    [Fact]
     public void ApplyCorrections_RegexEntry_ReplacesMatches()
     {
         _sut.AddEntry(new DictionaryEntry

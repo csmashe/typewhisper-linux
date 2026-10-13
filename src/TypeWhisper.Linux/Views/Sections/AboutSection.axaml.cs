@@ -52,6 +52,44 @@ public partial class AboutSection : UserControl
     }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnExportSupportReport(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AboutSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.StorageProvider is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+                new FilePickerSaveOptions
+                {
+                    Title = Loc.Instance["Dialog.ExportSupportReport"],
+                    SuggestedFileName = $"typewhisper-support-report-{DateTime.Now:yyyyMMdd-HHmmss}.json",
+                    DefaultExtension = "json",
+                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }],
+                }
+            );
+
+            var path = file?.TryGetLocalPath();
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                await viewModel.ExportSupportReportAsync(path);
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowMessage("Export support report failed", ex.Message);
+        }
+    }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnBackupSettings(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not AboutSectionViewModel viewModel)
