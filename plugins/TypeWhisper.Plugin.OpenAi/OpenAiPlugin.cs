@@ -26,7 +26,7 @@ public sealed class OpenAiPlugin
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.openai.com";
-    private const string ChatGptModelsEndpoint = "https://chatgpt.com/backend-api/codex/models";
+    private const string ChatGptModelsEndpoint = "https://api.openai.com/v1/models";
     private const string FetchedTranscriptionModelsSettingName = "fetchedTranscriptionModels";
     private const string FetchedChatGptModelsSettingName = "fetchedChatGPTModels";
     private const string ApiKeySecretName = "api-key";
@@ -45,6 +45,9 @@ public sealed class OpenAiPlugin
     private const string OAuthAccountIdSettingName = "oauthAccountID";
     private const string OAuthPlanTypeSettingName = "oauthPlanType";
     private const string OAuthExpiresAtSettingName = "oauthExpiresAt";
+    private const string OAuthClientIdSettingName = "oauthClientId";
+    private const string OAuthHostIdSettingName = "oauthHostId";
+    private const string OAuthGrantedScopesSettingName = "oauthGrantedScopes";
     private const string TemperatureModeSettingName = "llmTemperatureMode";
     private const string TemperatureValueSettingName = "llmTemperatureValue";
     private const string TemperatureModeProviderDefault = "providerDefault";
@@ -159,7 +162,9 @@ public sealed class OpenAiPlugin
                     NormalizeApiKey(await host.LoadSecretAsync(OAuthIdTokenSecretName)),
                     host.GetSetting<string>(OAuthAccountIdSettingName),
                     host.GetSetting<string>(OAuthPlanTypeSettingName),
-                    LoadExpiresAt(host)
+                    LoadExpiresAt(host),
+                    host.GetSetting<string>(OAuthClientIdSettingName),
+                    host.GetSetting<string>(OAuthGrantedScopesSettingName) ?? ""
                 ));
         }
         finally
@@ -387,8 +392,7 @@ public sealed class OpenAiPlugin
             var credentials = await ValidOAuthCredentialsAsync(ct);
             var client = new OpenAiChatGptClient(
                 _httpClient,
-                credentials.AccessToken!,
-                credentials.AccountId
+                credentials.AccessToken!
             );
             return await client.ProcessAsync(
                 systemPrompt,
@@ -560,6 +564,9 @@ public sealed class OpenAiPlugin
     }
 
     internal string? ChatGptPlanType => Volatile.Read(ref _oauthCredentials).PlanType;
+    internal bool HasChatGptPlanPermission => Volatile.Read(ref _oauthCredentials).GrantedScopes
+        .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+        .Contains("chatgpt.tokens.use.direct", StringComparer.Ordinal);
 
     private string? _selectedApiKeyModelId;
     private string? _selectedChatGptModelId;
@@ -808,28 +815,20 @@ public sealed class OpenAiPlugin
             var credentials = await ValidOAuthCredentialsAsync(ct);
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,
-                $"{ChatGptModelsEndpoint}?client_version={Uri.EscapeDataString(PluginBuildInfo.Version)}");
+                ChatGptModelsEndpoint);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credentials.AccessToken);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             request.Headers.UserAgent.ParseAdd($"TypeWhisper-OpenAI-Plugin/{PluginBuildInfo.Version}");
-            request.Headers.TryAddWithoutValidation("originator", "typewhisper");
-            if (!string.IsNullOrWhiteSpace(credentials.AccountId))
-                request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", credentials.AccountId);
 
             using var response = await _httpClient.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
                 return null;
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            var decoded = JsonSerializer.Deserialize<OpenAiChatGptModelsResponse>(
-                json,
-                s_jsonReadOptions);
-            if (decoded?.Models is not { } catalogModels)
+            if (!TryReadChatGptModels(json, out var catalogModels))
                 return null;
 
             var visibleModels = SanitizeChatGptModels(catalogModels)
-                .OrderBy(model => model.Priority ?? int.MaxValue)
-                .ThenBy(model => model.Slug, StringComparer.Ordinal)
                 .ToList();
             if (visibleModels.Count == 0)
                 return null;
@@ -920,6 +919,26 @@ public sealed class OpenAiPlugin
             .DistinctBy(model => model.Slug, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+    private static bool TryReadChatGptModels(string json, out List<OpenAiChatGptModel?> models)
+    {
+        models = [];
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("models", out var array)
+            || array.ValueKind != JsonValueKind.Array)
+            return false;
+        foreach (var item in array.EnumerateArray())
+        {
+            var slug = item.TryGetProperty("slug", out var slugValue) ? slugValue.GetString() : null;
+            var visibility = item.TryGetProperty("visibility", out var visibilityValue)
+                ? visibilityValue.GetString() : null;
+            var displayName = item.TryGetProperty("display_name", out var displayValue)
+                ? displayValue.GetString() : slug;
+            if (!string.IsNullOrWhiteSpace(slug) && visibility == "list")
+                models.Add(new OpenAiChatGptModel(slug, displayName, visibility, null, null));
+        }
+        return true;
+    }
+
     internal static bool IsVisibleChatGptModel(OpenAiChatGptModel model) =>
         !string.IsNullOrWhiteSpace(model.Slug)
         && !string.Equals(model.Visibility, "hide", StringComparison.OrdinalIgnoreCase);
@@ -972,11 +991,26 @@ public sealed class OpenAiPlugin
     internal async Task LoginWithChatGptInBrowserAsync(CancellationToken ct = default)
     {
         var state = OpenAiOAuthClient.RandomState();
+        var nonce = OpenAiOAuthClient.RandomState();
         var pkce = OpenAiOAuthClient.GeneratePkceCodes();
         await using var server = new OpenAiLoopbackOAuthServer(state);
         server.Start();
 
-        var authUri = OpenAiOAuthClient.BuildAuthorizeUri(state, pkce);
+        var host = _host ?? throw new InvalidOperationException("OpenAI plugin is not activated.");
+        var hostId = host.GetSetting<string>(OAuthHostIdSettingName);
+        if (string.IsNullOrWhiteSpace(hostId))
+        {
+            hostId = $"urn:uuid:{Guid.NewGuid():D}";
+            host.SetSetting(OAuthHostIdSettingName, hostId);
+        }
+        var existing = Volatile.Read(ref _oauthCredentials);
+        var clientId = string.IsNullOrWhiteSpace(existing.ClientId)
+            ? OpenAiOAuthClient.DynamicClientId
+            : existing.ClientId;
+        var authUri = OpenAiOAuthClient.BuildAuthorizeUri(
+            state, nonce, pkce, clientId, hostId,
+            clientId == OpenAiOAuthClient.DynamicClientId,
+            existing.IdToken);
         var launch = (
             _host
             ?? throw new InvalidOperationException("OpenAI plugin is not activated.")
@@ -990,9 +1024,20 @@ public sealed class OpenAiPlugin
             );
         }
 
-        var code = await server.WaitForCodeAsync(ct);
-        var tokens = await OpenAiOAuthClient.ExchangeAuthorizationCodeAsync(_httpClient, code, pkce, ct);
-        await StoreOAuthTokensAsync(tokens, preferredAccountId: null, ct: ct);
+        var callback = await server.WaitForAuthorizationCallbackAsync(ct);
+        var issuedClientId = callback.ClientId ?? clientId;
+        if (clientId != OpenAiOAuthClient.DynamicClientId
+            && !string.Equals(issuedClientId, clientId, StringComparison.Ordinal))
+            throw new InvalidOperationException("ChatGPT returned a different app registration. Sign in again.");
+        if (issuedClientId == OpenAiOAuthClient.DynamicClientId)
+            throw new InvalidOperationException("ChatGPT did not return the app registration ID.");
+        var tokens = await OpenAiOAuthClient.ExchangeAuthorizationCodeAsync(
+            _httpClient, callback.Code, pkce, issuedClientId, ct);
+        if (!(tokens.Scope?.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Contains("chatgpt.tokens.use.direct", StringComparer.Ordinal) ?? false))
+            throw new InvalidOperationException("ChatGPT did not grant permission to use your plan.");
+        var identity = await OpenAiOAuthClient.ValidateIdTokenAsync(tokens.IdToken, issuedClientId, nonce, ct);
+        await StoreOAuthTokensAsync(tokens, identity.Subject, issuedClientId, ct);
         SetAuthMode(OpenAiAuthMode.ChatGpt);
         await RefreshAvailableLlmModelsAsync(ct);
     }
@@ -1237,6 +1282,11 @@ public sealed class OpenAiPlugin
     private async Task<OAuthCredentialSnapshot> ValidOAuthCredentialsAsync(CancellationToken ct)
     {
         var credentials = Volatile.Read(ref _oauthCredentials);
+        if (!credentials.GrantedScopes.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Contains("chatgpt.tokens.use.direct", StringComparer.Ordinal))
+            throw new PluginRequestException(
+                "ChatGPT plan use was not authorized. Reconnect ChatGPT and enable plan usage.",
+                PluginRequestFailureKind.Authentication);
         if (HasValidOAuthAccessToken(credentials))
             return credentials;
 
@@ -1246,6 +1296,11 @@ public sealed class OpenAiPlugin
             // A preceding waiter may have refreshed and atomically replaced
             // the credential snapshot while this request waited for the gate.
             credentials = Volatile.Read(ref _oauthCredentials);
+            if (!credentials.GrantedScopes.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Contains("chatgpt.tokens.use.direct", StringComparer.Ordinal))
+                throw new PluginRequestException(
+                    "ChatGPT plan use was not authorized. Reconnect ChatGPT and enable plan usage.",
+                    PluginRequestFailureKind.Authentication);
             if (HasValidOAuthAccessToken(credentials))
                 return credentials;
 
@@ -1255,12 +1310,15 @@ public sealed class OpenAiPlugin
             var refreshed = await OpenAiOAuthClient.RefreshTokenAsync(
                 _httpClient,
                 credentials.RefreshToken,
+                credentials.ClientId ?? throw new InvalidOperationException("ChatGPT app registration is missing."),
                 ct);
             var refreshedCredentials = CreateOAuthCredentialSnapshot(
                 refreshed,
                 credentials.AccountId,
                 credentials.RefreshToken,
-                credentials.PlanType);
+                credentials.PlanType,
+                credentials.ClientId,
+                credentials.GrantedScopes);
             await CommitOAuthCredentialSnapshotUnderGateAsync(refreshedCredentials);
             return refreshedCredentials;
         }
@@ -1273,6 +1331,7 @@ public sealed class OpenAiPlugin
     private async Task StoreOAuthTokensAsync(
         OpenAiOAuthTokenResponse tokens,
         string? preferredAccountId,
+        string? clientId = null,
         CancellationToken ct = default)
     {
         await _oauthCredentialGate.WaitAsync(ct);
@@ -1282,7 +1341,9 @@ public sealed class OpenAiPlugin
             var credentials = CreateOAuthCredentialSnapshot(
                 tokens,
                 preferredAccountId,
-                currentCredentials.RefreshToken);
+                currentCredentials.RefreshToken,
+                clientId: clientId,
+                fallbackScopes: currentCredentials.GrantedScopes);
             await CommitOAuthCredentialSnapshotUnderGateAsync(credentials);
         }
         finally
@@ -1295,7 +1356,9 @@ public sealed class OpenAiPlugin
         OpenAiOAuthTokenResponse tokens,
         string? preferredAccountId,
         string? existingRefreshToken,
-        string? fallbackPlanType = null)
+        string? fallbackPlanType = null,
+        string? clientId = null,
+        string? fallbackScopes = null)
     {
         var metadata = OpenAiOAuthClient.ExtractMetadata(tokens, preferredAccountId, fallbackPlanType);
         // RFC 6749 §6: a refresh response MAY omit `refresh_token`, meaning
@@ -1312,7 +1375,9 @@ public sealed class OpenAiPlugin
             tokens.IdToken,
             metadata.AccountId,
             metadata.PlanType,
-            metadata.ExpiresAt
+            metadata.ExpiresAt,
+            clientId,
+            tokens.Scope ?? fallbackScopes ?? ""
         );
     }
 
@@ -1350,6 +1415,8 @@ public sealed class OpenAiPlugin
         host.SetSetting(OAuthAccountIdSettingName, credentials.AccountId);
         host.SetSetting(OAuthPlanTypeSettingName, credentials.PlanType);
         host.SetSetting(OAuthExpiresAtSettingName, credentials.ExpiresAt);
+        host.SetSetting(OAuthClientIdSettingName, credentials.ClientId);
+        host.SetSetting(OAuthGrantedScopesSettingName, credentials.GrantedScopes);
         NormalizeSelectedLlmModel(
             persist: true,
             preserveUnknownWhenCatalogUnavailable: credentials != OAuthCredentialSnapshot.Empty,
@@ -1703,6 +1770,12 @@ public sealed class OpenAiPlugin
             return new PluginSettingsValidationResult(true, Loc.L("Settings.ChatGptLoginRemoved"));
         }
 
+        // Older builds used a private Codex OAuth registration. Those tokens
+        // cannot authorize the supported ChatGPT plan-sharing Responses flow.
+        if (HasChatGptCredentials
+            && string.IsNullOrWhiteSpace(Volatile.Read(ref _oauthCredentials).ClientId))
+            await ClearChatGptLoginAsync(ct);
+
         if (HasChatGptCredentials)
         {
             // Stored credentials might have been revoked or expired beyond refresh.
@@ -1724,21 +1797,6 @@ public sealed class OpenAiPlugin
                     false,
                     Loc.L("Settings.ChatGptLoginRefreshFailed", ex.Message));
             }
-        }
-
-        try
-        {
-            await ImportExistingLoginAsync();
-            return new PluginSettingsValidationResult(true, ChatGptConnectedMessage());
-        }
-        catch (FileNotFoundException)
-        {
-            // No ~/.codex/auth.json — fall through to the interactive browser login.
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or JsonException or IOException)
-        {
-            return new PluginSettingsValidationResult(
-                false, Loc.L("Settings.ChatGptImportFailed", ex.Message));
         }
 
         try
@@ -1782,10 +1840,12 @@ public sealed class OpenAiPlugin
         string? IdToken,
         string? AccountId,
         string? PlanType,
-        DateTimeOffset? ExpiresAt)
+        DateTimeOffset? ExpiresAt,
+        string? ClientId,
+        string GrantedScopes)
     {
         public static OAuthCredentialSnapshot Empty { get; } =
-            new(null, null, null, null, null, null);
+            new(null, null, null, null, null, null, null, "");
     }
 
     private sealed record TranscriptionModelEntry(

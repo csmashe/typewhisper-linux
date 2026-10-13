@@ -12,17 +12,15 @@ namespace TypeWhisper.Plugin.OpenAi;
 
 internal sealed class OpenAiChatGptClient
 {
-    internal const string Endpoint = "https://chatgpt.com/backend-api/codex/responses";
+    internal const string Endpoint = "https://api.openai.com/v1/responses";
 
     private readonly HttpClient _httpClient;
     private readonly string _accessToken;
-    private readonly string? _accountId;
 
-    public OpenAiChatGptClient(HttpClient httpClient, string accessToken, string? accountId)
+    public OpenAiChatGptClient(HttpClient httpClient, string accessToken)
     {
         _httpClient = httpClient;
         _accessToken = accessToken;
-        _accountId = accountId;
     }
 
     public async Task<string> ProcessAsync(
@@ -35,8 +33,6 @@ internal sealed class OpenAiChatGptClient
         using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
-        if (!string.IsNullOrWhiteSpace(_accountId))
-            request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", _accountId);
 
         request.Content = OpenAiJson.CreateJsonContent(
             CreateRequestBody(model, systemPrompt, userText, reasoningEffort));
@@ -128,7 +124,7 @@ internal sealed class OpenAiChatGptClient
         public static ChatGptSsePolicy Instance { get; } = new();
 
         public string StreamName => "ChatGPT SSE stream";
-        public string ExpectedTerminal => "[DONE]";
+        public string ExpectedTerminal => "response.completed";
 
         public SsePolicyDecision<ChatGptTextPart> Evaluate(SseEvent sseEvent)
         {
@@ -171,6 +167,8 @@ internal sealed class OpenAiChatGptClient
 
                 switch (type)
                 {
+                    case "response.completed":
+                        return new SsePolicyDecision<ChatGptTextPart>(AcceptTerminal: true);
                     case "response.output_text.delta":
                         if (GetString(root, "delta") is { } delta)
                         {
