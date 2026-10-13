@@ -2,13 +2,15 @@
   "Settings.ApiKey": "API key",
   "Settings.ApiKeyDescription": "Required for AssemblyAI transcription and streaming.",
   "Settings.TranscriptionModel": "Transcription model",
-  "Settings.ModelDescription": "Choose the AssemblyAI speech model.",
+  "Settings.ModelDescription": "Choose the AssemblyAI speech model. Universal-3.5 Pro covers 18 languages and Universal-2 about 100. Real-time dictation uses Universal-3.6 Pro Streaming with Universal-3.5 Pro, and Universal-Streaming with Universal-2 when English, Spanish, German, French, Portuguese or Italian is selected; with automatic detection or other languages, Universal-2 transcribes after recording.",
   "Settings.UseDictionaryTerms": "Send dictionary terms as keyterms",
-  "Settings.UseDictionaryTermsDescription": "Biases transcription toward your dictionary terms, each sent whole (commas included). AssemblyAI charges extra for keyterms with Universal-3 Pro and in non-English real-time dictation; Universal-2 includes them. Real-time dictation sends at most 100 terms of up to 50 characters. When off, AssemblyAI receives no dictionary terms.",
+  "Settings.UseDictionaryTermsDescription": "Biases transcription toward your dictionary terms, each sent whole (commas included). AssemblyAI charges extra for keyterms on recorded audio and in English real-time dictation with Universal-2; other real-time dictation includes them. Real-time dictation sends at most 100 terms of up to 50 characters. When off, AssemblyAI receives no dictionary terms.",
+  "Settings.SpeakerLabels": "Label speakers",
+  "Settings.SpeakerLabelsDescription": "Starts each utterance with its speaker (\"Speaker A: …\") and keeps utterance timestamps. AssemblyAI charges extra. Turns off real-time dictation, so text appears after recording.",
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
   "Manifest.Name": "AssemblyAI",
-  "Manifest.Description": "AssemblyAI Universal-2 transcription engine"
+  "Manifest.Description": "AssemblyAI Universal-3.5 Pro and Universal-2 transcription engine"
 }
