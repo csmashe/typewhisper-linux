@@ -135,7 +135,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             .GetConnectionOptionsAsync(CancellationToken.None);
         var speechmatics = await new SpeechmaticsWebSocketAdapter(
                 "speechmatics-key",
-                "de"
+                "de",
+                []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var xai = await new XaiWebSocketAdapter("xai-key", "de")
@@ -678,7 +679,7 @@ public sealed class StreamingProviderAdapterConformanceTests
             // Speechmatics rejects a null language at StartRecognition; passing null made
             // every Speechmatics case fault during start and tear the transport down, which
             // surfaced as "the channel has been closed" from the first NextSentAsync.
-            "Speechmatics" => new SpeechmaticsWebSocketAdapter("key", "en"),
+            "Speechmatics" => new SpeechmaticsWebSocketAdapter("key", "en", []),
             "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null),
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
