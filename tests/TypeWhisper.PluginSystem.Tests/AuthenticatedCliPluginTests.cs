@@ -685,7 +685,8 @@ public sealed class AuthenticatedCliPluginTests : IDisposable
 
         AssertPrivateScratchDirectory(scratch);
         Assert.Equal(Path.Join(directories.DataPath, "scratch"), root);
-        Assert.True(Directory.Exists(directories.DataPath));
+        // Created owner-only, so a umask such as 0002 cannot make the plugin refuse its own directory.
+        Assert.Equal(ScratchTestDirectories.PrivateMode, GetUnixMode(directories.DataPath));
         Assert.Equal(ScratchTestDirectories.PrivateMode, GetUnixMode(root));
     }
 
