@@ -36,13 +36,14 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession, IStreaming
 
     public static async Task<AssemblyAiStreamingSession> ConnectAsync(
         string apiKey,
+        string modelId,
         string? language,
         IReadOnlyList<string> keyterms,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new AssemblyAiWebSocketAdapter(apiKey, language, keyterms),
+            new AssemblyAiWebSocketAdapter(apiKey, language, keyterms, modelId),
             ct
         );
         return new AssemblyAiStreamingSession(pump);
@@ -59,12 +60,19 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession, IStreaming
 internal sealed class AssemblyAiWebSocketAdapter(
     string apiKey,
     string? language,
-    IReadOnlyList<string>? keyterms = null
+    IReadOnlyList<string>? keyterms = null,
+    string modelId = AssemblyAiModels.DefaultId
 ) : IWebSocketSessionAdapter
 {
     internal const int MinimumChunkBytes = 1600;
 
     private readonly MemoryStream _audioBuffer = new();
+
+    // Receive-loop state only (HandleMessage), so it needs no synchronization.
+    private int _lastTurnOrder = -1;
+    private bool _lastTurnFinal = true;
+    // An empty unfinished turn loses nothing, so only pending text counts.
+    private bool _lastTurnPendingText;
 
     public string ProviderName => "AssemblyAI";
     public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
@@ -77,16 +85,7 @@ internal sealed class AssemblyAiWebSocketAdapter(
         CancellationToken ct
     )
     {
-        var url =
-            "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true";
-        if (
-            !string.IsNullOrEmpty(language)
-            && !language.StartsWith("en", StringComparison.OrdinalIgnoreCase)
-        )
-        {
-            url += "&speech_model=universal-streaming-multilingual";
-        }
-
+        var url = "wss://streaming.assemblyai.com/v3/ws?" + ModelQuery(modelId, AssemblyAiModels.NormalizeLanguage(language));
         if (keyterms is { Count: > 0 })
             url += "&keyterms_prompt=" + Uri.EscapeDataString(JsonSerializer.Serialize(keyterms));
 
@@ -98,6 +97,27 @@ internal sealed class AssemblyAiWebSocketAdapter(
         return ValueTask.FromResult(
             new WebSocketConnectionOptions(new Uri(url), headers)
         );
+    }
+
+    // Always named: AssemblyAI's default model has changed price before.
+    private static string ModelQuery(string modelId, string? language)
+    {
+        var query = "sample_rate=16000&encoding=pcm_s16le";
+        if (AssemblyAiModels.Find(modelId) is { IsPro: false })
+        {
+            return language is not null && AssemblyAiModels.IsEnglish(language)
+                ? query + "&speech_model=universal-streaming-english&format_turns=true"
+                : query + "&speech_model=universal-streaming-multilingual&format_turns=true&language_detection=true";
+        }
+
+        query += "&speech_model=" + AssemblyAiModels.ProStreamingModelId + "&language_detection=true";
+        if (language is not null)
+        {
+            query += "&language_codes="
+                + Uri.EscapeDataString(JsonSerializer.Serialize(new[] { AssemblyAiModels.BaseLanguage(language) }));
+        }
+
+        return query;
     }
 
     public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
@@ -175,10 +195,10 @@ internal sealed class AssemblyAiWebSocketAdapter(
             return typeElement.GetString() switch
             {
                 "Turn" => HandleTurn(root),
-                "Termination" => new WebSocketInboundResult(
-                    [],
-                    WebSocketSessionSignal.Terminal
-                ),
+                // Termination follows the last Turn, so an unconfirmed turn would be lost text.
+                "Termination" => !_lastTurnPendingText
+                    ? new WebSocketInboundResult([], WebSocketSessionSignal.Terminal)
+                    : Fault("AssemblyAI ended before the final transcript was confirmed."),
                 "Error" => Fault(
                     $"AssemblyAI streaming provider error: {ExtractError(root)}"
                 ),
@@ -197,18 +217,26 @@ internal sealed class AssemblyAiWebSocketAdapter(
         }
     }
 
-    private static WebSocketInboundResult HandleTurn(JsonElement root)
+    private WebSocketInboundResult HandleTurn(JsonElement root)
     {
         if (
             !root.TryGetProperty("transcript", out var textElement)
             || textElement.ValueKind != JsonValueKind.String
+            || !root.TryGetProperty("turn_order", out var orderElement)
+            || orderElement.ValueKind != JsonValueKind.Number
+            || !orderElement.TryGetInt32(out var turnOrder)
+            || turnOrder < 0
         )
         {
             return Fault("AssemblyAI sent a malformed Turn message.");
         }
 
-        var transcript = textElement.GetString() ?? "";
-        if (string.IsNullOrWhiteSpace(transcript))
+        if (turnOrder < _lastTurnOrder)
+            return Fault("AssemblyAI sent turns out of order.");
+        if (turnOrder > _lastTurnOrder && _lastTurnPendingText)
+            return Fault("AssemblyAI started a turn before confirming the previous one.");
+        // A re-delivered final turn is not repeated speech.
+        if (turnOrder == _lastTurnOrder && _lastTurnFinal)
             return WebSocketInboundResult.Empty;
 
         var isEndOfTurn =
@@ -223,12 +251,25 @@ internal sealed class AssemblyAiWebSocketAdapter(
                 is JsonValueKind.True
                     or JsonValueKind.False
             && formattedElement.GetBoolean();
+        var isFinal = isEndOfTurn && isFormatted;
+        var transcript = textElement.GetString() ?? "";
+        _lastTurnOrder = turnOrder;
+        _lastTurnFinal = isFinal;
+        _lastTurnPendingText = !isFinal && !string.IsNullOrWhiteSpace(transcript);
+
+        if (string.IsNullOrWhiteSpace(transcript))
+            return WebSocketInboundResult.Empty;
+
         return new WebSocketInboundResult(
             [
-                new StreamingTranscriptEvent(
-                    transcript,
-                    isEndOfTurn && isFormatted
-                ),
+                new StreamingTranscriptEvent(transcript, isFinal)
+                {
+                    DetectedLanguage = root.TryGetProperty("language_code", out var languageElement)
+                        && languageElement.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(languageElement.GetString())
+                            ? languageElement.GetString()
+                            : null,
+                },
             ]
         );
     }

@@ -2,13 +2,15 @@
   "Settings.ApiKey": "API-ключ",
   "Settings.ApiKeyDescription": "Требуется для транскрипции и потоковой передачи AssemblyAI.",
   "Settings.TranscriptionModel": "Модель транскрипции",
-  "Settings.ModelDescription": "Выберите речевую модель AssemblyAI.",
+  "Settings.ModelDescription": "Выберите речевую модель AssemblyAI. Universal-3.5 Pro поддерживает 18 языков, Universal-2 — около 100. Диктовка в реальном времени использует Universal-3.6 Pro Streaming с Universal-3.5 Pro и Universal-Streaming с Universal-2, если выбран английский, испанский, немецкий, французский, португальский или итальянский; при автоопределении или других языках Universal-2 транскрибирует после записи.",
   "Settings.UseDictionaryTerms": "Отправлять термины словаря как keyterms",
-  "Settings.UseDictionaryTermsDescription": "Настраивает распознавание на термины из вашего словаря; каждый термин отправляется целиком (вместе с запятыми). AssemblyAI берёт доплату за keyterms с Universal-3 Pro и при диктовке в реальном времени не на английском; в Universal-2 они включены. Диктовка в реальном времени отправляет не более 100 терминов длиной до 50 символов. Если выключено, AssemblyAI не получает термины словаря.",
+  "Settings.UseDictionaryTermsDescription": "Настраивает распознавание на термины из вашего словаря; каждый термин отправляется целиком (вместе с запятыми). AssemblyAI берёт доплату за keyterms в записях и при диктовке в реальном времени на английском с Universal-2; в остальной диктовке в реальном времени они включены. Диктовка в реальном времени отправляет не более 100 терминов длиной до 50 символов. Если выключено, AssemblyAI не получает термины словаря.",
+  "Settings.SpeakerLabels": "Помечать говорящих",
+  "Settings.SpeakerLabelsDescription": "Добавляет к каждой реплике её говорящего («Speaker A: …») и сохраняет метки времени реплик. AssemblyAI берёт доплату. Отключает диктовку в реальном времени: текст появляется после записи.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyValid": "API-ключ действителен.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
   "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "AssemblyAI",
-  "Manifest.Description": "Движок транскрипции AssemblyAI Universal-2"
+  "Manifest.Description": "Движок транскрипции AssemblyAI Universal-3.5 Pro и Universal-2"
 }
