@@ -152,7 +152,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             .GetConnectionOptionsAsync(CancellationToken.None);
 
         Assert.Equal("assembly-key", assembly.Headers!["Authorization"]);
-        Assert.Contains("speech_model=universal-streaming-multilingual", assembly.Uri.Query);
+        Assert.Contains("speech_model=universal-3-6-pro", assembly.Uri.Query);
+        Assert.Contains("language_codes=%5B%22de%22%5D", assembly.Uri.Query);
         Assert.Equal("Token deepgram-key", deepgram.Headers!["Authorization"]);
         Assert.Contains("language=multi", deepgram.Uri.Query);
         Assert.Equal("eleven-key", eleven.Headers!["xi-api-key"]);

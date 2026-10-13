@@ -20,12 +20,11 @@ public sealed class AssemblyAiPlugin
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.assemblyai.com";
-    // Off by default: keyterms cost extra on the Pro and Universal-Streaming models.
+    // Off by default: keyterms cost extra on recorded audio and Universal-Streaming English.
     internal const string UseDictionaryTermsSettingName = "useDictionaryTerms";
+    // Off by default: labels cost extra, and live text cannot carry them.
+    internal const string SpeakerLabelsSettingName = "speakerLabels";
 
-    // Recorded audio counts each word of a phrase toward the limit, so KeytermsFor caps total words.
-    private static readonly DictionaryTermsBudget s_proBudget = new(MaxTerms: 1000, MaxWordsPerTerm: 6);
-    private static readonly DictionaryTermsBudget s_universal2Budget = new(MaxTerms: 200, MaxWordsPerTerm: 6);
     // Streaming counts terms, not words; it ignores longer keyterms and rejects more than 100.
     private static readonly DictionaryTermsBudget s_streamingBudget =
         new(MaxTerms: 100, MaxCharsPerTerm: 50, MaxWordsPerTerm: 6);
@@ -37,8 +36,11 @@ public sealed class AssemblyAiPlugin
 
     private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
-        new("universal-3-pro", "Universal-3 Pro"),
-        new("universal-2", "Universal-2"),
+        .. AssemblyAiModels.All.Select(model => new PluginModelInfo(model.Id, model.DisplayName)
+        {
+            LanguageCount = model.Languages.Count,
+            IsRecommended = model.IsPro,
+        }),
     ];
 
     public AssemblyAiPlugin()
@@ -57,8 +59,12 @@ public sealed class AssemblyAiPlugin
     {
         _host = host;
         ApiKey = await host.LoadSecretAsync("api-key");
-        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
+        var savedModelId = host.GetSetting<string>("selectedModel");
+        SelectedModelId = AssemblyAiModels.Resolve(savedModelId).Id;
+        if (savedModelId is not null && savedModelId != SelectedModelId)
+            host.SetSetting("selectedModel", SelectedModelId);
         UseDictionaryTerms = host.GetSetting<bool?>(UseDictionaryTermsSettingName) ?? false;
+        SpeakerLabels = host.GetSetting<bool?>(SpeakerLabelsSettingName) ?? false;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -74,14 +80,15 @@ public sealed class AssemblyAiPlugin
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId { get; private set; }
+    public string? SelectedModelId { get; private set; } = AssemblyAiModels.DefaultId;
 
     public bool SupportsTranslation => false;
-    public bool SupportsStreaming => true;
+    public bool SupportsStreaming => !SpeakerLabels;
     public bool SupportsStructuredDictionaryTerms => UseDictionaryTerms;
     public DictionaryTermsBudget DictionaryTermsBudget => BudgetFor(SelectedModelId);
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
+    public IReadOnlyList<string> SupportedLanguages => AssemblyAiModels.Resolve(SelectedModelId).Languages;
 
     public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
         StartStreamingWithLanguageHintsAndPromptAsync(language is null ? [] : [language], null, ct);
@@ -100,9 +107,15 @@ public sealed class AssemblyAiPlugin
     {
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
-        var language = languageHints.FirstOrDefault(static hint => !string.IsNullOrWhiteSpace(hint))?.Trim();
+        var model = AssemblyAiModels.Resolve(SelectedModelId);
+        var language = AssemblyAiModels.NormalizeLanguage(
+            languageHints.FirstOrDefault(static hint => !string.IsNullOrWhiteSpace(hint)));
+        // The host transcribes the recording instead when a session cannot start.
+        if (!AssemblyAiModels.SupportsStreamingLanguage(model, language))
+            throw new NotSupportedException("Universal-2 real-time dictation needs one of its six streaming languages selected.");
         return await AssemblyAiStreamingSession.ConnectAsync(
             ApiKey!,
+            model.Id,
             language,
             StreamingKeytermsFor(prompt, UseDictionaryTerms),
             ct
@@ -111,10 +124,9 @@ public sealed class AssemblyAiPlugin
 
     public void SelectModel(string modelId)
     {
-        if (s_models.All(m => m.Id != modelId))
-            throw new ArgumentException($"Unknown model: {modelId}");
-        SelectedModelId = modelId;
-        _host?.SetSetting("selectedModel", modelId);
+        var model = AssemblyAiModels.Find(modelId) ?? throw new ArgumentException($"Unknown model: {modelId}");
+        SelectedModelId = model.Id;
+        _host?.SetSetting("selectedModel", model.Id);
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -131,10 +143,13 @@ public sealed class AssemblyAiPlugin
                 "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
+        var speakerLabels = SpeakerLabels;
         var keyterms = KeytermsFor(prompt, UseDictionaryTerms, BudgetFor(modelId));
         var uploadUrl = await UploadAudioAsync(wavAudio, ct);
-        var transcriptId = await SubmitTranscriptionAsync(uploadUrl, modelId, language, keyterms, ct);
-        return await PollForResultAsync(transcriptId, ct);
+        var transcriptId = await SubmitTranscriptionAsync(
+            new SubmitOptions(uploadUrl, modelId, AssemblyAiModels.NormalizeLanguage(language), keyterms, speakerLabels),
+            ct);
+        return await PollForResultAsync(transcriptId, speakerLabels, ct);
     }
 
     private async Task<string> UploadAudioAsync(byte[] wavAudio, CancellationToken ct)
@@ -147,22 +162,16 @@ public sealed class AssemblyAiPlugin
         using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
             _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
             (errorResponse, errorBody) => $"AssemblyAI upload error {(int)errorResponse.StatusCode}: {errorBody}");
-        var json = await response.Content.ReadAsStringAsync(ct);
-
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.GetProperty("upload_url").GetString()
-            ?? throw new InvalidOperationException("Missing upload_url in response");
+        using var doc = await ReadObjectAsync(response, ct);
+        var uploadUrl = RequiredString(doc.RootElement, "upload_url");
+        return Uri.TryCreate(uploadUrl, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+            ? uploadUrl
+            : throw InvalidResponse();
     }
 
-    private async Task<string> SubmitTranscriptionAsync(
-        string audioUrl,
-        string modelId,
-        string? language,
-        IReadOnlyList<string> keyterms,
-        CancellationToken ct
-    )
+    private async Task<string> SubmitTranscriptionAsync(SubmitOptions options, CancellationToken ct)
     {
-        var body = CreateSubmitBody(audioUrl, modelId, language, keyterms);
+        var body = CreateSubmitBody(options);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v2/transcript");
         request.Headers.Add("Authorization", ApiKey);
@@ -175,39 +184,41 @@ public sealed class AssemblyAiPlugin
         using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
             _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
             (errorResponse, errorBody) => $"AssemblyAI submit error {(int)errorResponse.StatusCode}: {errorBody}");
-        var json = await response.Content.ReadAsStringAsync(ct);
-
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.GetProperty("id").GetString()
-            ?? throw new InvalidOperationException("Missing id in response");
+        using var doc = await ReadObjectAsync(response, ct);
+        return RequiredString(doc.RootElement, "id");
     }
 
-    internal static Dictionary<string, object> CreateSubmitBody(
-        string audioUrl,
-        string modelId,
-        string? language,
-        IReadOnlyList<string> keyterms
-    )
+    internal sealed record SubmitOptions(
+        string AudioUrl,
+        string ModelId,
+        string? Language,
+        IReadOnlyList<string> Keyterms,
+        bool SpeakerLabels = false
+    );
+
+    internal static Dictionary<string, object> CreateSubmitBody(SubmitOptions options)
     {
         var body = new Dictionary<string, object>
         {
-            ["audio_url"] = audioUrl,
-            ["speech_models"] = new[] { modelId },
+            ["audio_url"] = options.AudioUrl,
+            ["speech_models"] = new[] { options.ModelId },
         };
 
-        if (string.IsNullOrEmpty(language))
+        if (options.Language is null)
             body["language_detection"] = true;
         else
-            body["language_code"] = language;
+            body["language_code"] = options.Language;
 
-        if (keyterms.Count > 0)
-            body["keyterms_prompt"] = keyterms;
+        if (options.Keyterms.Count > 0)
+            body["keyterms_prompt"] = options.Keyterms;
+
+        if (options.SpeakerLabels)
+            body["speaker_labels"] = true;
 
         return body;
     }
 
-    internal static DictionaryTermsBudget BudgetFor(string? modelId) =>
-        modelId == "universal-2" ? s_universal2Budget : s_proBudget;
+    internal static DictionaryTermsBudget BudgetFor(string? modelId) => AssemblyAiModels.Resolve(modelId).Budget;
 
     // Dictionary terms stay whole; prompt text is not sent (AssemblyAI's prompt describes the audio).
     // Terms are dropped when the setting is off, so a prompt composed before a toggle cannot add them.
@@ -256,6 +267,7 @@ public sealed class AssemblyAiPlugin
 
     private async Task<PluginTranscriptionResult> PollForResultAsync(
         string transcriptId,
+        bool speakerLabels,
         CancellationToken ct
     )
     {
@@ -266,52 +278,134 @@ public sealed class AssemblyAiPlugin
 
             using var request = new HttpRequestMessage(
                 HttpMethod.Get,
-                $"{BaseUrl}/v2/transcript/{transcriptId}"
+                $"{BaseUrl}/v2/transcript/{Uri.EscapeDataString(transcriptId)}"
             );
             request.Headers.Add("Authorization", ApiKey);
 
             using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
                 _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
                 (errorResponse, errorBody) => $"AssemblyAI poll error {(int)errorResponse.StatusCode}: {errorBody}");
-            var json = await response.Content.ReadAsStringAsync(ct);
-
-            using var doc = JsonDocument.Parse(json);
+            using var doc = await ReadObjectAsync(response, ct);
             var root = doc.RootElement;
-            var status = root.GetProperty("status").GetString();
 
-            // ReSharper disable once ConvertIfStatementToSwitchStatement -- subjective control-flow style; the if-chain reads fine here.
-            if (status == "error")
+            switch (RequiredString(root, "status"))
             {
-                var error = root.TryGetProperty("error", out var errEl)
-                    ? errEl.GetString()
-                    : "Unknown error";
-                throw new InvalidOperationException($"AssemblyAI transcription failed: {error}");
-            }
-
-            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
-            if (status == "completed")
-            {
-                var text = root.GetProperty("text").GetString() ?? "";
-                var duration = root.TryGetProperty("audio_duration", out var durEl)
-                    ? durEl.GetDouble()
-                    : 0.0;
-                var detectedLanguage = root.TryGetProperty("language_code", out var langEl)
-                    ? langEl.GetString()
-                    : null;
-                return new PluginTranscriptionResult(
-                    text,
-                    detectedLanguage,
-                    duration,
-                    NoSpeechProbability: null
-                );
+                case "queued" or "processing":
+                    continue;
+                case "completed":
+                    return ParseCompleted(root, speakerLabels);
+                case "error":
+                    throw new PluginRequestException(
+                        $"AssemblyAI transcription failed: {OptionalString(root, "error") ?? "Unknown error"}",
+                        PluginRequestFailureKind.InvalidRequest);
+                default:
+                    throw InvalidResponse();
             }
         }
 
         throw new TimeoutException("AssemblyAI transcription timed out after 5 minutes");
     }
 
+    internal static PluginTranscriptionResult ParseCompleted(JsonElement root, bool speakerLabels)
+    {
+        // A completed recording without speech has a null text.
+        if (!root.TryGetProperty("text", out var textElement)
+            || textElement.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+            throw InvalidResponse();
+
+        var text = textElement.GetString() ?? "";
+        var duration = Number(root, "audio_duration") ?? 0;
+        // Without usable utterances, labelled transcripts keep the plain text.
+        var segments = speakerLabels ? ReadUtterances(root) : [];
+        // ReSharper disable once InvertIf -- inverting would duplicate the result construction below.
+        if (segments.Count > 0)
+        {
+            text = string.Join("\n", segments.Select(static segment => segment.Text));
+            duration = Math.Max(duration, segments.Max(static segment => segment.End));
+        }
+
+        return new PluginTranscriptionResult(
+            text,
+            OptionalString(root, "language_code"),
+            duration,
+            NoSpeechProbability: null
+        )
+        {
+            Segments = segments,
+        };
+    }
+
+    private static List<PluginTranscriptionSegment> ReadUtterances(JsonElement root)
+    {
+        var segments = new List<PluginTranscriptionSegment>();
+        if (!root.TryGetProperty("utterances", out var utterances) || utterances.ValueKind != JsonValueKind.Array)
+            return segments;
+
+        foreach (var utterance in utterances.EnumerateArray())
+        {
+            if (OptionalString(utterance, "text")?.Trim() is not { Length: > 0 } text)
+                continue;
+            // Dropping a spoken utterance would lose text, so labelled output needs every one.
+            if (Number(utterance, "start") is not { } start
+                || Number(utterance, "end") is not { } end
+                || end < start)
+                return [];
+
+            if (OptionalString(utterance, "speaker")?.Trim() is { Length: > 0 } speaker
+                && !speaker.Equals("unknown", StringComparison.OrdinalIgnoreCase))
+                text = $"Speaker {speaker}: {text}";
+            // AssemblyAI times utterances in milliseconds.
+            segments.Add(new PluginTranscriptionSegment(text, start / 1000, end / 1000));
+        }
+
+        return segments;
+    }
+
+    private static async Task<JsonDocument> ReadObjectAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var json = await response.Content.ReadAsStringAsync(ct);
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(json);
+        }
+        catch (JsonException)
+        {
+            throw InvalidResponse();
+        }
+
+        if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            return doc;
+        doc.Dispose();
+        throw InvalidResponse();
+    }
+
+    private static PluginRequestException InvalidResponse() =>
+        new("AssemblyAI returned an invalid or incomplete response.", PluginRequestFailureKind.OutputIncomplete);
+
+    private static string? OptionalString(JsonElement element, string name) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(name, out var property)
+        && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static string RequiredString(JsonElement element, string name) =>
+        OptionalString(element, name) is { } value && !string.IsNullOrWhiteSpace(value) ? value : throw InvalidResponse();
+
+    private static double? Number(JsonElement element, string name) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(name, out var property)
+        && property.ValueKind == JsonValueKind.Number
+        && property.TryGetDouble(out var value)
+        && double.IsFinite(value)
+        && value >= 0
+            ? value
+            : null;
+
     internal string? ApiKey { get; private set; }
     internal bool UseDictionaryTerms { get; private set; }
+    internal bool SpeakerLabels { get; private set; }
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -381,6 +475,12 @@ public sealed class AssemblyAiPlugin
                 Description: Loc.L("Settings.UseDictionaryTermsDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
+            new(
+                SpeakerLabelsSettingName,
+                Loc.L("Settings.SpeakerLabels"),
+                Description: Loc.L("Settings.SpeakerLabelsDescription"),
+                Kind: PluginSettingKind.Boolean
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -390,6 +490,7 @@ public sealed class AssemblyAiPlugin
                 "api-key" => ApiKey,
                 "selectedModel" => SelectedModelId,
                 UseDictionaryTermsSettingName => UseDictionaryTerms ? "true" : "false",
+                SpeakerLabelsSettingName => SpeakerLabels ? "true" : "false",
                 _ => null,
             }
         );
@@ -412,6 +513,15 @@ public sealed class AssemblyAiPlugin
             case UseDictionaryTermsSettingName:
                 UseDictionaryTerms = bool.TryParse(value, out var useDictionaryTerms) && useDictionaryTerms;
                 _host?.SetSetting(UseDictionaryTermsSettingName, UseDictionaryTerms);
+                break;
+            case SpeakerLabelsSettingName:
+                var speakerLabels = bool.TryParse(value, out var parsed) && parsed;
+                if (speakerLabels == SpeakerLabels)
+                    break;
+                SpeakerLabels = speakerLabels;
+                _host?.SetSetting(SpeakerLabelsSettingName, SpeakerLabels);
+                // Live text availability follows this setting.
+                _host?.NotifyCapabilitiesChanged();
                 break;
         }
     }

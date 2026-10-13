@@ -2,13 +2,15 @@
   "Settings.ApiKey": "API-Schlüssel",
   "Settings.ApiKeyDescription": "Erforderlich für AssemblyAI-Transkription und -Streaming.",
   "Settings.TranscriptionModel": "Transkriptionsmodell",
-  "Settings.ModelDescription": "Wählen Sie das AssemblyAI-Sprachmodell.",
+  "Settings.ModelDescription": "Wählen Sie das AssemblyAI-Sprachmodell. Universal-3.5 Pro unterstützt 18 Sprachen, Universal-2 etwa 100. Echtzeit-Diktate nutzen mit Universal-3.5 Pro Universal-3.6 Pro Streaming und mit Universal-2 Universal-Streaming, wenn Englisch, Spanisch, Deutsch, Französisch, Portugiesisch oder Italienisch ausgewählt ist; bei automatischer Erkennung oder anderen Sprachen transkribiert Universal-2 nach der Aufnahme.",
   "Settings.UseDictionaryTerms": "Wörterbuchbegriffe als Keyterms senden",
-  "Settings.UseDictionaryTermsDescription": "Richtet die Transkription auf Ihre Wörterbuchbegriffe aus, jeweils vollständig (auch mit Kommas). AssemblyAI berechnet für Keyterms mit Universal-3 Pro und bei nicht-englischen Echtzeit-Diktaten einen Aufpreis; bei Universal-2 sind sie enthalten. Echtzeit-Diktate senden höchstens 100 Begriffe mit bis zu 50 Zeichen. Wenn deaktiviert, erhält AssemblyAI keine Wörterbuchbegriffe.",
+  "Settings.UseDictionaryTermsDescription": "Richtet die Transkription auf Ihre Wörterbuchbegriffe aus, jeweils vollständig (auch mit Kommas). AssemblyAI berechnet für Keyterms bei Aufnahmen und bei englischen Echtzeit-Diktaten mit Universal-2 einen Aufpreis; bei anderen Echtzeit-Diktaten sind sie enthalten. Echtzeit-Diktate senden höchstens 100 Begriffe mit bis zu 50 Zeichen. Wenn deaktiviert, erhält AssemblyAI keine Wörterbuchbegriffe.",
+  "Settings.SpeakerLabels": "Sprecher kennzeichnen",
+  "Settings.SpeakerLabelsDescription": "Stellt jeder Äußerung ihren Sprecher voran („Speaker A: …“) und erhält die Zeitstempel der Äußerungen. AssemblyAI berechnet einen Aufpreis. Schaltet Echtzeit-Diktate ab; der Text erscheint nach der Aufnahme.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
   "Manifest.Name": "AssemblyAI",
-  "Manifest.Description": "AssemblyAI-Universal-2-Transkriptions-Engine"
+  "Manifest.Description": "AssemblyAI-Transkriptions-Engine mit Universal-3.5 Pro und Universal-2"
 }
