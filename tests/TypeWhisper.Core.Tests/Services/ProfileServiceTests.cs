@@ -33,6 +33,18 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetProfiles_ReportsACorruptFileResetToEmpty()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+
+        Assert.False(new ProfileService(_filePath).TryGetProfiles(out _));
+
+        File.Delete(_filePath);
+
+        Assert.True(new ProfileService(_filePath).TryGetProfiles(out _));
+    }
+
+    [Fact]
     public void AddProfile_ContextMatchMode_PersistsAsStringAndReloads()
     {
         _sut.AddProfile(new Profile

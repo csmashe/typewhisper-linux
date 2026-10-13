@@ -351,7 +351,7 @@ public sealed partial class HttpApiService : IDisposable
 
     // ReSharper disable once InconsistentlySynchronizedField -- racy-read-tolerant status probe;
     // _host is published under _lifecycleLock and a stale read only skews advisory status text.
-    private bool IsRunning => _host is not null;
+    internal bool IsRunning => _host is not null;
 
     // ReSharper disable once InconsistentlySynchronizedField -- same advisory-read tolerance as IsRunning.
     internal IHostLifetime? HostLifetime => _host?.Services.GetService<IHostLifetime>();

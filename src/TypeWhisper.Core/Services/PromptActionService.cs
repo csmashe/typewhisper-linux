@@ -46,6 +46,12 @@ public sealed class PromptActionService : IPromptActionService
 
     public IReadOnlyList<PromptAction> Actions => _store.Current.ToArray();
 
+    public bool TryGetActions(out IReadOnlyList<PromptAction> actions)
+    {
+        actions = _store.GetCurrent(out var reset).ToArray();
+        return !reset;
+    }
+
     public IReadOnlyList<PromptAction> EnabledActions
     {
         get

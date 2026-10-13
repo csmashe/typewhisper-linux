@@ -23,6 +23,35 @@ public sealed class ErrorLogServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetEntries_DistinguishesAnUnreadableLogFromAnEmptyOne()
+    {
+        Assert.True(new ErrorLogService(_tempDir).TryGetEntries(out var empty));
+        Assert.Empty(empty);
+
+        Directory.CreateDirectory(Path.Join(_tempDir, "error-log.json"));
+        var service = new ErrorLogService(_tempDir);
+
+        Assert.False(service.TryGetEntries(out var unreadable));
+        Assert.Empty(unreadable);
+        Assert.Empty(service.Entries);
+    }
+
+    [Fact]
+    public void TryGetEntries_TreatsACorruptLogResetToEmptyAsUnreadable()
+    {
+        File.WriteAllText(Path.Join(_tempDir, "error-log.json"), "{ not json");
+        var service = new ErrorLogService(_tempDir);
+
+        Assert.False(service.TryGetEntries(out var entries));
+        Assert.Empty(entries);
+
+        service.AddEntry("after the reset");
+
+        Assert.True(service.TryGetEntries(out var healed));
+        Assert.Single(healed);
+    }
+
+    [Fact]
     public void AddEntry_PersistsBeforePublishingAndRoundTrips()
     {
         var directory = TestPaths.CreateTempDirectory("ErrorLogServiceRoundTrip");
