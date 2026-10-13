@@ -1275,7 +1275,12 @@ public sealed class AuthenticatedCliPlugin :
 
         try
         {
-            Directory.CreateDirectory(dataDirectory);
+            // Owner-only when created here: a umask such as Ubuntu's 0002 would otherwise make it
+            // group-writable and the check below would refuse it.
+            Directory.CreateDirectory(
+                dataDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
             // The host may create this parent as 0755; only shared write access is unsafe.
             if (new DirectoryInfo(dataDirectory).LinkTarget is not null
                 || (File.GetUnixFileMode(dataDirectory) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
