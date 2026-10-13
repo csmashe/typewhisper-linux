@@ -1,0 +1,12 @@
+{
+  "id": "com.typewhisper.needle-whistle",
+  "name": "Needle Whistle",
+  "version": "0.1.0",
+  "minHostVersion": "0.17.0",
+  "author": "TypeWhisper",
+  "description": "Local seven-language speech recognition with Cactus Whistle.",
+  "networkAccess": "mixed",
+  "categories": ["transcription"],
+  "assemblyName": "TypeWhisper.Plugin.NeedleWhistle.dll",
+  "pluginClass": "TypeWhisper.Plugin.NeedleWhistle.NeedleWhistlePlugin"
+}

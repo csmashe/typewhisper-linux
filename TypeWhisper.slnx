@@ -33,6 +33,7 @@
         <Project Path="plugins/TypeWhisper.Plugin.Groq/TypeWhisper.Plugin.Groq.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Linear/TypeWhisper.Plugin.Linear.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Meta/TypeWhisper.Plugin.Meta.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.NeedleWhistle/TypeWhisper.Plugin.NeedleWhistle.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.MicrosoftAi/TypeWhisper.Plugin.MicrosoftAi.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Obsidian/TypeWhisper.Plugin.Obsidian.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.OpenAi/TypeWhisper.Plugin.OpenAi.csproj"/>

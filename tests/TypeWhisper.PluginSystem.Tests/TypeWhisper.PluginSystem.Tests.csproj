@@ -43,6 +43,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Obsidian\TypeWhisper.Plugin.Obsidian.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.ParakeetCtc\TypeWhisper.Plugin.ParakeetCtc.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Qwen3Stt\TypeWhisper.Plugin.Qwen3Stt.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.NeedleWhistle\TypeWhisper.Plugin.NeedleWhistle.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Reson8\TypeWhisper.Plugin.Reson8.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Script\TypeWhisper.Plugin.Script.csproj"/>
         <!--
