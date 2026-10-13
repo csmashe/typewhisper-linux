@@ -10,6 +10,14 @@ public interface ISnippetService
 {
     IReadOnlyList<Snippet> Snippets { get; }
 
+    /// <summary>Reads the snippets and reports whether they are stored data.</summary>
+    /// <returns><c>false</c> when the store was reset after corruption, not merely empty.</returns>
+    bool TryGetSnippets(out IReadOnlyList<Snippet> snippets)
+    {
+        snippets = Snippets;
+        return true;
+    }
+
     /// <summary>All distinct tags used across the snippets.</summary>
     IReadOnlyList<string> AllTags { get; }
 
