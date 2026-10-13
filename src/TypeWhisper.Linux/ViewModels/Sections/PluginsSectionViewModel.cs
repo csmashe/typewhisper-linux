@@ -373,6 +373,10 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         row.IsExpanded = true;
         await LoadPluginSettingsAsync(row, SettingsReloadKind.ResetBaseline);
+        if (row.IsEnabled && row.HasModelCatalogProvider)
+        {
+            await RefreshModelCatalogAsync(row);
+        }
     }
 
     [RelayCommand]

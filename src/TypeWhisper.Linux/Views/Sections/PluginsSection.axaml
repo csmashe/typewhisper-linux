@@ -330,9 +330,7 @@
                                                         Spacing="8"
                                                         Margin="0,0,0,14">
                                                 <!-- ReSharper disable once Xaml.PossibleNullReferenceException -->
-                                                <Button Content="⟳"
-                                                        ToolTip.Tip="{loc:Str Common.Refresh}"
-                                                        Width="32"
+                                                <Button Content="{loc:Str Common.Refresh}"
                                                         Command="{Binding Owner.RefreshModelCatalogCommand}"
                                                         CommandParameter="{Binding}"
                                                         IsEnabled="{Binding CanRefreshModels}"

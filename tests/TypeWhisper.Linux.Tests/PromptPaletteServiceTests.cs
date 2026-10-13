@@ -13,10 +13,43 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptPaletteServiceTests
 {
+    [Theory]
+    [InlineData(InsertionResult.Pasted, null)]
+    [InlineData(InsertionResult.Typed, null)]
+    [InlineData(InsertionResult.ActionHandled, null)]
+    [InlineData(InsertionResult.CopiedToClipboard, "Corrected text was copied to the clipboard, but it did not replace the selection. Paste it manually.")]
+    [InlineData(InsertionResult.MissingClipboardTool, "TypeWhisper could not replace the selected text because no clipboard tool is available.")]
+    [InlineData(InsertionResult.MissingPasteTool, "TypeWhisper could not replace the selected text because no paste tool is available.")]
+    [InlineData(InsertionResult.Failed, "The correction was not applied because TypeWhisper could not replace the selected text.")]
+    [InlineData(InsertionResult.NoText, "The correction was not applied because TypeWhisper could not replace the selected text.")]
+    public void Insertion_result_has_clear_user_feedback(
+        InsertionResult result,
+        string? expectedMessage
+    )
+    {
+        Assert.Equal(expectedMessage, PromptPaletteService.GetInsertionFeedbackMessage(result));
+    }
+
     [Fact]
     public void No_provider_warning_is_localized()
     {
         Assert.Equal(Loc.Instance["Prompts.NoProviderConfigure"], PromptPaletteService.NoProviderMessage);
+    }
+
+    [Theory]
+    [InlineData(false, "xdotool", "42", "42")]
+    [InlineData(true, "xdotool", "42", null)]
+    [InlineData(false, "hyprland", "42", null)]
+    [InlineData(false, "xdotool", null, null)]
+    public void Replacement_uses_x11_window_id_only_for_xdotool_x11(
+        bool isWayland,
+        string source,
+        string? windowId,
+        string? expected
+    )
+    {
+        var snapshot = new ActiveWindowSnapshot("editor", "Document", windowId, "app", source);
+        Assert.Equal(expected, PromptPaletteService.GetReplacementTargetWindowId(snapshot, isWayland));
     }
 
     [Theory]

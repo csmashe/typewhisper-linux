@@ -16,6 +16,7 @@ public sealed class PromptPaletteService
     private readonly ActiveWindowService _activeWindow;
     private readonly ActionPluginExecutionHost _actionPluginExecutionHost;
     private readonly DictationOrchestrator _dictation;
+    private readonly SystemCommandAvailabilityService _commands;
     private readonly PluginManager _pluginManager;
     private readonly PromptProcessingService _processing;
     private readonly IPromptActionService _promptActions;
@@ -35,7 +36,8 @@ public sealed class PromptPaletteService
         PluginManager pluginManager,
         ActiveWindowService activeWindow,
         ActionPluginExecutionHost actionPluginExecutionHost,
-        DictationOrchestrator dictation
+        DictationOrchestrator dictation,
+        SystemCommandAvailabilityService commands
     )
     {
         _services = services;
@@ -46,6 +48,7 @@ public sealed class PromptPaletteService
         _activeWindow = activeWindow;
         _actionPluginExecutionHost = actionPluginExecutionHost;
         _dictation = dictation;
+        _commands = commands;
     }
 
     public async Task TogglePaletteAsync()
@@ -80,17 +83,19 @@ public sealed class PromptPaletteService
             return;
         }
 
-        var targetWindowId = _activeWindow.GetActiveWindowId();
-
-        var captured = await _textInsertion.CaptureSelectedTextAsync();
+        var targetSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
+        var captured = await _textInsertion.CaptureSelectedTextAsync(
+            TextInsertionService.IsTerminalApp(targetSnapshot?.ProcessName)
+        );
         if (string.IsNullOrWhiteSpace(captured))
         {
+            await ShowWarningAsync("TypeWhisper", "Select text before running a correction.");
             return;
         }
 
         // No palette window: streaming has no UI sink (null → no-op renders),
         // but the result still streams + falls back to batch before configured delivery.
-        await ExecuteActionAsync(action, captured, null, targetWindowId);
+        await ExecuteActionAsync(action, captured, null, targetSnapshot);
     }
 
     private async Task OpenPaletteAsync()
@@ -103,9 +108,10 @@ public sealed class PromptPaletteService
 
         // Capture the target window before the palette steals focus, so the paste
         // can re-activate it and land in the editor even while the palette streamed.
-        var targetWindowId = _activeWindow.GetActiveWindowId();
-
-        var capturedText = await _textInsertion.CaptureSelectedTextAsync();
+        var targetSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
+        var capturedText = await _textInsertion.CaptureSelectedTextAsync(
+            TextInsertionService.IsTerminalApp(targetSnapshot?.ProcessName)
+        );
 
         PromptAction? selectedAction = null;
         PromptPaletteWindow? window = null;
@@ -127,17 +133,18 @@ public sealed class PromptPaletteService
         if (string.IsNullOrWhiteSpace(capturedText))
         {
             await CloseWindowAsync(window);
+            await ShowWarningAsync("TypeWhisper", "Select text before running a correction.");
             return;
         }
 
-        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId);
+        await ExecuteActionAsync(selectedAction, capturedText, window, targetSnapshot);
     }
 
     private async Task ExecuteActionAsync(
         PromptAction action,
         string capturedText,
         PromptPaletteWindow? window,
-        string? targetWindowId
+        ActiveWindowSnapshot? targetSnapshot
     )
     {
         if (_processing.HasNoProviderForRequest(action.ProviderOverride))
@@ -203,7 +210,7 @@ public sealed class PromptPaletteService
             await RouteActionDeliveryAsync(
                 action.TargetActionPluginId,
                 actionPlugin,
-                () => _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId),
+                () => InsertResultAsync(result, targetSnapshot),
                 async resolvedActionPlugin =>
                 {
                     // Unlinked: userCts is dead once the palette closed; the plugin's
@@ -249,6 +256,53 @@ public sealed class PromptPaletteService
             await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
         }
     }
+
+    private async Task InsertResultAsync(string result, ActiveWindowSnapshot? targetSnapshot)
+    {
+        var currentSnapshot = await _activeWindow.GetActiveWindowSnapshotAsync(CancellationToken.None);
+        if (TransformSelectionService.HasSelectionTargetChanged(targetSnapshot, currentSnapshot))
+        {
+            await _textInsertion.InsertTextAsync(result, autoPaste: false);
+            await ShowWarningAsync(
+                "TypeWhisper",
+                "The active window changed while TypeWhisper was correcting the text. The correction was copied to the clipboard, but the selection was left unchanged."
+            );
+            return;
+        }
+
+        var targetWindowId = GetReplacementTargetWindowId(targetSnapshot!, _commands.IsWaylandSession);
+        var insertion = await _textInsertion.InsertTextAsync(
+            result,
+            targetWindowId: targetWindowId,
+            targetProcessName: targetSnapshot!.ProcessName,
+            targetWindowTitle: targetSnapshot.Title,
+            strategy: TextInsertionStrategy.ClipboardPaste
+        );
+        if (GetInsertionFeedbackMessage(insertion) is { } message)
+        {
+            await ShowWarningAsync("TypeWhisper", message);
+        }
+    }
+
+    internal static string? GetReplacementTargetWindowId(
+        ActiveWindowSnapshot snapshot,
+        bool isWaylandSession
+    ) => !isWaylandSession
+         && string.Equals(snapshot.Source, "xdotool", StringComparison.Ordinal)
+        ? snapshot.WindowId
+        : null;
+
+    internal static string? GetInsertionFeedbackMessage(InsertionResult result) => result switch
+    {
+        InsertionResult.Pasted or InsertionResult.Typed or InsertionResult.ActionHandled => null,
+        InsertionResult.CopiedToClipboard =>
+            "Corrected text was copied to the clipboard, but it did not replace the selection. Paste it manually.",
+        InsertionResult.MissingClipboardTool =>
+            "TypeWhisper could not replace the selected text because no clipboard tool is available.",
+        InsertionResult.MissingPasteTool =>
+            "TypeWhisper could not replace the selected text because no paste tool is available.",
+        _ => "The correction was not applied because TypeWhisper could not replace the selected text.",
+    };
 
     /// <summary>
     ///     Extracted for tests: a configured-but-unresolved action target must surface a routing
