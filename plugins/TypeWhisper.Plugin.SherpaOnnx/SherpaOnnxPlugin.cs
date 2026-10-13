@@ -35,6 +35,9 @@ public sealed class SherpaOnnxPlugin
         "es",
     ];
 
+    private static readonly IReadOnlyList<TranscriptionAccelerationBackend> s_supportedAccelerationBackends =
+        CreateSupportedAccelerationBackends();
+
     // Native-library parse diagnostics from org.k2fsa.sherpa.onnx 1.12.23. Match only
     // these artifact-specific signatures; generic InvalidOperationException failures
     // (CUDA/provider/runtime setup) must leave the downloaded model intact.
@@ -198,6 +201,7 @@ public sealed class SherpaOnnxPlugin
     // Lets a first-load CUDA-recognizer failure pin "cuda" (the runtime is CUDA-capable)
     // rather than "cpu", so a later CPU↔CUDA recognizer swap doesn't read as restart-required.
     private bool _cudaOrtRuntimeWired;
+    private bool _webGpuOrtRuntimeWired;
 
     private string _canarySrcLang = "en";
     private string _canaryTgtLang = "en";
@@ -222,9 +226,8 @@ public sealed class SherpaOnnxPlugin
             ? LanguageSelectionSupport.Supported
             : LanguageSelectionSupport.Unsupported;
 
-    public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
-        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda,
-            TranscriptionAccelerationBackend.AmdMigraphx];
+    public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends =>
+        s_supportedAccelerationBackends;
 
     // LoadModelAsync downloads + preloads the CUDA runtime on demand and falls back to
     // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
@@ -252,6 +255,30 @@ public sealed class SherpaOnnxPlugin
                 LanguageCount = m.LanguageCount,
             })
             .ToList();
+
+    private static List<TranscriptionAccelerationBackend> CreateSupportedAccelerationBackends()
+    {
+        var backends = new List<TranscriptionAccelerationBackend>
+        {
+            TranscriptionAccelerationBackend.Cpu,
+            TranscriptionAccelerationBackend.NvidiaCuda,
+            TranscriptionAccelerationBackend.AmdMigraphx,
+        };
+
+        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64)
+        {
+            var runtimeDirectory = Path.Join(
+                Path.GetDirectoryName(typeof(SherpaOnnxPlugin).Assembly.Location),
+                "Runtimes",
+                "linux-x64",
+                "sherpa-webgpu"
+            );
+            if (File.Exists(Path.Join(runtimeDirectory, "libonnxruntime_providers_webgpu.so")))
+                backends.Add(TranscriptionAccelerationBackend.WebGpu);
+        }
+
+        return backends;
+    }
 
     public IReadOnlyList<string> SupportedLanguages =>
         SelectedModelId == "canary-180m-flash" ? s_canarySupportedLanguages : [];
@@ -308,7 +335,13 @@ public sealed class SherpaOnnxPlugin
 
     public Task ConfigureComputeBackendAsync(string backend)
     {
-        var normalized = backend.ToLowerInvariant() switch { "cuda" => "cuda", "migraphx" => "migraphx", _ => "cpu" };
+        var normalized = backend.ToLowerInvariant() switch
+        {
+            "cuda" => "cuda",
+            "migraphx" => "migraphx",
+            "webgpu" => "webgpu",
+            _ => "cpu",
+        };
 
         // Serialize backend switches with model load/unload: without the lock,
         // a LoadModelAsync running on another thread could observe the old
@@ -330,6 +363,8 @@ public sealed class SherpaOnnxPlugin
                 && !(string.Equals(_loadedNativeProvider, "cuda", StringComparison.Ordinal)
                     && normalized == "cpu")
                 && !(string.Equals(_loadedNativeProvider, "migraphx", StringComparison.Ordinal)
+                    && normalized == "cpu")
+                && !(string.Equals(_loadedNativeProvider, "webgpu", StringComparison.Ordinal)
                     && normalized == "cpu"))
                 return Task.CompletedTask;
 
@@ -349,6 +384,7 @@ public sealed class SherpaOnnxPlugin
         {
             TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
             TranscriptionAccelerationPreference.AmdMigraphx => "migraphx",
+            TranscriptionAccelerationPreference.WebGpu => "webgpu",
             _ => "cpu",
         };
 
@@ -588,6 +624,21 @@ public sealed class SherpaOnnxPlugin
                 lock (_sync) _computeBackend = "cpu";
             }
         }
+        else if (desiredProvider == "webgpu")
+        {
+            try
+            {
+                await EnsureWebGpuRuntimeReadyAsync(model, progress, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _host?.Log(PluginLogLevel.Warning, $"sherpa-onnx WebGPU runtime unavailable ({ex.Message}); falling back to CPU.");
+                gpuUnavailableDetail = ex.Message;
+                desiredProvider = "cpu";
+                lock (_sync) _computeBackend = "cpu";
+            }
+        }
 
         try
         {
@@ -618,12 +669,10 @@ public sealed class SherpaOnnxPlugin
                                 : _parakeetRecognizerFactory(dir, activeProvider);
                         }
                         catch (Exception ex)
-                            when (activeProvider is "cuda" or "migraphx")
+                            when (activeProvider is "cuda" or "migraphx" or "webgpu")
                         {
-                            // Recreate with the CPU execution provider. The GPU ONNX
-                            // Runtime is already wired in by ConfigureCudaRuntime and runs
-                            // the CPU provider correctly, so this yields working CPU
-                            // transcription rather than failing the load outright.
+                            // Recreate with CPU. A GPU-capable ONNX Runtime can also run the
+                            // CPU provider, so a provider failure remains recoverable.
                             _host?.Log(
                                 PluginLogLevel.Warning,
                                 $"sherpa-onnx {activeProvider} recognizer creation failed ({ex.Message}); falling back to CPU."
@@ -641,7 +690,9 @@ public sealed class SherpaOnnxPlugin
                         // recognizer's active provider: a CUDA-wired runtime whose recognizer
                         // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
                         // CPU↔CUDA swap needs no restart.
-                        _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
+                        _loadedNativeProvider ??= _cudaOrtRuntimeWired
+                            ? "cuda"
+                            : _webGpuOrtRuntimeWired ? "webgpu" : activeProvider;
 
                         _loadedModelId = modelId;
                         _loadedModelDir = dir;
@@ -710,6 +761,56 @@ public sealed class SherpaOnnxPlugin
             SherpaOnnxNativeRuntime.ConfigureMigraphxRuntime(capiDirectory, installer.RuntimeDirectory);
             _loadedNativeProvider = "migraphx";
         }
+    }
+
+    private Task EnsureWebGpuRuntimeReadyAsync(
+        ModelDefinition model,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("Sherpa WebGPU acceleration requires Linux x64.");
+        if (model.SupportsTranslation)
+            throw new NotSupportedException("Sherpa WebGPU is enabled only for the Parakeet transducer models.");
+
+        var runtimeDirectory = Path.Join(
+            Path.GetDirectoryName(typeof(SherpaOnnxPlugin).Assembly.Location),
+            "Runtimes",
+            "linux-x64",
+            "sherpa-webgpu"
+        );
+        foreach (var library in new[]
+        {
+            "libsherpa-onnx-c-api.so",
+            "libsherpa-onnx-cxx-api.so",
+            "libonnxruntime.so.1",
+            "libonnxruntime_providers_shared.so",
+            "libonnxruntime_providers_webgpu.so",
+        })
+        {
+            if (!File.Exists(Path.Join(runtimeDirectory, library)))
+                throw new FileNotFoundException($"Sherpa WebGPU runtime is missing '{library}'.", runtimeDirectory);
+        }
+
+        if (!NativeLibrary.TryLoad("libvulkan.so.1", out var vulkan))
+            throw new InvalidOperationException("The Vulkan loader libvulkan.so.1 is missing; install a Vulkan driver/runtime.");
+        NativeLibrary.Free(vulkan);
+
+        lock (_sync)
+        {
+            if (_loadedNativeProvider is not null && _loadedNativeProvider != "webgpu")
+                throw new InvalidOperationException("sherpa-onnx native runtime is already pinned to another provider; restart TypeWhisper to switch to WebGPU.");
+            if (_computeBackend != "webgpu")
+                throw new InvalidOperationException("Compute backend changed during WebGPU runtime setup.");
+            SherpaOnnxNativeRuntime.ConfigureWebGpuRuntime(runtimeDirectory);
+            _webGpuOrtRuntimeWired = true;
+            _loadedNativeProvider = "webgpu";
+        }
+
+        progress?.Report(1.0);
+        return Task.CompletedTask;
     }
 
     public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
@@ -1395,23 +1496,26 @@ public sealed class SherpaOnnxPlugin
         {
             "cuda" => TranscriptionAccelerationBackend.NvidiaCuda,
             "migraphx" => TranscriptionAccelerationBackend.AmdMigraphx,
+            "webgpu" => TranscriptionAccelerationBackend.WebGpu,
             _ => TranscriptionAccelerationBackend.Cpu,
         };
         var displayText = active switch
         {
             TranscriptionAccelerationBackend.NvidiaCuda => "Using NVIDIA CUDA",
             TranscriptionAccelerationBackend.AmdMigraphx => "Using AMD MIGraphX",
+            TranscriptionAccelerationBackend.WebGpu => "Using WebGPU",
             _ => "Using CPU",
         };
 
     // Runtime changes need a restart because the managed import resolver is process-wide.
         var requiresRestart =
-            (_loadedNativeProvider == "cpu" && preference is TranscriptionAccelerationPreference.NvidiaCuda or TranscriptionAccelerationPreference.AmdMigraphx)
-            || ((_loadedNativeProvider is "cuda" or "migraphx")
-                && preference == TranscriptionAccelerationPreference.AmdMigraphx
-                && _loadedNativeProvider != "migraphx")
-            || (_loadedNativeProvider == "migraphx"
-                && preference == TranscriptionAccelerationPreference.NvidiaCuda);
+            preference switch
+            {
+                TranscriptionAccelerationPreference.NvidiaCuda => _loadedNativeProvider != "cuda",
+                TranscriptionAccelerationPreference.AmdMigraphx => _loadedNativeProvider != "migraphx",
+                TranscriptionAccelerationPreference.WebGpu => _loadedNativeProvider != "webgpu",
+                _ => false,
+            };
 
         if (requiresRestart)
             return new TranscriptionAccelerationStatus(
@@ -1438,6 +1542,11 @@ public sealed class SherpaOnnxPlugin
                 TranscriptionAccelerationBackend.AmdMigraphx,
                 "Preparing AMD MIGraphX",
                 "Requires a supported ROCm/MIGraphX system runtime. The ONNX Runtime package downloads on the next model load."
+            ),
+            TranscriptionAccelerationPreference.WebGpu => new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.WebGpu,
+                "Preparing WebGPU",
+                "Uses the Vulkan driver through ONNX Runtime WebGPU for Parakeet."
             ),
             _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,

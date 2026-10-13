@@ -1409,6 +1409,7 @@ public sealed partial class HttpApiService : IDisposable
             TranscriptionAccelerationBackend.NvidiaCuda => "nvidia-cuda",
             TranscriptionAccelerationBackend.Vulkan => "vulkan",
             TranscriptionAccelerationBackend.AmdMigraphx => "amd-migraphx",
+            TranscriptionAccelerationBackend.WebGpu => "webgpu",
             _ => "cpu",
         };
     }

@@ -56,6 +56,7 @@ internal static class SherpaOnnxNativeRuntime
     private static string? s_cudaRuntimeDirectory;
     private static string? s_migraphxCapiDirectory;
     private static string? s_migraphxRuntimeDirectory;
+    private static string? s_webGpuRuntimeDirectory;
     private static IntPtr s_resolvedCApi;
 
     /// <summary>
@@ -163,19 +164,64 @@ internal static class SherpaOnnxNativeRuntime
         }
     }
 
+    /// <summary>Wires the bundled WebGPU-enabled Sherpa and ONNX Runtime libraries.</summary>
+    public static void ConfigureWebGpuRuntime(string runtimeDirectory)
+    {
+        lock (s_sync)
+        {
+            if (!s_resolverRegistered)
+            {
+                NativeLibrary.SetDllImportResolver(typeof(OfflineRecognizer).Assembly, ResolveNativeLibrary);
+                s_resolverRegistered = true;
+            }
+
+            var libraryPath = Path.Join(runtimeDirectory, "libonnxruntime_providers_webgpu.so");
+            foreach (var soname in new[]
+            {
+                "libonnxruntime_providers_shared.so",
+                "libonnxruntime.so.1",
+                "libsherpa-onnx-cxx-api.so",
+                CApiSoName,
+            })
+            {
+                var path = Path.Join(runtimeDirectory, soname);
+                if (!File.Exists(path))
+                    throw new FileNotFoundException($"Missing WebGPU runtime library: {path}");
+                var handle = dlopen(path, RtldNow | RtldGlobal);
+                if (handle == IntPtr.Zero)
+                {
+                    var error = Marshal.PtrToStringAnsi(dlerror());
+                    throw new InvalidOperationException($"Failed to preload '{soname}': {error ?? "unknown error"}");
+                }
+            }
+
+            if (!File.Exists(libraryPath))
+                throw new FileNotFoundException("The ONNX Runtime WebGPU provider library is missing.", libraryPath);
+
+            // Sherpa registers plugin EPs during session creation. ORT must load the EP
+            // through that API so it can install its provider host before dlopen.
+            Environment.SetEnvironmentVariable("SHERPA_ONNX_WEBGPU_LIBRARY_PATH", libraryPath);
+            s_webGpuRuntimeDirectory = runtimeDirectory;
+            s_cudaRuntimeDirectory = null;
+            s_migraphxCapiDirectory = null;
+            s_migraphxRuntimeDirectory = null;
+            s_resolvedCApi = IntPtr.Zero;
+        }
+    }
+
     private static IntPtr ResolveNativeLibrary(
         string libraryName,
         Assembly assembly,
         DllImportSearchPath? searchPath
     )
     {
-        var capiDirectory = s_migraphxCapiDirectory ?? s_cudaRuntimeDirectory;
+        var capiDirectory = s_webGpuRuntimeDirectory ?? s_migraphxCapiDirectory ?? s_cudaRuntimeDirectory;
         if (string.IsNullOrWhiteSpace(capiDirectory))
             return IntPtr.Zero; // CPU path: let the default loader find the nuget runtime.
 
         var fileName = ToSoFileName(libraryName);
         var runtimeDirectory = fileName.Contains("onnxruntime", StringComparison.Ordinal)
-            ? s_migraphxRuntimeDirectory ?? s_cudaRuntimeDirectory
+            ? s_webGpuRuntimeDirectory ?? s_migraphxRuntimeDirectory ?? s_cudaRuntimeDirectory
             : capiDirectory;
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             return IntPtr.Zero;

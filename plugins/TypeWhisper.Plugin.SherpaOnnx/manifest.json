@@ -4,7 +4,7 @@
   "version": "1.1.0",
   "minHostVersion": "0.16.0",
   "author": "TypeWhisper",
-  "description": "Offline transcription via sherpa-onnx (Parakeet, Canary; CPU, NVIDIA CUDA, or AMD MIGraphX)",
+  "description": "Offline transcription via sherpa-onnx (Parakeet, Canary; CPU, NVIDIA CUDA, AMD MIGraphX, or WebGPU)",
   "networkAccess": "local",
   "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.SherpaOnnx.dll",

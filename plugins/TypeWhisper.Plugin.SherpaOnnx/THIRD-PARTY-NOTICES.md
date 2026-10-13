@@ -12,3 +12,5 @@ The exports are int8-quantized ONNX conversions of the original NeMo checkpoints
 
 - **sherpa-onnx MIGraphX build** — built from [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) v1.12.23 with the patch in `scripts/patches/sherpa-onnx-migraphx.patch`. sherpa-onnx is licensed under Apache-2.0. The build links against ONNX Runtime 1.23.2.
 - **ONNX Runtime MIGraphX package** — downloaded on first use from AMD's ROCm 7.2.1 package index. ONNX Runtime is licensed under MIT. The package is pinned by SHA-256 in `SherpaMigraphxRuntimeInstaller.cs`.
+- **sherpa-onnx WebGPU build** — built from [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) v1.12.23 with `scripts/patches/sherpa-onnx-webgpu.patch`. sherpa-onnx is licensed under Apache-2.0. The build links against ONNX Runtime 1.24.4.
+- **ONNX Runtime WebGPU provider** — distributed in the [Microsoft.ML.OnnxRuntime.EP.WebGpu](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.EP.WebGpu/0.1.0) package, licensed under MIT. The build pins the package by SHA-256 and includes the Linux x64 provider library.

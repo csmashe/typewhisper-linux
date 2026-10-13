@@ -771,6 +771,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 TranscriptionAccelerationPreference.Vulkan,
             AppSettings.LocalModelAccelerationAmdMigraphx =>
                 TranscriptionAccelerationPreference.AmdMigraphx,
+            AppSettings.LocalModelAccelerationWebGpu => TranscriptionAccelerationPreference.WebGpu,
             AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
             _ => TranscriptionAccelerationPreference.Auto,
         };

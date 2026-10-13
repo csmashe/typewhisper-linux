@@ -1,0 +1,179 @@
+diff --git a/sherpa-onnx/csrc/provider-config.cc b/sherpa-onnx/csrc/provider-config.cc
+--- a/sherpa-onnx/csrc/provider-config.cc
++++ b/sherpa-onnx/csrc/provider-config.cc
+@@ -109,7 +109,7 @@ void ProviderConfig::Register(ParseOptions *po) {
+ 
+   po->Register("device", &device, "GPU device index for CUDA and Trt EP");
+   po->Register("provider", &provider,
+-               "Specify a provider to use: cpu, cuda, coreml");
++               "Specify a provider to use: cpu, cuda, coreml, webgpu");
+ }
+ 
+ bool ProviderConfig::Validate() const {
+diff --git a/sherpa-onnx/csrc/provider.cc b/sherpa-onnx/csrc/provider.cc
+--- a/sherpa-onnx/csrc/provider.cc
++++ b/sherpa-onnx/csrc/provider.cc
+@@ -31,6 +31,8 @@ Provider StringToProvider(std::string s) {
+     return Provider::kDirectML;
+   } else if (s == "spacemit") {
+     return Provider::kSpacemiT;
++  } else if (s == "webgpu") {
++    return Provider::kWebGPU;
+   } else {
+     SHERPA_ONNX_LOGE("Unsupported string: %s. Fallback to cpu", s.c_str());
+     return Provider::kCPU;
+diff --git a/sherpa-onnx/csrc/provider.h b/sherpa-onnx/csrc/provider.h
+--- a/sherpa-onnx/csrc/provider.h
++++ b/sherpa-onnx/csrc/provider.h
+@@ -22,5 +22,6 @@ enum class Provider {
+   kDirectML = 6,  // DmlExecutionProvider
+   kSpacemiT = 7,  // SpacemiTExecutionProvider
++  kWebGPU = 8,    // WebGpuExecutionProvider
+ };
+ 
+ /**
+diff --git a/sherpa-onnx/csrc/CMakeLists.txt b/sherpa-onnx/csrc/CMakeLists.txt
+--- a/sherpa-onnx/csrc/CMakeLists.txt
++++ b/sherpa-onnx/csrc/CMakeLists.txt
+@@ -155,6 +155,7 @@ set(sources
+   vad-model.cc
+   version.cc
+   voice-activity-detector.cc
++  webgpu-provider.cc
+   wave-reader.cc
+   wave-writer.cc
+ )
+diff --git a/sherpa-onnx/csrc/session.cc b/sherpa-onnx/csrc/session.cc
+--- a/sherpa-onnx/csrc/session.cc
++++ b/sherpa-onnx/csrc/session.cc
+@@ -17,5 +17,6 @@
+ #include "sherpa-onnx/csrc/provider.h"
++#include "sherpa-onnx/csrc/webgpu-provider.h"
+ #if defined(__APPLE__) && (ORT_API_VERSION >= 15) && \
+     !defined(SHERPA_ONNX_DISABLE_COREML)
+ #include "coreml_provider_factory.h"  // NOLINT
+ #endif
+@@ -270,5 +271,20 @@ Ort::SessionOptions GetSessionOptionsImpl(
+       break;
+     }
++    case Provider::kWebGPU: {
++#if defined(SHERPA_ONNX_ENABLE_WEBGPU) && SHERPA_ONNX_ENABLE_WEBGPU == 1 && \
++    ORT_API_VERSION >= 24
++      if (RegisterWebGpuExecutionProvider()) {
++        sess_opts.SetEpSelectionPolicy(
++            OrtExecutionProviderDevicePolicy_PREFER_GPU);
++      } else {
++        SHERPA_ONNX_LOGE("WebGPU provider registration failed. Fallback to cpu!");
++      }
++#else
++      SHERPA_ONNX_LOGE(
++          "WebGPU requires SHERPA_ONNX_ENABLE_WEBGPU and ONNX Runtime >= 1.24.4. Fallback to cpu!");
++#endif
++      break;
++    }
+   }
+   return sess_opts;
+ }
+diff --git a/sherpa-onnx/csrc/webgpu-provider.h b/sherpa-onnx/csrc/webgpu-provider.h
+new file mode 100644
+--- /dev/null
++++ b/sherpa-onnx/csrc/webgpu-provider.h
+@@ -0,0 +1,11 @@
++// Loads and registers the WebGPU execution provider once for this process.
++#ifndef SHERPA_ONNX_CSRC_WEBGPU_PROVIDER_H_
++#define SHERPA_ONNX_CSRC_WEBGPU_PROVIDER_H_
++
++namespace sherpa_onnx {
++
++bool RegisterWebGpuExecutionProvider();
++
++}  // namespace sherpa_onnx
++
++#endif  // SHERPA_ONNX_CSRC_WEBGPU_PROVIDER_H_
+diff --git a/sherpa-onnx/csrc/webgpu-provider.cc b/sherpa-onnx/csrc/webgpu-provider.cc
+new file mode 100644
+--- /dev/null
++++ b/sherpa-onnx/csrc/webgpu-provider.cc
+@@ -0,0 +1,82 @@
++#include "sherpa-onnx/csrc/webgpu-provider.h"
++
++#include <cstdlib>
++#include <sstream>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "onnxruntime_cxx_api.h"
++#include "sherpa-onnx/csrc/macros.h"
++
++namespace sherpa_onnx {
++namespace {
++
++#if defined(SHERPA_ONNX_ENABLE_WEBGPU) && SHERPA_ONNX_ENABLE_WEBGPU == 1 && \
++    ORT_API_VERSION >= 24
++
++using Candidate = std::pair<std::basic_string<ORTCHAR_T>, std::string>;
++
++std::vector<Candidate> GetWebGpuLibraryCandidates() {
++  std::vector<Candidate> candidates;
++  const char *path = std::getenv("SHERPA_ONNX_WEBGPU_LIBRARY_PATH");
++  if (path != nullptr && path[0] != '\0') {
++    candidates.emplace_back(path, path);
++  }
++  candidates.emplace_back(ORT_TSTR("libonnxruntime_providers_webgpu.so"),
++                          "libonnxruntime_providers_webgpu.so");
++  return candidates;
++}
++
++bool HasWebGpuDevice(const Ort::Env &env) {
++  for (const auto &device : env.GetEpDevices()) {
++    if (std::string(device.EpName()) == "WebGpuExecutionProvider") {
++      return true;
++    }
++  }
++  return false;
++}
++
++class WebGpuProviderRegistration {
++ public:
++  WebGpuProviderRegistration() : env_(ORT_LOGGING_LEVEL_ERROR, "sherpa-onnx-webgpu") {
++    std::ostringstream errors;
++    for (const auto &candidate : GetWebGpuLibraryCandidates()) {
++      try {
++        env_.RegisterExecutionProviderLibrary("webgpu_ep", candidate.first);
++        if (HasWebGpuDevice(env_)) {
++          registered_ = true;
++          return;
++        }
++        errors << candidate.second << ": no WebGPU device was reported";
++        break;
++      } catch (const Ort::Exception &e) {
++        if (errors.tellp() > 0) errors << "; ";
++        errors << candidate.second << ": " << e.what();
++      }
++    }
++    SHERPA_ONNX_LOGE("WebGPU registration failed: %s", errors.str().c_str());
++  }
++
++  bool IsRegistered() const { return registered_; }
++
++ private:
++  Ort::Env env_;
++  bool registered_ = false;
++};
++
++#endif
++
++}  // namespace
++
++bool RegisterWebGpuExecutionProvider() {
++#if defined(SHERPA_ONNX_ENABLE_WEBGPU) && SHERPA_ONNX_ENABLE_WEBGPU == 1 && \
++    ORT_API_VERSION >= 24
++  static const WebGpuProviderRegistration registration;
++  return registration.IsRegistered();
++#else
++  return false;
++#endif
++}
++
++}  // namespace sherpa_onnx

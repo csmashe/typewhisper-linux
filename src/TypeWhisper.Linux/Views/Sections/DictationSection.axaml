@@ -187,6 +187,11 @@
                                        FontSize="12"
                                        Foreground="#8A9AAE"
                                        TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding AccelerationHelpText}"
+                                       FontSize="12"
+                                       Foreground="#8A9AAE"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding AccelerationHelpText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock Text="{Binding CudaSetupStatus}"
                                        FontSize="12"
                                        Foreground="#D6B45F"

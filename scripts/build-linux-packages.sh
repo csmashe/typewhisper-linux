@@ -54,6 +54,8 @@ done
 # Package the same pinned, patched Sherpa native runtime that plugin releases ship.
 # The AMD ORT execution provider itself remains an on-demand download at runtime.
 "$ROOT/scripts/build-sherpa-migraphx.sh"
+# Build the opt-in Sherpa WebGPU runtime against its matching ONNX Runtime release.
+"$ROOT/scripts/build-sherpa-webgpu.sh"
 
 compute_bundle_identity() {
   local plugin_root="$1"

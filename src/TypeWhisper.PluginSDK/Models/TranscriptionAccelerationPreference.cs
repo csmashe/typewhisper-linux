@@ -19,4 +19,6 @@ public enum TranscriptionAccelerationPreference
     Vulkan,
     // ReSharper disable once UnusedMember.Global
     AmdMigraphx,
+    // ReSharper disable once UnusedMember.Global
+    WebGpu,
 }

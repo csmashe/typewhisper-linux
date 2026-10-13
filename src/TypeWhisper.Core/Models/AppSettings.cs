@@ -28,6 +28,7 @@ public record AppSettings
     public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";
     public const string LocalModelAccelerationVulkan = "vulkan";
     public const string LocalModelAccelerationAmdMigraphx = "amd-migraphx";
+    public const string LocalModelAccelerationWebGpu = "webgpu";
 
     public const int MinPreviewBubbleAutoHideMilliseconds = 0;
     public const int DefaultPreviewBubbleAutoHideMilliseconds = 1500;
@@ -253,7 +254,7 @@ public record AppSettings
     /// <summary>
     ///     Maps a stored/user acceleration string to a canonical value
     ///     (<see cref="LocalModelAccelerationAuto" />, <c>…Cpu</c>, <c>…NvidiaCuda</c>,
-    ///     <c>…Vulkan</c>, or <c>…AmdMigraphx</c>), accepting aliases like "cuda" and "migraphx" and
+    ///     <c>…Vulkan</c>, <c>…AmdMigraphx</c>, or <c>…WebGpu</c>), accepting aliases like "cuda" and "migraphx" and
     ///     falling back to "auto" for blank or unrecognized input.
     /// </summary>
     public static string NormalizeLocalModelAcceleration(string? value)
@@ -290,6 +291,8 @@ public record AppSettings
             || string.Equals(trimmed, "migraphx", StringComparison.OrdinalIgnoreCase)
         )
             return LocalModelAccelerationAmdMigraphx;
+        if (string.Equals(trimmed, LocalModelAccelerationWebGpu, StringComparison.OrdinalIgnoreCase))
+            return LocalModelAccelerationWebGpu;
 
         return LocalModelAccelerationAuto;
     }

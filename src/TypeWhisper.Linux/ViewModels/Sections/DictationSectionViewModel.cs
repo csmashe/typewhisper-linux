@@ -486,6 +486,12 @@ public partial class DictationSectionViewModel : ObservableObject
         TranscriptionAccelerationBackend.AmdMigraphx
     ) == true;
 
+    public bool CanUseWebGpu =>
+        SelectedModel?.ModelId.EndsWith(":canary-180m-flash", StringComparison.Ordinal) != true
+        && SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+            TranscriptionAccelerationBackend.WebGpu
+        ) == true;
+
     // The engine that owns the model selected in the Dictation UI — the one a CUDA download
     // must target. Distinct from ActiveTranscriptionPlugin (the loaded engine), which is null
     // before any model loads (e.g. at startup) and can lag a freshly selected model.
@@ -564,6 +570,11 @@ public partial class DictationSectionViewModel : ObservableObject
             return text;
         }
     }
+
+    public string AccelerationHelpText =>
+        LocalModelAcceleration == AppSettings.LocalModelAccelerationWebGpu
+            ? "WebGPU runs supported model operations on the GPU. Sherpa runs unsupported operations on the CPU. On our Radeon 780M, Parakeet decode after stop took 656 ms with WebGPU and 174 ms with CPU at the median across 50 clips. Parakeet shows text only after it decodes the full recording."
+            : string.Empty;
 
     public AccelerationOption? SelectedAccelerationOption
     {
@@ -1055,6 +1066,7 @@ public partial class DictationSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedNewInsertionStrategyOption));
         OnPropertyChanged(nameof(SelectedAccelerationOption));
         OnPropertyChanged(nameof(AccelerationStatusText));
+        OnPropertyChanged(nameof(AccelerationHelpText));
         // Remove-button visibility reads AccessibilityBridgeEnabledByApp from settings, so a
         // reload (e.g. backup restore) must re-notify it or the button can go stale.
         OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
@@ -1136,6 +1148,7 @@ public partial class DictationSectionViewModel : ObservableObject
             new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"]),
             new(AppSettings.LocalModelAccelerationVulkan, Loc.Instance["Dictation.AccelerationVulkan"]),
             new(AppSettings.LocalModelAccelerationAmdMigraphx, Loc.Instance["Dictation.AccelerationAmdMigraphx"]),
+            new(AppSettings.LocalModelAccelerationWebGpu, "WebGPU"),
         ];
     }
 
@@ -1434,6 +1447,7 @@ public partial class DictationSectionViewModel : ObservableObject
     private void RefreshModelState()
     {
         RefreshSpokenFormattingVerification();
+        OnPropertyChanged(nameof(AccelerationHelpText));
         var active = _models.ActiveModelId;
         ActiveModelLabel = string.IsNullOrEmpty(active)
             ? Loc.Instance["Dictation.NoModelLoaded"]
@@ -1499,6 +1513,7 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(SelectedAccelerationOption));
             OnPropertyChanged(nameof(AccelerationStatusText));
+            OnPropertyChanged(nameof(AccelerationHelpText));
             return;
         }
 
@@ -1519,6 +1534,18 @@ public partial class DictationSectionViewModel : ObservableObject
         if (normalized == AppSettings.LocalModelAccelerationAmdMigraphx && !CanUseAmdMigraphx)
         {
             const string message = "AMD MIGraphX is available only for sherpa-onnx local models.";
+            Dispatcher.UIThread.Post(() =>
+            {
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
+                OnPropertyChanged(nameof(SelectedAccelerationOption));
+                StatusText = message;
+            });
+            return;
+        }
+
+        if (normalized == AppSettings.LocalModelAccelerationWebGpu && !CanUseWebGpu)
+        {
+            const string message = "WebGPU is available only for supported sherpa-onnx local models.";
             Dispatcher.UIThread.Post(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
@@ -1570,6 +1597,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
         OnPropertyChanged(nameof(SelectedAccelerationOption));
         OnPropertyChanged(nameof(AccelerationStatusText));
+        OnPropertyChanged(nameof(AccelerationHelpText));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
 
         // Reload so EnsureModelLoadedAsync re-evaluates; AccelerationStatus surfaces
