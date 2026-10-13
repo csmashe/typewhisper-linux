@@ -1,3 +1,5 @@
+using TypeWhisper.Core.Services.Diagnostics;
+
 namespace TypeWhisper.Core.Models;
 
 /// <summary>
@@ -165,6 +167,10 @@ public record AppSettings
 
     // Opt-in Sentry crash + performance reporting; default off (see docs/PRIVACY.md).
     public bool CrashReportingEnabled { get; init; }
+
+    // Opt-in local, content-free diagnostic log (Logs/diagnostics.jsonl); never sent anywhere.
+    public bool DiagnosticLogEnabled { get; init; }
+    public int DiagnosticLogRetentionDays { get; init; } = DiagnosticLogPreferences.DefaultRetentionDays;
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }

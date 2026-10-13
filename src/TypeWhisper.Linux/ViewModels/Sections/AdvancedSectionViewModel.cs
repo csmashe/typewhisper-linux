@@ -5,15 +5,18 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using System.Collections.ObjectModel;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services.Diagnostics;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
 public partial class AdvancedSectionViewModel : ObservableObject
 {
+    private readonly LocalDiagnosticLogService? _diagnosticLog;
     private readonly PluginManager _pluginManager;
     private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
@@ -32,6 +35,15 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _crashReportingEnabled;
+
+    [ObservableProperty]
+    private bool _diagnosticLogEnabled;
+
+    [ObservableProperty]
+    private string _diagnosticLogStatus = "";
+
+    [ObservableProperty]
+    private DiagnosticLogRetentionOption? _selectedDiagnosticLogRetention;
 
     [ObservableProperty]
     private bool _memoryEnabled;
@@ -57,13 +69,15 @@ public partial class AdvancedSectionViewModel : ObservableObject
     public AdvancedSectionViewModel(
         ISettingsService settings,
         SpeechFeedbackService speechFeedback,
-        PluginManager pluginManager
+        PluginManager pluginManager,
+        LocalDiagnosticLogService diagnosticLog
     )
         : this(
             settings,
             speechFeedback,
             pluginManager,
-            action => Dispatcher.UIThread.Post(action)
+            action => Dispatcher.UIThread.Post(action),
+            diagnosticLog
         )
     {
     }
@@ -72,10 +86,12 @@ public partial class AdvancedSectionViewModel : ObservableObject
         ISettingsService settings,
         SpeechFeedbackService speechFeedback,
         PluginManager pluginManager,
-        Action<Action> post
+        Action<Action> post,
+        LocalDiagnosticLogService? diagnosticLog = null
     )
     {
         _settings = settings;
+        _diagnosticLog = diagnosticLog;
         _speechFeedback = speechFeedback;
         _pluginManager = pluginManager;
         _post = post;
@@ -178,6 +194,11 @@ public partial class AdvancedSectionViewModel : ObservableObject
     public IReadOnlyList<HistoryRetentionOption> HistoryRetentionOptions { get; private set; } =
         CreateHistoryRetentionOptions();
 
+    public IReadOnlyList<DiagnosticLogRetentionOption> DiagnosticLogRetentionOptions { get; private set; } =
+        CreateDiagnosticLogRetentionOptions();
+
+    public bool CanUseDiagnosticLog => _diagnosticLog is not null;
+
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
     public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
 
@@ -223,6 +244,8 @@ public partial class AdvancedSectionViewModel : ObservableObject
             SaveToHistoryEnabled = settings.SaveToHistoryEnabled;
             CaptureLlmProvenance = settings.CaptureLlmProvenance;
             CrashReportingEnabled = settings.CrashReportingEnabled;
+            DiagnosticLogEnabled = settings.DiagnosticLogEnabled;
+            SelectedDiagnosticLogRetention = MatchDiagnosticLogRetention(settings.DiagnosticLogRetentionDays);
             ApplyEffectiveSpokenFeedbackPreference();
             SelectedAutoUnloadOption =
                 AutoUnloadOptions.FirstOrDefault(option =>
@@ -366,6 +389,72 @@ public partial class AdvancedSectionViewModel : ObservableObject
         _settings.Update(current => current with { CrashReportingEnabled = value });
     }
 
+    partial void OnDiagnosticLogEnabledChanged(bool value)
+    {
+        if (_isProgrammaticRefresh || _settings.Current.DiagnosticLogEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { DiagnosticLogEnabled = value });
+        ReportDiagnosticLogConfiguration();
+    }
+
+    partial void OnSelectedDiagnosticLogRetentionChanged(DiagnosticLogRetentionOption? value)
+    {
+        if (
+            _isProgrammaticRefresh
+            || value is null
+            || _settings.Current.DiagnosticLogRetentionDays == value.Days
+        )
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { DiagnosticLogRetentionDays = value.Days });
+        ReportDiagnosticLogConfiguration();
+    }
+
+    // The log service applies the change synchronously from SettingsChanged.
+    private void ReportDiagnosticLogConfiguration()
+    {
+        DiagnosticLogStatus = _diagnosticLog is { LastConfigureSucceeded: false }
+            ? Loc.Instance["Advanced.DiagnosticLogUpdateFailed"]
+            : "";
+    }
+
+    public async Task ExportDiagnosticLogAsync(string destination)
+    {
+        if (_diagnosticLog is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var count = await _diagnosticLog.ExportAsync(destination);
+            DiagnosticLogStatus = count == 1
+                ? Loc.Instance["Advanced.DiagnosticLogExportedOne"]
+                : Loc.Instance.GetString("Advanced.DiagnosticLogExported", count);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticLogStatus = Loc.Instance["Advanced.DiagnosticLogExportFailed"];
+        }
+    }
+
+    public async Task DeleteDiagnosticLogAsync()
+    {
+        if (_diagnosticLog is null)
+        {
+            return;
+        }
+
+        DiagnosticLogStatus = await _diagnosticLog.ClearAsync()
+            ? Loc.Instance["Advanced.DiagnosticLogDeleted"]
+            : Loc.Instance["Advanced.DiagnosticLogDeleteFailed"];
+    }
+
     partial void OnCaptureLlmProvenanceChanged(bool value)
     {
         if (_settings.Current.CaptureLlmProvenance == value)
@@ -412,6 +501,8 @@ public partial class AdvancedSectionViewModel : ObservableObject
             SelectedHistoryRetention?.Mode ?? _settings.Current.HistoryRetentionMode;
         var retentionMinutes =
             SelectedHistoryRetention?.Minutes ?? _settings.Current.HistoryRetentionMinutes;
+        var diagnosticLogDays =
+            SelectedDiagnosticLogRetention?.Days ?? _settings.Current.DiagnosticLogRetentionDays;
 
         RunProgrammaticRefresh(() =>
         {
@@ -419,6 +510,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
             HistoryRetentionOptions = CreateHistoryRetentionOptions();
             OnPropertyChanged(nameof(AutoUnloadOptions));
             OnPropertyChanged(nameof(HistoryRetentionOptions));
+            DiagnosticLogRetentionOptions = CreateDiagnosticLogRetentionOptions();
+            OnPropertyChanged(nameof(DiagnosticLogRetentionOptions));
+            SelectedDiagnosticLogRetention = MatchDiagnosticLogRetention(diagnosticLogDays);
 
             SelectedAutoUnloadOption =
                 AutoUnloadOptions.FirstOrDefault(option => option.Seconds == autoUnloadSeconds)
@@ -457,6 +551,24 @@ public partial class AdvancedSectionViewModel : ObservableObject
             new(HistoryRetentionMode.Forever, null, Loc.Instance["Advanced.RetentionForever"]),
             new(HistoryRetentionMode.UntilAppCloses, null, Loc.Instance["Advanced.RetentionUntilAppCloses"]),
         ];
+    }
+
+    private static IReadOnlyList<DiagnosticLogRetentionOption> CreateDiagnosticLogRetentionOptions()
+    {
+        return
+        [
+            new(1, Loc.Instance["Advanced.Retention1Day"]),
+            new(3, Loc.Instance["Advanced.Retention3Days"]),
+            new(7, Loc.Instance["Advanced.Retention7Days"]),
+            new(14, Loc.Instance["Advanced.Retention14Days"]),
+            new(30, Loc.Instance["Advanced.Retention30Days"]),
+        ];
+    }
+
+    private DiagnosticLogRetentionOption MatchDiagnosticLogRetention(int days)
+    {
+        days = DiagnosticLogPreferences.NormalizeRetentionDays(days);
+        return DiagnosticLogRetentionOptions.First(option => option.Days == days);
     }
 
     // First try exact match; if the stored minutes value no longer matches any
@@ -576,6 +688,8 @@ public partial class AdvancedSectionViewModel : ObservableObject
 }
 
 public sealed record AutoUnloadOption(int Seconds, string DisplayName);
+
+public sealed record DiagnosticLogRetentionOption(int Days, string DisplayName);
 
 public sealed record HistoryRetentionOption(
     HistoryRetentionMode Mode,
