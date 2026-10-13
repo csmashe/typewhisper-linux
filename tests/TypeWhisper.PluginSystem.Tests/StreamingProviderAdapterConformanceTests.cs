@@ -128,7 +128,8 @@ public sealed class StreamingProviderAdapterConformanceTests
         var gladia = await new GladiaWebSocketAdapter(
                 gladiaHttp,
                 "gladia-key",
-                "de"
+                "de",
+                []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), ["de"])
@@ -679,7 +680,7 @@ public sealed class StreamingProviderAdapterConformanceTests
             // every Speechmatics case fault during start and tear the transport down, which
             // surfaced as "the channel has been closed" from the first NextSentAsync.
             "Speechmatics" => new SpeechmaticsWebSocketAdapter("key", "en"),
-            "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null),
+            "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null, []),
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
                 OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
