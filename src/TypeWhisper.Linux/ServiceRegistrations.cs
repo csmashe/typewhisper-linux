@@ -217,7 +217,10 @@ internal static class ServiceRegistrations
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<OverlayCoordinator>();
         services.AddSingleton<SentryTelemetryService>();
-        services.AddSingleton<IDiagnosticsReporter>(p => p.GetRequiredService<SentryTelemetryService>());
+        services.AddSingleton<LocalDiagnosticLogService>();
+        services.AddSingleton<IDiagnosticsReporter>(p => new CompositeDiagnosticsReporter(
+            p.GetRequiredService<SentryTelemetryService>(),
+            p.GetRequiredService<LocalDiagnosticLogService>()));
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();
