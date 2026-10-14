@@ -1,132 +1,104 @@
 ---
 name: verify-typewhisper-linux
-description: Verify TypeWhisper Linux changes with the repository build and tests, real app commands, local audio transcription, and repeatable latency, quality, and GPU checks.
+description: Verify TypeWhisper Linux changes with the repository build and tests, an isolated real app instance, local audio through a virtual microphone, rendered UI checks, quality evals, and repeatable latency and GPU measurements.
 ---
 
 # Verify TypeWhisper Linux
 
-Use this skill after changing the Linux app, its CLI or API, plugins, model loading, acceleration, audio capture, packaging, or user settings. Start with the checks for the changed feature. Run the full CI checks when a change crosses project boundaries or when a release needs full coverage.
+Use this skill after changing the Linux app, its CLI or API, plugins, model loading, acceleration, audio capture, cleanup, text delivery, the UI, packaging, or settings. Start with the checks for the changed feature in `features/README.md`. Run the full CI set when a change crosses project boundaries.
+
+Five layers answer different questions. None can stand in for another.
+
+| Layer | Question | Entry point |
+|---|---|---|
+| Tests | Is the code correct? | `just ci`, or one `just test-*` recipe |
+| Live verification | Does the user path work in the real app? | `just live-smoke` and the feature guides |
+| UI | Does every screen render readable, named controls? Can a person act on it? | `just ui-check`, `just ui-live` |
+| Quality evals | Is the output text good? | `just eval-capture`, then the `just eval-*` review recipes |
+| Performance | How fast is it, and where does the time go? | `just benchmark`, the `performance` field of a dictation result |
 
 ## Launch
 
-The repository targets .NET 10. The requested SDK is set in `global.json`. The app needs a Linux graphical session to show its window and an available microphone for live dictation. The LibriSpeech helper also needs `ffprobe` from FFmpeg. GPU sampling needs `amdgpu_top` on AMD or `nvidia-smi` on NVIDIA.
-
-On this host, the SDK is at `/tmp/typewhisper-dotnet/dotnet`. If `dotnet` is not already on `PATH`, run `export PATH="/tmp/typewhisper-dotnet:$PATH"` in the terminal before using the commands below.
-
-From the repository root, restore and build the app and CLI:
+The repository targets .NET 10 (`global.json`). The `justfile` finds the SDK on `PATH` or at `/tmp/typewhisper-dotnet/dotnet`; set `DOTNET` to choose another. Built CLI executables can also need `DOTNET_ROOT=/tmp/typewhisper-dotnet`.
 
 ```bash
-dotnet restore TypeWhisper.slnx
-dotnet build TypeWhisper.slnx -c Debug --no-restore -p:DeployBundledLinuxPlugins=false
-dotnet build src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Debug --no-restore
+just restore          # fresh checkout only
+just build-release    # app, CLI, plugins, and all test projects
 ```
 
-Check whether a TypeWhisper instance is already running:
+Use an isolated instance for anything that changes app state. `scripts/verification/isolated_app.py` starts the built app with its own `HOME`, XDG data, config, state, and cache folders under the evidence directory, a short private runtime folder in `/tmp`, its own API port and token, and optionally a PulseAudio null sink as its microphone. It never reads or writes the user's settings, history, or recordings. When asked, it reflink-copies a plugin's model folder from the user's `PluginData`; that source is only read.
 
 ```bash
-uv run --no-project scripts/verification/doctor.py
+just live-smoke                      # dictation with a fake cleanup LLM, clipboard read-back
+just live-smoke artifacts/verification/$(date +%F)-no-llm "--llm none"   # arguments are positional
+uv run --no-project scripts/verification/isolated_app.py --workdir artifacts/verification/$(date +%F)-manual \
+  --configuration Release --plugin-data com.typewhisper.sherpa-onnx --virtual-mic
 ```
 
-If the doctor reports a healthy running instance, use it for read-only checks. Do not launch a second instance against the same control socket. If there is no running instance, start the build from the repository root:
+The last command prints the port and keeps the instance running until Ctrl+C. The instance's published token is in `<workdir>/instance/config/typewhisper/api-discovery.json`.
 
-```bash
-dotnet src/TypeWhisper.Linux/bin/Debug/net10.0/typewhisper.dll --minimized
-```
-
-The command stays in the foreground. In another terminal, run the doctor again. The app is ready when `app.control_status.ok` is `true`. Stop only the process started by this command with Ctrl+C. Do not stop an instance that was already running before the check.
-
-## Repository checks
-
-The Linux pull request workflow in `.github/workflows/pr-ci-linux.yml` is the source of truth for the full test set. In a clean checkout, run:
-
-```bash
-dotnet restore TypeWhisper.slnx
-dotnet restore src/TypeWhisper.Cli/TypeWhisper.Cli.csproj
-dotnet build TypeWhisper.slnx -c Release --no-restore
-dotnet build src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Release --no-restore
-dotnet test tests/TypeWhisper.Core.Tests/TypeWhisper.Core.Tests.csproj -c Release --no-build
-dotnet test tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj -c Release --no-build
-dotnet test tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj -c Release --no-build
-dotnet test tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj -c Release --no-build
-dotnet test tests/TypeWhisper.Integration.Tests/TypeWhisper.Integration.Tests.csproj -c Release --no-build
-```
-
-On a developer machine with an active app install, add `-p:DeployBundledLinuxPlugins=false` to local builds. The default build target deploys bundled plugins into user data. Run only the test projects relevant to a narrow change; run every command above for cross-project changes and release checks. Use the workflow's hang timeout and result artifact options when diagnosing a slow or stuck CI run.
+The user's own instance usually runs the Debug build. Do not run `just build` while it runs; that overwrites assemblies under a live process. Build Release for isolated runs. Restart the user's instance with `just restart` only when the user asks for it.
 
 ## Doctor
 
-Run `uv run --no-project scripts/verification/doctor.py` before interacting with the app. It reports the source and SDK versions, app process and control status, API port and token presence, and whether the settings, model, log, and audio paths exist. It never prints API token contents or settings values.
+Run `just doctor` before driving anything. It reports the source commit and SDK, the app process and control status, the API port, discovery file, and socket state, token presence (never its value), and data folders, including model files per plugin under `PluginData`. Exit code 2 means no healthy running instance.
 
-The doctor reads `$XDG_DATA_HOME/TypeWhisper/settings.json` and `$XDG_CONFIG_HOME/typewhisper/api-discovery.json`, using the standard home-directory defaults when those environment variables are unset. It checks the API discovery port and Unix socket when the discovery file exists. A present socket that refuses a connection is stale and does not prove the API is ready.
+Inside a sandbox, uv may fail to write its cache; set `UV_CACHE_DIR=/tmp/uv-cache`. A sandbox that hides host processes or `/tmp` makes the doctor report no app and no SDK; rerun it on the host before concluding anything.
 
-The app can run with the API server disabled. That is a valid state for desktop checks. Enable the API server in the app's Settings page only when a CLI transcription or HTTP API check needs it. The discovery file includes a token. Do not print, copy, or save that token in evidence.
+The user's app can run with its API disabled. That is a valid state. Do not enable it to verify a change; use an isolated instance instead.
 
 ## Drive
 
-Use the real user path for the changed feature. Do not use private setters or test-only endpoints as proof of app behavior.
+Use the real user path. Internal setters and test-only endpoints are not proof of user-facing behavior.
 
-- Use `typewhisper status` to inspect app state without starting or stopping a recording.
-- Use `typewhisper record start` and `typewhisper record stop` only when a microphone check is needed and the user has approved a spoken test phrase. Check the returned session state and the resulting history entry.
-- Use `typewhisper-cli transcribe` with a WAV path and the options `--language en --json --no-corrections` for file transcription. The app's local API server must be enabled.
-- Use the Settings window to select models and acceleration backends. Check `acceleration.activeBackend` from `typewhisper-cli status --json` to confirm the active backend after model load. A selected preference alone does not prove that the backend ran.
-- Use `scripts/verification/benchmark_transcription.py` for a fixed set of reference recordings. The runner calls the same CLI path a user uses.
-
-Use the feature map in `features/README.md` to choose the drive steps and observable end state. Record the app version, commit, model, backend, runtime, device, driver, and corpus for each performance comparison.
+- Control socket: `typewhisper status` reads state without recording. `typewhisper record start|stop|toggle|cancel` drives dictation.
+- HTTP API on an isolated instance: `/v1/dictation/start`, `/v1/dictation/stop`, and `/v1/dictation/transcription?sessionId=` for dictation; `/v1/transcribe/local-file` for files; `/v1/models/load` to load a model; `/v1/text/process` to run raw text through the final dictation pipeline without inserting it.
+- Microphone: play public audio into the isolated instance's null sink with `VirtualMic.play`. `IsolatedApp.capture_sources()` must list only the fixture monitor. Record a physical microphone only with an approved test phrase.
+- Delivery: the session result's `state: ready` and a successful insertion return do not prove delivery. Read the text back from the destination; `live_smoke.py` reads the clipboard and compares it with the session text.
+- Settings: the Settings window, or settings written into an isolated instance before launch. Confirm `acceleration.active_backend` from `/v1/status` after model load; a selected preference does not prove the backend ran.
 
 ## Evidence
 
-Save evidence under a date-named directory such as `artifacts/verification/2026-10-13-asr/`. Keep command output, test result files, benchmark JSON, and GPU samples together. Benchmark JSON contains reference and hypothesis text. Use the public benchmark corpus and do not save credentials or private recordings there.
+Save evidence under `artifacts/verification/<date>-<topic>/` and quality runs under `artifacts/evals/<date>-<topic>/`. Every helper writes a `run.json` with the commit, branch, dirty files, app version, host, and run settings. Compare two runs only when their manifests match except for the variable under test.
 
-For each check, record the exact command or visible user action, the state before and after, the user-visible output and any files or history entries that changed, and the artifact path. Note whether an artifact contains private audio or transcript text.
+For each check, record the command or user action, the state before and after, the visible output and changed files or history entries, and the artifact path. Note when an artifact holds transcript text. An isolated instance folder holds a throwaway API token for a stopped instance; do not copy real credentials into one.
 
-For ASR comparisons, report these values separately:
+Report transcription, cleanup, and delivery times separately. For ASR comparisons report first-request latency, warm median and p95, real-time factor, WER, CER, and the active backend. The benchmark measures complete CLI responses, not model-only or first-partial time.
 
-- First request latency, which can include a cold model load.
-- Warm complete-result median and p95.
-- Real-time factor for the same audio set.
-- Word error rate and character error rate against the same references.
-- GPU activity and the active execution backend.
-
-The benchmark runner measures complete CLI responses, including a new CLI process and local API request per recording. It does not measure model-only time or streaming first-token time. An offline model such as Parakeet returns text after decoding the full recording. For a streaming model, measure time from the first captured audio frame to the first visible partial text, then measure final-result time separately. Do not compare those values as if they were the same measure.
+For cleanup, dictionary, profile, or streaming-quality changes, also use `evals/dictation/README.md`. Run `just eval-tests`, capture actual raw and final text with the same cases, and keep manual pass/fail critiques. Use the audio scenarios for segment boundaries and later corrections. Separate upstream recognition errors from cleanup errors. An LLM judge is optional and advisory until checked against human labels. Do not send transcripts to a judge during ordinary build or verification commands. Record model, prompt, dictionary, profile, and backend versions with each quality run.
 
 ## Cleanup
 
-Do not clear models, history, settings, or user recordings as part of verification. Keep benchmark evidence after each run. Remove only temporary files that the current run created and that contain no evidence. If this run started the foreground app, stop that app with Ctrl+C. Leave any earlier app process running.
+Isolated runs clean up after themselves: the helpers stop only the process they started (by process group), unload only the null sink they loaded, remove only their `/tmp/tw-verify-*` runtime folder, and restore the clipboard they saved. Check afterwards:
 
-After testing, run the doctor again and record whether the app is idle or recording. If a test started a recording and did not finish it, cancel that test session. Do not delete the resulting audio or history entry.
+```bash
+pactl list short modules | grep -c null-sink     # 0 unless something else loaded one
+ls -d /tmp/tw-verify-* 2>/dev/null               # nothing
+```
+
+Do not clear models, history, settings, or recordings. Keep evidence folders. Leave the user's instance running. If a run is killed before its cleanup, stop only the leftover isolated process (its environment has `XDG_DATA_HOME` under the evidence folder) and unload only the `tw_verify_fixture` sink. A `wl-copy` process serving the restored clipboard is expected; do not kill it.
 
 ## Helpers
 
-The Python helpers use Python 3 standard-library modules. The corpus helper also calls `ffprobe` to check clip length.
+All Python helpers use the standard library and run with `uv run --no-project`. Their tests run with `just eval-tests`.
 
-Inspect the current machine and app state:
+| Helper | Purpose |
+|---|---|
+| `scripts/verification/doctor.py` | Read-only health report (`just doctor`) |
+| `scripts/verification/isolated_app.py` | Isolated instance, virtual mic, fake OpenAI-compatible LLM, run manifest |
+| `scripts/verification/live_smoke.py` | End-to-end dictation with clipboard read-back (`just live-smoke`) |
+| `scripts/verification/capture_text_evals.py` | Eval capture through `/v1/text/process` (`just eval-capture`) |
+| `scripts/verification/benchmark_transcription.py`, `compare_benchmarks.py` | File ASR benchmark and before/after comparison (`just benchmark`) |
+| `scripts/verification/prepare_librispeech.py` | Fixed public corpus (`just prepare-corpus`) |
+| `tests/TypeWhisper.UiTests` | Rendered Settings checks and PNGs (`just ui-check`) |
+| `scripts/verification/hidden_desktop.py` | Hidden headless desktop, AT-SPI actions, RemoteDesktop input, screenshots (`just ui-live`, `just ui-shortcuts`, `just ui-streaming`) |
 
-```bash
-uv run --no-project scripts/verification/doctor.py
-```
+The fake LLM serves `GET /v1/models` and `POST /v1/chat/completions` only. Any other path returns 404 and is recorded, so a malformed base URL fails instead of passing. At Medium or High cleanup, a run with no cleanup LLM call means cleanup silently fell back to Light; the capture helper marks those rows as errors.
 
-Prepare the fixed 50-clip LibriSpeech set, then run the benchmark from its JSON Lines manifest. Each line contains `id`, `audio`, `reference`, and `duration_seconds`. The audio paths are relative to the manifest.
+## Not yet mapped
 
-```bash
-uv run --no-project scripts/verification/prepare_librispeech.py
-mkdir -p "artifacts/verification/$(date +%F)-webgpu"
-uv run --no-project scripts/verification/benchmark_transcription.py \
-  --manifest benchmarks/data/librispeech-50.jsonl \
-  --engine sherpa-onnx \
-  --model parakeet-tdt-0.6b-v3 \
-  --expect-backend webgpu \
-  --language en \
-  --cli src/TypeWhisper.Cli/bin/Debug/net10.0/typewhisper-cli \
-  --output "artifacts/verification/$(date +%F)-webgpu/benchmark.json"
-```
+These areas have user-facing behavior but no live recipe proven yet. Add a feature guide only after driving one live.
 
-The corpus helper downloads the LibriSpeech test-clean and test-other archives, selects 25 speakers from each split with a fixed seed, and extracts only the selected audio. The audio and manifest stay under the ignored `benchmarks/data/` directory. The API server must be enabled and the selected model must be available. Select the backend in Settings and load the model before running the benchmark. The runner checks the active backend through the API and stops if it does not match `--expect-backend`.
-
-For AMD GPU evidence, start this in a second terminal before the benchmark and stop it with Ctrl+C after the run:
-
-```bash
-amdgpu_top --json --select-apu --single-gpu -s 250 \
-  > "artifacts/verification/$(date +%F)-webgpu/amdgpu-top.jsonl"
-```
-
-Use `vulkaninfo --summary` to capture Vulkan device and driver details. Use `nvidia-smi` for an NVIDIA device. A utilization sample proves device activity, not that every model operation ran on the GPU. Pair it with the active backend and provider or runtime logs.
+- Streaming and audio quality, deferred by the user to a later pass. `just ui-streaming` watches the overlay's live-preview text over AT-SPI while a public clip plays, but it has not been run. Segment-boundary quality needs the eval audio scenarios recorded.
+- Plugin catalog install and update from the network, and provider setup by clicking through the Plugins section. Provider activation and routing are covered in `features/plugins-and-providers.md`.
+- Container install, upgrade, and removal of packages on this host. It needs `rpm-tools` installed; CI runs it. See `features/packaging-and-install.md`.

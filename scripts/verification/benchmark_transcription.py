@@ -61,7 +61,7 @@ def read_active_backend(cli: str) -> tuple[str | None, bool | None, str | None]:
     except json.JSONDecodeError as error:
         raise RuntimeError("The app status command did not return JSON") from error
     acceleration = payload.get("acceleration") or {}
-    return acceleration.get("activeBackend"), acceleration.get("requiresRestart"), payload.get("model")
+    return acceleration.get("active_backend"), acceleration.get("requires_restart"), payload.get("model")
 
 
 def normalize(text: str) -> list[str]:

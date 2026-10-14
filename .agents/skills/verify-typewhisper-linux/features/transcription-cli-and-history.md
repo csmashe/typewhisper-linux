@@ -19,7 +19,8 @@ For a history check, use an approved test phrase through dictation. Open History
 
 ## Gotchas
 
-- The CLI uses the local API server. A running GUI does not prove the API server is enabled.
+- The CLI uses the local API server. A running GUI does not prove the API server is enabled. The user's instance often has it off; run CLI checks against an isolated instance instead, whose port and token are in `<workdir>/instance/config/typewhisper/api-discovery.json`.
+- The app replaces a seeded plaintext API token at startup (`SecretProtectionMigrationService`), even a 64-hex legacy token. Read the published token from the discovery file instead of assuming the seeded one.
 - A complete file response measures the whole request. It does not prove streaming partials.
 - Corrections can change text after recognition. Use `--no-corrections` for raw model quality comparisons.
 - Keep private audio and transcript text out of committed benchmark fixtures and logs.

@@ -28,4 +28,5 @@ For live streaming tests, play a fixed recording into a virtual microphone or us
 - Include model load time in a separate cold measurement. Do not mix it with warm per-clip latency.
 - Use the same audio duration sum when computing real-time factor.
 - GPU counters can include desktop rendering and other processes. Sample idle use and inference use, then report both.
-- The earlier AMD comparison scripts and audio set lived under `/tmp`; use a checked-in or separately prepared manifest for future runs.
+- Use `just prepare-corpus` for the fixed LibriSpeech manifest under `benchmarks/data/`. Earlier one-off clips in `/tmp/typewhisper-benchmark` disappear on reboot.
+- For dictation timing, read the `performance` block of `/v1/dictation/transcription` from `just live-smoke`. It separates transcription, each processing step, queue wait, and delivery. It is measured inside the app and does not include the target app drawing the text.

@@ -19,6 +19,8 @@ For WebGPU, confirm the active backend is `webgpu`; do not infer GPU use from th
 
 ## Gotchas
 
+- Models live in each plugin's folder under `PluginData`, for example `com.typewhisper.sherpa-onnx/Models/parakeet-tdt-0.6b/`. The top-level `Models` folder is empty on current installs. `just doctor` reports model files per plugin.
+- The Sherpa plugin's model ID is `parakeet-tdt-0.6b`. Pass `--model parakeet-tdt-0.6b` to the benchmark; older examples used `parakeet-tdt-0.6b-v3`.
 - Execution providers can assign only supported operations to the GPU. Other operations can run on the CPU.
 - Provider initialization can fail and fall back to CPU. Record the active backend after inference.
 - Some native runtimes are pinned for the process lifetime. Restart TypeWhisper when the UI reports that a restart is required.

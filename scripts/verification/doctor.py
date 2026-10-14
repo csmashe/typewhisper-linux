@@ -103,6 +103,34 @@ def running_status(command: list[str] | None) -> tuple[dict[str, object] | None,
     return None, f"control status exited with code {result.returncode} and returned no status object"
 
 
+MODEL_FILE_MIN_BYTES = 1024 * 1024
+
+
+def plugin_model_summary(data_root: Path) -> list[dict[str, object]]:
+    """Count large files under each plugin's data folder.
+
+    Plugins store models in their own layouts, such as `Models/<id>/` or `model/`.
+    The legacy top-level `Models` folder is empty on current installs.
+    """
+    plugin_data = data_root / "PluginData"
+    if not plugin_data.is_dir():
+        return []
+    summary = []
+    for plugin in sorted(item for item in plugin_data.iterdir() if item.is_dir()):
+        sizes = []
+        for path in plugin.rglob("*"):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    size = path.stat().st_size
+                    if size >= MODEL_FILE_MIN_BYTES:
+                        sizes.append(size)
+            except OSError:
+                continue
+        if sizes:
+            summary.append({"plugin": plugin.name, "model_files": len(sizes), "bytes": sum(sizes)})
+    return summary
+
+
 def source_version() -> str | None:
     try:
         root = ET.parse(ROOT / "Directory.Build.props").getroot()
@@ -166,7 +194,7 @@ def main() -> int:
             audio_mode = oct(audio_path.stat().st_mode & 0o777)
         except OSError:
             pass
-    model_path = data_root / "Models"
+    plugin_models = plugin_model_summary(data_root)
     processes = typewhisper_processes()
     command = typewhisper_command()
     status, status_error = running_status(command) if processes else (None, "app process not found")
@@ -203,8 +231,8 @@ def main() -> int:
         "data": {
             "root": str(data_root),
             "settings_exists": settings_path.is_file(),
-            "models_exists": model_path.is_dir(),
-            "model_directory_count": sum(1 for item in model_path.iterdir() if item.is_dir()) if model_path.is_dir() else 0,
+            "plugin_models": plugin_models,
+            "model_file_count": sum(int(item["model_files"]) for item in plugin_models),
             "logs_exists": (data_root / "Logs").is_dir(),
             "audio_exists": audio_path.is_dir(),
             "audio_directory_mode": audio_mode,
