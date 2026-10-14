@@ -562,8 +562,8 @@ public partial class PluginsSectionViewModel : ObservableObject
                 return;
             }
 
-            // Saved values are the new baseline, so only later edits count as unsaved.
-            row.CaptureSettingsBaseline();
+            // Only flat values were saved; collection edits stay unsaved.
+            row.CaptureFlatSettingsBaseline();
             // The refresh that would cancel a disabled or replaced plugin is posted; ask the manager now.
             if (
                 !_pluginManager.IsEnabled(row.Id)
@@ -1260,6 +1260,19 @@ public partial class PluginRow : ObservableObject
     internal void CaptureSettingsBaseline()
     {
         _settingsBaseline = CaptureSettingsDraft();
+    }
+
+    /// <summary>Re-baselines the flat fields only, keeping collection edits unsaved.</summary>
+    internal void CaptureFlatSettingsBaseline()
+    {
+        var draft = CaptureSettingsDraft();
+        _settingsBaseline = _settingsBaseline is null
+            ? draft
+            :
+            [
+                .. draft.Where(entry => entry.Kind == PluginSettingsDraftEntryKind.FlatField),
+                .. _settingsBaseline.Where(entry => entry.Kind != PluginSettingsDraftEntryKind.FlatField),
+            ];
     }
 
     private PluginSettingsDraftEntry[] CaptureSettingsDraft()
