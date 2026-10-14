@@ -164,6 +164,24 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task UnsavedCollectionEdits_SurviveAnAction()
+    {
+        var plugin = new FakeCollectionActionsPlugin();
+        var (vm, row) = await CreateExpandedAsync(plugin);
+        row.SettingFields.Single().Value = "saved by the action";
+        row.Collections.Single().Items.Single().Fields.Single(field => field.Key == "name").Value = "draft";
+
+        await vm.RunSettingsActionCommand.ExecuteAsync(row.Actions.Single());
+
+        var current = CurrentRow(vm);
+        Assert.Equal("ran", current.Status);
+        Assert.Equal("saved by the action", plugin.Value);
+        Assert.Equal(0, plugin.CollectionSaves);
+        Assert.Equal("draft", current.Collections.Single().Items.Single().Fields.Single(field => field.Key == "name").Value);
+        Assert.True(current.HasUnsavedSettings);
+    }
+
+    [Fact]
     public async Task ValuesSavedByTheAction_AreReloadedFromThePlugin()
     {
         var plugin = new FakeActionsPlugin { NormalizeValue = value => value.Trim() };
@@ -268,7 +286,7 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
     }
 
     private async Task<(PluginsSectionViewModel Vm, PluginRow Row)> CreateExpandedAsync(
-        FakeActionsPlugin plugin,
+        ITypeWhisperPlugin plugin,
         TimeSpan? validationTimeout = null,
         ErrorLogService? errorLog = null,
         bool enabled = true)
@@ -316,6 +334,53 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         var field = typeof(PluginManager).GetField("_allPlugins", BindingFlags.Instance | BindingFlags.NonPublic)
                     ?? throw new MissingFieldException(nameof(PluginManager), "_allPlugins");
         field.SetValue(manager, new List<LoadedPlugin> { TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, TestPluginId, replacement) });
+    }
+
+    private sealed class FakeCollectionActionsPlugin
+        : ITypeWhisperPlugin, IPluginSettingsProvider, IPluginCollectionSettingsProvider, IPluginSettingsActions
+    {
+        public string Value { get; private set; } = "initial";
+        public int CollectionSaves { get; private set; }
+        public string PluginId => TestPluginId;
+        public string PluginName => "Collection actions";
+        public string PluginVersion => "1.0.0";
+
+        public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+            [new("value", "Value", Kind: PluginSettingKind.Text)];
+
+        public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<string?>(Value);
+
+        public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+        {
+            Value = value ?? string.Empty;
+            return Task.CompletedTask;
+        }
+
+        public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
+            [new("items", "Items", null, [new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text)], "name")];
+
+        public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(string collectionKey, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<PluginCollectionItem>>(
+                [new PluginCollectionItem(new Dictionary<string, string?> { ["name"] = "saved" })]);
+
+        public Task<PluginSettingsValidationResult> SetItemsAsync(
+            string collectionKey,
+            IReadOnlyList<PluginCollectionItem> items,
+            CancellationToken ct = default)
+        {
+            CollectionSaves++;
+            return Task.FromResult(new PluginSettingsValidationResult(true, "saved"));
+        }
+
+        public IReadOnlyList<PluginSettingsAction> GetSettingsActions() => [new("log", "Show log")];
+
+        public Task<PluginSettingsValidationResult> ExecuteSettingsActionAsync(string actionId, CancellationToken ct) =>
+            Task.FromResult(new PluginSettingsValidationResult(true, "ran"));
+
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+        public Task DeactivateAsync() => Task.CompletedTask;
+        public void Dispose() { }
     }
 
     private sealed class FakeActionsPlugin
