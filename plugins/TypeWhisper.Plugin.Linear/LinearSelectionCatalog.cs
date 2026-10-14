@@ -28,15 +28,29 @@ public sealed partial class LinearPlugin
         if (string.IsNullOrWhiteSpace(json))
             return;
 
+        LinearSelectionCatalog? catalog = null;
         try
         {
-            _catalog = JsonSerializer.Deserialize<LinearSelectionCatalog>(json, s_jsonOptions);
+            catalog = JsonSerializer.Deserialize<LinearSelectionCatalog>(json, s_jsonOptions);
         }
         catch (JsonException)
         {
-            host.Log(PluginLogLevel.Warning, "Ignoring unreadable cached Linear teams and projects.");
-            _catalog = null;
+            // Reported below with the other unusable shapes.
         }
+
+        // JSON nulls override the initializers, and the settings dropdowns dereference every entry.
+        // ReSharper disable RedundantAlwaysMatchSubpattern -- non-nullable only by annotation; deserialization can still produce null here.
+        if (catalog is { KeyFingerprint: not null, Teams: not null, Projects: not null }
+            && catalog.Teams.All(t => t is { Id: not null, Name: not null, Key: not null })
+            && catalog.Projects.All(p => p is { Id: not null, Name: not null }))
+        // ReSharper restore RedundantAlwaysMatchSubpattern
+        {
+            _catalog = catalog;
+            return;
+        }
+
+        host.Log(PluginLogLevel.Warning, "Ignoring unreadable cached Linear teams and projects.");
+        _catalog = null;
     }
 
     // Read-only. Null when any page fails, so a partial list never replaces the previous one.

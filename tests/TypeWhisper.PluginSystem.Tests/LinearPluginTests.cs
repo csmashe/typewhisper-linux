@@ -123,6 +123,34 @@ public class LinearPluginTests
     }
 
     [Theory]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": null, "projects": [] }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [], "projects": null }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [null], "projects": [] }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [{ "id": null, "name": "API", "key": "API" }], "projects": [] }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [], "projects": [{ "id": "x", "name": null }] }""")]
+    [InlineData("null")]
+    [InlineData("not json")]
+    public async Task ActivateAsync_IgnoresAnUnusableCachedCatalog(string cachedTemplate)
+    {
+        var host = ConfiguredHost();
+        using (var first = new LinearPlugin(new HttpClient(CatalogHandler())))
+        {
+            await first.ActivateAsync(host);
+            await first.ValidateAsync();
+        }
+
+        using var saved = JsonDocument.Parse(host.GetSetting<string>("selection-catalog")!);
+        var fingerprint = saved.RootElement.GetProperty("keyFingerprint").GetString()!;
+        host.SetSetting("selection-catalog", cachedTemplate.Replace("FP", fingerprint));
+
+        using var sut = new LinearPlugin(new HttpClient(CatalogHandler()));
+        await sut.ActivateAsync(host);
+
+        Assert.Null(Definition(sut, "default-team-id").Options);
+        Assert.Null(Definition(sut, "default-project-id").Options);
+    }
+
+    [Theory]
     [InlineData("errors")]
     [InlineData("http500")]
     [InlineData("repeatedCursor")]
