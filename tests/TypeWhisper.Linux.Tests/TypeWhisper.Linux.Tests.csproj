@@ -19,6 +19,7 @@
         <ProjectReference Include="..\..\src\TypeWhisper.Linux\TypeWhisper.Linux.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Webhook\TypeWhisper.Plugin.Webhook.csproj"/>
         <ProjectReference Include="..\TypeWhisper.ProcessTestChild\TypeWhisper.ProcessTestChild.csproj"/>
+        <ProjectReference Include="..\TypeWhisper.TranscriptionWorkerProbe\TypeWhisper.TranscriptionWorkerProbe.csproj"/>
     </ItemGroup>
 
     <ItemGroup>
