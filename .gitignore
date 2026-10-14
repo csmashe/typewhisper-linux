@@ -17,6 +17,7 @@ releases/
 /dist/
 # Test result output (e.g. CI writes .trx into artifacts/test-results)
 artifacts/
+benchmarks/data/
 # Ignore everything under docs/ except published release notes and prompts
 docs/*
 !docs/releases/
@@ -24,6 +25,10 @@ docs/*
 publish/
 artifacts/
 .agents/
+!.agents/
+!.agents/skills/
+!.agents/skills/verify-typewhisper-linux/
+!.agents/skills/verify-typewhisper-linux/**
 .claude/
 .serena/
 .venv
