@@ -1741,6 +1741,23 @@ public sealed class HotkeyService : IDisposable
                 continue;
             }
 
+            // Accept any named SharpHook virtual key. FormatHotkey emits the same
+            // name without the Vc prefix, which keeps recorded keys round-trippable.
+            if (
+                Enum.TryParse<KeyCode>($"Vc{raw}", ignoreCase: true, out var namedKey)
+                && namedKey != KeyCode.VcUndefined
+                && Enum.IsDefined(namedKey)
+            )
+            {
+                if (key is not null)
+                {
+                    return false;
+                }
+
+                key = namedKey;
+                continue;
+            }
+
             key = null;
             return false;
         }

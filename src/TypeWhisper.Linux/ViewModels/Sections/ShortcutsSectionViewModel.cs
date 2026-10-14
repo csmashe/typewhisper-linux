@@ -76,6 +76,9 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     private string _hotkeyText = "";
 
     [ObservableProperty]
+    private bool _isCapturingHotkey;
+
+    [ObservableProperty]
     private string _integrationStatusMessage = "";
 
     [ObservableProperty]
@@ -1087,6 +1090,27 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             StatusMessage =
                 Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", HotkeyText);
         }
+    }
+
+    [RelayCommand]
+    private void StartHotkeyCapture()
+    {
+        IsCapturingHotkey = true;
+        StatusMessage = Loc.Instance["Shortcuts.CapturePrompt"];
+    }
+
+    [RelayCommand]
+    private void CancelHotkeyCapture()
+    {
+        IsCapturingHotkey = false;
+        StatusMessage = Loc.Instance["Shortcuts.CaptureCancelled"];
+    }
+
+    public async Task ApplyCapturedHotkeyAsync(string hotkey)
+    {
+        IsCapturingHotkey = false;
+        HotkeyText = hotkey;
+        await ApplyHotkeyAsync();
     }
 
     [RelayCommand]
