@@ -157,6 +157,13 @@ internal sealed class IsolatedTranscriptionEngine
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // The request that held the gate may have loaded this very model meanwhile.
+            if (_state?.LoadedModelId == modelId)
+            {
+                await DiscardWorkerAsync().ConfigureAwait(false);
+                _state = null;
+            }
+
             await _inner.DeleteModelAsync(modelId, ct).ConfigureAwait(false);
         }
         finally
