@@ -10,6 +10,23 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class StreamingTranscriptionCoordinatorTests
 {
+    [Fact]
+    public async Task PartialPreview_IncludesCompletedSegmentsAndRevisesOnlyCurrentSegment()
+    {
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        var previews = new List<string>();
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, text) => previews.Add(text), _ => { });
+        await coord.StartAsync(CancellationToken.None);
+        session.RaiseFinal("Send the report.", "en");
+        session.RaisePartial("On Monday", "en");
+        session.RaisePartial("On Tuesday", "en");
+        session.RaiseFinal("On Tuesday.", "en");
+        Assert.Equal(new[] { "Send the report.", "Send the report.\nOn Monday",
+            "Send the report.\nOn Tuesday", "Send the report.\nOn Tuesday." }, previews);
+        Assert.Equal("Send the report.\nOn Tuesday.", await coord.FinalizeAsync(default));
+    }
     [Theory]
     [InlineData("de")]
     [InlineData("DE")]
@@ -132,6 +149,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         Assert.Equal(1, ReadMarker(session.SentChunks[0]));
         Assert.Equal(2, ReadMarker(session.SentChunks[1]));
         Assert.Equal(3, ReadMarker(session.SentChunks[2]));
+        Assert.False(coord.HasDroppedAudio);
     }
 
     [Fact]
@@ -223,6 +241,7 @@ public sealed class StreamingTranscriptionCoordinatorTests
         // Oldest (0..50) must be dropped.
         Assert.DoesNotContain(0, markers);
         Assert.DoesNotContain(50, markers);
+        Assert.True(coord.HasDroppedAudio);
     }
 
     [Fact]
@@ -271,6 +290,50 @@ public sealed class StreamingTranscriptionCoordinatorTests
         var earlyPresent = markers.Count(m => m is >= 5 and <= 50);
         Assert.True(earlyPresent < 10,
             $"Expected most early markers (5-50) dropped, got {earlyPresent} present");
+        Assert.True(coord.HasDroppedAudio);
+    }
+
+    [Fact]
+    public async Task PendingFlush_ExceedingFrameCapacity_InvalidatesOtherwiseSuccessfulStream()
+    {
+        var session = new FakeStreamingSession();
+        var connect = new TaskCompletionSource<IStreamingSession>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.OnSendAudio = async _ =>
+        {
+            sendEntered.TrySetResult();
+            await releaseSend.Task;
+        };
+        var plugin = new FakePlugin { OnStartStreaming = _ => connect.Task };
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Explicit("en"), [], 1, (_, _) => { }, _ => { });
+        var start = coord.StartAsync(CancellationToken.None);
+        // Small frames stay below the byte cap but overflow the channel during connect flush.
+        for (var i = 0; i < 200; i++)
+            coord.AcceptAudioFrame(MakeMarkedFrame(i), 16000);
+        Assert.False(coord.HasDroppedAudio);
+
+        try
+        {
+            connect.SetResult(session);
+            await start.WaitAsync(TimeSpan.FromSeconds(2));
+            await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            session.RaiseFinal("incomplete but successful", "en");
+            releaseSend.TrySetResult();
+            var text = await coord.FinalizeAsync(CancellationToken.None);
+
+            Assert.True(coord.HasDroppedAudio);
+            Assert.False(coord.Faulted);
+            Assert.False(DictationOrchestrator.CanReuseStreamingText(
+                text, coord.Faulted || coord.HasDroppedAudio, true,
+                LanguageSelection.Explicit("en"), [], LanguageSelection.Explicit("en"), [], false, false, null));
+        }
+        finally
+        {
+            releaseSend.TrySetResult();
+            connect.TrySetResult(session);
+        }
     }
 
     [Fact]

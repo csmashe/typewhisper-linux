@@ -21,7 +21,60 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class HttpApiUnixSocketTests
 {
+    [Fact]
+    public async Task DictationResult_DistinguishesTextReadyFromDeliveryAndExposesStageTimings()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var ready = new TypeWhisper.Linux.Models.DictationSessionResult(
+            71, "ready", "Send it Tuesday.", "um send it Tuesday", "en", 3, "test", "model");
+        fixture.RecordResult(ready);
+        using var before = JsonDocument.Parse(await client.GetStringAsync("/v1/dictation/transcription?sessionId=71"));
+        Assert.Equal(JsonValueKind.Null, before.RootElement.GetProperty("performance").ValueKind);
+        fixture.RecordResult(ready with
+        {
+            Performance = new TypeWhisper.Linux.Models.DictationPerformance(
+                120, new Dictionary<string, double> { ["Cleanup"] = 80 }, 10, 15, 260,
+                "CopiedToClipboard", 2, true),
+        });
+        using var after = JsonDocument.Parse(await client.GetStringAsync("/v1/dictation/transcription?sessionId=71"));
+        var performance = after.RootElement.GetProperty("performance");
+        Assert.Equal(260, performance.GetProperty("stop_to_delivery_milliseconds").GetDouble());
+        Assert.Equal(80, performance.GetProperty("processing_milliseconds").GetProperty("Cleanup").GetDouble());
+        Assert.Equal("CopiedToClipboard", performance.GetProperty("delivery_outcome").GetString());
+        Assert.True(performance.GetProperty("live_cleanup_reused").GetBoolean());
+    }
     private static readonly string[] s_helloWorld = ["Hello", "World"];
+
+    [Fact]
+    public async Task TextProcessRoute_IsListedAndRequiresBearer()
+    {
+        Assert.True(HttpApiRoutes.Contains("POST", "/v1/text/process"));
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: false);
+        using var response = await client.PostAsync("/v1/text/process",
+            new StringContent("""{"text":"hello"}""", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("", "Missing JSON body")]
+    [InlineData("{not json", "Invalid JSON body")]
+    [InlineData("{}", "Missing required field: text")]
+    [InlineData("""{"text":"   "}""", "Missing required field: text")]
+    public async Task TextProcessRoute_RejectsInvalidBodiesBeforeProcessing(string body, string error)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var response = await client.PostAsync("/v1/text/process",
+            new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(error, json.RootElement.GetProperty("error").GetString());
+    }
 
     [Fact]
     public async Task RecorderRoutesRoundTripWithFakeCapture()
@@ -1213,6 +1266,39 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Fact]
+    public void StartFailureIsWrittenToTheLogNotOnlyTheSettingsStatus()
+    {
+        // The status text is only visible in Settings; a headless or remote check reads the log.
+        using var fixture = new ApiFixture();
+        using var occupied = new System.Net.Sockets.TcpListener(IPAddress.Loopback, fixture.Port);
+        occupied.Start();
+        var lines = new List<string>();
+        using var listener = new CollectingTraceListener(lines);
+        System.Diagnostics.Trace.Listeners.Add(listener);
+        try
+        {
+            fixture.Service.ApplySettings();
+        }
+        finally
+        {
+            System.Diagnostics.Trace.Listeners.Remove(listener);
+        }
+
+        Assert.StartsWith("Local API failed to start", fixture.Service.StatusText, StringComparison.Ordinal);
+        Assert.Contains(lines, line => line.Contains("[HttpApiService] Local API failed to start", StringComparison.Ordinal));
+    }
+
+    private sealed class CollectingTraceListener(List<string> lines) : System.Diagnostics.TraceListener
+    {
+        public override void Write(string? message) { }
+
+        public override void WriteLine(string? message)
+        {
+            lock (lines) lines.Add(message ?? "");
+        }
+    }
+
+    [Fact]
     public void UnpublishableDiscoveryFileIsReportedInStatus()
     {
         using var fixture = new ApiFixture();
@@ -1872,6 +1958,7 @@ public sealed class HttpApiUnixSocketTests
         private readonly HotkeyService _hotkeys = TestShortcutBackend.CreateHotkeyService();
         
         private readonly DictationSessionResultStore _sessionResults = new();
+        internal void RecordResult(TypeWhisper.Linux.Models.DictationSessionResult result) => _sessionResults.Record(result);
         private AppSettings _current;
 
         internal ApiFixture(

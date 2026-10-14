@@ -535,11 +535,3 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 }
-
-internal sealed record OpenAiExistingLoginStore(OpenAiExistingLoginTokens Tokens);
-
-internal sealed record OpenAiExistingLoginTokens(
-    [property: JsonPropertyName("access_token")] string AccessToken,
-    [property: JsonPropertyName("refresh_token")] string RefreshToken,
-    [property: JsonPropertyName("id_token")] string? IdToken,
-    [property: JsonPropertyName("account_id")] string? AccountId);

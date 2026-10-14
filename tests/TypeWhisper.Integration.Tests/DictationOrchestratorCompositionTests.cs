@@ -21,6 +21,8 @@ public sealed class DictationOrchestratorCompositionTests
         {
             await using var fixture = new OrchestratorCompositionFixture();
             fixture.Plugin.EnqueueText("hello question mark");
+            var completionCount = 0;
+            fixture.Orchestrator.SessionCompleted += _ => Interlocked.Increment(ref completionCount);
             var captured = new TaskCompletionSource<string>(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
@@ -68,7 +70,15 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.NotNull(recent);
             Assert.Equal("hello?", recent.FinalText);
             Assert.True(fixture.SessionResults.TryGet(sessionId, out var storedResult));
+            // Text readiness is published before delivery. Session completion
+            // is published once afterward with its delivery performance.
             Assert.Equal(result, storedResult);
+            var performance = Assert.IsType<TypeWhisper.Linux.Models.DictationPerformance>(storedResult.Performance);
+            Assert.Equal("Typed", performance.DeliveryOutcome);
+            Assert.True(performance.StopToDeliveryMilliseconds > 0);
+            Assert.True(performance.TranscriptionMilliseconds >= 0);
+            Assert.NotEmpty(performance.ProcessingMilliseconds);
+            Assert.Equal(1, completionCount);
 
             // Detects capture ownership, post-processing, persistence, event publication,
             // insertion delivery, and terminal gate/in-flight leaks in the assembled service.

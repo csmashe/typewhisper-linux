@@ -12,6 +12,38 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationSectionViewModelLocalizationTests
 {
     [Fact]
+    public void LanguageChange_RefreshesEngineAndModelStatusLabels()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+            using var pluginManager = TestPluginManagerFactory.Create();
+            var commands = new SystemCommandAvailabilityService();
+            using var models = new ModelManagerService(pluginManager, settings.Object, commands);
+            using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+            var a11yBus = new Mock<IAccessibilityBusActivation>();
+            a11yBus.Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+            var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(typeof(DictationOrchestrator));
+            var sut = new DictationSectionViewModel(dictation, models, audio, settings.Object, pluginManager, commands,
+                new CudaLibraryPathSetupService(), a11yBus.Object, () => []);
+            Assert.Null(sut.SelectedModel);
+            Assert.Equal("No engine selected", sut.EngineName);
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.Equal(Loc.Instance["Dictation.NoEngineSelected"], sut.EngineName);
+            Assert.Equal(Loc.Instance["Dictation.StatusNotSelected"], sut.ModelStatusText);
+            Assert.NotEqual("No engine selected", sut.EngineName);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void LanguageChange_RebuildsLocalizedOptions_PreservesSelectionsWithoutSaving()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;

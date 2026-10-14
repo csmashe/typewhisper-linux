@@ -317,9 +317,12 @@ internal sealed class SecretProtectionMigrationService
                 )
             )
             {
+                // A pre-encryption hex token cannot be authenticated as ciphertext, but external
+                // clients still hold it, so protect it as-is instead of issuing a new one.
+                var token = HttpApiService.IsLegacyPlaintextToken(stored) ? stored : CreateBearerToken();
                 replacements[propertyName] = new SecretReplacement(
                     stored,
-                    ApiKeyProtection.Encrypt(CreateBearerToken(), _keyFilePath)
+                    ApiKeyProtection.Encrypt(token, _keyFilePath)
                 );
                 continue;
             }

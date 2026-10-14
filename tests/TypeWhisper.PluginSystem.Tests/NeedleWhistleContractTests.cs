@@ -80,6 +80,23 @@ public sealed class NeedleWhistleContractTests
     }
 
     [Fact]
+    public void ReadWavDuration_AcceptsFfmpegPipeUnknownDataLength()
+    {
+        var wav = BuildPcmWav(16_000, 1, 16, 32_000);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(4), uint.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(40), uint.MaxValue);
+        Assert.Equal(1, NeedleWhistleContract.ReadWavDurationSeconds(wav), precision: 5);
+    }
+
+    [Fact]
+    public void ReadWavDuration_StillRejectsTruncatedFiniteDataLength()
+    {
+        var wav = BuildPcmWav(16_000, 1, 16, 32_000);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(40), 64_000);
+        Assert.Throws<InvalidDataException>(() => NeedleWhistleContract.ReadWavDurationSeconds(wav));
+    }
+
+    [Fact]
     public void ReadWavDuration_RejectsMalformedOrUnsupportedWaveHeaders()
     {
         Assert.Throws<InvalidDataException>(() => NeedleWhistleContract.ReadWavDurationSeconds([]));

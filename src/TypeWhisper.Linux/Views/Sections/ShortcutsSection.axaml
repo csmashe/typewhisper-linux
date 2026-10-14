@@ -37,6 +37,7 @@
         <Style Selector="TextBlock.row-title">
             <Setter Property="FontSize" Value="12.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="TextBlock.row-hint">
             <Setter Property="FontSize" Value="12" />
@@ -163,6 +164,7 @@
                                            Text="{loc:Str Shortcuts.WaylandEvdevHint}" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Shortcuts.WaylandEvdev}"
                                           VerticalAlignment="Center"
                                           IsChecked="{Binding WaylandEvdevHotkeysEnabled}" />
                         </Grid>
@@ -175,9 +177,11 @@
             <Border Classes="section-panel">
                 <StackPanel>
                     <Border Classes="section-row">
-                        <Grid ColumnDefinitions="*,Auto"
-                              ColumnSpacing="16">
-                            <StackPanel Margin="0,0,16,0">
+                        <!-- Title above the controls: the record, cancel, and apply buttons are too wide
+                             for a side-by-side row in compact windows and long translations. -->
+                        <Grid RowDefinitions="Auto,Auto"
+                              RowSpacing="10">
+                            <StackPanel>
                                 <TextBlock Text="{loc:Str Shortcuts.MainHotkey}"
                                            Classes="row-title" />
                                 <TextBlock
@@ -185,11 +189,12 @@
                                     Classes="row-hint" />
                             </StackPanel>
 
-                            <StackPanel Grid.Column="1"
+                            <StackPanel Grid.Row="1"
                                         Orientation="Horizontal"
                                         Spacing="8"
-                                        VerticalAlignment="Center">
+                                        HorizontalAlignment="Left">
                                 <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.MainHotkey}"
                                          Text="{Binding HotkeyText}"
                                          PlaceholderText="Ctrl+Shift+Space" />
                                 <Button Content="{loc:Str Shortcuts.RecordShortcut}"
@@ -269,6 +274,7 @@
                                         Spacing="8"
                                         VerticalAlignment="Center">
                                 <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.PromptPalette}"
                                          Text="{Binding PromptPaletteHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+P" />
                                 <Button Content="{loc:Str Common.Apply}"
@@ -297,6 +303,7 @@
                                         Spacing="8"
                                         VerticalAlignment="Center">
                                 <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.TransformSelection}"
                                          Text="{Binding TransformSelectionHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+T" />
                                 <Button Content="{loc:Str Common.Apply}"
@@ -325,6 +332,7 @@
                                         Spacing="8"
                                         VerticalAlignment="Center">
                                 <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.RecentTranscriptions}"
                                          Text="{Binding RecentTranscriptionsHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+R" />
                                 <Button Content="{loc:Str Common.Apply}"
@@ -353,6 +361,7 @@
                                         Spacing="8"
                                         VerticalAlignment="Center">
                                 <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.CopyLastTranscription}"
                                          Text="{Binding CopyLastTranscriptionHotkeyText}"
                                          PlaceholderText="Ctrl+Shift+C" />
                                 <Button Content="{loc:Str Common.Apply}"
@@ -381,8 +390,9 @@
                                         Spacing="8"
                                         VerticalAlignment="Center">
                                 <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.ReadLastTranscription}"
                                          Text="{Binding ReadLastTranscriptionHotkeyText}"
-                                         PlaceholderText="Ctrl+Shift+R" />
+                                         PlaceholderText="Ctrl+Shift+S" />
                                 <Button Content="{loc:Str Common.Apply}"
                                         Command="{Binding ApplyReadLastTranscriptionHotkeyCommand}" />
                             </StackPanel>

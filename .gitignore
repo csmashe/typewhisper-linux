@@ -32,6 +32,9 @@ artifacts/
 .claude/
 .serena/
 .venv
+__pycache__/
+# Native Sherpa runtimes compiled by scripts/build-sherpa-*.sh during package builds.
+plugins/TypeWhisper.Plugin.SherpaOnnx/Runtimes/
 granite-speech-onnx/
 granite-speech-onnx-int8/
 granite-speech-genai/

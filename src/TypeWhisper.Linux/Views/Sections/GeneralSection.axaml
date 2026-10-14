@@ -35,6 +35,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str General.UiLanguage}"
                                       VerticalAlignment="Center"
                                       ItemsSource="{Binding UiLanguageChoices}"
                                       SelectedItem="{Binding SelectedUiLanguageOption}"
@@ -70,6 +71,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str General.Autostart}"
                                           IsChecked="{Binding StartWithSystem}"
                                           VerticalAlignment="Center" />
                         </Grid>
@@ -136,6 +138,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str General.CloseToTray}"
                                           IsChecked="{Binding CloseToTray}"
                                           IsEnabled="{Binding IsTrayAvailable}"
                                           VerticalAlignment="Center" />
@@ -173,6 +176,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str General.LocalApi}"
                                           IsChecked="{Binding ApiServerEnabled}"
                                           VerticalAlignment="Center" />
                         </Grid>
@@ -189,6 +193,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <NumericUpDown Grid.Column="1"
+                                           AutomationProperties.Name="{loc:Str General.Port}"
                                            Minimum="1"
                                            Maximum="65535"
                                            Value="{Binding ApiServerPort}"
@@ -207,6 +212,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <TextBox Grid.Column="1"
+                                     AutomationProperties.Name="{loc:Str General.BearerToken}"
                                      IsReadOnly="True"
                                      Text="{Binding ApiBearerToken}" />
                         </Grid>

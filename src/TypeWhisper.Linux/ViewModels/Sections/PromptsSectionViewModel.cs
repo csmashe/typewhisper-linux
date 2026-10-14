@@ -100,6 +100,8 @@ public partial class PromptsSectionViewModel : ObservableObject
         _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) =>
             Dispatcher.UIThread.Post(RefreshPluginOptions);
+        // Provider option labels ("Use default provider", "unavailable") are computed text.
+        Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(RefreshPluginOptions);
         _settings.SettingsChanged += value =>
             Dispatcher.UIThread.Post(() =>
             {

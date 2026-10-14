@@ -39,7 +39,6 @@
   "Settings.ApiKeyValidDefault": "La clave de API es válida. Se están usando los modelos guardados/predeterminados.",
   "Settings.ChatGptLoginRemoved": "Inicio de sesión de ChatGPT eliminado.",
   "Settings.ChatGptLoginRefreshFailed": "No se pudo actualizar el inicio de sesión de ChatGPT almacenado: {0} Activa \"Olvidar el inicio de sesión de ChatGPT\" y vuelve a ejecutar Validar para borrar las credenciales almacenadas, luego inicia sesión de nuevo.",
-  "Settings.ChatGptImportFailed": "No se pudo importar el inicio de sesión de ChatGPT existente: {0}",
   "Settings.ChatGptLoginPortInUse": "No se pudo iniciar el escucha de inicio de sesión en el puerto 1455. Cierra cualquier aplicación que esté usando ese puerto e inténtalo de nuevo.",
   "Settings.ChatGptLoginNoBrowser": "No se pudo abrir un navegador para el inicio de sesión de ChatGPT. Instala xdg-utils o establece un navegador predeterminado e inténtalo de nuevo. ({0})",
   "Settings.ChatGptLoginFailed": "El inicio de sesión de ChatGPT falló: {0}",

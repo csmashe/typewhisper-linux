@@ -211,7 +211,7 @@ public sealed class SherpaOnnxPlugin
     public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "sherpa-onnx";
-    public string ProviderDisplayName => "Lokal (sherpa-onnx)";
+    public string ProviderDisplayName => "Local (sherpa-onnx)";
     public bool IsConfigured => true;
     public string? SelectedModelId { get; private set; }
 

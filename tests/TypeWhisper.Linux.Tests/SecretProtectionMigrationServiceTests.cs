@@ -108,6 +108,27 @@ public sealed class SecretProtectionMigrationServiceTests : IDisposable
     }
 
     [Fact]
+    public void MigrateAll_KeepsAPreEncryptionHexBearerTokenInsteadOfRotatingIt()
+    {
+        // Pre-encryption builds stored the generated token as 64 hex characters. That decodes to a
+        // CBC-shaped envelope that cannot be authenticated; rotating it would break external clients
+        // already holding the token, which HttpApiService explicitly avoids.
+        var legacyToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        WriteJson(
+            Path.Join(_basePath, "settings.json"),
+            new Dictionary<string, object?> { ["apiServerBearerToken"] = legacyToken }
+        );
+
+        var result = CreateService().MigrateAll();
+
+        Assert.Equal(0, result.UnresolvedSecretCount);
+        AssertCurrentSecret(
+            ReadString(Path.Join(_basePath, "settings.json"), "apiServerBearerToken"),
+            legacyToken
+        );
+    }
+
+    [Fact]
     public void MigrateAll_OneUndecryptableSecretLeavesWholeFileUnchanged()
     {
         var valid = ApiKeyProtectionTests.EncryptLegacyGcm("valid-secret");

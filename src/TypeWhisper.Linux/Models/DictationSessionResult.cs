@@ -18,4 +18,19 @@ public sealed record DictationSessionResult(
     string? EngineUsed,
     string? ModelUsed,
     string? Message = null
+)
+{
+    // Available only after delivery finishes. Text can be ready before it is delivered.
+    public DictationPerformance? Performance { get; init; }
+}
+
+public sealed record DictationPerformance(
+    double TranscriptionMilliseconds,
+    IReadOnlyDictionary<string, double> ProcessingMilliseconds,
+    double QueueWaitMilliseconds,
+    double DeliveryMilliseconds,
+    double? StopToDeliveryMilliseconds,
+    string DeliveryOutcome,
+    int LiveCleanupRequests,
+    bool LiveCleanupReused
 );

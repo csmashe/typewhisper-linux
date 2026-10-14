@@ -67,6 +67,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private long _lastFinalTickMs;
     private bool _open;
     private int _pendingBytes;
+    private int _droppedAudio;
     private Task? _senderTask;
 
     private IStreamingSession? _session;
@@ -97,6 +98,10 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     }
 
     public bool Faulted { get; private set; }
+
+    // A provider can finish successfully after missing audio. Keep this separate from
+    // socket faults so normal sender teardown still runs, but never reuse that transcript.
+    public bool HasDroppedAudio => Volatile.Read(ref _droppedAudio) != 0;
 
     // A final segment that reported no language may itself have been multilingual — Deepgram
     // collapses `languages: ["de","en"]` to none — so one unlabelled segment leaves the whole
@@ -226,7 +231,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             var channel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(ChannelCapacity)
             {
                 FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false,
-            });
+            }, _ => MarkDroppedAudio());
 
             var handler = OnTranscriptReceived;
 
@@ -586,9 +591,16 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             return;
         }
 
+        string preview;
+        lock (_lock)
+        {
+            preview = _finalSegments.Length == 0 ? evt.Text
+                : string.IsNullOrWhiteSpace(evt.Text) ? _finalSegments.ToString()
+                : _finalSegments + "\n" + evt.Text;
+        }
         try
         {
-            _onPartial(_sessionVersion, evt.Text);
+            _onPartial(_sessionVersion, preview);
         }
         catch (Exception ex)
         {
@@ -783,6 +795,13 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         while (_pendingBytes > MaxPendingBytes && _pending.TryDequeue(out var dropped))
         {
             _pendingBytes -= dropped.Length;
+            MarkDroppedAudio();
         }
+    }
+
+    private void MarkDroppedAudio()
+    {
+        if (Interlocked.Exchange(ref _droppedAudio, 1) == 0)
+            Trace.WriteLine("[StreamingCoordinator] Audio buffer overflow; streamed text is incomplete.");
     }
 }

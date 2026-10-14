@@ -39,7 +39,6 @@
   "Settings.ApiKeyValidDefault": "API key is valid. Using saved/default models.",
   "Settings.ChatGptLoginRemoved": "ChatGPT login removed.",
   "Settings.ChatGptLoginRefreshFailed": "Stored ChatGPT login could not be refreshed: {0} Enable \"Forget ChatGPT login\" and re-run Validate to clear the stored credentials, then sign in again.",
-  "Settings.ChatGptImportFailed": "Could not import existing ChatGPT login: {0}",
   "Settings.ChatGptLoginPortInUse": "Could not start the login listener on port 1455. Close any application using that port and try again.",
   "Settings.ChatGptLoginNoBrowser": "Could not open a browser for ChatGPT login. Install xdg-utils or set a default browser and try again. ({0})",
   "Settings.ChatGptLoginFailed": "ChatGPT login failed: {0}",

@@ -116,6 +116,13 @@ internal static class NeedleWhistleContract
         {
             var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(wav.Slice(offset + 4, 4));
             var chunkStart = offset + 8;
+            // FFmpeg cannot seek back to fill the data size when it writes WAV
+            // to stdout. The complete captured buffer supplies that size instead.
+            var openEndedData = chunkSize == uint.MaxValue
+                && wav.Slice(offset, 4).SequenceEqual("data"u8)
+                && BinaryPrimitives.ReadUInt32LittleEndian(wav.Slice(4, 4)) == uint.MaxValue;
+            if (openEndedData)
+                chunkSize = (uint)(wav.Length - chunkStart);
             if (chunkSize > int.MaxValue || chunkStart > wav.Length - (int)chunkSize)
                 throw new InvalidDataException("The WAVE file contains a truncated chunk.");
 
@@ -128,6 +135,7 @@ internal static class NeedleWhistleContract
             else if (wav.Slice(offset, 4).SequenceEqual("data"u8))
             {
                 dataLength = chunkSize;
+                if (openEndedData) break;
             }
 
             var paddedSize = (long)chunkSize + (chunkSize & 1);

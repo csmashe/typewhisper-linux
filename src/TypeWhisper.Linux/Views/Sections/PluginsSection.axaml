@@ -24,6 +24,7 @@
                            IsVisible="{Binding HasDescription}" />
 
                 <ComboBox ItemsSource="{Binding Options}"
+                          AutomationProperties.Name="{Binding Label}"
                           SelectedItem="{Binding SelectedOption}"
                           HorizontalAlignment="Stretch"
                           IsVisible="{Binding IsDropdownKind}"
@@ -36,17 +37,20 @@
                 </ComboBox>
 
                 <TextBox Text="{Binding Value}"
+                         AutomationProperties.Name="{Binding Label}"
                          PlaceholderText="{Binding Placeholder}"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsTextKind}" />
 
                 <TextBox Text="{Binding Value}"
+                         AutomationProperties.Name="{Binding Label}"
                          PlaceholderText="{Binding Placeholder}"
                          PasswordChar="•"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsSecretKind}" />
 
                 <TextBox Text="{Binding Value}"
+                         AutomationProperties.Name="{Binding Label}"
                          PlaceholderText="{Binding Placeholder}"
                          PasswordChar="{Binding MultilinePasswordChar}"
                          RevealPassword="{Binding RevealSecretMultiline, Mode=TwoWay}"
@@ -139,6 +143,7 @@
 
                                         <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                         <ToggleSwitch Grid.Column="2"
+                                                      AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                       Margin="0,0,2,0"
                                                       VerticalAlignment="Center"
                                                       IsChecked="{Binding IsEnabled, Mode=OneWay}"

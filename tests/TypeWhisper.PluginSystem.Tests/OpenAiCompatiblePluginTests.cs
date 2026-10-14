@@ -386,6 +386,19 @@ public sealed class OpenAiCompatiblePluginTests
     }
 
     [Theory]
+    // Ollama, LM Studio, and vLLM document their base URL with /v1; appending /v1 again breaks every request.
+    [InlineData("http://localhost:11434/v1", "/v1/chat/completions", "http://localhost:11434/v1/chat/completions")]
+    [InlineData("http://localhost:11434/v1/", "v1/models", "http://localhost:11434/v1/models")]
+    [InlineData("http://localhost:11434/V1", "/v1/models", "http://localhost:11434/V1/models")]
+    [InlineData("http://localhost:11434", "/v1/models", "http://localhost:11434/v1/models")]
+    [InlineData("https://host/api/v1beta", "/v1/models", "https://host/api/v1beta/v1/models")]
+    [InlineData("https://host/v1", "/deployments/m/audio/transcriptions", "https://host/v1/deployments/m/audio/transcriptions")]
+    public void RequestUri_DoesNotRepeatAVersionSegmentTheBaseUrlAlreadyEndsWith(string baseUrl, string path, string expected)
+    {
+        Assert.Equal(expected, OpenAiCompatiblePlugin.RequestUri(baseUrl, "", path).AbsoluteUri);
+    }
+
+    [Theory]
     [InlineData("standard", "", false, "/v1/audio/transcriptions")]
     [InlineData("standard", "", true, "/v1/audio/translations")]
     [InlineData("deployment-scoped", "2025-03-01-preview", false, "/deployments/my%2Fmodel%20id/audio/transcriptions?api-version=2025-03-01-preview")]

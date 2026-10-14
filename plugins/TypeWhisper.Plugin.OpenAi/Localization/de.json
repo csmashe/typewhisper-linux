@@ -39,7 +39,6 @@
   "Settings.ApiKeyValidDefault": "API-Schlüssel ist gültig. Gespeicherte/Standardmodelle werden verwendet.",
   "Settings.ChatGptLoginRemoved": "ChatGPT-Anmeldung entfernt.",
   "Settings.ChatGptLoginRefreshFailed": "Die gespeicherte ChatGPT-Anmeldung konnte nicht aktualisiert werden: {0} Aktivieren Sie „ChatGPT-Anmeldung vergessen“ und führen Sie die Validierung erneut aus, um die gespeicherten Anmeldedaten zu löschen, und melden Sie sich dann erneut an.",
-  "Settings.ChatGptImportFailed": "Bestehende ChatGPT-Anmeldung konnte nicht importiert werden: {0}",
   "Settings.ChatGptLoginPortInUse": "Der Anmelde-Listener konnte nicht auf Port 1455 gestartet werden. Schließen Sie alle Anwendungen, die diesen Port verwenden, und versuchen Sie es erneut.",
   "Settings.ChatGptLoginNoBrowser": "Es konnte kein Browser für die ChatGPT-Anmeldung geöffnet werden. Installieren Sie xdg-utils oder legen Sie einen Standardbrowser fest und versuchen Sie es erneut. ({0})",
   "Settings.ChatGptLoginFailed": "ChatGPT-Anmeldung fehlgeschlagen: {0}",

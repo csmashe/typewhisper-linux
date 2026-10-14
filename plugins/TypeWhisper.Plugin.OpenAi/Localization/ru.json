@@ -39,7 +39,6 @@
   "Settings.ApiKeyValidDefault": "API-ключ действителен. Используются сохранённые модели или модели по умолчанию.",
   "Settings.ChatGptLoginRemoved": "Вход ChatGPT удалён.",
   "Settings.ChatGptLoginRefreshFailed": "Не удалось обновить сохранённый вход ChatGPT: {0} Включите «Забыть вход ChatGPT» и снова запустите проверку, чтобы удалить сохранённые учётные данные, затем войдите снова.",
-  "Settings.ChatGptImportFailed": "Не удалось импортировать существующий вход ChatGPT: {0}",
   "Settings.ChatGptLoginPortInUse": "Не удалось запустить прослушиватель входа на порту 1455. Закройте все приложения, использующие этот порт, и попробуйте снова.",
   "Settings.ChatGptLoginNoBrowser": "Не удалось открыть браузер для входа ChatGPT. Установите xdg-utils или задайте браузер по умолчанию и попробуйте снова. ({0})",
   "Settings.ChatGptLoginFailed": "Не удалось войти в ChatGPT: {0}",

@@ -45,6 +45,9 @@ internal sealed record RecordingContext(
     public OverlayPresentationToken? OverlayToken { get; init; }
     public string? TranscriptionTaskUsed { get; init; }
     public string? StreamingDetectedLanguage { get; init; }
+    public int CleanupTimeoutSeconds { get; init; } = 5;
+    public long StopRequestedTimestamp { get; init; }
+    public LiveCleanupDraft? LiveCleanup { get; init; }
 
     /// <summary>
     ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
@@ -78,6 +81,9 @@ public sealed partial class DictationOrchestrator : IDisposable
     private readonly AudioRecordingService _audio;
     private readonly IAudioDuckingService _audioDucking;
     private readonly LlmCleanupService _cleanup;
+    private readonly Lock _liveCleanupLock = new();
+    private LiveCleanupDraft? _liveCleanupDraft;
+    private int _liveCleanupSessionVersion;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly IDictionaryService _dictionary;
     private readonly IErrorLogService _errorLog;
@@ -153,6 +159,7 @@ public sealed partial class DictationOrchestrator : IDisposable
     private string? _recordingAppTitle;
     private string? _recordingAppUrl;
     private Profile? _recordingProfile;
+    private int _recordingCleanupTimeoutSeconds = 5;
 
     // Monotonically incremented when a start reserves ownership, when a stop
     // relinquishes it, and when session-loss rollback invalidates startup. The
@@ -370,6 +377,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
 
         ShutdownPartialTranscriptionSession();
+        lock (_liveCleanupLock) { _liveCleanupDraft?.Dispose(); _liveCleanupDraft = null; }
 
         // Null the audio tap and snapshot the coordinator before awaiting close
         // so no stray frames or shared-field reads can race teardown.
@@ -882,6 +890,7 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             _audioCaptureSession = captureSession;
             _recordingStart = DateTime.UtcNow;
+            _recordingCleanupTimeoutSeconds = Math.Clamp(startupSettings.CleanupTimeoutSeconds, 0, 120);
             telemetryStartedSessionId = sessionId;
             _telemetry.Begin(sessionId);
             _telemetry.Tag(sessionId, "mode", startupSettings.Mode.ToString());
@@ -941,6 +950,12 @@ public sealed partial class DictationOrchestrator : IDisposable
                 // and the streaming coordinator share this version. Bumping twice
                 // would immediately invalidate the streaming session.
                 var sessionVersion = _partialTranscriptState.StartSession();
+                lock (_liveCleanupLock)
+                {
+                    _liveCleanupDraft?.Dispose();
+                    _liveCleanupDraft = null;
+                    _liveCleanupSessionVersion = sessionVersion;
+                }
 
                 var languageHints = LanguageSelectionResolver.ResolveHints(startupProfile, startupSettings);
                 var startupPlugin = _models.ActiveTranscriptionPlugin;
@@ -1485,10 +1500,12 @@ public sealed partial class DictationOrchestrator : IDisposable
     // Runs the stop teardown assuming the caller already owns _toggleGate; the finally releases it.
     private async Task StopWhileHoldingGateAsync()
     {
+        var stopRequestedTimestamp = Stopwatch.GetTimestamp();
         var earlyCleanupDone = false;
         var wasRecording = false;
         var gateReleased = false;
         CancellationTokenSource? snapshotCts = null;
+        LiveCleanupDraft? stoppedLiveCleanup = null;
         int? insertionOrderSessionId = null;
         int? telemetrySessionId = null;
         try
@@ -1524,6 +1541,12 @@ public sealed partial class DictationOrchestrator : IDisposable
             }
 
             var recoveredPartialPreview = await StopPartialTranscriptionSessionAsync();
+            lock (_liveCleanupLock)
+            {
+                stoppedLiveCleanup = _liveCleanupDraft;
+                _liveCleanupDraft = null;
+                stoppedLiveCleanup?.StopScheduling();
+            }
             await AwaitRecordingSnapshotAsync();
             _audioDucking.RestoreAudio();
             _mediaPause.ResumeMedia();
@@ -1594,6 +1617,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // feedback gate takes (a real deadlock). The toggle gate's fences
                     // already order this read against the acquire.
                     OverlayToken = _overlayToken,
+                    CleanupTimeoutSeconds = _recordingCleanupTimeoutSeconds,
+                    LiveCleanup = stoppedLiveCleanup,
+                    StopRequestedTimestamp = stopRequestedTimestamp,
                     // Consent withdrawn mid-recording means the captured element must not be touched again.
                     // TextInsertionService re-checks consent right before it touches the element.
                     LockedFocusField = learningConsent ? _recordingLockedField : null,
@@ -1838,6 +1864,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 _telemetry.Finish(terminalSessionId, DiagnosticsOutcome.Aborted);
             }
+
+            stoppedLiveCleanup?.Dispose();
 
             // Safety net: every early-discard branch above and every early return
             // in TranscribeAndInsertAsync that never reaches the insertion call
@@ -2262,6 +2290,8 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             PluginTranscriptionResult? result;
             var transcribeOperation = _telemetry.Child(context.SessionId, "transcribe");
+            var transcriptionStarted = Stopwatch.GetTimestamp();
+            double transcriptionMilliseconds = 0;
             try
             {
                 // Reject streaming if the engine or language changed mid-session
@@ -2385,6 +2415,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             finally
             {
                 transcribeOperation?.Finish(DiagnosticsOutcome.Ok);
+                transcriptionMilliseconds = Stopwatch.GetElapsedTime(transcriptionStarted).TotalMilliseconds;
                 // Release the model lock now so a concurrent dictation isn't
                 // blocked by post-processing, insertion, and history below.
                 // ReSharper disable once DisposeOnUsingVariable -- intentional early dispose to release the lock; the using re-dispose at scope end is idempotent.
@@ -2641,8 +2672,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     Url = context.AppUrl,
                 }
             );
-            PublishSessionResult(
-                new DictationSessionResult(
+            var completedSessionResult = new DictationSessionResult(
                     context.SessionId,
                     "ready",
                     finalText,
@@ -2651,8 +2681,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     duration,
                     engineProviderId,
                     engineModelId
-                )
-            );
+                );
             transcriptionCompletedPublished = true;
 
             var actionPlugin = ResolveActionPlugin(promptAction);
@@ -2676,8 +2705,12 @@ public sealed partial class DictationOrchestrator : IDisposable
             // status/focus handoff below so a queued session doesn't announce "Inserting…" and
             // take focus minutes before it can deliver. Cancellation here flows to the pipeline's
             // own handler, and the terminal safety net still releases this session's slot.
+            var insertionWaitStarted = Stopwatch.GetTimestamp();
             await _insertionOrder.WaitForTurnAsync(context.SessionId, cancelToken)
                 .ConfigureAwait(false);
+            var insertionWait = Stopwatch.GetElapsedTime(insertionWaitStarted);
+            _telemetry.Measure(context.SessionId, "insertion.queue_wait_ms", insertionWait.TotalMilliseconds, "millisecond");
+            Trace.WriteLine($"[Dictation] Insertion queue wait: {insertionWait.TotalMilliseconds:0} ms.");
 
             // Yield focus before any synthesized keystroke: on Wayland a
             // visible overlay can still hold keyboard focus, and ydotool's
@@ -2704,6 +2737,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             var insertionText = DictationInsertionTextFormatter.TextForInsertion(finalText);
 
             var insertionOperation = _telemetry.Child(context.SessionId, "insert");
+            var deliveryStarted = Stopwatch.GetTimestamp();
             var insertionStrategy = ResolveInsertionStrategy(context.AppProcess);
             insertionOperation?.SetTag("insertion.strategy", insertionStrategy.ToString());
             InsertionResult insertion;
@@ -2802,6 +2836,30 @@ public sealed partial class DictationOrchestrator : IDisposable
             insertionOperation?.SetTag("insertion.result", insertion.ToString());
             var insertionFailed = IsInsertionFailure(insertion, insertionThrew);
             insertionOperation?.Finish(insertionFailed ? DiagnosticsOutcome.Failed : DiagnosticsOutcome.Ok);
+            var deliveryMilliseconds = Stopwatch.GetElapsedTime(deliveryStarted).TotalMilliseconds;
+            double? stopToDeliveryMilliseconds = context.StopRequestedTimestamp == 0 ? null
+                : Stopwatch.GetElapsedTime(context.StopRequestedTimestamp).TotalMilliseconds;
+            PublishSessionResult(completedSessionResult with
+            {
+                Performance = new DictationPerformance(
+                    transcriptionMilliseconds,
+                    stepTimings.GroupBy(step => step.Name).ToDictionary(group => group.Key,
+                        group => group.Sum(step => step.Elapsed.TotalMilliseconds)),
+                    insertionWait.TotalMilliseconds,
+                    deliveryMilliseconds,
+                    stopToDeliveryMilliseconds,
+                    insertion.ToString(),
+                    context.LiveCleanup?.RequestCount ?? 0,
+                    context.LiveCleanup?.Reused ?? false),
+            });
+            if (context.StopRequestedTimestamp != 0)
+            {
+                // Starts at accepted capture teardown, including ASR finalization and queue wait.
+                // This is delivery time, not model-only time or proof that a paste was observed.
+                var stopToDelivery = Stopwatch.GetElapsedTime(context.StopRequestedTimestamp);
+                _telemetry.Measure(context.SessionId, "dictation.stop_to_delivery_ms", stopToDelivery.TotalMilliseconds, "millisecond");
+                Trace.WriteLine($"[Dictation] Stop to delivery: {stopToDelivery.TotalMilliseconds:0} ms ({insertion}).");
+            }
 
             if (!insertionThrew)
             {
@@ -4968,7 +5026,9 @@ public sealed partial class DictationOrchestrator : IDisposable
         var detectedLanguage = coordinator.DetectedLanguage;
         await coordinator.DisposeAsync();
         startupCts?.Dispose();
-        return (finalText, coordinator.Faulted || finalizeThrew, detectedLanguage);
+        if (coordinator.HasDroppedAudio)
+            Trace.WriteLine("[Dictation] Streaming audio was dropped; using complete-WAV batch fallback.");
+        return (finalText, coordinator.Faulted || coordinator.HasDroppedAudio || finalizeThrew, detectedLanguage);
     }
 
     private async Task<string> StopPartialTranscriptionSessionAsync()
@@ -5084,6 +5144,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         var partialPollInterval = TimeSpan.FromSeconds(3);
         var loopDelay = TimeSpan.FromMilliseconds(250);
         var nextPartialPollAtUtc = DateTime.UtcNow + partialPollInterval;
+        var speechSinceLastPartialPoll = false;
 
         try
         {
@@ -5094,6 +5155,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 if (_audio.HasSpeechEnergy)
                 {
+                    speechSinceLastPartialPoll = true;
                     _lastSpeechDetectedAtUtc = DateTime.UtcNow;
                 }
                 else if (ShouldAutoStopForSilence())
@@ -5115,7 +5177,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     if (
                         wav is not null
                         && wav.Length > 44
-                        && _audio.HasSpeechEnergy
+                        && speechSinceLastPartialPoll
                         && _models.ActiveModelId is not null
                     )
                     {
@@ -5146,6 +5208,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                                 captureSession,
                                 ct
                             );
+                            // Decode speech once even if the speaker has paused by the
+                            // polling instant. Silence after this point needs no new decode.
+                            speechSinceLastPartialPoll = false;
                         }
                     }
 
@@ -5294,6 +5359,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             return;
         }
 
+        ScheduleLiveCleanup(sessionVersion, captureSession, text ?? "");
         if (string.Equals(_lastPublishedPartialText, partialText, StringComparison.Ordinal))
         {
             return;
@@ -5313,5 +5379,55 @@ public sealed partial class DictationOrchestrator : IDisposable
         );
 
         SetOverlayState(state => state with { PartialText = partialText });
+    }
+
+    private void ScheduleLiveCleanup(int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession, string rawText)
+    {
+        if (!_audio.IsRecordingOwnedBy(captureSession)) return;
+        var settings = _settings.Current;
+        var profile = _recordingProfile;
+        var action = ResolveAutoPromptAction(profile?.PromptActionId, _promptActions.EnabledActions);
+        var level = profile is null ? settings.CleanupLevel
+            : profile.CleanupLevelOverride ?? ProfileStylePresetService.Resolve(profile.StylePreset).CleanupLevel;
+        var language = LanguageSelectionResolver.ResolveOrAutomatic(profile?.InputLanguage, settings.Language).LanguageTag;
+        if (rawText.Length > 8192 || !settings.LiveCleanupEnabled || level < CleanupLevel.Medium || action is not null
+            || string.Equals(profile?.SelectedTask ?? settings.TranscriptionTask, "translate", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(profile?.TranslationTarget ?? settings.TranslationTargetLanguage))
+        {
+            lock (_liveCleanupLock)
+            {
+                if (_liveCleanupSessionVersion == sessionVersion)
+                { _liveCleanupDraft?.Dispose(); _liveCleanupDraft = null; }
+            }
+            return;
+        }
+        try
+        {
+            var provider = _promptProcessing.GetCleanupProviderSelection();
+            if (provider is null) return;
+            lock (_liveCleanupLock)
+            {
+                if (_liveCleanupSessionVersion != sessionVersion) return;
+                if (_liveCleanupDraft is null || !_liveCleanupDraft.Matches(level, language, provider))
+                {
+                    _liveCleanupDraft?.Dispose();
+                    LiveCleanupDraft? newDraft = null;
+                    newDraft = new LiveCleanupDraft(_cleanup, level, language, provider,
+                        _recordingCleanupTimeoutSeconds, (_, output) =>
+                        {
+                            if (ReferenceEquals(_liveCleanupDraft, newDraft) && _settings.Current.LiveCleanupEnabled
+                                && _liveCleanupSessionVersion == sessionVersion && _audio.IsRecordingOwnedBy(captureSession))
+                                SetOverlayState(state => state with { PartialText = output });
+                        });
+                    _liveCleanupDraft = newDraft;
+                }
+                _liveCleanupDraft.Submit(rawText.Trim());
+            }
+        }
+        catch (PluginRequestException)
+        {
+            // Final cleanup reports invalid provider configuration through its normal path.
+        }
     }
 }

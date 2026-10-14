@@ -8,11 +8,13 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Moq;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.Processes;
 using TypeWhisper.PluginSDK.WebSockets;
 
 // The CapturingHandler lambdas assert on the outgoing request (method, URI,
@@ -120,7 +122,10 @@ public partial class OpenAiPluginTests
         var response = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var client = new HttpClient(new CapturingHandler((request, _) =>
         {
-            Assert.Equal(chatGpt ? "/backend-api/codex/models" : "/v1/models", request.RequestUri!.AbsolutePath);
+            // Both catalogs now live at the public models endpoint; the bearer
+            // credential tells the ChatGPT catalog request from the API-key one.
+            Assert.Equal(ChatGptModelsEndpoint, request.RequestUri!.ToString());
+            Assert.Equal(chatGpt ? "Bearer access" : "Bearer sk-old", request.Headers.Authorization?.ToString());
             started.SetResult();
             return response.Task;
         }));
@@ -133,6 +138,7 @@ public partial class OpenAiPluginTests
             },
         };
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        SetChatGptPlanRegistration(host);
         host.SetSetting("authMode", chatGpt ? "chatgpt" : "apiKey");
         using var sut = new OpenAiPlugin(client);
         await sut.ActivateAsync(host);
@@ -276,17 +282,25 @@ public partial class OpenAiPluginTests
         var host = new TestPluginHostServices();
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("selectedChatGPTModel", "gpt-future");
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "expired";
         host.Secrets["oauth-refresh-token"] = "refresh";
+        var requestedUris = new List<string>();
         using var unavailableResponse = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
         // ReSharper disable once AccessToDisposedClosure -- the handler only runs while sut lives, and sut is disposed before unavailableResponse.
-        using var client = new HttpClient(new CapturingHandler((request, _) => Task.FromResult(
-            request.RequestUri!.Host == "auth.openai.com"
-                ? JsonResponse("""{"access_token":"fresh","expires_in":3600}""")
-                : unavailableResponse)));
+        using var client = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            requestedUris.Add(request.RequestUri!.ToString());
+            return Task.FromResult(
+                request.RequestUri!.Host == "auth.openai.com"
+                    ? JsonResponse("""{"access_token":"fresh","expires_in":3600}""")
+                    : unavailableResponse);
+        }));
         using var sut = new OpenAiPlugin(client);
         await sut.ActivateAsync(host);
         await sut.RefreshModelCatalogAsync();
+        // The refresh succeeded and the catalog request was made with it, but failed.
+        Assert.Equal([ChatGptTokenEndpoint, ChatGptModelsEndpoint], requestedUris);
         Assert.Equal("fresh", host.Secrets["oauth-access-token"]);
         Assert.Equal("gpt-future", sut.SelectedLlmModelId);
         Assert.Equal("gpt-future", host.GetSetting<string>("selectedChatGPTModel"));
@@ -318,11 +332,13 @@ public partial class OpenAiPluginTests
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthPlanType", plan);
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "access";
+        // The catalog parser only keeps entries explicitly listed as visible.
         using var client = new HttpClient(new CapturingHandler((_, _) => Task.FromResult(JsonResponse("""
             {"models":[
-                {"slug":"gpt-5.5","priority":1,"available_in_plans":["plus"]},
-                {"slug":"gpt-5.6-sol","priority":2,"available_in_plans":["pro"]},
+                {"slug":"gpt-5.5","visibility":"list","priority":1,"available_in_plans":["plus"]},
+                {"slug":"gpt-5.6-sol","visibility":"list","priority":2,"available_in_plans":["pro"]},
                 {"slug":"hidden","visibility":"hide","priority":0}
             ]}
             """))));
@@ -331,6 +347,8 @@ public partial class OpenAiPluginTests
         await sut.RefreshModelCatalogAsync();
         Assert.Equal(expected, sut.SupportedModels[0].Id);
         Assert.DoesNotContain(sut.SupportedModels, model => model.Id == "hidden");
+        // The fetched catalog, not the built-in fallback list, is in use.
+        Assert.DoesNotContain(sut.SupportedModels, model => model.Id == "gpt-5.4");
     }
 
 
@@ -504,6 +522,8 @@ public partial class OpenAiPluginTests
         host.SetSetting("selectedModel", "whisper-1");
         host.SetSetting("fetchedTranscriptionModels", new List<OpenAiFetchedModel> { new("whisper-1", "openai") });
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        // Plan permission lets the ChatGPT case reach the failing catalog request.
+        SetChatGptPlanRegistration(host);
         host.Secrets["api-key"] = "sk-test";
         host.Secrets["oauth-access-token"] = "access";
         using var sut = new OpenAiPlugin(client);
@@ -577,6 +597,9 @@ public partial class OpenAiPluginTests
             {
                 Assert.Contains("grant_type=refresh_token", body);
                 Assert.Contains("refresh_token=old-refresh-token", body);
+                // The refresh uses the issued app registration and the API resource.
+                Assert.Contains($"client_id={ChatGptIssuedClientId}", body);
+                Assert.Contains($"resource={Uri.EscapeDataString(OpenAiOAuthClient.Resource)}", body);
                 return Task.FromResult(JsonResponse("""
                 {
                   "access_token": "new-access-token",
@@ -604,6 +627,7 @@ public partial class OpenAiPluginTests
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthAccountID", "acct_123");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-1));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "expired-access-token";
         host.Secrets["oauth-refresh-token"] = "old-refresh-token";
 
@@ -613,16 +637,12 @@ public partial class OpenAiPluginTests
 
         var models = await sut.RefreshAvailableLlmModelsAsync();
 
-        Assert.Equal(
-            [
-                "https://auth.openai.com/oauth/token",
-                "https://chatgpt.com/backend-api/codex/models?client_version=1.2.2",
-            ],
-            requestedUris);
+        Assert.Equal([ChatGptTokenEndpoint, ChatGptModelsEndpoint], requestedUris);
         Assert.Equal(1, models.LlmCount);
         Assert.Equal(["gpt-5.6-sol"], sut.SupportedModels.Select(model => model.Id).ToArray());
         Assert.Equal("new-access-token", host.Secrets["oauth-access-token"]);
         Assert.Equal("new-refresh-token", host.Secrets["oauth-refresh-token"]);
+        Assert.True(sut.HasChatGptPlanPermission);
     }
 
     [Fact]
@@ -673,6 +693,7 @@ public partial class OpenAiPluginTests
         host.SetSetting("oauthAccountID", "acct_123");
         host.SetSetting("oauthPlanType", "plus");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "access-token";
         host.Secrets["oauth-refresh-token"] = "refresh-token";
 
@@ -682,21 +703,24 @@ public partial class OpenAiPluginTests
 
         var models = await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
 
+        // Request shape: the public models endpoint with no client_version query.
+        // The account is identified by the plan-scoped bearer token alone; the
+        // private-backend ChatGPT-Account-Id and originator headers are gone.
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(ChatGptModelsEndpoint, capturedRequest.RequestUri?.ToString());
+        Assert.Equal("Bearer access-token", capturedRequest.Headers.Authorization?.ToString());
+        Assert.Equal("application/json", capturedRequest.Headers.Accept.Single().MediaType);
+        Assert.Equal($"TypeWhisper-OpenAI-Plugin/{sut.PluginVersion}", capturedRequest.Headers.UserAgent.ToString());
+        Assert.False(capturedRequest.Headers.Contains("ChatGPT-Account-Id"));
+        Assert.False(capturedRequest.Headers.Contains("originator"));
+
+        // Catalog content: a null entry is skipped, hidden models are dropped,
+        // and models outside the account's plan ("pro"-only luna) are filtered.
         Assert.Equal(2, models.LlmCount);
         Assert.Equal(["gpt-5.6-sol", "gpt-5.5"], sut.SupportedModels.Select(model => model.Id).ToArray());
         Assert.Equal("GPT-5.6-Sol", sut.SupportedModels[0].DisplayName);
         Assert.Equal("gpt-5.6-sol", sut.SelectedLlmModelId);
         Assert.Equal("gpt-5.6-sol", host.GetSetting<string>("selectedChatGPTModel"));
-        Assert.Equal(
-            "https://chatgpt.com/backend-api/codex/models?client_version=1.2.2",
-            capturedRequest?.RequestUri?.ToString());
-        Assert.Equal("Bearer access-token", capturedRequest?.Headers.Authorization?.ToString());
-        Assert.Equal("application/json", capturedRequest?.Headers.Accept.Single().MediaType);
-        Assert.Equal($"TypeWhisper-OpenAI-Plugin/{sut.PluginVersion}", capturedRequest?.Headers.UserAgent.ToString());
-        Assert.Equal(
-            "acct_123",
-            capturedRequest?.Headers.GetValues("ChatGPT-Account-Id").Single());
-        Assert.Equal("typewhisper", capturedRequest?.Headers.GetValues("originator").Single());
         Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
 
         var cachedModels =
@@ -1686,6 +1710,7 @@ public partial class OpenAiPluginTests
         host.Secrets["oauth-access-token"] = "access-token";
         host.Secrets["oauth-refresh-token"] = "refresh-token";
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        SetChatGptPlanRegistration(host);
         host.SetSetting("reasoningEffort", "xhigh");
         var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
@@ -2000,13 +2025,60 @@ public partial class OpenAiPluginTests
 
         Assert.Equal("https", uri.Scheme);
         Assert.Equal("auth.openai.com", uri.Host);
-        Assert.Equal("/oauth/authorize", uri.AbsolutePath);
+        Assert.Equal("/api/accounts/authorize", uri.AbsolutePath);
         Assert.Equal("code", query["response_type"]);
-        Assert.Equal(OpenAiOAuthClient.ClientId, query["client_id"]);
+        // The basic overload describes a first-time sign-in: the dynamic
+        // registration placeholder, a new-registration name hint, no ID hint.
+        Assert.Equal(OpenAiOAuthClient.DynamicClientId, query["client_id"]);
+        Assert.Equal("http://127.0.0.1:1455/auth/callback", OpenAiOAuthClient.RedirectUri);
         Assert.Equal(OpenAiOAuthClient.RedirectUri, query["redirect_uri"]);
         Assert.Equal("challenge", query["code_challenge"]);
         Assert.Equal("S256", query["code_challenge_method"]);
         Assert.Equal("state_123", query["state"]);
+        Assert.False(string.IsNullOrWhiteSpace(query["nonce"]));
+        Assert.Equal(OpenAiOAuthClient.Resource, query["resource"]);
+        var scopes = query["scope"].Split(' ');
+        Assert.Contains(ChatGptPlanPermissionScope, scopes);
+        Assert.Contains("offline_access", scopes);
+        Assert.Contains("openid", scopes);
+        Assert.False(string.IsNullOrWhiteSpace(query["ext_agent_host_id"]));
+        Assert.Equal("TypeWhisper", query["agent_name_hint"]);
+        Assert.False(query.ContainsKey("id_token_hint"));
+        // Parameters of the private Codex CLI flow are no longer sent.
+        Assert.False(query.ContainsKey("codex_cli_simplified_flow"));
+        Assert.False(query.ContainsKey("originator"));
+        Assert.False(query.ContainsKey("id_token_add_organizations"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ChatGptAuthorizeUri_FullOverloadCarriesRegistrationHostAndNonce(bool isNewRegistration)
+    {
+        var clientId = isNewRegistration ? OpenAiOAuthClient.DynamicClientId : ChatGptIssuedClientId;
+        var idTokenHint = isNewRegistration ? null : "previous-id-token";
+        var uri = OpenAiOAuthClient.BuildAuthorizeUri(
+            "state_123",
+            "nonce_456",
+            new OpenAiPkceCodes("verifier", "challenge"),
+            clientId,
+            "urn:uuid:11111111-2222-3333-4444-555555555555",
+            isNewRegistration,
+            idTokenHint);
+        var query = ParseQuery(uri);
+
+        Assert.Equal("/api/accounts/authorize", uri.AbsolutePath);
+        Assert.Equal(clientId, query["client_id"]);
+        Assert.Equal("state_123", query["state"]);
+        Assert.Equal("nonce_456", query["nonce"]);
+        Assert.Equal("challenge", query["code_challenge"]);
+        Assert.Equal("urn:uuid:11111111-2222-3333-4444-555555555555", query["ext_agent_host_id"]);
+        Assert.Contains(ChatGptPlanPermissionScope, query["scope"].Split(' '));
+        Assert.Equal(isNewRegistration, query.ContainsKey("agent_name_hint"));
+        if (isNewRegistration)
+            Assert.False(query.ContainsKey("id_token_hint"));
+        else
+            Assert.Equal("previous-id-token", query["id_token_hint"]);
     }
 
     [Fact]
@@ -2078,26 +2150,76 @@ public partial class OpenAiPluginTests
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthAccountID", "acct_123");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "access-token";
         host.Secrets["oauth-refresh-token"] = "refresh-token";
 
         using var httpClient = new HttpClient(handler);
         var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
+        Assert.True(sut.HasChatGptPlanPermission);
 
         var result = await sut.ProcessAsync("Fix grammar", "hello world", "gpt-5.5", CancellationToken.None);
 
         Assert.Equal("Cleaned with ChatGPT", result);
-        Assert.Equal("https://chatgpt.com/backend-api/codex/responses", capturedRequest?.RequestUri?.ToString());
+        // Plan usage goes through the public Responses API, authorized by the
+        // plan-scoped OAuth token (no API key is configured in this host).
+        Assert.Equal(ChatGptResponsesEndpoint, capturedRequest?.RequestUri?.ToString());
         Assert.Equal("Bearer", capturedRequest?.Headers.Authorization?.Scheme);
         Assert.Equal("access-token", capturedRequest?.Headers.Authorization?.Parameter);
-        Assert.Equal("acct_123", capturedRequest?.Headers.GetValues("ChatGPT-Account-Id").Single());
+        Assert.False(capturedRequest?.Headers.Contains("ChatGPT-Account-Id") ?? true);
         Assert.Equal("text/event-stream", capturedRequest?.Headers.Accept.Single().MediaType);
 
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.Equal("gpt-5.5", doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal("Fix grammar", doc.RootElement.GetProperty("instructions").GetString());
         Assert.False(doc.RootElement.GetProperty("store").GetBoolean());
         Assert.True(doc.RootElement.GetProperty("stream").GetBoolean());
+        Assert.False(doc.RootElement.TryGetProperty("max_output_tokens", out _));
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("openid profile email offline_access resource.invoke", false)]
+    [InlineData("openid offline_access chatgpt.tokens.use", false)]
+    [InlineData("openid offline_access CHATGPT.TOKENS.USE.DIRECT", false)]
+    [InlineData(null, true)]
+    public async Task ProcessAsync_ChatGptModeWithoutPlanPermission_ThrowsNotAuthorizedWithoutAnyRequest(
+        string? grantedScopes, bool expired)
+    {
+        var requests = new List<Uri>();
+        using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            requests.Add(request.RequestUri!);
+            return Task.FromResult(JsonResponse("""{"output_text":"must not be used"}"""));
+        }));
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthClientId", ChatGptIssuedClientId);
+        if (grantedScopes is not null)
+            host.SetSetting("oauthGrantedScopes", grantedScopes);
+        host.SetSetting("oauthExpiresAt", expired
+            ? DateTimeOffset.UtcNow.AddMinutes(-5)
+            : DateTimeOffset.UtcNow.AddHours(1));
+        host.Secrets["oauth-access-token"] = "access-token";
+        host.Secrets["oauth-refresh-token"] = "refresh-token";
+        using var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        Assert.True(sut.HasChatGptCredentials);
+        Assert.False(sut.HasChatGptPlanPermission);
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() =>
+            sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None));
+
+        Assert.Equal(
+            "ChatGPT plan use was not authorized. Reconnect ChatGPT and enable plan usage.",
+            error.Message);
+        Assert.Equal(PluginRequestFailureKind.Authentication, error.FailureKind);
+        Assert.False(error.IsTransient);
+        // Neither the prompt nor a token refresh is sent with an unauthorized login.
+        Assert.Empty(requests);
+        Assert.Equal("access-token", host.Secrets["oauth-access-token"]);
+        Assert.Equal("refresh-token", host.Secrets["oauth-refresh-token"]);
     }
 
     [Fact]
@@ -2126,14 +2248,17 @@ public partial class OpenAiPluginTests
         // upstream code unconditionally overwrote `_oauthRefreshToken` from
         // the response, which would null out the only usable refresh token.
         HttpRequestMessage? capturedTokenRequest = null;
-        var handler = new CapturingHandler((request, _) =>
+        string? capturedTokenBody = null;
+        var handler = new CapturingHandler((request, body) =>
         {
-            if (request.RequestUri?.AbsoluteUri != "https://auth.openai.com/oauth/token")
+            if (request.RequestUri?.AbsoluteUri != ChatGptTokenEndpoint)
             {
                 return Task.FromResult(JsonResponse("""{"output_text":"OK"}"""));
             }
 
             capturedTokenRequest = request;
+            capturedTokenBody = body;
+            // The response omits refresh_token and scope alike.
             return Task.FromResult(JsonResponse(
                 """{"access_token":"new-access-token","expires_in":3600}"""));
 
@@ -2142,6 +2267,7 @@ public partial class OpenAiPluginTests
         var host = new TestPluginHostServices();
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "old-access-token";
         host.Secrets["oauth-refresh-token"] = "original-refresh-token";
 
@@ -2152,8 +2278,15 @@ public partial class OpenAiPluginTests
         await sut.ProcessAsync("system", "user", "gpt-5.5", CancellationToken.None);
 
         Assert.NotNull(capturedTokenRequest);
+        Assert.Contains("refresh_token=original-refresh-token", capturedTokenBody);
+        Assert.Contains($"client_id={ChatGptIssuedClientId}", capturedTokenBody);
         Assert.Equal("original-refresh-token", host.Secrets["oauth-refresh-token"]);
         Assert.Equal("new-access-token", host.Secrets["oauth-access-token"]);
+        // The same rule keeps the app registration and the granted plan
+        // permission when the refresh response does not restate them.
+        Assert.Equal(ChatGptIssuedClientId, host.GetSetting<string>("oauthClientId"));
+        Assert.Equal(ChatGptGrantedScopes, host.GetSetting<string>("oauthGrantedScopes"));
+        Assert.True(sut.HasChatGptPlanPermission);
     }
 
     [Fact]
@@ -2168,13 +2301,14 @@ public partial class OpenAiPluginTests
             expires_in = 3600,
         });
         var handler = new CapturingHandler((request, _) => Task.FromResult(JsonResponse(
-            request.RequestUri?.AbsoluteUri == "https://auth.openai.com/oauth/token"
+            request.RequestUri?.AbsoluteUri == ChatGptTokenEndpoint
                 ? tokenResponse
                 : """{"output_text":"OK"}""")));
         var host = new TestPluginHostServices();
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthPlanType", "plus");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "old-access-token";
         host.Secrets["oauth-refresh-token"] = "original-refresh-token";
 
@@ -2239,7 +2373,7 @@ public partial class OpenAiPluginTests
         var tokenPostCount = 0;
         var handler = new CapturingHandler(async (request, _) =>
         {
-            if (request.RequestUri?.AbsoluteUri == "https://auth.openai.com/oauth/token")
+            if (request.RequestUri?.AbsoluteUri == ChatGptTokenEndpoint)
             {
                 // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
                 var refreshNumber = Interlocked.Increment(ref tokenPostCount);
@@ -2264,6 +2398,7 @@ public partial class OpenAiPluginTests
         var host = new TestPluginHostServices();
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "expired-access-token";
         host.Secrets["oauth-refresh-token"] = "original-refresh-token";
 
@@ -2300,6 +2435,8 @@ public partial class OpenAiPluginTests
         Assert.Equal(firstIdToken, host.Secrets["oauth-id-token"]);
         Assert.Equal("acct_single_refresh", host.GetSetting<string>("oauthAccountID"));
         Assert.Equal("pro", host.GetSetting<string>("oauthPlanType"));
+        Assert.Equal(ChatGptIssuedClientId, host.GetSetting<string>("oauthClientId"));
+        Assert.Equal(ChatGptGrantedScopes, host.GetSetting<string>("oauthGrantedScopes"));
         Assert.Equal(
             DateTimeOffset.FromUnixTimeSeconds(expiresAtUnixSeconds),
             host.GetSetting<DateTimeOffset?>("oauthExpiresAt"));
@@ -2315,7 +2452,7 @@ public partial class OpenAiPluginTests
         var tokenPostCount = 0;
         var handler = new CapturingHandler(async (request, _) =>
         {
-            if (request.RequestUri?.AbsoluteUri != "https://auth.openai.com/oauth/token")
+            if (request.RequestUri?.AbsoluteUri != ChatGptTokenEndpoint)
                 return JsonResponse("""{"output_text":"OK"}""");
 
             // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
@@ -2340,6 +2477,7 @@ public partial class OpenAiPluginTests
         var host = new TestPluginHostServices();
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "expired-access-token";
         host.Secrets["oauth-refresh-token"] = "original-refresh-token";
 
@@ -2387,7 +2525,7 @@ public partial class OpenAiPluginTests
         var tokenPostCount = 0;
         var handler = new CapturingHandler(async (request, _, cancellationToken) =>
         {
-            if (request.RequestUri?.AbsoluteUri != "https://auth.openai.com/oauth/token")
+            if (request.RequestUri?.AbsoluteUri != ChatGptTokenEndpoint)
                 return JsonResponse("""{"output_text":"OK"}""");
 
             // ReSharper disable once AccessToModifiedClosure -- intentional shared counter across handler invocations; Interlocked.Increment coordinates the concurrent-refresh dedup this test asserts.
@@ -2405,6 +2543,7 @@ public partial class OpenAiPluginTests
         var host = new TestPluginHostServices();
         host.SetSetting("authMode", "chatgpt");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddMinutes(-5));
+        SetChatGptPlanRegistration(host);
         host.Secrets["oauth-access-token"] = "expired-access-token";
         host.Secrets["oauth-refresh-token"] = "original-refresh-token";
 
@@ -2447,48 +2586,69 @@ public partial class OpenAiPluginTests
         }
     }
 
+    // Replaces ImportExistingLogin_LoadsTokensFromCodexAuthFile. Validation no
+    // longer imports ~/.codex/auth.json: tokens from that file, or from the
+    // older private Codex OAuth registration, carry no issued app registration
+    // and cannot authorize ChatGPT plan usage. Validation must discard such a
+    // login without sending its tokens anywhere and ask the user to sign in
+    // again through the plan flow.
     [Fact]
-    public async Task ImportExistingLogin_LoadsTokensFromCodexAuthFile()
+    public async Task ValidateAsync_ChatGptMode_DiscardsLegacyCodexLoginAndStartsPlanSignIn()
     {
-        var tempDir = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDir);
-        var authPath = Path.Join(tempDir, "auth.json");
-        await File.WriteAllTextAsync(authPath, """
+        var requests = new List<Uri>();
+        using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
         {
-          "tokens": {
-            "access_token": "access-token",
-            "refresh_token": "refresh-token",
-            "id_token": null,
-            "account_id": "acct_from_file"
-          }
-        }
-        """);
-        var host = new TestPluginHostServices();
-        var requestedUris = new List<string>();
-        var sut = new OpenAiPlugin(new HttpClient(new CapturingHandler((request, _) =>
-        {
-            requestedUris.Add(request.RequestUri!.AbsolutePath);
-            return Task.FromResult(JsonResponse(request.RequestUri.Host == "auth.openai.com"
-                ? """{"access_token":"access-token","expires_in":3600}"""
-                : """{"models":[{"slug":"gpt-5.6-sol","visibility":"list"}]}"""));
-        })));
+            requests.Add(request.RequestUri!);
+            return Task.FromResult(JsonResponse("""{"access_token":"must-not-be-issued","expires_in":3600}"""));
+        }));
+        var launchedUris = new List<Uri>();
+        var processes = new Mock<IPluginProcessSupervisor>(MockBehavior.Strict);
+        // Report a missing browser so sign-in stops after the launch instead of
+        // waiting for a loopback callback that never arrives.
+        processes.Setup(supervisor => supervisor.LaunchUri(It.IsAny<Uri>()))
+            .Callback<Uri>(uri => launchedUris.Add(uri))
+            .Returns(new DetachedLaunchOutcome(false, "no browser available"));
+        var host = new TestPluginHostServices { Processes = processes.Object };
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthAccountID", "acct_from_codex");
+        host.SetSetting("oauthPlanType", "plus");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        host.Secrets["oauth-access-token"] = "codex-access-token";
+        host.Secrets["oauth-refresh-token"] = "codex-refresh-token";
+        host.Secrets["oauth-id-token"] = "codex-id-token";
+        using var sut = new OpenAiPlugin(httpClient);
         await sut.ActivateAsync(host);
+        Assert.True(sut.HasChatGptCredentials);
 
-        try
-        {
-            await sut.ImportExistingLoginAsync(authPath);
+        var result = await sut.ValidateAsync();
 
-            Assert.Equal("access-token", host.Secrets["oauth-access-token"]);
-            Assert.Equal("refresh-token", host.Secrets["oauth-refresh-token"]);
-            Assert.Equal("acct_from_file", host.GetSetting<string>("oauthAccountID"));
-            Assert.True(sut.HasChatGptCredentials);
-            Assert.Contains("/backend-api/codex/models", requestedUris);
-            Assert.Equal("gpt-5.6-sol", sut.SelectedLlmModelId);
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(
+            host.Localization.GetString("Settings.ChatGptLoginNoBrowser", "no browser available"),
+            result.Message);
+
+        // The legacy login is gone and was never refreshed, validated, or used.
+        Assert.False(sut.HasChatGptCredentials);
+        Assert.Null(sut.ChatGptPlanType);
+        Assert.False(host.Secrets.ContainsKey("oauth-access-token"));
+        Assert.False(host.Secrets.ContainsKey("oauth-refresh-token"));
+        Assert.False(host.Secrets.ContainsKey("oauth-id-token"));
+        Assert.Null(host.GetSetting<string>("oauthAccountID"));
+        Assert.Empty(requests);
+
+        // The user is sent to a fresh first-time plan sign-in. The old ID
+        // token is not offered as a hint to the new registration.
+        var authorizeUri = Assert.Single(launchedUris);
+        Assert.Equal("auth.openai.com", authorizeUri.Host);
+        Assert.Equal("/api/accounts/authorize", authorizeUri.AbsolutePath);
+        var query = ParseQuery(authorizeUri);
+        Assert.Equal(OpenAiOAuthClient.DynamicClientId, query["client_id"]);
+        Assert.Contains(ChatGptPlanPermissionScope, query["scope"].Split(' '));
+        Assert.Equal("TypeWhisper", query["agent_name_hint"]);
+        Assert.False(query.ContainsKey("id_token_hint"));
+        Assert.StartsWith("urn:uuid:", query["ext_agent_host_id"]);
+        Assert.Equal(host.GetSetting<string>("oauthHostId"), query["ext_agent_host_id"]);
     }
 
     [Fact]
@@ -2636,6 +2796,10 @@ public partial class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "refresh-token";
         host.SetSetting("oauthPlanType", "plus");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        // A login made through the plan sign-in. Without an issued registration
+        // the credentials would be treated as a legacy Codex login, discarded,
+        // and browser sign-in would start (which needs host.Processes).
+        SetChatGptPlanRegistration(host);
 
         var sut = new OpenAiPlugin(new HttpClient(new CapturingHandler((_, _) => Task.FromResult(JsonResponse("{}")))));
         await sut.ActivateAsync(host);
@@ -2644,7 +2808,10 @@ public partial class OpenAiPluginTests
 
         Assert.NotNull(result);
         Assert.True(result.IsSuccess);
+        Assert.Equal(host.Localization.GetString("Settings.ChatGptLoginConnectedPlan", "plus"), result.Message);
         Assert.Contains("plus", result.Message);
+        Assert.True(sut.HasChatGptCredentials);
+        Assert.Equal("access-token", host.Secrets["oauth-access-token"]);
     }
 
     [Fact]
@@ -3465,6 +3632,33 @@ public partial class OpenAiPluginTests
         Assert.Equal("bulk result", chunks[0]);
     }
 
+    // Token endpoint used by both the authorization-code exchange and refresh.
+    private const string ChatGptTokenEndpoint = "https://auth.openai.com/api/accounts/oauth/token";
+
+    // The catalog and the prompt requests both go to the public API resource.
+    private const string ChatGptModelsEndpoint = "https://api.openai.com/v1/models";
+    private const string ChatGptResponsesEndpoint = "https://api.openai.com/v1/responses";
+
+    // The scope that grants ChatGPT plan usage. ValidOAuthCredentialsAsync
+    // rejects every ChatGPT request whose stored scopes lack this exact token.
+    private const string ChatGptPlanPermissionScope = "chatgpt.tokens.use.direct";
+    private const string ChatGptGrantedScopes =
+        "openid profile email offline_access resource.invoke " + ChatGptPlanPermissionScope;
+
+    // An app registration issued by the plan sign-in flow. Credentials without
+    // one come from the older private Codex registration and are discarded.
+    private const string ChatGptIssuedClientId = "app_issued_registration";
+
+    /// <summary>
+    ///     Marks the stored ChatGPT login as one made through the current plan
+    ///     sign-in: an issued app registration plus the plan-permission scope.
+    /// </summary>
+    private static void SetChatGptPlanRegistration(TestPluginHostServices host)
+    {
+        host.SetSetting("oauthClientId", ChatGptIssuedClientId);
+        host.SetSetting("oauthGrantedScopes", ChatGptGrantedScopes);
+    }
+
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
@@ -3666,6 +3860,16 @@ public partial class OpenAiPluginTests
         public string PluginDataDirectory => Path.GetTempPath();
         public IPluginPcmPlaybackService PcmPlayback { get; init; } =
             UnavailablePluginPcmPlaybackService.Instance;
+
+        // Unset by default so a test that unexpectedly reaches browser sign-in
+        // fails the same way an old host would, instead of launching anything.
+        private readonly IPluginProcessSupervisor? _processes;
+        public IPluginProcessSupervisor Processes
+        {
+            get => _processes
+                ?? throw new NotSupportedException("This plugin host does not provide process supervision.");
+            init => _processes = value;
+        }
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();

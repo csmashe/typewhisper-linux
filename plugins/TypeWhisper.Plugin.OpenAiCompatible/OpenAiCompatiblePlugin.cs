@@ -821,7 +821,13 @@ public sealed class OpenAiCompatiblePlugin
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             throw new PluginRequestException("Base URL must be an absolute http:// or https:// URL.", PluginRequestFailureKind.Configuration);
 
-        var endpoint = baseUrl.TrimEnd('/') + "/" + path.TrimStart('/');
+        var root = baseUrl.TrimEnd('/');
+        var relative = path.TrimStart('/');
+        // Servers such as Ollama, LM Studio, and vLLM document their base URL with a trailing /v1.
+        if (root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
+            && relative.StartsWith("v1/", StringComparison.OrdinalIgnoreCase))
+            relative = relative["v1/".Length..];
+        var endpoint = root + "/" + relative;
         var version = apiVersion.Trim();
         if (version.Length > 0)
             endpoint += "?api-version=" + Uri.EscapeDataString(version);

@@ -919,24 +919,57 @@ public sealed class OpenAiPlugin
             .DistinctBy(model => model.Slug, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    private static bool TryReadChatGptModels(string json, out List<OpenAiChatGptModel?> models)
+    /// <summary>
+    ///     Reads either the ChatGPT catalog shape (<c>models[]</c> with slug, visibility, priority, and
+    ///     available_in_plans) or the standard <c>/v1/models</c> list shape (<c>data[]</c> with id).
+    ///     Malformed entries are skipped so one bad item cannot discard the whole catalog.
+    /// </summary>
+    internal static bool TryReadChatGptModels(string json, out List<OpenAiChatGptModel?> models)
     {
         models = [];
         using var document = JsonDocument.Parse(json);
-        if (!document.RootElement.TryGetProperty("models", out var array)
-            || array.ValueKind != JsonValueKind.Array)
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
             return false;
-        foreach (var item in array.EnumerateArray())
+
+        if (root.TryGetProperty("models", out var catalog) && catalog.ValueKind == JsonValueKind.Array)
         {
-            var slug = item.TryGetProperty("slug", out var slugValue) ? slugValue.GetString() : null;
-            var visibility = item.TryGetProperty("visibility", out var visibilityValue)
-                ? visibilityValue.GetString() : null;
-            var displayName = item.TryGetProperty("display_name", out var displayValue)
-                ? displayValue.GetString() : slug;
-            if (!string.IsNullOrWhiteSpace(slug) && visibility == "list")
-                models.Add(new OpenAiChatGptModel(slug, displayName, visibility, null, null));
+            foreach (var item in catalog.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+                var slug = ReadString(item, "slug");
+                var visibility = ReadString(item, "visibility");
+                if (string.IsNullOrWhiteSpace(slug) || visibility != "list")
+                    continue;
+                int? priority = item.TryGetProperty("priority", out var priorityValue)
+                    && priorityValue.ValueKind == JsonValueKind.Number && priorityValue.TryGetInt32(out var parsed)
+                        ? parsed : null;
+                List<string>? plans = null;
+                if (item.TryGetProperty("available_in_plans", out var planValues) && planValues.ValueKind == JsonValueKind.Array)
+                    plans = planValues.EnumerateArray()
+                        .Where(plan => plan.ValueKind == JsonValueKind.String)
+                        .Select(plan => plan.GetString()!)
+                        .ToList();
+                models.Add(new OpenAiChatGptModel(slug, ReadString(item, "display_name") ?? slug, visibility, priority, plans));
+            }
+            return true;
         }
-        return true;
+
+        if (root.TryGetProperty("data", out var list) && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in list.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Object && ReadString(item, "id") is { Length: > 0 } id && IsChatModel(id))
+                    models.Add(new OpenAiChatGptModel(id, id, "list", null, null));
+            }
+            return true;
+        }
+
+        return false;
+
+        static string? ReadString(JsonElement item, string name) =>
+            item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 
     internal static bool IsVisibleChatGptModel(OpenAiChatGptModel model) =>
@@ -1040,32 +1073,6 @@ public sealed class OpenAiPlugin
         await StoreOAuthTokensAsync(tokens, identity.Subject, issuedClientId, ct);
         SetAuthMode(OpenAiAuthMode.ChatGpt);
         await RefreshAvailableLlmModelsAsync(ct);
-    }
-
-    internal async Task ImportExistingLoginAsync(string? authFilePath = null)
-    {
-        authFilePath ??= Path.Join(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".codex",
-            "auth.json");
-
-        if (!File.Exists(authFilePath))
-            throw new FileNotFoundException("No existing login file was found.", authFilePath);
-
-        var json = await File.ReadAllTextAsync(authFilePath);
-        var store = JsonSerializer.Deserialize<OpenAiExistingLoginStore>(
-            json,
-            s_jsonReadOptions)
-            ?? throw new InvalidOperationException("Existing login file could not be parsed.");
-
-        var tokens = new OpenAiOAuthTokenResponse(
-            store.Tokens.IdToken,
-            store.Tokens.AccessToken,
-            store.Tokens.RefreshToken,
-            ExpiresIn: null);
-        await StoreOAuthTokensAsync(tokens, store.Tokens.AccountId);
-        SetAuthMode(OpenAiAuthMode.ChatGpt);
-        await RefreshAvailableLlmModelsAsync();
     }
 
     internal async Task ClearChatGptLoginAsync(CancellationToken ct = default)
