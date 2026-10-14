@@ -38,12 +38,12 @@ public sealed partial class LinearPlugin
             // Reported below with the other unusable shapes.
         }
 
-        // JSON nulls override the initializers, and the settings dropdowns dereference every entry.
-        // ReSharper disable RedundantAlwaysMatchSubpattern -- non-nullable only by annotation; deserialization can still produce null here.
+        // JSON nulls override the initializers and missing fields stay blank, so entries meet the discovery rules again.
+        // ReSharper disable RedundantAlwaysMatchSubpattern, ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- non-nullable only by annotation; deserialization can still produce null here.
         if (catalog is { KeyFingerprint: not null, Teams: not null, Projects: not null }
-            && catalog.Teams.All(t => t is { Id: not null, Name: not null, Key: not null })
-            && catalog.Projects.All(p => p is { Id: not null, Name: not null }))
-        // ReSharper restore RedundantAlwaysMatchSubpattern
+            && catalog.Teams.All(t => t is not null && IsValidChoice(t.Id, true) && IsValidChoice(t.Name, false) && IsValidChoice(t.Key, false))
+            && catalog.Projects.All(p => p is not null && IsValidChoice(p.Id, true) && IsValidChoice(p.Name, false)))
+        // ReSharper restore RedundantAlwaysMatchSubpattern, ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
         {
             _catalog = catalog;
             return;
@@ -196,10 +196,14 @@ public sealed partial class LinearPlugin
         }
 
         var text = value.GetString();
-        if (string.IsNullOrWhiteSpace(text) || text.Length > MaxNameLength || text.Any(char.IsControl))
-            return null;
-        return property == "id" && !Guid.TryParse(text, out _) ? null : text;
+        return IsValidChoice(text, property == "id") ? text : null;
     }
+
+    private static bool IsValidChoice(string? text, bool isId) =>
+        !string.IsNullOrWhiteSpace(text)
+        && text.Length <= MaxNameLength
+        && !text.Any(char.IsControl)
+        && (!isId || Guid.TryParse(text, out _));
 
     private static string KeyFingerprint(string apiKey) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("TypeWhisper.Linear.catalog/1\n" + apiKey)));

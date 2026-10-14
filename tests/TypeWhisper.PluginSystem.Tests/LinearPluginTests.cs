@@ -128,6 +128,10 @@ public class LinearPluginTests
     [InlineData("""{ "keyFingerprint": "FP", "teams": [null], "projects": [] }""")]
     [InlineData("""{ "keyFingerprint": "FP", "teams": [{ "id": null, "name": "API", "key": "API" }], "projects": [] }""")]
     [InlineData("""{ "keyFingerprint": "FP", "teams": [], "projects": [{ "id": "x", "name": null }] }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [{}], "projects": [] }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [], "projects": [{ "name": "Alpha" }] }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [{ "id": "11111111-1111-1111-1111-111111111111", "name": " ", "key": "API" }], "projects": [] }""")]
+    [InlineData("""{ "keyFingerprint": "FP", "teams": [{ "id": "not-a-guid", "name": "API", "key": "API" }], "projects": [] }""")]
     [InlineData("null")]
     [InlineData("not json")]
     public async Task ActivateAsync_IgnoresAnUnusableCachedCatalog(string cachedTemplate)
