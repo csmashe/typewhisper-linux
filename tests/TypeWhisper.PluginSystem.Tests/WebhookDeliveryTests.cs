@@ -67,11 +67,12 @@ public sealed class WebhookDeliveryTests : IDisposable
             await Task.Delay(Timeout.Infinite, ct);
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
-        var service = CreateService(host, handler, TimeSpan.FromMinutes(1));
+        using var service = CreateService(host, handler, TimeSpan.FromMinutes(1));
         service.ReplaceAll([Config("Hook")]);
 
         var delivery = service.SendWebhooksAsync(Event());
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // ReSharper disable once DisposeOnUsingVariable -- disposing mid-delivery is the behavior under test; using covers early assertion failures.
         service.Dispose();
         await delivery.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -99,11 +100,12 @@ public sealed class WebhookDeliveryTests : IDisposable
 
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
-        var service = CreateService(host, handler, TimeSpan.FromMinutes(1));
+        using var service = CreateService(host, handler, TimeSpan.FromMinutes(1));
         service.ReplaceAll([Config("Hook")]);
 
         var delivery = service.SendWebhooksAsync(Event());
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // ReSharper disable once DisposeOnUsingVariable -- disposing mid-delivery is the behavior under test; using covers early assertion failures.
         service.Dispose();
         await delivery.WaitAsync(TimeSpan.FromSeconds(5));
 
