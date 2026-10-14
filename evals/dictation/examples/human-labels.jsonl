@@ -1,0 +1,2 @@
+{"id":"fillers-01","verdict":"pass","critique":"The hesitation sounds are removed. The request and Rina are preserved."}
+{"id":"facts-01","verdict":"fail","critique":"The output removes not and reverses the instruction.","critical_errors":["Lost negation"]}

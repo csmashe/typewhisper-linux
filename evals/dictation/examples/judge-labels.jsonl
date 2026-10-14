@@ -1,0 +1,2 @@
+{"id":"fillers-01","verdict":"pass","critique":"The request and recipient are preserved.","critical_errors":[],"judge_metadata":{"origin":"authored demonstration, not an LLM judgment"}}
+{"id":"facts-01","verdict":"pass","critique":"Incorrect demonstration judgment that rewards fluency and misses lost negation.","critical_errors":[],"judge_metadata":{"origin":"deliberately incorrect demonstration judgment, not an LLM judgment"}}
