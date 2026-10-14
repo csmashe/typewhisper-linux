@@ -1,6 +1,6 @@
 {
   "Settings.Webhooks": "Webhooks",
-  "Settings.WebhooksDescription": "HTTP endpoints notified when a transcription completes. Each transcription has 10 seconds to reach all webhooks. A webhook is retried once, only when it refused the request or could not be reached. Redirects are not followed.",
+  "Settings.WebhooksDescription": "HTTP endpoints notified when a transcription completes. Each transcription has 10 seconds to reach all webhooks. A webhook is retried once, only when the connection failed or it answered HTTP 429 or 503. Redirects are not followed.",
   "Settings.Name": "Name",
   "Settings.Url": "URL",
   "Settings.Method": "Method",

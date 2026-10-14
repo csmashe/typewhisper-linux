@@ -1,6 +1,6 @@
 {
   "Settings.Webhooks": "Webhooks",
-  "Settings.WebhooksDescription": "Endpoints HTTP que reciben una notificación cuando se completa una transcripción. Cada transcripción tiene 10 segundos para llegar a todos los webhooks. Un webhook se reintenta una vez, solo si rechazó la solicitud o no se pudo conectar. No se siguen las redirecciones.",
+  "Settings.WebhooksDescription": "Endpoints HTTP que reciben una notificación cuando se completa una transcripción. Cada transcripción tiene 10 segundos para llegar a todos los webhooks. Un webhook se reintenta una vez, solo si falló la conexión o respondió HTTP 429 o 503. No se siguen las redirecciones.",
   "Settings.Name": "Nombre",
   "Settings.Url": "URL",
   "Settings.Method": "Método",

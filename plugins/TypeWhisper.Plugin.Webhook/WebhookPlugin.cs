@@ -633,6 +633,11 @@ public sealed class WebhookService : IDisposable
             // The connection was never established, so nothing was sent.
             return (DeliveryOutcome.ConnectionFailed, null, true);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException && ct.IsCancellationRequested)
+        {
+            // E.g. the client was disposed by deactivation mid-send: not a delivery failure.
+            throw new OperationCanceledException(ct);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return (DeliveryOutcome.Failed, null, false);

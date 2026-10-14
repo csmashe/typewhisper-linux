@@ -81,6 +81,37 @@ public sealed class WebhookDeliveryTests : IDisposable
     }
 
     [Fact]
+    public async Task Dispose_DoesNotReportAFailureFromTheCancelledSend()
+    {
+        var host = new FakeHost(_tempDir);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new ScriptedHandler(async (_, ct) =>
+        {
+            started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new ObjectDisposedException("client");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        var service = CreateService(host, handler, TimeSpan.FromMinutes(1));
+        service.ReplaceAll([Config("Hook")]);
+
+        var delivery = service.SendWebhooksAsync(Event());
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        service.Dispose();
+        await delivery.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(service.SnapshotDeliveryLog());
+        Assert.Empty(host.Logs);
+    }
+
+    [Fact]
     public async Task CallerCancellation_StopsDeliveryWithoutLogging()
     {
         var host = new FakeHost(_tempDir);

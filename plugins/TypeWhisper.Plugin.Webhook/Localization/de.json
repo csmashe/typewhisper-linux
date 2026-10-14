@@ -1,6 +1,6 @@
 {
   "Settings.Webhooks": "Webhooks",
-  "Settings.WebhooksDescription": "HTTP-Endpunkte, die benachrichtigt werden, wenn eine Transkription abgeschlossen ist. Jede Transkription hat 10 Sekunden, um alle Webhooks zu erreichen. Ein Webhook wird nur dann einmal wiederholt, wenn er die Anfrage abgelehnt hat oder nicht erreichbar war. Weiterleitungen werden nicht verfolgt.",
+  "Settings.WebhooksDescription": "HTTP-Endpunkte, die benachrichtigt werden, wenn eine Transkription abgeschlossen ist. Jede Transkription hat 10 Sekunden, um alle Webhooks zu erreichen. Ein Webhook wird nur dann einmal wiederholt, wenn die Verbindung fehlschlug oder er mit HTTP 429 oder 503 antwortete. Weiterleitungen werden nicht verfolgt.",
   "Settings.Name": "Name",
   "Settings.Url": "URL",
   "Settings.Method": "Methode",
