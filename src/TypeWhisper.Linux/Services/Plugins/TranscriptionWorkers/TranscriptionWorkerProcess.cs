@@ -68,7 +68,7 @@ internal sealed record TranscriptionWorkerLaunch(
     private static readonly TimeSpan s_defaultHeartbeatInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan s_defaultRequestInactivityTimeout = TimeSpan.FromSeconds(90);
 
-    internal TimeSpan StartupTimeout { get; } = TimeSpan.FromSeconds(60);
+    internal TimeSpan StartupTimeout { get; init; } = TimeSpan.FromSeconds(60);
     internal TimeSpan CancellationGrace { get; init; } = TimeSpan.FromSeconds(3);
 
     /// <summary>How often the worker reports that a request is still running.</summary>
@@ -117,6 +117,9 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
     private const int DiagnosticLines = 60;
     private const int DiagnosticLineCharacters = 1000;
     private const int SigKill = 9;
+
+    // sun_path holds 108 bytes including the terminating NUL.
+    private const int MaximumSocketPathBytes = 107;
 
     private readonly IPluginProcessSession _session;
     private readonly NetworkStream _stream;
@@ -177,7 +180,19 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
         }
 
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        var socketPath = Path.Join(launch.SocketDirectory, $"worker-{Guid.NewGuid():N}.sock");
+        var socketName = $"w{Convert.ToHexString(RandomNumberGenerator.GetBytes(8))}.sock";
+        var socketPath = Path.Join(launch.SocketDirectory, socketName);
+        // A deep fallback directory can exceed the Unix socket path limit; a fresh owner-only
+        // directory under the temp root then holds the socket instead.
+        DirectoryInfo? shortDirectory = null;
+        if (Encoding.UTF8.GetByteCount(socketPath) > MaximumSocketPathBytes)
+        {
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+            shortDirectory = Directory.CreateTempSubdirectory("tw-");
+#pragma warning restore CA1416
+            socketPath = Path.Join(shortDirectory.FullName, socketName);
+        }
+
         var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         IPluginProcessSession? session = null;
         Socket? accepted = null;
@@ -239,8 +254,8 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                throw await CrashAsync(session, output, "The local transcription engine did not start in time.")
-                    .ConfigureAwait(false);
+                session.Terminate();
+                throw StartupTimeout(output);
             }
 
             // Only the child may speak for it, even within the private socket directory.
@@ -274,6 +289,10 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
         {
             listener.Dispose();
             TryDelete(socketPath);
+            if (shortDirectory is not null)
+            {
+                TryDeleteDirectory(shortDirectory.FullName);
+            }
             accepted?.Dispose();
             if (session is not null)
             {
@@ -304,7 +323,8 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw await CrashAsync("The local transcription engine did not start in time.").ConfigureAwait(false);
+            Kill();
+            throw StartupTimeout(_output);
         }
         catch (Exception ex) when (ex is IOException && !ct.IsCancellationRequested)
         {
@@ -618,6 +638,15 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
 
     private string Diagnostics => string.Join(Environment.NewLine, _output);
 
+    // A worker that hangs while starting counts as a hang, which is not retried.
+    private static TranscriptionWorkerUnresponsiveException StartupTimeout(ConcurrentQueue<string> output)
+    {
+        return new TranscriptionWorkerUnresponsiveException(
+            "The local transcription engine did not start in time and was ended.",
+            string.Join(Environment.NewLine, output)
+        );
+    }
+
     private Task<TranscriptionWorkerCrashedException> CrashAsync(string message, Exception? inner = null)
     {
         return CrashAsync(_session, _output, message, inner);
@@ -724,6 +753,18 @@ internal sealed partial class TranscriptionWorkerProcess : ITranscriptionWorkerC
         }
 
         return false;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // An empty private directory left in the temp root is harmless.
+        }
     }
 
     private static void TryDelete(string path)

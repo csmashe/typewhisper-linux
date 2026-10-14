@@ -61,7 +61,21 @@ internal static partial class SocketPathResolver
         return ResolveSocketPath(fallbackDirectory, ApiSocketFileName);
     }
 
+    /// <summary>
+    ///     Resolves the private directory that holds the app's sockets, creating it owner-only;
+    ///     transcription workers connect back through sockets placed here.
+    /// </summary>
+    public static string ResolveSocketDirectory()
+    {
+        return ResolveSocketDirectory(DefaultFallbackDirectory);
+    }
+
     private static string ResolveSocketPath(string fallbackDirectory, string socketFileName)
+    {
+        return Path.Join(ResolveSocketDirectory(fallbackDirectory), socketFileName);
+    }
+
+    private static string ResolveSocketDirectory(string fallbackDirectory)
     {
         var uid = (int)geteuid();
         var xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
@@ -71,7 +85,7 @@ internal static partial class SocketPathResolver
             try
             {
                 PreparePrivateDirectory(dir, uid);
-                return Path.Join(dir, socketFileName);
+                return dir;
             }
             catch (Exception ex)
             {
@@ -85,7 +99,7 @@ internal static partial class SocketPathResolver
         Trace.WriteLine(
             $"[SocketPathResolver] Using user-data socket directory {fallbackDirectory}."
         );
-        return Path.Join(fallbackDirectory, socketFileName);
+        return fallbackDirectory;
     }
 
     /// <summary>Best-effort <c>chmod</c>; logs on failure but never throws.</summary>

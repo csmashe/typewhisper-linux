@@ -1,8 +1,12 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text.Json;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -231,20 +235,70 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ANativeCrashEndsOnlyTheWorkerAndTheNextRequestStartsANewOne()
+    public async Task ANativeCrashEndsOnlyTheWorkerAndTheRequestIsRetriedInANewOne()
     {
         var engine = Engine();
         await engine.LoadModelAsync("small", CancellationToken.None);
         var first = engine.WorkerProcessId!.Value;
 
-        var crash = await Assert.ThrowsAsync<TranscriptionWorkerCrashedException>(() =>
-            engine.TranscribeAsync(s_audio, "crash", false, null, CancellationToken.None));
+        var result = await engine.TranscribeAsync(s_audio, "crash-once", false, null, CancellationToken.None);
 
-        Assert.Equal(128 + 11, crash.ExitCode); // SIGSEGV
-        Assert.Null(engine.WorkerProcessId);
-        var result = await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
         Assert.NotEqual(first.ToString(CultureInfo.InvariantCulture), Fields(result)["pid"]);
         Assert.Equal("small", Fields(result)["model"]);
+        Assert.False(IsRunning(first));
+        Assert.Contains(Logs(), line => line.Contains("1 in a row", StringComparison.Ordinal)
+                                        && line.Contains("exit code 139", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RepeatedCrashesPauseTheEngineUntilTheModelIsLoadedAgain()
+    {
+        var engine = Engine();
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+
+        var paused = await Assert.ThrowsAsync<TranscriptionWorkerFaultedException>(() =>
+            engine.TranscribeAsync(s_audio, "crash", false, null, CancellationToken.None));
+
+        Assert.Contains("paused it briefly", paused.Message, StringComparison.Ordinal);
+        var crash = Assert.IsType<TranscriptionWorkerCrashedException>(paused.InnerException);
+        Assert.Equal(128 + 11, crash.ExitCode); // SIGSEGV
+        Assert.Equal(
+            IsolatedTranscriptionEngine.MaximumAttempts,
+            Logs().Count(line => line.Contains("worker crashed", StringComparison.Ordinal))
+        );
+        // Paused: no worker starts, even for audio that would work.
+        await Assert.ThrowsAsync<TranscriptionWorkerFaultedException>(() =>
+            engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None));
+        Assert.Null(engine.WorkerProcessId);
+
+        await engine.LoadModelAsync("small", CancellationToken.None);
+        var result = await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+        Assert.Equal("small", Fields(result)["model"]);
+    }
+
+    [Fact]
+    public async Task RepeatedCrashesOnTheGraphicsCardSwitchTheEngineToTheCpu()
+    {
+        var changes = 0;
+        var engine = IsolatedTranscriptionEngine.Create(_inner, _runner, Launch(), Log, () => Interlocked.Increment(ref changes));
+        _engines.Add(engine);
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+
+        var result = await engine.TranscribeAsync(s_audio, "crash-on-gpu", false, null, CancellationToken.None);
+
+        Assert.Equal("Cpu", Fields(result)["preference"]);
+        Assert.True(engine.UsesCpuFallback);
+        Assert.Equal(TranscriptionAccelerationBackend.Cpu, engine.AccelerationStatus.ActiveBackend);
+        Assert.Contains("switched it to the CPU", engine.AccelerationStatus.Detail, StringComparison.Ordinal);
+        Assert.Equal(1, changes);
+        // Loading the same choice again keeps the fallback; a new choice tries the card again.
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+        Assert.True(engine.UsesCpuFallback);
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.Cpu);
+        engine.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+        Assert.False(engine.UsesCpuFallback);
+        var retried = await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+        Assert.Equal("NvidiaCuda", Fields(retried)["preference"]);
     }
 
     [Fact]
@@ -478,10 +532,39 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
     {
         var engine = Engine(Launch(FakeWorker("exit-before-connect")));
 
-        var crash = await Assert.ThrowsAsync<TranscriptionWorkerCrashedException>(() =>
+        var faulted = await Assert.ThrowsAsync<TranscriptionWorkerFaultedException>(() =>
             engine.LoadModelAsync("small", CancellationToken.None));
 
-        Assert.Equal(7, crash.ExitCode);
+        Assert.Equal(7, Assert.IsType<TranscriptionWorkerCrashedException>(faulted.InnerException).ExitCode);
+    }
+
+    [Fact]
+    public async Task AWorkerThatHangsWhileStartingIsEndedAndNotRetried()
+    {
+        // The worker arguments become ignored positional parameters of the shell.
+        var engine = Engine(Launch(new ProcessCommand("sh", ["-c", "sleep 30", "sh"])) with { StartupTimeout = TimeSpan.FromSeconds(1) });
+        var elapsed = Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<TranscriptionWorkerUnresponsiveException>(() =>
+            engine.LoadModelAsync("small", CancellationToken.None));
+
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(10));
+        Assert.Single(Logs(), line => line.Contains("worker crashed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ASocketDirectoryTooDeepForASocketPathStillWorks()
+    {
+        var deep = Path.Join(_root, new string('d', 60), new string('e', 60));
+#pragma warning disable CA1416 // TypeWhisper.Linux is a Linux-only assembly.
+        Directory.CreateDirectory(deep, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+#pragma warning restore CA1416
+        var engine = Engine(Launch() with { SocketDirectory = deep });
+
+        var result = await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+
+        Assert.Equal("small", Fields(result)["model"]);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(deep));
     }
 
     [Fact]
@@ -501,9 +584,10 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
     {
         var engine = Engine(Launch(FakeWorker(behavior)));
 
-        await Assert.ThrowsAsync<TranscriptionWorkerCrashedException>(() =>
+        var faulted = await Assert.ThrowsAsync<TranscriptionWorkerFaultedException>(() =>
             engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None));
 
+        Assert.IsType<TranscriptionWorkerCrashedException>(faulted.InnerException);
         Assert.Null(engine.WorkerProcessId);
         Assert.Contains(Logs(), line => line.Contains("invalid frame", StringComparison.Ordinal));
     }
@@ -565,8 +649,10 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
         // Killed from outside, the worker leaves no tree for the host to walk.
         Process.GetProcessById(worker).Kill();
 
-        await Assert.ThrowsAsync<TranscriptionWorkerCrashedException>(() => request);
         await WaitUntilGoneAsync(spawned);
+        // The retry hangs in a new worker; stopping the engine ends it.
+        await engine.UnloadModelAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => request);
     }
 
     [Fact]
@@ -580,6 +666,106 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
         Process.GetProcessById(engine.WorkerProcessId!.Value).Kill();
 
         await WaitUntilGoneAsync(spawned);
+    }
+
+    [Fact]
+    public async Task ThePluginManagerRunsSelectedEnginesInWorkersForOneActivation()
+    {
+        var isolation = new TranscriptionIsolation(
+            new ProcessCommand(AppExecutable, [TranscriptionWorkerServer.Argument]),
+            new HashSet<string> { WorkerProbePlugin.Id },
+            () => SocketDirectory
+        );
+        using var manager = PluginManager(isolation);
+        Assert.True(await manager.LoadPluginFromDirectoryAsync(PackageDirectory, activate: true));
+
+        var engine = Assert.IsType<IsolatedTranscriptionEngine>(Assert.Single(manager.TranscriptionEngines));
+        engine.SelectModel("small");
+        var result = await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None);
+        var processId = engine.WorkerProcessId!.Value;
+        Assert.Equal(processId.ToString(CultureInfo.InvariantCulture), Fields(result)["pid"]);
+
+        // Callers compare engines by reference, so a rebuild keeps the adapter.
+        typeof(PluginManager)
+            .GetMethod("RebuildCapabilityIndices", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(manager, null);
+        Assert.Same(engine, Assert.Single(manager.TranscriptionEngines));
+
+        // The worker read the settings once; a changed setting gets a worker that reads it again.
+        Assert.Equal(
+            Fields(await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None))["pid"],
+            Fields(result)["pid"]
+        );
+        var hostServices = (Dictionary<string, PluginHostServices>)typeof(PluginManager)
+            .GetField("_hostServices", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(manager)!;
+        var services = hostServices[WorkerProbePlugin.Id];
+        services.SetSetting("probe-setting", "changed-by-host");
+        var reread = Fields(await engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None));
+        Assert.Equal("changed-by-host", reread["setting"]);
+        Assert.NotEqual(Fields(result)["pid"], reread["pid"]);
+        processId = engine.WorkerProcessId!.Value;
+
+        await manager.DisablePluginAsync(WorkerProbePlugin.Id);
+        await WaitUntilGoneAsync(processId);
+        Assert.Empty(manager.TranscriptionEngines);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            engine.TranscribeAsync(s_audio, null, false, null, CancellationToken.None));
+
+        await manager.EnablePluginAsync(WorkerProbePlugin.Id);
+        Assert.NotSame(engine, Assert.IsType<IsolatedTranscriptionEngine>(Assert.Single(manager.TranscriptionEngines)));
+    }
+
+    [Fact]
+    public async Task EnginesStayInProcessWhenIsolationIsOffOrNotSelected()
+    {
+        foreach (var isolation in new[]
+                 {
+                     new TranscriptionIsolation(null, new HashSet<string> { WorkerProbePlugin.Id }, () => SocketDirectory),
+                     new TranscriptionIsolation(
+                         new ProcessCommand(AppExecutable, [TranscriptionWorkerServer.Argument]),
+                         new HashSet<string> { "com.typewhisper.whisper-cpp" },
+                         () => SocketDirectory
+                     ),
+                 })
+        {
+            using var manager = PluginManager(isolation);
+            Assert.True(await manager.LoadPluginFromDirectoryAsync(PackageDirectory, activate: true));
+
+            Assert.IsNotType<IsolatedTranscriptionEngine>(Assert.Single(manager.TranscriptionEngines));
+        }
+    }
+
+    [Fact]
+    public void TheWorkerIsTheAppExecutableOrTheDotnetHostWithTheAppAssembly()
+    {
+        var packaged = TranscriptionIsolation.ResolveExecutable("/opt/typewhisper/typewhisper", null)!;
+        Assert.Equal("/opt/typewhisper/typewhisper", packaged.FileName);
+        Assert.Equal([TranscriptionWorkerServer.Argument], packaged.Arguments);
+
+        var development = TranscriptionIsolation.ResolveExecutable("/usr/lib/dotnet/dotnet", "/src/TypeWhisper.Linux.dll")!;
+        Assert.Equal("/usr/lib/dotnet/dotnet", development.FileName);
+        Assert.Equal(["/src/TypeWhisper.Linux.dll", TranscriptionWorkerServer.Argument], development.Arguments);
+
+        Assert.Null(TranscriptionIsolation.ResolveExecutable("/usr/lib/dotnet/dotnet", null));
+        Assert.Null(TranscriptionIsolation.ResolveExecutable(null, "/src/TypeWhisper.Linux.dll"));
+        // The test runner hosts the app assembly here, and it has no worker mode.
+        Assert.False(TranscriptionIsolation.CreateDefault().IsEnabled);
+    }
+
+    private PluginManager PluginManager(TranscriptionIsolation isolation)
+    {
+        var profiles = new Moq.Mock<IProfileService>();
+        profiles.SetupGet(service => service.Profiles).Returns([]);
+        return new PluginManager(
+            new PluginLoader(PluginDataRoot),
+            new PluginEventBus(),
+            new Moq.Mock<IActiveWindowService>().Object,
+            profiles.Object,
+            TestPluginManagerFactory.CreateSettings(new AppSettings()).Object,
+            [],
+            transcriptionIsolation: isolation
+        );
     }
 
     private async Task WaitForLogAsync(string expected)
