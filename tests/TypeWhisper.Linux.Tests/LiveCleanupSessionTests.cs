@@ -6,6 +6,68 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class LiveCleanupSessionTests
 {
     [Fact]
+    public async Task RevisedDraft_UsesTimeSpentWaitingForPreviousRequestAsDebounce()
+    {
+        var clock = new OffsetTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var published = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var session = new LiveCleanupSession(async (input, token) =>
+        {
+            if (input == "first")
+            {
+                entered.SetResult();
+                await release.Task.WaitAsync(token);
+            }
+            return input.ToUpperInvariant();
+        }, (_, output) => published.TrySetResult(output), TimeSpan.FromMilliseconds(20), clock);
+        session.Submit("first");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var timersBeforeRevision = clock.TimerCount;
+        session.Submit("revised");
+        clock.Advance(TimeSpan.FromSeconds(3));
+        release.SetResult();
+
+        Assert.Equal("REVISED", await published.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(timersBeforeRevision, clock.TimerCount);
+        Assert.Equal("REVISED", await session.ReuseAsync("revised", default));
+    }
+
+    [Fact]
+    public async Task FinalInputMismatch_CancelsObsoleteRequestAfterStop()
+    {
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var session = new LiveCleanupSession(async (_, token) =>
+        {
+            entered.SetResult(token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return null;
+        }, (_, _) => { }, TimeSpan.Zero);
+        session.Submit("old hypothesis");
+        var token = await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        session.StopScheduling();
+
+        Assert.Null(await session.ReuseAsync("corrected final text", default));
+        Assert.True(token.IsCancellationRequested);
+    }
+
+    private sealed class OffsetTimeProvider : TimeProvider
+    {
+        private long _offset;
+        private int _timerCount;
+        public int TimerCount => Volatile.Read(ref _timerCount);
+        public override long TimestampFrequency => System.TimestampFrequency;
+        public override long GetTimestamp() => System.GetTimestamp() + Volatile.Read(ref _offset);
+        public void Advance(TimeSpan duration) =>
+            Interlocked.Add(ref _offset, (long)(duration.TotalSeconds * TimestampFrequency));
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Interlocked.Increment(ref _timerCount);
+            return System.CreateTimer(callback, state, dueTime, period);
+        }
+    }
+
+    [Fact]
     public async Task RevisedDraft_CoalescesPendingWorkAndRejectsStaleOutput()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

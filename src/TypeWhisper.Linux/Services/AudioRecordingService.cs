@@ -590,6 +590,7 @@ public sealed class AudioRecordingService : IDisposable
 
     internal byte[]? GetCurrentBuffer(AudioCaptureSession session)
     {
+        RecordedAudioSnapshot snapshot;
         lock (_captureLock)
         {
             if (!ReferenceEquals(_activeCaptureSession, session))
@@ -597,9 +598,12 @@ public sealed class AudioRecordingService : IDisposable
                 return null;
             }
 
-            var snapshot = SnapshotRecordedAudio();
-            return snapshot.SampleCount == 0 ? null : BuildWavFromRecordedAudio(snapshot);
+            snapshot = SnapshotRecordedAudio();
         }
+
+        // The snapshot owns references to immutable chunks. Conversion can run without
+        // blocking stop, device control, or a new capture session.
+        return snapshot.SampleCount == 0 ? null : BuildWavFromRecordedAudio(snapshot);
     }
 
     public bool StartPreview()

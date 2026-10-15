@@ -5169,15 +5169,12 @@ public sealed partial class DictationOrchestrator : IDisposable
 
                 if (DateTime.UtcNow >= nextPartialPollAtUtc)
                 {
-                    var wav = _audio.GetCurrentBuffer(captureSession);
                     // Partials are best-effort/cosmetic. Only poll when a model is
                     // already loaded (never *initiate* a load for a partial), and
                     // use TryAcquire so a partial silently skips when a final
                     // transcription holds the lease.
                     if (
-                        wav is not null
-                        && wav.Length > 44
-                        && speechSinceLastPartialPoll
+                        speechSinceLastPartialPoll
                         && _models.ActiveModelId is not null
                     )
                     {
@@ -5201,16 +5198,21 @@ public sealed partial class DictationOrchestrator : IDisposable
                             ) == LiveTranscriptionMode.Polling
                         )
                         {
-                            await PollPartialTranscriptOnceAsync(
-                                lease.Plugin,
-                                wav,
-                                sessionVersion,
-                                captureSession,
-                                ct
-                            );
-                            // Decode speech once even if the speaker has paused by the
-                            // polling instant. Silence after this point needs no new decode.
-                            speechSinceLastPartialPoll = false;
+                            // Copy and resample only when this poll can actually decode.
+                            var wav = _audio.GetCurrentBuffer(captureSession);
+                            if (wav is { Length: > 44 })
+                            {
+                                await PollPartialTranscriptOnceAsync(
+                                    lease.Plugin,
+                                    wav,
+                                    sessionVersion,
+                                    captureSession,
+                                    ct
+                                );
+                                // Decode speech once even if the speaker has paused by the
+                                // polling instant. Silence after this point needs no new decode.
+                                speechSinceLastPartialPoll = false;
+                            }
                         }
                     }
 

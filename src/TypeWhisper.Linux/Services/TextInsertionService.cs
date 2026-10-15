@@ -94,10 +94,6 @@ public sealed class TextInsertionService
     private const int ClipboardVerifyAttempts = 4;
     private static readonly TimeSpan s_clipboardVerifyRetryDelay = TimeSpan.FromMilliseconds(40);
 
-    // How long the event-driven restore waits for a positive "text landed" signal
-    // before falling back to the fixed floor delay above.
-    private static readonly TimeSpan s_pasteConfirmTimeout = TimeSpan.FromSeconds(2);
-
     // Env-gated per-paste diagnostics (TW_PASTE_DIAG=1): verify attempts, restore
     // gate (confirmed vs floor) + elapsed, and whether AT-SPI knew a focused element
     // at paste time — the signal that would justify a future pre-paste focus gate.
@@ -786,9 +782,9 @@ public sealed class TextInsertionService
             // Event-driven gate: a positive "text landed" signal means the target has read
             // the clipboard, so restoring now cannot cut off the transfer. The watch was
             // armed before the keystroke, so a text-changed that already fired is latched
-            // and confirms instantly. Indeterminate (no watch — confirmer absent or AT-SPI
-            // idle — or no event within the window) falls back to the fixed floor delay
-            // that previously bounded this race on its own. Auto-enter has already paid this
+            // and confirms instantly. Without confirmation, keep the clipboard for the
+            // restoration floor; the event wait runs within that same interval.
+            // Auto-enter has already paid this
             // gate before sending Enter, so reuse its result instead of re-arming a fresh timeout.
             if (deliveryConfirmed is null)
             {
@@ -849,16 +845,22 @@ public sealed class TextInsertionService
 
     private async Task<bool> AwaitPasteDeliveryAsync(IPasteWatch? watch)
     {
-        var confirmed =
-            watch is not null
-            && await watch.WaitAsync(s_pasteConfirmTimeout, CancellationToken.None) == true;
+        var floor = _platform.IsKdePlasma
+            ? s_clipboardRestoreDelayKde
+            : s_clipboardRestoreDelayDefault;
+        var confirmation = watch?.WaitAsync(floor, CancellationToken.None);
+        if (confirmation is { IsCompletedSuccessfully: true } && confirmation.Result == true)
+        {
+            return true;
+        }
+
+        // Confirmation and the restoration floor share one wait. An unreadable target
+        // must not pay a confirmation timeout followed by another full floor delay.
+        var floorDelay = _platform.DelayAsync(floor);
+        var confirmed = confirmation is not null && await confirmation == true;
         if (!confirmed)
         {
-            await _platform.DelayAsync(
-                _platform.IsKdePlasma
-                    ? s_clipboardRestoreDelayKde
-                    : s_clipboardRestoreDelayDefault
-            );
+            await floorDelay;
         }
 
         return confirmed;

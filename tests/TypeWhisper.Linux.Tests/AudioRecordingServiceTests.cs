@@ -244,6 +244,28 @@ public sealed class AudioRecordingServiceTests
     }
 
     [Fact]
+    public void GetCurrentBuffer_MaterializationDoesNotBlockCaptureControl()
+    {
+        AudioRecordingService? recorder = null;
+        AudioRecordingService.AudioCaptureSession? session = null;
+        var checkedControl = false;
+        using var service = new AudioRecordingService(_ => { }, () => 0, () => { },
+            wavMaterializationObserver: _ =>
+            {
+                var control = Task.Run(() => recorder!.TrySetLiveFrameSink(session!, null));
+                Assert.True(control.Wait(TimeSpan.FromSeconds(2)), "Preview conversion held the capture lock.");
+                Assert.True(control.Result);
+                checkedControl = true;
+            });
+        recorder = service;
+        session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(service.TryStartRecording(false));
+        service.ProcessAudioBufferForTest([0.25f, -0.5f]);
+
+        Assert.NotNull(service.GetCurrentBuffer(session));
+        Assert.True(checkedControl);
+    }
+
+    [Fact]
     public void GetCurrentBuffer_MaterializationStartsWithoutHoldingSampleLock()
     {
         var observerInvoked = false;

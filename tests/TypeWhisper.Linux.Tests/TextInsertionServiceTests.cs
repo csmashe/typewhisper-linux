@@ -896,7 +896,7 @@ public sealed class TextInsertionServiceTests
         );
         Assert.NotNull(confirmation.LastWatch);
         Assert.Equal(1, confirmation.LastWatch.WaitCallCount);
-        Assert.Equal(TimeSpan.FromSeconds(2), confirmation.LastWatch.LastTimeout);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), confirmation.LastWatch.LastTimeout);
         Assert.True(confirmation.LastWatch.Disposed);
         Assert.Equal("previous", platform.Clipboard);
     }
@@ -1016,7 +1016,7 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.Pasted, result);
         Assert.NotNull(confirmation.LastWatch);
         Assert.True(confirmation.LastWatch.WaitCalled);
-        Assert.Equal(TimeSpan.FromSeconds(2), confirmation.LastWatch.LastTimeout);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), confirmation.LastWatch.LastTimeout);
         Assert.True(confirmation.LastWatch.Disposed);
         Assert.Contains(TimeSpan.FromMilliseconds(500), platform.Delays);
         Assert.Equal("previous", platform.Clipboard);
