@@ -59,12 +59,25 @@ internal sealed class SherpaDecodeCoordinator
     // The untimed fallback only removes text the 1 s of shared audio can hold.
     private const int MaximumFallbackOverlapWords = 6;
 
-    private readonly SherpaDecodeDelegate _decode;
+    // Parakeet's int8 export decodes some 12-15 s chunks of quiet speech (peak near
+    // -30 dBFS) to nothing, and which chunks fail shifts with small gain changes.
+    // Raising quiet chunks to this peak avoided every such loss on 126 real chunks.
+    internal const float TargetPeak = 0.3f;
+    internal const float MaximumGain = 20f;
+    // Above this a chunk is not silence, so an empty decode is retried once. Room
+    // noise passes too (real speech sits as low as -57 dBFS RMS, so no level gate
+    // separates them); that costs one extra decode, nothing more.
+    private const float NotSilentRmsThreshold = 0.005f;
+    internal const float RetryGain = 1.5f;
 
-    internal SherpaDecodeCoordinator(SherpaDecodeDelegate decode)
+    private readonly SherpaDecodeDelegate _decode;
+    private readonly Action<string>? _warn;
+
+    internal SherpaDecodeCoordinator(SherpaDecodeDelegate decode, Action<string>? warn = null)
     {
         ArgumentNullException.ThrowIfNull(decode);
         _decode = decode;
+        _warn = warn;
     }
 
     internal SherpaDecodeResult Decode(
@@ -98,7 +111,7 @@ internal sealed class SherpaDecodeCoordinator
         string? detectedLanguage = null;
         foreach (var chunk in CreateChunks(audioSamples, parseCanaryPayload: true, ct))
         {
-            var decoded = DecodeChunk(audioSamples, chunk, ct);
+            var decoded = DecodeChunk(audioSamples, chunk, parseCanaryPayload: true, ct);
             var result = ParseCanaryResult(decoded.Text);
             if (result.Text.Length > 0)
                 parts.Add(result.Text);
@@ -117,6 +130,7 @@ internal sealed class SherpaDecodeCoordinator
             var whole = DecodeChunk(
                 audioSamples,
                 new SherpaChunkWindow(0, audioSamples.Length, 0, audioSamples.Length),
+                parseCanaryPayload: false,
                 ct
             );
             IReadOnlyList<VocabularyTokenTiming> timings =
@@ -138,7 +152,7 @@ internal sealed class SherpaDecodeCoordinator
         string? untimedText = null;
         foreach (var chunk in CreateChunks(audioSamples, parseCanaryPayload: false, ct))
         {
-            var decoded = DecodeChunk(audioSamples, chunk, ct);
+            var decoded = DecodeChunk(audioSamples, chunk, parseCanaryPayload: false, ct);
             var text = decoded.Text.Trim();
             if (untimedText is null)
             {
@@ -173,6 +187,7 @@ internal sealed class SherpaDecodeCoordinator
     private SherpaDecodeChunk DecodeChunk(
         float[] audioSamples,
         SherpaChunkWindow chunk,
+        bool parseCanaryPayload,
         CancellationToken ct
     )
     {
@@ -180,13 +195,67 @@ internal sealed class SherpaDecodeCoordinator
         // checkpoints cannot interrupt that call, but chunking bounds normal
         // uncancellable work and stops before the next native invocation.
         ct.ThrowIfCancellationRequested();
-        var samples =
-            chunk.Start == 0 && chunk.End == audioSamples.Length
-                ? audioSamples
-                : audioSamples[chunk.Start..chunk.End];
+        var samples = NormalizeLevel(audioSamples, chunk.Start, chunk.End);
         var decoded = _decode(samples);
         ct.ThrowIfCancellationRequested();
-        return decoded;
+        if (!IsEmpty(decoded, parseCanaryPayload) || Rms(samples) < NotSilentRmsThreshold)
+            return decoded;
+
+        // Audible level but no tokens: the failure is specific to the exact sample
+        // values, so a different gain usually decodes the same chunk.
+        var retried = _decode(Scale(samples, RetryGain));
+        ct.ThrowIfCancellationRequested();
+        var seconds = $"{chunk.Start / (double)SampleRate:F1}-{chunk.End / (double)SampleRate:F1} s";
+        if (IsEmpty(retried, parseCanaryPayload))
+        {
+            _warn?.Invoke($"[SherpaOnnx] Chunk {seconds} is not silent but decoded to nothing twice; any words in it are lost.");
+            return decoded;
+        }
+
+        _warn?.Invoke($"[SherpaOnnx] Chunk {seconds} decoded to nothing at first; the retry at {RetryGain:F1}x gain recovered it.");
+        return retried;
+    }
+
+    // Canary reports an empty chunk as JSON with an empty "text", not as empty text.
+    private static bool IsEmpty(SherpaDecodeChunk decoded, bool parseCanaryPayload) =>
+        parseCanaryPayload
+            ? ParseCanaryResult(decoded.Text).Text.Length == 0
+            : string.IsNullOrWhiteSpace(decoded.Text) && (decoded.Tokens is null || decoded.Tokens.Length == 0);
+
+    // The gain is capped so near-silence is not blown up into noise.
+    internal static float[] NormalizeLevel(float[] audioSamples, int start, int end)
+    {
+        var peak = 0f;
+        for (var i = start; i < end; i++)
+            peak = Math.Max(peak, Math.Abs(audioSamples[i]));
+
+        if (peak is <= 0 or >= TargetPeak)
+            return start == 0 && end == audioSamples.Length ? audioSamples : audioSamples[start..end];
+
+        var gain = Math.Min(TargetPeak / peak, MaximumGain);
+        var scaled = new float[end - start];
+        for (var i = 0; i < scaled.Length; i++)
+            scaled[i] = audioSamples[start + i] * gain;
+        return scaled;
+    }
+
+    private static float[] Scale(float[] samples, float gain)
+    {
+        var scaled = new float[samples.Length];
+        for (var i = 0; i < scaled.Length; i++)
+            scaled[i] = Math.Clamp(samples[i] * gain, -1f, 1f);
+        return scaled;
+    }
+
+    private static float Rms(float[] samples)
+    {
+        if (samples.Length == 0)
+            return 0f;
+        double sum = 0;
+        // ReSharper disable once LoopCanBeConvertedToQuery -- up to 240k samples per chunk; keep the allocation-free loop.
+        foreach (var sample in samples)
+            sum += (double)sample * sample;
+        return (float)Math.Sqrt(sum / samples.Length);
     }
 
     private static IEnumerable<SherpaChunkWindow> CreateChunks(

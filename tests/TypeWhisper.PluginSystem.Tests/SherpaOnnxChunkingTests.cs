@@ -98,7 +98,10 @@ public sealed class SherpaOnnxChunkingTests
     public void Canary_MinuteLongRecording_KeepsEverySectionAndSkipsEmptyChunks()
     {
         var audio = Speech(61 * SampleRate);
-        var chunkCount = SherpaDecodeCoordinator.PlanChunks(audio, true).Count;
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, true);
+        var chunkCount = chunks.Count;
+        // The second chunk really is silent, so its empty decode is not retried.
+        Array.Clear(audio, chunks[1].Start, chunks[1].End - chunks[1].Start);
         var index = 0;
         var coordinator = new SherpaDecodeCoordinator(_ =>
         {
@@ -900,7 +903,10 @@ public sealed class SherpaOnnxChunkingTests
     public void Transducer_SilentChunkWithoutTimingArrays_KeepsTimings()
     {
         var audio = Speech(20 * SampleRate);
-        var cut = SherpaDecodeCoordinator.PlanChunks(audio, false)[0].OwnedEnd / (double)SampleRate;
+        var chunks = SherpaDecodeCoordinator.PlanChunks(audio, false);
+        var cut = chunks[0].OwnedEnd / (double)SampleRate;
+        // The second chunk really is silent, so its empty decode is not retried.
+        Array.Clear(audio, chunks[1].Start, audio.Length - chunks[1].Start);
         var index = 0;
         var coordinator = new SherpaDecodeCoordinator(_ =>
             index++ == 0
@@ -1113,6 +1119,9 @@ public sealed class SherpaOnnxChunkingTests
     {
         var audio = Speech(20 * SampleRate);
         var words = new[] { new Word("hello", 1.0), new Word("world", 2.0) };
+        // The later chunk really is silent, so its empty decode is not retried.
+        var later = SherpaDecodeCoordinator.PlanChunks(audio, false)[1].Start;
+        Array.Clear(audio, later, audio.Length - later);
 
         var result = DecodeTransducer(audio, words, _ => 0);
 
@@ -1199,6 +1208,183 @@ public sealed class SherpaOnnxChunkingTests
     }
 
     // Low-level noise: no digital silence, so cuts are chosen by energy alone.
+    [Fact]
+    public void NormalizeLevel_RaisesAQuietChunkToTheTargetPeak()
+    {
+        var audio = Speech(10 * SampleRate);
+        for (var i = 0; i < audio.Length; i++)
+            audio[i] *= 0.1f;
+        var original = (float[])audio.Clone();
+
+        var normalized = SherpaDecodeCoordinator.NormalizeLevel(audio, SampleRate, 5 * SampleRate);
+
+        Assert.Equal(4 * SampleRate, normalized.Length);
+        Assert.Equal(SherpaDecodeCoordinator.TargetPeak, normalized.Max(Math.Abs), 5);
+        Assert.Equal(normalized[0] / audio[SampleRate], normalized[^1] / audio[5 * SampleRate - 1], 4);
+        Assert.Equal(original, audio);
+    }
+
+    [Fact]
+    public void NormalizeLevel_CapsTheGainSoNearSilenceIsNotBlownUp()
+    {
+        var audio = Speech(2 * SampleRate);
+        for (var i = 0; i < audio.Length; i++)
+            audio[i] *= 0.001f;
+        var peak = audio.Max(Math.Abs);
+
+        var normalized = SherpaDecodeCoordinator.NormalizeLevel(audio, 0, audio.Length);
+
+        Assert.Equal(peak * SherpaDecodeCoordinator.MaximumGain, normalized.Max(Math.Abs), 5);
+    }
+
+    [Fact]
+    public void NormalizeLevel_PassesLoudAudioThroughUntouched()
+    {
+        var audio = Speech(2 * SampleRate);
+
+        Assert.Same(audio, SherpaDecodeCoordinator.NormalizeLevel(audio, 0, audio.Length));
+        Assert.Equal(audio[SampleRate..], SherpaDecodeCoordinator.NormalizeLevel(audio, SampleRate, audio.Length));
+    }
+
+    [Fact]
+    public void Transducer_QuietSpeechReachesTheDecoderAtTheTargetPeak()
+    {
+        var audio = Speech(10 * SampleRate);
+        for (var i = 0; i < audio.Length; i++)
+            audio[i] *= 0.05f;
+        float[]? seen = null;
+        var coordinator = new SherpaDecodeCoordinator(samples =>
+        {
+            seen = samples;
+            return new SherpaDecodeChunk("hi", ["▁hi"], [1f], [0.2f]);
+        });
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("hi", result.Text);
+        Assert.NotNull(seen);
+        Assert.Equal(audio.Length, seen.Length);
+        Assert.Equal(SherpaDecodeCoordinator.TargetPeak, seen.Max(Math.Abs), 5);
+    }
+
+    [Fact]
+    public void Transducer_EmptyDecodeOfSpeech_IsRetriedAtHigherGainAndReported()
+    {
+        var audio = Speech(10 * SampleRate);
+        var peaks = new List<float>();
+        var warnings = new List<string>();
+        var coordinator = new SherpaDecodeCoordinator(
+            samples =>
+            {
+                peaks.Add(samples.Max(Math.Abs));
+                return peaks.Count == 1
+                    ? new SherpaDecodeChunk("", [])
+                    : new SherpaDecodeChunk("found it", ["▁found", "▁it"], [1f, 2f], [0.3f, 0.3f]);
+            },
+            warnings.Add
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("found it", result.Text);
+        Assert.Equal(2, result.TokenTimings.Count);
+        Assert.Equal(2, peaks.Count);
+        Assert.Equal(peaks[0] * SherpaDecodeCoordinator.RetryGain, peaks[1], 5);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("0.0-10.0 s", warning);
+        Assert.Contains("recovered", warning);
+    }
+
+    [Fact]
+    public void Transducer_EmptyDecodeOfSpeechTwice_KeepsTheEmptyResultAndWarns()
+    {
+        var audio = Speech(20 * SampleRate);
+        var calls = 0;
+        var warnings = new List<string>();
+        var coordinator = new SherpaDecodeCoordinator(
+            _ => ++calls <= 2
+                ? new SherpaDecodeChunk("", [])
+                : new SherpaDecodeChunk("later words", ["▁later", "▁words"], [1f, 2f], [0.3f, 0.3f]),
+            warnings.Add
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("later words", result.Text);
+        Assert.Equal(3, calls);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("lost", warning);
+    }
+
+    [Fact]
+    public void Transducer_EmptyDecodeOfSilence_IsNotRetried()
+    {
+        var audio = new float[10 * SampleRate];
+        var calls = 0;
+        var warnings = new List<string>();
+        var coordinator = new SherpaDecodeCoordinator(
+            _ =>
+            {
+                calls++;
+                return new SherpaDecodeChunk("", []);
+            },
+            warnings.Add
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: false, CancellationToken.None);
+
+        Assert.Equal("", result.Text);
+        Assert.Equal(1, calls);
+        Assert.Empty(warnings);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("""{"text":"","lang":"en"}""")]
+    [InlineData("""{"text":"  ","lang":"en"}""")]
+    public void Canary_EmptyDecodeOfSpeech_IsRetriedAndReported(string emptyPayload)
+    {
+        var audio = Speech(10 * SampleRate);
+        var calls = 0;
+        var warnings = new List<string>();
+        var coordinator = new SherpaDecodeCoordinator(
+            _ => ++calls == 1
+                ? new SherpaDecodeChunk(emptyPayload)
+                : new SherpaDecodeChunk("""{"text":"second try","lang":"en"}"""),
+            warnings.Add
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: true, CancellationToken.None);
+
+        Assert.Equal("second try", result.Text);
+        Assert.Equal("en", result.DetectedLanguage);
+        Assert.Equal(2, calls);
+        Assert.Contains("recovered", Assert.Single(warnings));
+    }
+
+    [Fact]
+    public void Canary_EmptyJsonTwice_KeepsTheEmptyResultAndWarns()
+    {
+        var audio = Speech(10 * SampleRate);
+        var calls = 0;
+        var warnings = new List<string>();
+        var coordinator = new SherpaDecodeCoordinator(
+            _ =>
+            {
+                calls++;
+                return new SherpaDecodeChunk("""{"text":"","lang":"en"}""");
+            },
+            warnings.Add
+        );
+
+        var result = coordinator.Decode(audio, parseCanaryPayload: true, CancellationToken.None);
+
+        Assert.Equal("", result.Text);
+        Assert.Equal("en", result.DetectedLanguage);
+        Assert.Equal(2, calls);
+        Assert.Contains("lost", Assert.Single(warnings));
+    }
+
     private static float[] Speech(int sampleCount)
     {
         var random = new Random(1234);
