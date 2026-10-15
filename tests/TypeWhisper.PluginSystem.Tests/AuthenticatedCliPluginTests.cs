@@ -15,7 +15,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 // The provider CLIs are discovered by file name on PATH, so every end-to-end case runs against a
 // shell shim named codex/claude/opencode that execs the FakeProviderCli assembly.
-public sealed class AuthenticatedCliPluginTests : IDisposable
+public sealed partial class AuthenticatedCliPluginTests : IDisposable
 {
     private static readonly JsonSerializerOptions s_manifestJsonOptions =
         new() { PropertyNameCaseInsensitive = true };
