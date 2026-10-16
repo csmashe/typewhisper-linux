@@ -211,6 +211,8 @@
   "Dictation.AccelCudaNotInstalled": "Библиотеки среды выполнения CUDA 12 ещё не установлены.",
   "Dictation.AccelCudaNotVisible": "CUDA 12 установлена, но TypeWhisper пока её не видит.",
   "Dictation.AccelCudaReady": "CUDA готова для моделей whisper.cpp и sherpa-onnx. Другие локальные плагины используют CPU.",
+  "Dictation.AccelVulkanNotSupported": "Ускорение Vulkan доступно только для локальных моделей с поддержкой Vulkan.",
+  "Dictation.AccelVulkanReady": "Vulkan готов для моделей whisper.cpp. Другие локальные плагины используют ЦП.",
   "Dictation.AccelerationAuto": "Авто",
   "Dictation.AccelerationCpu": "CPU",
   "Dictation.AccelerationNvidiaCuda": "NVIDIA CUDA",
@@ -1136,5 +1138,6 @@
   "LanguageSelection.Invalid": "Недопустимый язык транскрипции «{0}». Выберите «Авто» или укажите допустимый тег BCP-47.",
   "LanguageSelection.AutomaticNotSupported": "{0} не может определить язык автоматически. Выберите язык явно.",
   "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто».",
-  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}.",
+  "Dictation.AccelerationVulkan": "Vulkan (AMD/Intel)"
 }

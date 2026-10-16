@@ -211,6 +211,8 @@
   "Dictation.AccelCudaNotInstalled": "CUDA 12 runtime libraries are not installed yet.",
   "Dictation.AccelCudaNotVisible": "CUDA 12 is installed, but TypeWhisper cannot see it yet.",
   "Dictation.AccelCudaReady": "CUDA is ready for whisper.cpp and sherpa-onnx models. Other local plugins use CPU.",
+  "Dictation.AccelVulkanNotSupported": "Vulkan acceleration is available only for local models that support Vulkan.",
+  "Dictation.AccelVulkanReady": "Vulkan is ready for whisper.cpp models. Other local plugins use CPU.",
   "Dictation.AccelerationAuto": "Auto",
   "Dictation.AccelerationCpu": "CPU",
   "Dictation.AccelerationNvidiaCuda": "NVIDIA CUDA",
@@ -1136,5 +1138,6 @@
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
   "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}.",
+  "Dictation.AccelerationVulkan": "Vulkan (AMD/Intel)"
 }
