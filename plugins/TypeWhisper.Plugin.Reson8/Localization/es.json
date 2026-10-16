@@ -14,6 +14,18 @@
   "Settings.ApiKeyValidWithModels": "Clave de API válida. {0} modelo(s) personalizado(s) cargado(s).",
   "Settings.ApiKeyValidShort": "Clave de API válida.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin no configurado. Se requiere una clave de API.",
+  "Settings.InvalidApiKeyCharacters": "La clave de API contiene un salto de línea u otro carácter de control.",
+  "Settings.InvalidBaseUrl": "Introduce una URL base absoluta http:// o https:// sin credenciales, consulta ni fragmento.",
+  "Settings.InvalidAuthHeader": "Introduce un nombre de encabezado HTTP válido como encabezado de autenticación personalizado.",
+  "Settings.ServerUnreachable": "No se pudo conectar con el servidor de Reson8. Comprueba la conexión y la URL base.",
+  "Settings.ServerRedirected": "El servidor de Reson8 redirigió la solicitud. Introduce la dirección final como URL base.",
+  "Settings.CustomModelsRefreshFailed": "Clave de API válida, pero no se pudieron actualizar los modelos personalizados ({0}). Se conservan los modelos cargados anteriormente.",
+  "Settings.RefreshReasonStatus": "HTTP {0}",
+  "Settings.RefreshReasonUnreachable": "servidor inaccesible",
+  "Settings.RefreshReasonInvalid": "respuesta no válida",
+  "Settings.SettingsChangedDuringValidation": "La configuración cambió durante la validación. Vuelve a validar.",
+  "Settings.SelectedModelUnavailable": "El modelo personalizado de Reson8 seleccionado no está cargado para esta clave de API y este servidor. Valida para actualizar los modelos personalizados o elige el modelo predeterminado.",
+  "Settings.UnavailableModelOption": "{0} (no disponible)",
   "Manifest.Name": "Reson8",
   "Manifest.Description": "Transcripción en la nube mediante la API de voz a texto de Reson8 con streaming por WebSocket en tiempo real. Requiere clave de API."
 }

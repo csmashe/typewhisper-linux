@@ -13,7 +13,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Reson8;
 
-public sealed class Reson8Plugin
+public sealed partial class Reson8Plugin
     : ITranscriptionEnginePlugin,
         ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
@@ -27,7 +27,6 @@ public sealed class Reson8Plugin
     private const string SelectedModelSettingName = "selectedModel";
     private const string CustomBaseUrlSettingName = "customBaseURL";
     private const string CustomAuthHeaderSettingName = "customAuthHeader";
-    private const string FetchedCustomModelsSettingName = "fetchedCustomModels";
 
     private static readonly IReadOnlyList<string> s_languages =
     [
@@ -44,8 +43,9 @@ public sealed class Reson8Plugin
     private IPluginHostServices? _host;
     private string _selectedModelId = DefaultModelId;
 
+    // A redirect would forward a custom auth header to the new host, so none are followed.
     public Reson8Plugin()
-        : this(CreateHttpClient())
+        : this(new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(120) })
     {
     }
 
@@ -64,7 +64,7 @@ public sealed class Reson8Plugin
         ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         CustomBaseUrl = NormalizeBaseUrl(host.GetSetting<string>(CustomBaseUrlSettingName));
         CustomAuthHeader = NormalizeAuthHeader(host.GetSetting<string>(CustomAuthHeaderSettingName));
-        FetchedCustomModels = host.GetSetting<List<Reson8CustomModel>>(FetchedCustomModelsSettingName) ?? [];
+        RestoreCatalog(host);
         _selectedModelId = NormalizeModelId(host.GetSetting<string>(SelectedModelSettingName));
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -94,8 +94,6 @@ public sealed class Reson8Plugin
 
     internal string CustomAuthHeader { get; private set; } = DefaultAuthHeader;
 
-    internal IReadOnlyList<Reson8CustomModel> FetchedCustomModels { get; private set; } = [];
-
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -109,8 +107,11 @@ public sealed class Reson8Plugin
     public void SelectModel(string modelId)
     {
         var normalized = NormalizeModelId(modelId);
-        _selectedModelId = normalized;
-        _host?.SetSetting(SelectedModelSettingName, normalized);
+        lock (_catalogLock)
+        {
+            _host?.SetSetting(SelectedModelSettingName, normalized);
+            _selectedModelId = normalized;
+        }
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -123,14 +124,13 @@ public sealed class Reson8Plugin
         if (translate)
             throw new InvalidOperationException("Reson8 does not support translation.");
 
-        if (!IsConfigured)
-            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
+        var connection = EnsureReadyForRequest();
 
         var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            BuildPrerecordedUri(CustomBaseUrl, _selectedModelId, NormalizeLanguage(language)));
-        AddAuthHeader(request, ApiKey!, CustomAuthHeader);
+            BuildPrerecordedUri(connection.BaseUrl, connection.ModelId, NormalizeLanguage(language)));
+        AddAuthHeader(request, connection.ApiKey, connection.AuthHeader);
         request.Content = new ByteArrayContent(pcm16);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
@@ -153,8 +153,7 @@ public sealed class Reson8Plugin
         if (translate)
             throw new InvalidOperationException("Reson8 does not support translation.");
 
-        if (!IsConfigured)
-            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
+        EnsureReadyForRequest();
 
         return await RunStreamingWithBatchFallbackAsync(
             async markProgressStopped =>
@@ -243,14 +242,13 @@ public sealed class Reson8Plugin
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
-        if (!IsConfigured)
-            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
+        var connection = EnsureReadyForRequest();
 
         return await Reson8StreamingSession.ConnectAsync(
-            ApiKey!,
-            CustomBaseUrl,
-            CustomAuthHeader,
-            _selectedModelId,
+            connection.ApiKey,
+            connection.BaseUrl,
+            connection.AuthHeader,
+            connection.ModelId,
             NormalizeLanguage(language),
             ct);
     }
@@ -270,9 +268,7 @@ public sealed class Reson8Plugin
                 Description: FetchedCustomModels.Count > 0
                     ? Loc.L("Settings.CustomModelsLoaded", FetchedCustomModels.Count)
                     : Loc.L("Settings.NoCustomModels"),
-                Options: TranscriptionModels
-                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
-                    .ToList(),
+                Options: ModelOptions(),
                 Kind: PluginSettingKind.Dropdown),
             new(
                 Key: CustomBaseUrlSettingName,
@@ -287,6 +283,15 @@ public sealed class Reson8Plugin
                 Description: Loc.L("Settings.CustomAuthHeaderDescription"),
                 Kind: PluginSettingKind.Text),
         ];
+
+    // A saved custom model hidden by a connection change stays listed so the choice is visible.
+    private List<PluginSettingOption> ModelOptions()
+    {
+        var options = TranscriptionModels.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList();
+        if (options.All(o => o.Value != _selectedModelId))
+            options.Add(new PluginSettingOption(_selectedModelId, Loc.L("Settings.UnavailableModelOption", _selectedModelId)));
+        return options;
+    }
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(
@@ -305,8 +310,6 @@ public sealed class Reson8Plugin
         {
             case ApiKeySecretName:
                 await SetApiKeyAsync(value ?? string.Empty);
-                if (!IsConfigured)
-                    SetFetchedCustomModels([]);
                 break;
             case SelectedModelSettingName:
                 if (!string.IsNullOrWhiteSpace(value))
@@ -319,28 +322,6 @@ public sealed class Reson8Plugin
                 SetCustomAuthHeader(value);
                 break;
         }
-    }
-
-    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
-    {
-        if (string.IsNullOrEmpty(ApiKey))
-            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
-
-        var valid = await ValidateApiKeyAsync(ApiKey, ct);
-        if (!valid)
-            return new PluginSettingsValidationResult(false, Loc.L("Settings.InvalidApiKey"));
-
-        // A valid key gates the custom model catalog; refresh it so the model
-        // dropdown reflects the account's custom models (mirrors the desktop
-        // "Test" → "Refresh models" flow).
-        var models = await FetchCustomModelsAsync(ct);
-        SetFetchedCustomModels(models);
-
-        return new PluginSettingsValidationResult(
-            true,
-            models.Count > 0
-                ? Loc.L("Settings.ApiKeyValidWithModels", models.Count)
-                : Loc.L("Settings.ApiKeyValidShort"));
     }
 
     internal async Task SetApiKeyAsync(string apiKey)
@@ -370,9 +351,9 @@ public sealed class Reson8Plugin
             // Update in-memory state only after the secret write/delete
             // succeeds, so a failing store leaves the plugin unconfigured (no
             // unsaved key) and a failing delete keeps the running key intact.
-            ApiKey = normalized;
+            var catalogChanged = ChangeConnection(() => ApiKey = normalized);
 
-            if (wasConfigured == IsConfigured)
+            if (wasConfigured == IsConfigured && !catalogChanged)
                 hostToNotify = null;
         }
         finally
@@ -383,89 +364,31 @@ public sealed class Reson8Plugin
         hostToNotify?.NotifyCapabilitiesChanged();
     }
 
-    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
-    {
-        var normalized = NormalizeApiKey(apiKey);
-        if (normalized is null)
-            return false;
-
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            BuildPrerecordedUri(CustomBaseUrl, DefaultModelId, language: null));
-        AddAuthHeader(request, normalized, CustomAuthHeader);
-        request.Content = new ByteArrayContent([]);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-
-        try
-        {
-            using var response = await _httpClient.SendAsync(request, ct);
-            return response.StatusCode != HttpStatusCode.Unauthorized;
-        }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return false;
-        }
-        catch (HttpRequestException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
-
-    internal async Task<IReadOnlyList<Reson8CustomModel>> FetchCustomModelsAsync(CancellationToken ct = default)
-    {
-        if (!IsConfigured)
-            return [];
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{CustomBaseUrl}/v1/custom-model");
-        AddAuthHeader(request, ApiKey!, CustomAuthHeader);
-
-        try
-        {
-            using var response = await _httpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-                return [];
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            return JsonSerializer.Deserialize<List<Reson8CustomModel>>(json, s_jsonOptions) ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-        catch (HttpRequestException)
-        {
-            return [];
-        }
-    }
-
-    internal void SetFetchedCustomModels(IReadOnlyList<Reson8CustomModel> models)
-    {
-        FetchedCustomModels = models.ToArray();
-        _host?.SetSetting(FetchedCustomModelsSettingName, FetchedCustomModels);
-
-        if (_selectedModelId != DefaultModelId && FetchedCustomModels.All(m => m.Id != _selectedModelId))
-        {
-            _selectedModelId = DefaultModelId;
-            _host?.SetSetting(SelectedModelSettingName, _selectedModelId);
-        }
-
-        _host?.NotifyCapabilitiesChanged();
-    }
-
+    // Saved as typed so the user can correct it; requests and Validate report an invalid value.
     internal void SetCustomBaseUrl(string? url)
     {
-        CustomBaseUrl = NormalizeBaseUrl(url);
-        _host?.SetSetting(CustomBaseUrlSettingName, CustomBaseUrl == DefaultBaseUrl ? null : CustomBaseUrl);
+        var normalized = NormalizeBaseUrl(url);
+        if (ChangeConnection(() =>
+            {
+                _host?.SetSetting(CustomBaseUrlSettingName, normalized == DefaultBaseUrl ? null : normalized);
+                CustomBaseUrl = normalized;
+            }))
+        {
+            _host?.NotifyCapabilitiesChanged();
+        }
     }
 
     internal void SetCustomAuthHeader(string? header)
     {
-        CustomAuthHeader = NormalizeAuthHeader(header);
-        _host?.SetSetting(CustomAuthHeaderSettingName, CustomAuthHeader == DefaultAuthHeader ? null : CustomAuthHeader);
+        var normalized = NormalizeAuthHeader(header);
+        if (ChangeConnection(() =>
+            {
+                _host?.SetSetting(CustomAuthHeaderSettingName, normalized == DefaultAuthHeader ? null : normalized);
+                CustomAuthHeader = normalized;
+            }))
+        {
+            _host?.NotifyCapabilitiesChanged();
+        }
     }
 
     internal static Uri BuildPrerecordedUri(string baseUrl, string? modelId, string? language)
@@ -589,8 +512,6 @@ public sealed class Reson8Plugin
 
     private static double PcmDurationSeconds(int pcm16ByteLength) =>
         pcm16ByteLength <= 0 ? 0 : pcm16ByteLength / 2.0 / 16000.0;
-
-    private static HttpClient CreateHttpClient() => new() { Timeout = TimeSpan.FromSeconds(120) };
 
     public void Dispose()
     {
