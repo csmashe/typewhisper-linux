@@ -104,8 +104,10 @@ public partial class PromptsSectionViewModel : ObservableObject
             Dispatcher.UIThread.Post(() =>
             {
                 OnPropertyChanged(nameof(DefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
                 OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
                 HydrateCommandSettings(value);
+                RefreshPluginOptions();
             });
 
         HydrateCommandSettings(_settings.Current);
@@ -153,6 +155,24 @@ public partial class PromptsSectionViewModel : ObservableObject
 
             _settings.Update(current => current with { DefaultLlmProvider = value });
             OnPropertyChanged();
+            RefreshPluginOptions();
+        }
+    }
+
+    /// <summary>The provider and model used by automatic LLM cleanup and default prompt actions.</summary>
+    public ProviderOption? SelectedDefaultLlmProvider
+    {
+        get => AvailableProviders.FirstOrDefault(option =>
+            string.Equals(option.Value, _settings.Current.DefaultLlmProvider, StringComparison.Ordinal));
+        set
+        {
+            if (_isRefreshingProviders
+                || string.Equals(_settings.Current.DefaultLlmProvider, value?.Value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            DefaultLlmProvider = value?.Value;
         }
     }
 
@@ -317,7 +337,11 @@ public partial class PromptsSectionViewModel : ObservableObject
         if (_synthesizedProviderOption is not null
             && !string.Equals(_synthesizedProviderOption.Value, value, StringComparison.Ordinal))
         {
-            AvailableProviders.Remove(_synthesizedProviderOption);
+            if (!string.Equals(_settings.Current.DefaultLlmProvider, _synthesizedProviderOption.Value, StringComparison.Ordinal)
+                && !string.Equals(_settings.Current.SpokenCommandLlmProvider, _synthesizedProviderOption.Value, StringComparison.Ordinal))
+            {
+                AvailableProviders.Remove(_synthesizedProviderOption);
+            }
             _synthesizedProviderOption = null;
         }
 
@@ -727,6 +751,7 @@ public partial class PromptsSectionViewModel : ObservableObject
             ? selectedActionPlugin
             : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
+        OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
         OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
