@@ -18,6 +18,7 @@ public sealed class OpenRouterPlugin
         ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
+        IModelCatalogProvider,
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://openrouter.ai/api";
@@ -247,6 +248,20 @@ public sealed class OpenRouterPlugin
     }
 
     // API key / catalog management
+
+    public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
+    {
+        var llmModels = await FetchModelsAsync(ct);
+        if (llmModels.Count > 0)
+            SetFetchedModels(llmModels);
+
+        var transcriptionModels = await FetchTranscriptionModelsAsync(ct);
+        if (transcriptionModels.Count > 0)
+            SetFetchedTranscriptionModels(transcriptionModels);
+
+        if (llmModels.Count == 0 && transcriptionModels.Count == 0)
+            throw new InvalidOperationException("Failed to fetch models from OpenRouter.");
+    }
 
     internal string? ApiKey { get; private set; }
 

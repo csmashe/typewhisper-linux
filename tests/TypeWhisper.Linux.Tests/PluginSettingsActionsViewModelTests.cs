@@ -267,6 +267,32 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         Assert.True(plugin.Cancelled);
     }
 
+    [Fact]
+    public async Task ExpandingSettings_RefreshesAndPersistsProviderModelCatalog()
+    {
+        var plugin = new FakeCatalogPlugin();
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, plugin.PluginId, plugin);
+        var manager = TestPluginManagerFactory.Create(
+            loadedPlugins: [loaded],
+            activatedPluginIds: [plugin.PluginId]
+        );
+        var vm = new PluginsSectionViewModel(
+            manager,
+            new ErrorLogService(_tempDir),
+            TimeSpan.FromSeconds(5),
+            postToUi: action => action()
+        );
+        var row = vm.EnabledGroups.Concat(vm.DisabledGroups)
+            .SelectMany(group => group.Plugins)
+            .Single(candidate => candidate.Id == plugin.PluginId);
+
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        Assert.Equal(1, plugin.RefreshCount);
+        Assert.Equal("current-model", plugin.SelectedModel);
+        Assert.Contains(plugin.CachedModels, model => model == "current-model");
+    }
+
     private async Task<(PluginsSectionViewModel Vm, PluginRow Row)> CreateExpandedAsync(
         FakeActionsPlugin plugin,
         TimeSpan? validationTimeout = null,
@@ -398,6 +424,52 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
         public Task DeactivateAsync() => Task.CompletedTask;
         public void Dispose() { }
+    }
+
+    private sealed class FakeCatalogPlugin : ITypeWhisperPlugin, IPluginSettingsProvider, IModelCatalogProvider
+    {
+        private readonly List<string> _cachedModels = ["old-model"];
+
+        public string PluginId => "com.test.catalog";
+        public string PluginName => "Catalog";
+        public string PluginVersion => "1.0.0";
+        public int RefreshCount { get; private set; }
+        public string SelectedModel { get; private set; } = "old-model";
+        public IReadOnlyList<string> CachedModels => _cachedModels;
+
+        public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+        [
+            new(
+                "selectedModel",
+                "Model",
+                Options: _cachedModels.Select(model => new PluginSettingOption(model, model)).ToList(),
+                Kind: PluginSettingKind.Dropdown
+            ),
+        ];
+
+        public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<string?>(SelectedModel);
+
+        public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+        {
+            SelectedModel = value ?? "";
+            return Task.CompletedTask;
+        }
+
+        public Task RefreshModelCatalogAsync(CancellationToken ct = default)
+        {
+            RefreshCount++;
+            _cachedModels.Clear();
+            _cachedModels.Add("current-model");
+            SelectedModel = "current-model";
+            return Task.CompletedTask;
+        }
+
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+        public Task DeactivateAsync() => Task.CompletedTask;
+        public void Dispose() { }
+        public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
+            Task.FromResult<PluginSettingsValidationResult?>(null);
     }
 
 }

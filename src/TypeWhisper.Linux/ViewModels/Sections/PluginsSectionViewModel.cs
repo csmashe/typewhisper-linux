@@ -27,6 +27,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly Action<Action> _postToUi;
     private readonly Dictionary<string, RunningSettingsAction> _runningActions = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _refreshingModelPlugins = new(StringComparer.Ordinal);
 
     [ObservableProperty]
     private string _headerSummary = "";
@@ -373,6 +374,10 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         row.IsExpanded = true;
         await LoadPluginSettingsAsync(row, SettingsReloadKind.ResetBaseline);
+        if (row.IsEnabled && row.HasModelCatalogProvider)
+        {
+            await RefreshModelCatalogAsync(row);
+        }
     }
 
     [RelayCommand]
@@ -397,55 +402,67 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider)
         {
-            foreach (var collection in row.Collections)
+            if (!await TrySaveCollectionSettingsAsync(row, loaded, collectionProvider))
             {
-                var items = collection
-                    .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(
-                            field => field.Key,
-                            string? (field) =>
-                                field is { IsSecretKind: true, IsUserModified: false }
-                                    ? null
-                                    : field.Value
-                        )
-                    ))
-                    .ToList();
-
-                var setResult = await TryInvokePluginBoundaryAsync(
-                    loaded,
-                    $"save collection '{collection.Key}'",
-                    ct => collectionProvider.SetItemsAsync(collection.Key, items, ct)
-                );
-                if (!setResult.IsSuccess || setResult.Value is null)
-                {
-                    if (setResult.IsSuccess)
-                    {
-                        ReportPluginBoundaryFailure(
-                            loaded,
-                            $"save collection '{collection.Key}'",
-                            new InvalidOperationException(
-                                "The plugin returned no collection validation result."
-                            )
-                        );
-                    }
-
-                    row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
-                    await ReloadCurrentVisibleRowAsync(row, loaded, true);
-                    return;
-                }
-
-                if (setResult.Value.IsSuccess)
-                {
-                    continue;
-                }
-
-                row.Status = setResult.Value.Message;
                 return;
             }
         }
 
         row.Status = Loc.Instance["Plugins.SettingsSaved"];
         await ReloadCurrentVisibleRowAsync(row, loaded, true);
+    }
+
+    private async Task<bool> TrySaveCollectionSettingsAsync(
+        PluginRow row,
+        LoadedPlugin loaded,
+        IPluginCollectionSettingsProvider collectionProvider
+    )
+    {
+        foreach (var collection in row.Collections)
+        {
+            var items = collection
+                .Items.Select(item => new PluginCollectionItem(
+                    item.Fields.ToDictionary(
+                        field => field.Key,
+                        string? (field) =>
+                            field is { IsSecretKind: true, IsUserModified: false }
+                                ? null
+                                : field.Value
+                    )
+                ))
+                .ToList();
+
+            var setResult = await TryInvokePluginBoundaryAsync(
+                loaded,
+                $"save collection '{collection.Key}'",
+                ct => collectionProvider.SetItemsAsync(collection.Key, items, ct)
+            );
+            if (!setResult.IsSuccess || setResult.Value is null)
+            {
+                if (setResult.IsSuccess)
+                {
+                    ReportPluginBoundaryFailure(
+                        loaded,
+                        $"save collection '{collection.Key}'",
+                        new InvalidOperationException(
+                            "The plugin returned no collection validation result."
+                        )
+                    );
+                }
+
+                row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
+                await ReloadCurrentVisibleRowAsync(row, loaded, true);
+                return false;
+            }
+
+            if (!setResult.Value.IsSuccess)
+            {
+                row.Status = setResult.Value.Message;
+                return false;
+            }
+        }
+
+        return true;
     }
 
     [RelayCommand]
@@ -481,6 +498,68 @@ public partial class PluginsSectionViewModel : ObservableObject
         row.Status =
             validation.Value?.Message ?? Loc.Instance["Plugins.NoValidationAvailable"];
         await ReloadCurrentVisibleRowAsync(row, loaded, true);
+    }
+
+    [RelayCommand]
+    private async Task RefreshModelCatalogAsync(PluginRow row)
+    {
+        if (!_pluginById.TryGetValue(row.Id, out var loaded)
+            || loaded.Instance is not IModelCatalogProvider provider
+            || !_pluginManager.IsEnabled(row.Id)
+            || row.IsRefreshingModels
+            || _refreshingModelPlugins.Contains(row.Id))
+        {
+            return;
+        }
+
+        if (loaded.Instance is IPluginSettingsProvider settingsProvider
+            && !await TrySaveFlatSettingsAsync(row, loaded, settingsProvider))
+        {
+            return;
+        }
+
+        if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider
+            && !await TrySaveCollectionSettingsAsync(row, loaded, collectionProvider))
+        {
+            return;
+        }
+
+        row.CaptureSettingsBaseline();
+
+        _refreshingModelPlugins.Add(row.Id);
+        row.IsRefreshingModels = true;
+        row.Status = Loc.Instance["Plugins.RefreshingModels"];
+        try
+        {
+            var result = await TryInvokePluginBoundaryAsync(
+                loaded,
+                "refresh model catalog",
+                async ct =>
+                {
+                    await provider.RefreshModelCatalogAsync(ct);
+                    return true;
+                },
+                TimeSpan.FromSeconds(30)
+            );
+            row.Status = result.IsSuccess
+                ? Loc.Instance["Plugins.ModelsRefreshed"]
+                : Loc.Instance["Plugins.ModelRefreshFailed"];
+
+            var currentRow = AllRows.FirstOrDefault(candidate => ReferenceEquals(candidate.LoadedPlugin, loaded));
+            if (currentRow is { HasUnsavedSettings: true })
+            {
+                currentRow.Status = row.Status;
+                return;
+            }
+
+            await ReloadCurrentVisibleRowAsync(row, loaded, true);
+        }
+        finally
+        {
+            _refreshingModelPlugins.Remove(row.Id);
+            row.IsRefreshingModels = false;
+            ApplyRunningState(row.Id, loaded);
+        }
     }
 
     // Concurrent so one plugin's long download does not block another plugin's actions.
@@ -654,6 +733,11 @@ public partial class PluginsSectionViewModel : ObservableObject
         row.IsActionRunning = running is not null;
         row.ActivityMessage = running?.Message ?? (running is null ? null : Loc.Instance["Plugins.ActionRunning"]);
         row.ActivityProgress = running?.Progress;
+        row.IsRefreshingModels = _refreshingModelPlugins.Contains(pluginId);
+        if (row.IsRefreshingModels)
+        {
+            row.Status = Loc.Instance["Plugins.RefreshingModels"];
+        }
     }
 
     private async Task<bool> TrySaveFlatSettingsAsync(
@@ -1148,6 +1232,9 @@ public partial class PluginRow : ObservableObject
     private bool _isActionRunning;
 
     [ObservableProperty]
+    private bool _isRefreshingModels;
+
+    [ObservableProperty]
     private string? _activityMessage;
 
     [ObservableProperty]
@@ -1241,6 +1328,10 @@ public partial class PluginRow : ObservableObject
     public string ExpansionGlyph => IsExpanded ? "⌃" : "⌄";
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public bool HasExpandableSettings { get; }
+    public bool HasModelCatalogProvider => LoadedPlugin?.Instance is IModelCatalogProvider;
+    public bool CanRefreshModels => IsEnabled
+        && LoadedPlugin?.Instance is IModelCatalogProvider
+        && !IsRefreshingModels;
     public ObservableCollection<PluginSettingFieldRow> SettingFields { get; } = [];
     public ObservableCollection<PluginCollectionRow> Collections { get; } = [];
     public ObservableCollection<PluginSettingsActionRow> Actions { get; } = [];
@@ -1253,6 +1344,7 @@ public partial class PluginRow : ObservableObject
 
     public PluginsSectionViewModel? Owner { get; }
     internal LoadedPlugin? LoadedPlugin { get; init; }
+    partial void OnIsRefreshingModelsChanged(bool value) => OnPropertyChanged(nameof(CanRefreshModels));
     internal bool HasUnsavedSettings =>
         _settingsBaseline is not null
         && !_settingsBaseline.SequenceEqual(CaptureSettingsDraft());
@@ -1361,6 +1453,7 @@ public partial class PluginRow : ObservableObject
         OnPropertyChanged(nameof(StatusBadgeBackground));
         OnPropertyChanged(nameof(StatusBadgeBorder));
         OnPropertyChanged(nameof(StatusBadgeForeground));
+        OnPropertyChanged(nameof(CanRefreshModels));
     }
 
     private enum PluginSettingsDraftEntryKind

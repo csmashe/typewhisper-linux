@@ -1136,5 +1136,8 @@
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
   "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}.",
+  "Plugins.RefreshingModels": "Refreshing models...",
+  "Plugins.ModelsRefreshed": "Models refreshed.",
+  "Plugins.ModelRefreshFailed": "Model refresh failed. See the error log for details."
 }
