@@ -45,10 +45,11 @@ internal static partial class UiInspector
                 var needed = text.TextWrapping == TextWrapping.NoWrap
                     ? text.TextLayout.WidthIncludingTrailingWhitespace
                     : text.TextLayout.Width;
-                if (text.TextTrimming == TextTrimming.None && needed > text.Bounds.Width + 1.5)
+                var visibleWidth = Math.Min(text.Bounds.Width, ComputeVisibleWidth(text, root));
+                if (text.TextTrimming == TextTrimming.None && needed > visibleWidth + 1.5)
                 {
                     findings.Add(new UiFinding(ClippedText, nameof(TextBlock),
-                        $"\"{Shorten(trimmed)}\" needs {needed:0} px, has {text.Bounds.Width:0} px", Locate(control)));
+                        $"\"{Shorten(trimmed)}\" needs {needed:0} px, has {visibleWidth:0} px", Locate(control)));
                 }
             }
 
@@ -115,5 +116,39 @@ internal static partial class UiInspector
         return string.Join(" < ", parts);
     }
 
+
+    private static double ComputeVisibleWidth(Control control, Visual root)
+    {
+        var transform = control.TransformToVisual(root);
+        if (transform is null)
+            return control.Bounds.Width;
+
+        var rootRect = new Rect(0, 0, control.Bounds.Width, control.Bounds.Height).TransformToAABB(transform.Value);
+        var clipLeft = 0.0;
+        var clipRight = root.Bounds.Width;
+
+        Visual? current = control.GetVisualParent();
+        while (current is not null && current != root)
+        {
+            if (current is Control ancestor && (ancestor.ClipToBounds || (ancestor is ScrollViewer sv && sv.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled)))
+            {
+                var ancestorTransform = ancestor.TransformToVisual(root);
+                if (ancestorTransform is not null)
+                {
+                    var ancestorBounds = new Rect(0, 0, ancestor.Bounds.Width, ancestor.Bounds.Height)
+                        .TransformToAABB(ancestorTransform.Value);
+                    clipLeft = Math.Max(clipLeft, ancestorBounds.Left);
+                    clipRight = Math.Min(clipRight, ancestorBounds.Right);
+                }
+            }
+            current = current.GetVisualParent();
+        }
+
+        var visibleLeft = Math.Max(rootRect.Left, clipLeft);
+        var visibleRight = Math.Min(rootRect.Right, clipRight);
+        return Math.Max(0.0, visibleRight - visibleLeft);
+    }
+
     private static string Shorten(string value) => value.Length <= 48 ? value : value[..45] + "...";
+
 }

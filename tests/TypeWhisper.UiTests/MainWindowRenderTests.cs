@@ -131,7 +131,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
     /// <summary>Text that only another UI language uses. Short words are shared across languages, so skipped.</summary>
     private static HashSet<string> ForeignText(string language)
     {
-        var allowed = Catalog(language).Values.Concat(Catalog("en").Values).ToHashSet(StringComparer.Ordinal);
+        var allowed = Catalog(language).Values.ToHashSet(StringComparer.Ordinal);
         return s_languages.Where(other => other != language)
             .SelectMany(other => Catalog(other).Values)
             .Where(text => text.Length > 3 && !text.Contains('{') && !allowed.Contains(text))

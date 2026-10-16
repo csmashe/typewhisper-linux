@@ -1,4 +1,5 @@
 using System.Globalization;
+using Avalonia.Data.Converters;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Converters;
 using TypeWhisper.Linux.Services.Localization;
@@ -48,6 +49,27 @@ public sealed class ProfileSummaryConverterTests
         );
 
         Assert.Equal("0 app rule(s), 0 URL rule(s)", result);
+    }
+
+    [Fact]
+    public void Convert_MultiValue_ReturnsFormattedSummary()
+    {
+        var profile = new Profile
+        {
+            Id = "p1",
+            Name = "Auto Format",
+            ProcessNames = ["code", "cursor"],
+            UrlPatterns = ["github.com"],
+        };
+
+        var result = ((IMultiValueConverter)ProfileSummaryConverter.Instance).Convert(
+            [profile, "en"],
+            typeof(string),
+            null,
+            CultureInfo.InvariantCulture
+        );
+
+        Assert.Equal("2 app rule(s), 1 URL rule(s)", result);
     }
 
     [Theory]

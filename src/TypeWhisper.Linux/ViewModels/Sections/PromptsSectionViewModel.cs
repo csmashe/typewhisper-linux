@@ -723,11 +723,18 @@ public partial class PromptsSectionViewModel : ObservableObject
             );
         }
 
-        EditTargetActionPluginId = ActionPluginOptions.Any(option =>
-            option.Value == selectedActionPlugin
-        )
-            ? selectedActionPlugin
-            : null;
+        if (!string.IsNullOrWhiteSpace(selectedActionPlugin)
+            && ActionPluginOptions.All(option => option.Value != selectedActionPlugin))
+        {
+            ActionPluginOptions.Add(
+                new ActionPluginOption(
+                    selectedActionPlugin,
+                    Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", selectedActionPlugin)
+                )
+            );
+        }
+
+        EditTargetActionPluginId = selectedActionPlugin;
         OnPropertyChanged(nameof(SelectedEditProvider));
         OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));

@@ -568,7 +568,7 @@
                             <TextBlock Text="{loc:Str Dictation.AppInsertionStrategies}"
                                        Classes="row-label" />
 
-                            <Grid ColumnDefinitions="*,180,Auto"
+                            <Grid ColumnDefinitions="*,150,Auto"
                                   ColumnSpacing="10">
                                 <TextBox Grid.Column="0"
                                          AutomationProperties.Name="{loc:Str Dictation.ProcessNamePlaceholder}"
