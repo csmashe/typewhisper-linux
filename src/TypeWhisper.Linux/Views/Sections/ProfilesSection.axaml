@@ -4,6 +4,7 @@
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
+             xmlns:converters="using:TypeWhisper.Linux.Converters"
              x:Class="TypeWhisper.Linux.Views.Sections.ProfilesSection"
              x:DataType="vm:ProfilesSectionViewModel">
     <UserControl.Styles>
@@ -77,7 +78,7 @@
     </UserControl.Styles>
 
     <Grid Margin="24"
-          ColumnDefinitions="260,18,*">
+          ColumnDefinitions="280,18,*">
         <Grid Grid.Column="0"
               RowDefinitions="Auto,*,Auto">
             <StackPanel Margin="0,0,0,8">
@@ -102,12 +103,13 @@
                                         CornerRadius="2"
                                         Margin="0,2,0,2" />
                                 <StackPanel Grid.Column="1"
-                                            Spacing="4">
+                                            Spacing="4"
+                                            VerticalAlignment="Center">
                                     <TextBlock Text="{Binding Name}"
-                                               FontSize="13"
-                                               FontWeight="SemiBold" />
-                                    <TextBlock FontSize="11"
-                                               Foreground="#8A9AAE">
+                                               Classes="card-title"
+                                               ToolTip.Tip="{Binding Name}" />
+                                    <TextBlock Classes="card-subtitle"
+                                               ToolTip.Tip="{Binding Converter={x:Static converters:ProfileSummaryConverter.Instance}}">
                                         <Run Text="{Binding ProcessNames.Count, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.AppRulesCount}" />
                                         <Run Text=" · " />
                                         <Run Text="{Binding UrlPatterns.Count, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.UrlRulesCount}" />
@@ -115,6 +117,8 @@
                                 </StackPanel>
                                 <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                 <ToggleSwitch Grid.Column="2"
+                                              AutomationProperties.Name="{loc:Str Profiles.Enabled}"
+                                              Classes="compact"
                                               IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                               Command="{Binding $parent[ListBox].((vm:ProfilesSectionViewModel)DataContext).ToggleProfileEnabledCommand}"
                                               CommandParameter="{Binding}"
@@ -191,6 +195,7 @@
                                 <TextBlock Text="{loc:Str Profiles.Name}"
                                            Classes="field-label" />
                                 <TextBox Text="{Binding EditName}"
+                                         AutomationProperties.Name="{loc:Str Profiles.Name}"
                                          Margin="0,0,0,14" />
 
                                 <TextBlock
@@ -229,6 +234,7 @@
                                       ColumnSpacing="8"
                                       Margin="0,0,0,8">
                                     <TextBox Grid.Column="0"
+                                             AutomationProperties.Name="{loc:Str Profiles.Apps}"
                                              Text="{Binding ProcessNameInput}"
                                              PlaceholderText="{loc:Str Profiles.ProcessNameWatermark}"
                                              KeyDown="OnProcessNameKeyDown" />
@@ -272,6 +278,7 @@
                                           ColumnSpacing="8"
                                           Margin="0,0,0,8">
                                         <TextBox Grid.Column="0"
+                                                 AutomationProperties.Name="{loc:Str Profiles.UrlPatterns}"
                                                  Text="{Binding UrlPatternInput}"
                                                  PlaceholderText="{loc:Str Profiles.UrlPatternWatermark}"
                                                  KeyDown="OnUrlPatternKeyDown" />
@@ -287,6 +294,7 @@
                                     <TextBlock Text="{loc:Str Profiles.ContextMatchMode}"
                                                Classes="field-label" />
                                     <ComboBox ItemsSource="{Binding ContextMatchModeOptions}"
+                                              AutomationProperties.Name="{loc:Str Profiles.ContextMatchMode}"
                                               SelectedItem="{Binding SelectedContextMatchModeOption}"
                                               HorizontalAlignment="Stretch">
                                         <ComboBox.ItemTemplate>
@@ -317,6 +325,7 @@
                                                    Classes="row-label"
                                                    VerticalAlignment="Center" />
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.Language}"
                                                   ItemsSource="{Binding LanguageChoices}"
                                                   SelectedItem="{Binding EditLanguage}" />
                                     </Grid>
@@ -335,6 +344,7 @@
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.Task}"
                                                   ItemsSource="{Binding TaskChoices}"
                                                   SelectedItem="{Binding EditTask}"
                                                   VerticalAlignment="Center" />
@@ -354,6 +364,7 @@
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.Translation}"
                                                   ItemsSource="{Binding TranslationTargetOptions}"
                                                   SelectedItem="{Binding SelectedTranslationTargetOption}"
                                                   VerticalAlignment="Center">
@@ -378,6 +389,7 @@
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.Model}"
                                                   ItemsSource="{Binding ModelOptions}"
                                                   SelectedItem="{Binding SelectedModelOption}"
                                                   DropDownOpened="OnModelDropDownOpened">
@@ -402,6 +414,7 @@
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.PromptAction}"
                                                   ItemsSource="{Binding PromptActionOptions}"
                                                   SelectedItem="{Binding SelectedPromptActionOption}">
                                             <ComboBox.ItemTemplate>
@@ -426,6 +439,7 @@
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Common.WhisperMode}"
                                                   ItemsSource="{Binding WhisperModeOptions}"
                                                   SelectedItem="{Binding SelectedWhisperModeOption}">
                                             <ComboBox.ItemTemplate>
@@ -450,6 +464,7 @@
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.StylePreset}"
                                                   ItemsSource="{Binding StylePresetOptions}"
                                                   SelectedItem="{Binding SelectedStylePresetOption}"
                                                   VerticalAlignment="Center">
@@ -475,6 +490,7 @@
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.CleanupOverride}"
                                                   ItemsSource="{Binding CleanupOverrideOptions}"
                                                   SelectedItem="{Binding SelectedCleanupOverrideOption}">
                                             <ComboBox.ItemTemplate>
@@ -502,6 +518,7 @@
                                              because the three choices — inherit / on / off — are
                                              identical in structure to the Whisper Mode override. -->
                                         <ComboBox Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.DeveloperFormattingOverride}"
                                                   ItemsSource="{Binding WhisperModeOptions}"
                                                   SelectedItem="{Binding SelectedDeveloperFormattingOverrideOption}">
                                             <ComboBox.ItemTemplate>
@@ -525,6 +542,7 @@
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
                                         <NumericUpDown Grid.Column="1"
+                                                       AutomationProperties.Name="{loc:Str Profiles.Priority}"
                                                        Minimum="0"
                                                        Maximum="999"
                                                        Value="{Binding EditPriority}" />
@@ -545,8 +563,10 @@
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Spacing="8">
                                             <TextBox Text="{Binding EditHotkeyData}"
+                                                     AutomationProperties.Name="{loc:Str Profiles.ProfileHotkey}"
                                                      PlaceholderText="{loc:Str Profiles.HotkeyWatermark}" />
                                             <ComboBox HorizontalAlignment="Stretch"
+                                                      AutomationProperties.Name="{loc:Str Profiles.HotkeyBehavior}"
                                                       ItemsSource="{Binding HotkeyBehaviorOptions}"
                                                       SelectedItem="{Binding SelectedHotkeyBehaviorOption}">
                                                 <ComboBox.ItemTemplate>
@@ -580,6 +600,7 @@
                                                Classes="row-label"
                                                VerticalAlignment="Center" />
                                     <ToggleSwitch Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Profiles.Enabled}"
                                                   IsChecked="{Binding EditIsEnabled}"
                                                   VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="2"

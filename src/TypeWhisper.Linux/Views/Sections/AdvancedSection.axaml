@@ -34,8 +34,10 @@
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.EnableMemory}"
                                        FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Advanced.EnableMemory}"
                                           IsChecked="{Binding MemoryEnabled}"
                                           IsEnabled="{Binding CanUseMemory}"
                                           VerticalAlignment="Center" />
@@ -63,8 +65,10 @@
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.AutoUnloadModel}"
                                        FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Advanced.AutoUnloadModel}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding AutoUnloadOptions}"
                                       SelectedItem="{Binding SelectedAutoUnloadOption}">
@@ -84,8 +88,10 @@
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.SpokenFeedback}"
                                        FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Advanced.SpokenFeedback}"
                                           IsChecked="{Binding SpokenFeedbackEnabled}"
                                           IsEnabled="{Binding CanUseSpokenFeedback}"
                                           VerticalAlignment="Center" />
@@ -99,8 +105,10 @@
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.SpokenFeedbackProvider}"
                                        FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Advanced.SpokenFeedbackProvider}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding SpokenFeedbackProviders}"
                                       SelectedItem="{Binding SelectedSpokenFeedbackProviderOption}"
@@ -121,8 +129,10 @@
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.Voice}"
                                        FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Advanced.Voice}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding SpokenFeedbackVoices}"
                                       SelectedItem="{Binding SelectedSpokenFeedbackVoiceOption}"
@@ -157,8 +167,10 @@
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.SaveToHistory}"
                                        FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Advanced.SaveToHistory}"
                                           IsChecked="{Binding SaveToHistoryEnabled}"
                                           VerticalAlignment="Center" />
                         </Grid>
@@ -172,13 +184,15 @@
                             <StackPanel Spacing="3">
                                 <TextBlock Text="{loc:Str Advanced.CaptureProvenance}"
                                            FontWeight="SemiBold"
-                                           VerticalAlignment="Center" />
+                                           VerticalAlignment="Center"
+                                           TextWrapping="Wrap" />
                                 <TextBlock Text="{loc:Str Advanced.CaptureProvenanceHint}"
                                            FontSize="12"
                                            Foreground="#8A9AAE"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Advanced.CaptureProvenance}"
                                           IsChecked="{Binding CaptureLlmProvenance}"
                                           IsEnabled="{Binding SaveToHistoryEnabled}"
                                           VerticalAlignment="Center" />
@@ -191,11 +205,13 @@
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                             <StackPanel Spacing="3">
                                 <TextBlock Text="{loc:Str Advanced.CrashReporting}"
-                                           FontWeight="SemiBold" VerticalAlignment="Center" />
+                                           FontWeight="SemiBold" VerticalAlignment="Center"
+                                           TextWrapping="Wrap" />
                                 <TextBlock Text="{loc:Str Advanced.CrashReportingHint}"
                                            FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1" IsChecked="{Binding CrashReportingEnabled}"
+                                          AutomationProperties.Name="{loc:Str Advanced.CrashReporting}"
                                           VerticalAlignment="Center" />
                         </Grid>
                     </Border>
@@ -207,8 +223,10 @@
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.HistoryRetention}"
                                        FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Advanced.HistoryRetention}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding HistoryRetentionOptions}"
                                       SelectedItem="{Binding SelectedHistoryRetention}">
