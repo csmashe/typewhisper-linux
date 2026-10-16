@@ -34,6 +34,13 @@ public partial class ShortcutsSection : UserControl
         }
 
         e.Handled = true;
+        if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None)
+        {
+            _pendingModifierKey = null;
+            vm.CancelHotkeyCaptureCommand.Execute(null);
+            return;
+        }
+
         if (IsModifierKey(e.Key))
         {
             _pendingModifierKey = e.Key;

@@ -1143,5 +1143,6 @@
   "Snippets.TriggerModeLabel": "Auslösermodus",
   "Shortcuts.RecordShortcut": "Tasten aufnehmen",
   "Shortcuts.CancelCapture": "Abbrechen",
+  "Shortcuts.CaptureCancelled": "Aufnahme abgebrochen.",
   "Shortcuts.CapturePrompt": "Drücken Sie eine Taste oder Tastenkombination. TypeWhisper übernimmt sie, sobald Sie die letzte Taste drücken."
 }

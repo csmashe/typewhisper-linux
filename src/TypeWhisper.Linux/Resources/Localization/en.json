@@ -1143,5 +1143,6 @@
   "Snippets.TriggerModeLabel": "Trigger mode",
   "Shortcuts.RecordShortcut": "Record keys",
   "Shortcuts.CancelCapture": "Cancel",
+  "Shortcuts.CaptureCancelled": "Recording cancelled.",
   "Shortcuts.CapturePrompt": "Press a key or key combination. TypeWhisper applies it when you press the final key."
 }

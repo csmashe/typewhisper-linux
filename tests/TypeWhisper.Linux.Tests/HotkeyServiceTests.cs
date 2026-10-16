@@ -1709,4 +1709,30 @@ public sealed class HotkeyServiceTests
         Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
     }
 
+    [Theory]
+    [InlineData("Ctrl+BackQuote", KeyCode.VcBackQuote)]
+    [InlineData("Ctrl+Minus", KeyCode.VcMinus)]
+    [InlineData("Ctrl+Equals", KeyCode.VcEquals)]
+    [InlineData("Ctrl+OpenBracket", KeyCode.VcOpenBracket)]
+    [InlineData("Ctrl+CloseBracket", KeyCode.VcCloseBracket)]
+    [InlineData("Ctrl+Backslash", KeyCode.VcBackslash)]
+    [InlineData("Ctrl+Semicolon", KeyCode.VcSemicolon)]
+    [InlineData("Ctrl+Quote", KeyCode.VcQuote)]
+    [InlineData("Ctrl+Comma", KeyCode.VcComma)]
+    [InlineData("Ctrl+Period", KeyCode.VcPeriod)]
+    [InlineData("Ctrl+Slash", KeyCode.VcSlash)]
+    [InlineData("Ctrl+NumPad0", KeyCode.VcNumPad0)]
+    public async Task TrySetHotkeyFromString_ParsesNamedSharpHookVirtualKeys_AndRoundTrips(string chord, KeyCode expectedKey)
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var parsed = hotkey.TrySetHotkeyFromString(chord);
+        await backend.WaitUntilSettledAsync();
+
+        Assert.True(parsed);
+        Assert.Equal(expectedKey, backend.LastSet?.DictationKey);
+        Assert.Equal(chord, hotkey.CurrentHotkeyString);
+    }
 }
