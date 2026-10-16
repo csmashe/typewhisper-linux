@@ -68,6 +68,28 @@
 
             <Border Classes="panel"
                     Padding="18,16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{loc:Str Prompts.CleanupProvider}"
+                               FontSize="16"
+                               FontWeight="SemiBold" />
+                    <ComboBox ItemsSource="{Binding AvailableProviders}"
+                              SelectedItem="{Binding SelectedDefaultLlmProvider}"
+                              DropDownOpened="OnProviderDropDownOpened">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProviderOption">
+                                <TextBlock Text="{Binding Label}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="{loc:Str Prompts.CleanupProviderHelp}"
+                               FontSize="12"
+                               Foreground="#8A9AAE"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="18,16">
                 <StackPanel Spacing="12">
                     <TextBlock Text="{loc:Str Prompts.CommandModeTitle}"
                                FontSize="16"
