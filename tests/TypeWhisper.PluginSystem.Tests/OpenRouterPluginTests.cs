@@ -741,8 +741,12 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
     {
-        var handler = new CapturingHandler((_, _) =>
-            JsonResponse("""{ "choices": [ { "message": { "content": "bulk" } } ] }"""));
+        string? capturedBody = null;
+        var handler = new CapturingHandler((_, body) =>
+        {
+            capturedBody = body;
+            return JsonResponse("""{ "choices": [ { "message": { "content": "bulk" } } ] }""");
+        });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("streamResponses", false);
@@ -757,6 +761,8 @@ public class OpenRouterPluginTests
 
         Assert.Single(chunks);
         Assert.Equal("bulk", chunks[0]);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.False(doc.RootElement.TryGetProperty("stream", out var stream) && stream.GetBoolean());
     }
 
     // Fork-specific: IPluginSettingsProvider coverage (the WPF settings view

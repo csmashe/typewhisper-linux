@@ -373,6 +373,10 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         row.IsExpanded = true;
         await LoadPluginSettingsAsync(row, SettingsReloadKind.ResetBaseline);
+        if (row.IsEnabled && row.HasModelCatalogProvider)
+        {
+            await RefreshModelCatalogAsync(row);
+        }
     }
 
     [RelayCommand]
@@ -481,6 +485,48 @@ public partial class PluginsSectionViewModel : ObservableObject
         row.Status =
             validation.Value?.Message ?? Loc.Instance["Plugins.NoValidationAvailable"];
         await ReloadCurrentVisibleRowAsync(row, loaded, true);
+    }
+
+    [RelayCommand]
+    private async Task RefreshModelCatalogAsync(PluginRow row)
+    {
+        if (!_pluginById.TryGetValue(row.Id, out var loaded)
+            || loaded.Instance is not IModelCatalogProvider provider
+            || !_pluginManager.IsEnabled(row.Id)
+            || row.IsRefreshingModels)
+        {
+            return;
+        }
+
+        if (loaded.Instance is IPluginSettingsProvider settingsProvider
+            && !await TrySaveFlatSettingsAsync(row, loaded, settingsProvider))
+        {
+            return;
+        }
+
+        row.IsRefreshingModels = true;
+        row.Status = Loc.Instance["Plugins.RefreshingModels"];
+        try
+        {
+            var result = await TryInvokePluginBoundaryAsync(
+                loaded,
+                "refresh model catalog",
+                async ct =>
+                {
+                    await provider.RefreshModelCatalogAsync(ct);
+                    return true;
+                },
+                TimeSpan.FromSeconds(30)
+            );
+            row.Status = result.IsSuccess
+                ? Loc.Instance["Plugins.ModelsRefreshed"]
+                : Loc.Instance["Plugins.ModelRefreshFailed"];
+            await ReloadCurrentVisibleRowAsync(row, loaded, true);
+        }
+        finally
+        {
+            row.IsRefreshingModels = false;
+        }
     }
 
     // Concurrent so one plugin's long download does not block another plugin's actions.
@@ -1148,6 +1194,9 @@ public partial class PluginRow : ObservableObject
     private bool _isActionRunning;
 
     [ObservableProperty]
+    private bool _isRefreshingModels;
+
+    [ObservableProperty]
     private string? _activityMessage;
 
     [ObservableProperty]
@@ -1241,6 +1290,10 @@ public partial class PluginRow : ObservableObject
     public string ExpansionGlyph => IsExpanded ? "⌃" : "⌄";
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public bool HasExpandableSettings { get; }
+    public bool HasModelCatalogProvider => LoadedPlugin?.Instance is IModelCatalogProvider;
+    public bool CanRefreshModels => IsEnabled
+        && LoadedPlugin?.Instance is IModelCatalogProvider
+        && !IsRefreshingModels;
     public ObservableCollection<PluginSettingFieldRow> SettingFields { get; } = [];
     public ObservableCollection<PluginCollectionRow> Collections { get; } = [];
     public ObservableCollection<PluginSettingsActionRow> Actions { get; } = [];
@@ -1253,6 +1306,7 @@ public partial class PluginRow : ObservableObject
 
     public PluginsSectionViewModel? Owner { get; }
     internal LoadedPlugin? LoadedPlugin { get; init; }
+    partial void OnIsRefreshingModelsChanged(bool value) => OnPropertyChanged(nameof(CanRefreshModels));
     internal bool HasUnsavedSettings =>
         _settingsBaseline is not null
         && !_settingsBaseline.SequenceEqual(CaptureSettingsDraft());
@@ -1361,6 +1415,7 @@ public partial class PluginRow : ObservableObject
         OnPropertyChanged(nameof(StatusBadgeBackground));
         OnPropertyChanged(nameof(StatusBadgeBorder));
         OnPropertyChanged(nameof(StatusBadgeForeground));
+        OnPropertyChanged(nameof(CanRefreshModels));
     }
 
     private enum PluginSettingsDraftEntryKind
