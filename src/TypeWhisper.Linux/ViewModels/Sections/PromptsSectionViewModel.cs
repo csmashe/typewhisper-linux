@@ -107,6 +107,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
                 OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
                 HydrateCommandSettings(value);
+                RefreshPluginOptions();
             });
 
         HydrateCommandSettings(_settings.Current);
@@ -154,6 +155,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
             _settings.Update(current => current with { DefaultLlmProvider = value });
             OnPropertyChanged();
+            RefreshPluginOptions();
         }
     }
 
@@ -335,7 +337,11 @@ public partial class PromptsSectionViewModel : ObservableObject
         if (_synthesizedProviderOption is not null
             && !string.Equals(_synthesizedProviderOption.Value, value, StringComparison.Ordinal))
         {
-            AvailableProviders.Remove(_synthesizedProviderOption);
+            if (!string.Equals(_settings.Current.DefaultLlmProvider, _synthesizedProviderOption.Value, StringComparison.Ordinal)
+                && !string.Equals(_settings.Current.SpokenCommandLlmProvider, _synthesizedProviderOption.Value, StringComparison.Ordinal))
+            {
+                AvailableProviders.Remove(_synthesizedProviderOption);
+            }
             _synthesizedProviderOption = null;
         }
 
