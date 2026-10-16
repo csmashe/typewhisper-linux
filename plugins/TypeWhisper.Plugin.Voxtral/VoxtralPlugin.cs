@@ -115,14 +115,12 @@ public sealed class VoxtralPlugin
         content.Add(fileContent, "file", "audio.wav");
         content.Add(new StringContent(ModelId), "model");
 
-        // Without a requested granularity Mistral returns an empty "segments" array
-        // (its documented response example), so ask for segment timestamps explicitly.
-        content.Add(new StringContent("segment"), "timestamp_granularities");
-
+        // Mistral documents timestamp_granularities as incompatible with language, so an explicit
+        // language gets no segments; otherwise ask for them (none are returned unrequested).
         if (!string.IsNullOrWhiteSpace(language))
-        {
             content.Add(new StringContent(language), "language");
-        }
+        else
+            content.Add(new StringContent("segment"), "timestamp_granularities");
 
         // Mistral exposes context_bias as an array; do not guess how a single prompt maps to it.
         _ = prompt;

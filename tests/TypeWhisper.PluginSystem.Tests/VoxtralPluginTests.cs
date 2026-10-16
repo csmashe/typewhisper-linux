@@ -117,14 +117,14 @@ public class VoxtralPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_SendsExplicitLanguage()
+    public async Task TranscribeAsync_SendsExplicitLanguageWithoutIncompatibleTimestampGranularities()
     {
         var handler = new StubHttpMessageHandler(async (request, ct) =>
         {
             var content = Assert.IsType<MultipartFormDataContent>(request.Content);
             var parts = content.ToArray();
             Assert.Equal(
-                ["file", "model", "timestamp_granularities", "language"],
+                ["file", "model", "language"],
                 parts.Select(GetPartName).ToArray()
             );
             var language = Assert.Single(parts, part => GetPartName(part) == "language");
@@ -143,6 +143,30 @@ public class VoxtralPluginTests
         );
 
         Assert.Equal("de", result.DetectedLanguage);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_ExplicitLanguageTakesDurationFromUsageWithoutSegments()
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse(
+                """{ "text": "Hallo", "language": null, "segments": [], "usage": { "prompt_audio_seconds": 4.5 } }"""
+            ))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.TranscribeAsync(
+            [1, 2, 3],
+            "de",
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+
+        Assert.Equal("Hallo", result.Text);
+        Assert.Null(result.DetectedLanguage);
+        Assert.Equal(4.5, result.DurationSeconds);
+        Assert.Empty(result.Segments);
     }
 
     [Fact]
