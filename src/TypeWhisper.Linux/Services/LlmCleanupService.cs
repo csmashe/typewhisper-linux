@@ -11,13 +11,14 @@ namespace TypeWhisper.Linux.Services;
 ///     Applies rule-based and optional LLM cleanup to transcribed text.
 ///     Light cleanup is always local (no LLM). Medium / High first run the
 ///     local pass, then send the lightened text to the configured LLM
-///     provider — falling back to Light if no provider is available.
+///     provider, falling back to Light when unavailable, failed or over the wait limit.
 /// </summary>
 public sealed class LlmCleanupService
 {
     private readonly CleanupService _cleanup;
     private readonly PromptProcessingService _promptProcessing;
     private readonly IErrorLogService? _errorLog;
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
 
     // Last cleanup failure written to the error log. A broken provider fails on every dictation,
     // so only a change of message is worth a new entry.
@@ -39,9 +40,14 @@ public sealed class LlmCleanupService
         CleanupLevel level,
         Func<string, Task>? statusCallback = null,
         LlmCallCapture? capture = null,
-        CancellationToken ct = default
+        TimeSpan? timeout = null,
+        CancellationToken ct = default,
+        string? sourceLanguage = null,
+        string? providerOverride = null,
+        bool preparedLightText = false
     )
     {
+        ct.ThrowIfCancellationRequested();
         // Medium/High intentionally fall through to the LLM cleanup path below.
         // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
         switch (level)
@@ -49,11 +55,11 @@ public sealed class LlmCleanupService
             case CleanupLevel.None:
                 return text;
             case CleanupLevel.Light:
-                return _cleanup.Clean(text, CleanupLevel.Light);
+                return _cleanup.Clean(text, CleanupLevel.Light, sourceLanguage);
         }
 
-        var lightText = _cleanup.Clean(text, CleanupLevel.Light);
-        if (_promptProcessing.HasNoProviderForRequest())
+        var lightText = preparedLightText ? text : PrepareLiveInput(text, sourceLanguage);
+        if (_promptProcessing.HasNoProviderForRequest(providerOverride))
         {
             await NotifyStatusAsync(
                 statusCallback,
@@ -70,12 +76,15 @@ public sealed class LlmCleanupService
         try
         {
             var prompt = CleanupService.GetLlmSystemPrompt(level);
-            var cleaned = await _promptProcessing.ProcessSystemPromptAsync(
+            var cleaned = await ProcessWithinBudgetAsync(
                 prompt,
                 lightText,
                 capture,
-                ct
+                timeout ?? TimeSpan.FromSeconds(5),
+                ct,
+                providerOverride
             );
+            ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
             _lastLoggedFailure = null;
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
@@ -87,6 +96,18 @@ public sealed class LlmCleanupService
         catch (Exception) when (ct.IsCancellationRequested)
         {
             throw new OperationCanceledException(ct);
+        }
+        catch (CleanupDeadlineExceededException)
+        {
+            const string failure = "AI cleanup exceeded its wait limit and fell back to Light cleanup.";
+            if (!string.Equals(failure, _lastLoggedFailure, StringComparison.Ordinal))
+            {
+                _lastLoggedFailure = failure;
+                _errorLog?.AddEntry(failure, ErrorCategory.Prompt);
+            }
+            await NotifyStatusAsync(statusCallback, Loc.Instance["Dictation.CleanupTimedOut"]);
+            ct.ThrowIfCancellationRequested();
+            return lightText;
         }
         catch (Exception ex)
         {
@@ -112,6 +133,58 @@ public sealed class LlmCleanupService
             return lightText;
         }
     }
+
+    internal string PrepareLiveInput(string text, string? language) =>
+        _cleanup.Clean(text, CleanupLevel.Light, language);
+
+    // Bound the caller's wait even if a plugin ignores cancellation. The gate stays held
+    // until the provider settles, so later dictations cannot accumulate abandoned requests.
+    private async Task<string> ProcessWithinBudgetAsync(
+        string prompt, string text, LlmCallCapture? capture, TimeSpan timeout, CancellationToken ct,
+        string? providerOverride)
+    {
+        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timerCts = new CancellationTokenSource();
+        var completed = false;
+        var request = Task.Run(async () =>
+        {
+            await _requestGate.WaitAsync(requestCts.Token).ConfigureAwait(false);
+            try
+            {
+                requestCts.Token.ThrowIfCancellationRequested();
+                return await _promptProcessing.ProcessSystemPromptAsync(
+                    prompt, text, capture, requestCts.Token, providerOverride).ConfigureAwait(false);
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        });
+        try
+        {
+            var deadline = Task.Delay(timeout > TimeSpan.Zero ? timeout : Timeout.InfiniteTimeSpan, timerCts.Token);
+            var winner = await Task.WhenAny(request, deadline).WaitAsync(ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            if (winner != request)
+                throw new CleanupDeadlineExceededException();
+            var result = await request.ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            completed = true;
+            return result;
+        }
+        finally
+        {
+            await timerCts.CancelAsync().ConfigureAwait(false);
+            var cancellation = completed ? Task.CompletedTask : requestCts.CancelAsync();
+            // A cancellation callback can also stall. Observe it and dispose the source only
+            // after both tasks finish; never let late provider work mutate an inserted result.
+            _ = Task.WhenAll(request, cancellation).ContinueWith(
+                task => { _ = task.Exception; requestCts.Dispose(); },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
+    private sealed class CleanupDeadlineExceededException : TimeoutException;
 
     private static async Task NotifyStatusAsync(Func<string, Task>? statusCallback, string message)
     {
