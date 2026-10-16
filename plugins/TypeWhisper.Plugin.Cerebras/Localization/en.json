@@ -15,6 +15,8 @@
   "Settings.ApiKeyRejected": "Cerebras rejected this API key. Check the key and try again.",
   "Settings.ModelRefreshFailed": "Could not load Cerebras models: {0} The saved model list is unchanged.",
   "Settings.ModelRefreshStale": "The API key changed while models were loading. Validate again.",
+  "Errors.ModelRefreshTimedOut": "Loading timed out.",
+  "Errors.ModelCatalogInvalid": "Cerebras returned an empty, invalid or oversized model list.",
   "Settings.ApiKeyNotConfigured": "API key not configured",
   "Manifest.Name": "Cerebras",
   "Manifest.Description": "Cerebras fast LLM inference"

@@ -249,7 +249,7 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
             throw new PluginRequestException(
-                "Loading Cerebras models timed out.", PluginRequestFailureKind.Timeout, innerException: ex);
+                Loc.L("Errors.ModelRefreshTimedOut"), PluginRequestFailureKind.Timeout, innerException: ex);
         }
     }
 
@@ -294,8 +294,8 @@ public sealed class CerebrasPlugin : ILlmProviderPlugin, IPluginSettingsProvider
         }
     }
 
-    private static PluginRequestException InvalidCatalog() =>
-        new("Cerebras returned an empty, invalid or oversized model catalog.",
+    private PluginRequestException InvalidCatalog() =>
+        new(Loc.L("Errors.ModelCatalogInvalid"),
             PluginRequestFailureKind.OutputIncomplete, isTransient: false);
 
     // Commits only when no key change or deactivation happened since the refresh began.

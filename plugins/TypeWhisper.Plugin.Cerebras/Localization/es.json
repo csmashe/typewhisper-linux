@@ -15,6 +15,8 @@
   "Settings.ApiKeyRejected": "Cerebras rechazó esta clave de API. Comprueba la clave e inténtalo de nuevo.",
   "Settings.ModelRefreshFailed": "No se pudieron cargar los modelos de Cerebras: {0} La lista de modelos guardada no ha cambiado.",
   "Settings.ModelRefreshStale": "La clave de API cambió mientras se cargaban los modelos. Vuelve a validar.",
+  "Errors.ModelRefreshTimedOut": "La carga tardó demasiado.",
+  "Errors.ModelCatalogInvalid": "Cerebras devolvió una lista de modelos vacía, no válida o demasiado grande.",
   "Settings.ApiKeyNotConfigured": "Clave de API sin configurar",
   "Manifest.Name": "Cerebras",
   "Manifest.Description": "Inferencia rápida de LLM de Cerebras"

@@ -15,6 +15,8 @@
   "Settings.ApiKeyRejected": "Cerebras hat diesen API-Schlüssel abgelehnt. Prüfen Sie den Schlüssel und versuchen Sie es erneut.",
   "Settings.ModelRefreshFailed": "Cerebras-Modelle konnten nicht geladen werden: {0} Die gespeicherte Modellliste bleibt unverändert.",
   "Settings.ModelRefreshStale": "Der API-Schlüssel wurde geändert, während die Modelle geladen wurden. Validieren Sie erneut.",
+  "Errors.ModelRefreshTimedOut": "Das Laden hat zu lange gedauert.",
+  "Errors.ModelCatalogInvalid": "Cerebras hat eine leere, ungültige oder zu große Modellliste zurückgegeben.",
   "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
   "Manifest.Name": "Cerebras",
   "Manifest.Description": "Schnelle LLM-Inferenz von Cerebras"

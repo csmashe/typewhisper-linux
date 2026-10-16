@@ -252,6 +252,28 @@ public sealed class CerebrasPluginTests
     }
 
     [Fact]
+    public async Task FetchModelsAsync_FailureReasonsAreLocalized()
+    {
+        using var invalid = await ActivatedAsync(new CapturingHandler((_, _) => Json("{}")));
+        var catalogError = await Assert.ThrowsAsync<PluginRequestException>(() =>
+            invalid.FetchModelsAsync(Key, CancellationToken.None));
+        Assert.Equal("Errors.ModelCatalogInvalid", catalogError.Message);
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = Key } };
+        var plugin = new CerebrasPlugin(new HttpClient(new AsyncHandler(async ct =>
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return Json("{}");
+        }))) { ModelDiscoveryDeadline = TimeSpan.FromMilliseconds(50) };
+        using var slow = plugin;
+        await slow.ActivateAsync(host);
+        var timeout = await Assert.ThrowsAsync<PluginRequestException>(() =>
+            slow.FetchModelsAsync(Key, CancellationToken.None));
+        Assert.Equal("Errors.ModelRefreshTimedOut", timeout.Message);
+        Assert.Equal(PluginRequestFailureKind.Timeout, timeout.FailureKind);
+    }
+
+    [Fact]
     public async Task ValidateAsync_OversizedCatalogIsRejectedWhole()
     {
         var models = string.Join(",", Enumerable.Range(0, 1001).Select(i => $$"""{"id":"model-{{i}}"}"""));
