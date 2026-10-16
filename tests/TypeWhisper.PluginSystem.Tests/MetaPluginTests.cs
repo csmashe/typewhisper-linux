@@ -78,6 +78,33 @@ public sealed class MetaPluginTests
             Assert.Single(sut.TranscriptionModels).Id);
     }
 
+    [Theory]
+    [InlineData("""{"object":"list"}""")]
+    [InlineData("""[{"id":"muse-spark-1.2"}]""")]
+    [InlineData("""{"data":[{"id":"muse-spark-1.2"},{"object":"model"}]}""")]
+    [InlineData("""{"data":[{"id":"muse-spark-1.2"},{"id":7}]}""")]
+    [InlineData("""{"data":[{"id":"muse-spark-1.2"},"muse-voice-transcribe-1.0"]}""")]
+    [InlineData("""{"data":[{"id":"muse-spark-1.2"},{"id":" "}]}""")]
+    public async Task RefreshAvailableModelsAsync_MalformedCatalogKeepsPreviousModels(string malformed)
+    {
+        var handler = new RecordingHandler(
+            HttpStatusCode.OK,
+            """{"data":[{"id":"muse-spark-1.2"},{"id":"muse-voice-transcribe-1.0"}]}""");
+        handler.EnqueueResponse(HttpStatusCode.OK, malformed);
+        using var client = new HttpClient(handler);
+        using var sut = new MetaPlugin(client);
+        var host = new FakePluginHostServices();
+        await sut.ActivateAsync(host);
+        await sut.SetApiKeyAsync("meta-key");
+
+        await sut.RefreshAvailableModelsAsync();
+        var refreshed = await sut.RefreshAvailableModelsAsync();
+
+        Assert.Null(refreshed);
+        Assert.Equal(1, sut.FetchedTranscriptionModelCount);
+        Assert.Equal(["muse-spark-1.2"], host.GetSetting<List<MetaFetchedModel>>("fetchedLlmModels")?.Select(model => model.Id));
+    }
+
     [Fact]
     public async Task ValidateApiKeyAsync_UsesForkAuthenticationErrorMapping()
     {
@@ -383,6 +410,18 @@ public sealed class MetaPluginTests
         Assert.Equal("Speaker A: Hello.\nSpeaker B: Hi.", result.Text);
         Assert.Equal("Speaker A: Hello.", result.Segments[0].Text);
         Assert.Equal("Speaker B: Hi.", result.Segments[1].Text);
+    }
+
+    [Theory]
+    [InlineData("""{"audioDurationMs":1000,"turns":[]}""")]
+    [InlineData("""{"transcript":null,"turns":[]}""")]
+    [InlineData("""["Hello"]""")]
+    [InlineData("""{"transcript":"Hello","turns":[{"turnId":1,"speaker":"A"}]}""")]
+    [InlineData("""{"transcript":"Hello","turns":["Hello"]}""")]
+    public void ParseTranscriptionResponse_RejectsMissingTranscriptText(string json)
+    {
+        foreach (var includeSpeakerLabels in new[] { false, true })
+            Assert.Throws<JsonException>(() => MetaPlugin.ParseTranscriptionResponse(json, null, includeSpeakerLabels));
     }
 
     [Fact]
@@ -762,17 +801,11 @@ public sealed class MetaPluginTests
         Assert.Equal("invalid access token", fault.InnerException?.Message);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("Speaker A: Hello\nSpeaker B: Hi")]
-    [InlineData("Hello Hi")]
-    public async Task Realtime_AccumulatesCompletedTurnsWithoutRepeatingTerminalSnapshot(string terminalText)
+    [Fact]
+    public async Task Realtime_DiarizationCompletesOnNormalCloseAfterEveryTurnCompleted()
     {
         var transport = new ScriptedWebSocketTransport();
-        transport.EnqueueText("""{"sessionId":"session"}""");
-        await using var session = await MetaRealtimeStreamingSession.CreateConnectedSessionForTests(transport,
-            new MetaRealtimeConnectionOptions("key", MetaPlugin.DefaultTranscriptionModelId, "DIARIZATION", [], []));
-        await transport.NextSentAsync();
+        await using var session = await StartDiarizationSessionAsync(transport);
         var events = new List<StreamingTranscriptEvent>();
         session.TranscriptReceived += events.Add;
         transport.EnqueueText("""{"type":"speechStart","turnId":1}""");
@@ -782,10 +815,14 @@ public sealed class MetaPluginTests
         transport.EnqueueText("""{"type":"speechStart","turnId":2}""");
         transport.EnqueueText("""{"type":"speaker","label":"Speaker B"}""");
         transport.EnqueueText("""{"type":"transcript","transcript":"H","final":false}""");
-        transport.EnqueueText("""{"type":"speechComplete","turnId":2,"transcript":"Hi"}""");
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await transport.NextSentAsync();
-        transport.EnqueueText(JsonSerializer.Serialize(new { type = "transcript", transcript = terminalText, final = true }));
+        // A final flag is documented for PUSH_TO_TALK only; here it must not end the session.
+        transport.EnqueueText("""{"type":"transcript","transcript":"Hi","final":true}""");
+        transport.EnqueueText("""{"type":"speechComplete","turnId":2,"transcript":"Hi"}""");
+        await Task.Delay(100);
+        Assert.False(finalize.IsCompleted);
+        transport.EnqueueClose();
         await finalize.WaitAsync(TimeSpan.FromSeconds(10));
 
         // Match StreamingTranscriptionCoordinator's append-only final accumulation.
@@ -793,6 +830,107 @@ public sealed class MetaPluginTests
         Assert.Equal("Speaker A: Hello\nSpeaker B: Hi", string.Join("\n", finals.Select(evt => evt.Text.Trim())));
         Assert.Equal(2, finals.Count);
         Assert.Contains(events, evt => evt is { IsFinal: false, Text: "Speaker A: Hello\nSpeaker B: H" });
+    }
+
+    [Fact]
+    public async Task Realtime_DiarizationWithoutSpeechCompletesOnNormalClose()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await StartDiarizationSessionAsync(transport);
+        var finalize = session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueClose();
+        await finalize.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Realtime_DiarizationFaultsWhenClosedWithUnconfirmedText(bool turnStarted)
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await StartDiarizationSessionAsync(transport);
+        if (turnStarted)
+            transport.EnqueueText("""{"type":"speechStart","turnId":1}""");
+        transport.EnqueueText("""{"type":"transcript","transcript":"Hel","final":false}""");
+        var finalize = session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueClose();
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() => finalize.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal("Meta closed the realtime session before completing every turn.", fault.Message);
+    }
+
+    [Fact]
+    public async Task Realtime_DiarizationFaultsWhenCloseInterruptsATurnMessage()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await StartDiarizationSessionAsync(transport);
+        transport.EnqueueText("""{"type":"speechStart","turnId":1}""");
+        transport.EnqueueText("""{"type":"speechComplete","turnId":1,"transcript":"Hello"}""");
+        var finalize = session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueText("""{"type":"speechStart","tur""", endOfMessage: false);
+        transport.EnqueueClose();
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() => finalize.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Contains("before normal closure after every turn completed", fault.Message);
+    }
+
+    [Fact]
+    public async Task Realtime_DiarizationFaultsOnAbnormalCloseAfterEndStream()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await StartDiarizationSessionAsync(transport);
+        var finalize = session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueClose(WebSocketCloseStatus.InternalServerError, "restart");
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() => finalize.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Contains("1011", fault.Message);
+    }
+
+    [Fact]
+    public async Task Realtime_DiarizationFaultsOnNormalCloseBeforeEndStream()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await StartDiarizationSessionAsync(transport);
+        transport.EnqueueText("""{"type":"speechStart","turnId":1}""");
+        transport.EnqueueText("""{"type":"speechComplete","turnId":1,"transcript":"Hello"}""");
+        transport.EnqueueClose();
+        var fault = Assert.IsType<InvalidOperationException>(await WaitForFaultAsync(session));
+        Assert.Contains("before normal closure after every turn completed", fault.Message);
+    }
+
+    [Fact]
+    public async Task Realtime_PushToTalkFaultsWhenFinalArrivesBeforeEndStream()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        transport.EnqueueText("""{"sessionId":"session"}""");
+        await using var session = await MetaRealtimeStreamingSession.CreateConnectedSessionForTests(transport,
+            new MetaRealtimeConnectionOptions("key", MetaPlugin.DefaultTranscriptionModelId, "PUSH_TO_TALK", [], []));
+        await transport.NextSentAsync();
+        var events = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += events.Add;
+        transport.EnqueueText("""{"type":"transcript","transcript":"Hello","final":true}""");
+        var fault = await WaitForFaultAsync(session);
+        Assert.Equal("Meta completed the transcript before the end of audio.", fault.InnerException?.Message);
+        Assert.Empty(events);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.FinalizeAsync(CancellationToken.None));
+    }
+
+    private static async Task<Exception> WaitForFaultAsync(MetaRealtimeStreamingSession session)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (session.Fault is null && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        return session.Fault ?? throw new TimeoutException("The session did not fault.");
+    }
+
+    private static async Task<MetaRealtimeStreamingSession> StartDiarizationSessionAsync(ScriptedWebSocketTransport transport)
+    {
+        transport.EnqueueText("""{"sessionId":"session"}""");
+        var session = await MetaRealtimeStreamingSession.CreateConnectedSessionForTests(transport,
+            new MetaRealtimeConnectionOptions("key", MetaPlugin.DefaultTranscriptionModelId, "DIARIZATION", [], []));
+        await transport.NextSentAsync();
+        return session;
     }
 
     [Theory]
@@ -847,37 +985,53 @@ public sealed class MetaPluginTests
         Assert.Equal(expectedFinals, finals);
     }
 
-    [Theory]
-    [InlineData("PUSH_TO_TALK", "Hello world", " world")]
-    [InlineData("DIARIZATION", "Hello world", "Speaker B: world")]
-    [InlineData("DIARIZATION", "Speaker A: Hello\nSpeaker B: world", "Speaker B: world")]
-    [InlineData("DIARIZATION", "", "Speaker B: wor")]
-    public void Collector_TerminalFinalizesOnlyUnreportedTail(string mode, string terminalText, string expected)
+    [Fact]
+    public void Collector_TerminalFinalizesOnlyUnreportedTail()
     {
-        var collector = new MetaRealtimeTranscriptCollector(mode);
+        var collector = new MetaRealtimeTranscriptCollector("PUSH_TO_TALK");
         collector.Apply("""{"type":"speechStart","turnId":1}""");
-        collector.Apply("""{"type":"speaker","label":"A"}""");
         collector.Apply("""{"type":"speechComplete","turnId":1,"transcript":"Hello"}""");
         collector.Apply("""{"type":"speechStart","turnId":2}""");
-        collector.Apply("""{"type":"speaker","label":"B"}""");
         collector.Apply("""{"type":"transcript","transcript":"wor","final":false}""");
-        var terminal = collector.Apply(JsonSerializer.Serialize(new { type = "transcript", transcript = terminalText, final = true }));
-        Assert.Equal(expected, terminal.Transcript?.Text);
+        var terminal = collector.Apply("""{"type":"transcript","transcript":"Hello world","final":true}""");
+        Assert.Equal(" world", terminal.Transcript?.Text);
         Assert.True(terminal.Transcript?.IsFinal);
+        Assert.True(terminal.IsTerminal);
     }
 
     [Fact]
-    public void Collector_LabelsInterimTailBesideSkippedTurnOnEmptyTerminal()
+    public void DiarizationCollector_TreatsFinalFlagAsPartial()
     {
         var collector = new MetaRealtimeTranscriptCollector("DIARIZATION");
-        collector.Apply("""{"type":"speechStart","turnId":2}""");
-        collector.Apply("""{"type":"speaker","label":"B"}""");
-        collector.Apply("""{"type":"speechComplete","turnId":2,"transcript":"Second"}""");
-        collector.Apply("""{"type":"speechStart","turnId":3}""");
-        collector.Apply("""{"type":"speaker","label":"C"}""");
-        collector.Apply("""{"type":"transcript","transcript":"thi","final":false}""");
-        var terminal = collector.Apply("""{"type":"transcript","transcript":"","final":true}""");
-        Assert.Equal("Speaker B: Second\nSpeaker C: thi", terminal.Transcript?.Text);
+        collector.Apply("""{"type":"speechStart","turnId":1}""");
+        collector.Apply("""{"type":"speaker","label":"A"}""");
+        var update = collector.Apply("""{"type":"transcript","transcript":"Hello","final":true}""");
+        Assert.Equal("Speaker A: Hello", update.Transcript?.Text);
+        Assert.False(update.Transcript?.IsFinal);
+        Assert.False(update.IsTerminal);
+        Assert.False(collector.AllTurnsComplete);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"transcript","final":false}""")]
+    [InlineData("""{"type":"transcript","transcript":3,"final":true}""")]
+    [InlineData("""{"type":"speechStart"}""")]
+    [InlineData("""{"type":"speechStart","turnId":"1"}""")]
+    [InlineData("""{"type":"speechComplete","transcript":"Hello"}""")]
+    [InlineData("""{"type":"speechComplete","turnId":1}""")]
+    public void Collector_RejectsTurnEventsMissingRequiredFields(string json)
+    {
+        foreach (var mode in new[] { "PUSH_TO_TALK", "DIARIZATION" })
+            Assert.Throws<JsonException>(() => new MetaRealtimeTranscriptCollector(mode).Apply(json));
+    }
+
+    [Fact]
+    public void Adapter_FaultsOnMalformedTurnEvent()
+    {
+        var adapter = new MetaWebSocketAdapter(new MetaRealtimeConnectionOptions("key", MetaPlugin.DefaultTranscriptionModelId, "DIARIZATION", [], []));
+        adapter.HandleMessage(WebSocketMessageType.Text, "{\"sessionId\":\"session\"}"u8.ToArray());
+        var result = adapter.HandleMessage(WebSocketMessageType.Text, "{\"type\":\"speechComplete\",\"transcript\":\"Hallo\"}"u8.ToArray());
+        Assert.IsType<JsonException>(result.Fault?.InnerException);
     }
 
     [Fact]
@@ -948,23 +1102,22 @@ public sealed class MetaPluginTests
     }
 
     [Fact]
-    public void Collector_MergesTurnsInOrderAndKeepsInterimAfterSpeechEnd()
+    public void DiarizationCollector_HoldsLaterTurnUntilOverlappingEarlierTurnCompletes()
     {
         var collector = new MetaRealtimeTranscriptCollector("DIARIZATION");
-        collector.Apply("""{"type":"speechStart","turnId":2}""");
-        collector.Apply("""{"type":"speaker","label":"B"}""");
-        var later = collector.Apply("""{"type":"speechComplete","turnId":2,"transcript":"Second"}""");
-        Assert.Null(later.Transcript);
         collector.Apply("""{"type":"speechStart","turnId":1}""");
         collector.Apply("""{"type":"speaker","label":"A"}""");
         collector.Apply("""{"type":"transcript","transcript":"Fir","final":false}""");
         var ended = collector.Apply("""{"type":"speechEnd","turnId":1}""");
-        Assert.Equal("Speaker B: Second\nSpeaker A: Fir", ended.Transcript?.Text);
+        Assert.Equal("Speaker A: Fir", ended.Transcript?.Text);
+        collector.Apply("""{"type":"speechStart","turnId":2}""");
+        collector.Apply("""{"type":"speaker","label":"B"}""");
+        var later = collector.Apply("""{"type":"speechComplete","turnId":2,"transcript":"Second"}""");
+        Assert.Null(later.Transcript);
+        Assert.False(collector.AllTurnsComplete);
         var complete = collector.Apply("""{"type":"speechComplete","turnId":1,"transcript":"First"}""");
-        var terminal = collector.Apply(
-            """{"type":"transcript","transcript":"Speaker A: First\nSpeaker B: Second","final":true}""");
-        Assert.Equal("Speaker A: First\nSpeaker B: Second",
-            AccumulateFinals(later, ended, complete, terminal));
+        Assert.Equal("Speaker A: First\nSpeaker B: Second", AccumulateFinals(later, complete));
+        Assert.True(collector.AllTurnsComplete);
     }
 
     [Theory]
@@ -987,32 +1140,28 @@ public sealed class MetaPluginTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Collector_TerminalReleasesTurnsWaitingForEarlierCompletion(bool emptyTerminal)
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(7)]
+    public void DiarizationCollector_ReportsTurnsWhateverTheFirstTurnIdAndGaps(int firstTurnId)
     {
-        var collector = new MetaRealtimeTranscriptCollector("PUSH_TO_TALK");
-        collector.Apply("""{"type":"speechStart","turnId":1}""");
-        var first = collector.Apply("""{"type":"speechComplete","turnId":1,"transcript":"First"}""");
-        var third = collector.Apply("""{"type":"speechComplete","turnId":3,"transcript":"Third"}""");
-        Assert.Null(third.Transcript);
-        var terminal = collector.Apply(JsonSerializer.Serialize(new
-        {
-            type = "transcript", transcript = emptyTerminal ? "" : "First Second Third", final = true,
-        }));
-        Assert.Equal(emptyTerminal ? "First\nThird" : "First\nSecond Third",
-            AccumulateFinals(first, third, terminal));
+        var collector = new MetaRealtimeTranscriptCollector("DIARIZATION");
+        collector.Apply(JsonSerializer.Serialize(new { type = "speechStart", turnId = firstTurnId }));
+        var first = collector.Apply(JsonSerializer.Serialize(new { type = "speechComplete", turnId = firstTurnId, transcript = "First" }));
+        collector.Apply(JsonSerializer.Serialize(new { type = "speechStart", turnId = firstTurnId + 2 }));
+        var third = collector.Apply(JsonSerializer.Serialize(new { type = "speechComplete", turnId = firstTurnId + 2, transcript = "Third" }));
+        Assert.Equal("First\nThird", AccumulateFinals(first, third));
+        Assert.True(collector.AllTurnsComplete);
     }
 
     [Fact]
-    public void Collector_FaultsWhenTerminalReordersEmittedTurns()
+    public void Collector_FaultsWhenEarlierTurnArrivesAfterLaterTurnWasReported()
     {
         var collector = new MetaRealtimeTranscriptCollector("PUSH_TO_TALK");
         var second = collector.Apply("""{"type":"speechComplete","turnId":2,"transcript":"Second"}""");
-        var first = collector.Apply("""{"type":"speechComplete","turnId":1,"transcript":"First"}""");
-        Assert.Equal("First\nSecond", AccumulateFinals(second, first));
-        Assert.Throws<InvalidOperationException>(() => collector.Apply(
-            """{"type":"transcript","transcript":"Second First","final":true}"""));
+        Assert.Equal("Second", second.Transcript?.Text);
+        Assert.Throws<JsonException>(() => collector.Apply(
+            """{"type":"speechComplete","turnId":1,"transcript":"First"}"""));
     }
 
     private static string AccumulateFinals(params MetaRealtimeUpdate[] updates) =>

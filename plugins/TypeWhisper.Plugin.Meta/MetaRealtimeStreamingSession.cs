@@ -64,16 +64,24 @@ internal sealed class MetaRealtimeStreamingSession(WebSocketSessionPump pump) : 
 
 internal sealed class MetaWebSocketAdapter(
     MetaRealtimeConnectionOptions options,
-    IPluginLocalization? localization = null) : IWebSocketSessionAdapter
+    IPluginLocalization? localization = null) : IWebSocketSessionAdapter, IWebSocketCloseAwareAdapter
 {
     private readonly MetaRealtimeTranscriptCollector _collector = new(options.Mode);
 
     // Receive-loop only: HandleMessage is the pump's single reader, so no synchronization is needed.
     private bool _handshakeSeen;
 
+    // Set by BeginFinalizeAsync on the send side before endStream goes out; read on the receive loop.
+    private volatile bool _endStreamSent;
+
     public string ProviderName => "Meta";
     public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Require("sessionId");
-    public WebSocketTerminalPolicy Terminal => WebSocketTerminalPolicy.Require("final transcript");
+
+    // Only PUSH_TO_TALK ends with a final transcript. DIARIZATION completes each turn with
+    // speechComplete, and the session ends when Meta closes normally after endStream.
+    public WebSocketTerminalPolicy Terminal => _collector.UsesDiarization
+        ? WebSocketTerminalPolicy.Require("normal closure after every turn completed")
+        : WebSocketTerminalPolicy.Require("final transcript");
     public WebSocketKeepAlivePolicy? KeepAlive => null;
     public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
 
@@ -92,9 +100,23 @@ internal sealed class MetaWebSocketAdapter(
         ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
             pcm16Audio.IsEmpty ? [] : [new WebSocketOutboundMessage(pcm16Audio.ToArray(), WebSocketMessageType.Binary)]);
 
-    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct) =>
-        ValueTask.FromResult(new WebSocketFinalizePlan(
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
+    {
+        _endStreamSent = true;
+        return ValueTask.FromResult(new WebSocketFinalizePlan(
             [new WebSocketOutboundMessage("{\"type\":\"endStream\"}"u8.ToArray(), WebSocketMessageType.Text)]));
+    }
+
+    public WebSocketInboundResult HandleClose(WebSocketCloseStatus? status, string? description)
+    {
+        if (!_collector.UsesDiarization || !_endStreamSent || status != WebSocketCloseStatus.NormalClosure)
+            return WebSocketInboundResult.Empty;
+
+        return _collector.AllTurnsComplete
+            ? new WebSocketInboundResult([], WebSocketSessionSignal.Terminal)
+            : new WebSocketInboundResult([], Fault: new InvalidOperationException(
+                "Meta closed the realtime session before completing every turn."));
+    }
 
     public WebSocketInboundResult HandleMessage(WebSocketMessageType type, ReadOnlyMemory<byte> completePayload)
     {
@@ -139,12 +161,12 @@ internal sealed class MetaWebSocketAdapter(
                 transcript = transcript with { Text = text };
             }
 
-            var terminal = root.TryGetProperty("type", out var eventType)
-                && eventType.ValueKind == JsonValueKind.String
-                && eventType.GetString() == "transcript"
-                && root.TryGetProperty("final", out var final) && final.ValueKind == JsonValueKind.True;
+            // Audio sent after an early final would be dropped; faulting keeps it for batch fallback.
+            if (update.IsTerminal && !_endStreamSent)
+                throw new InvalidOperationException("Meta completed the transcript before the end of audio.");
+
             return new WebSocketInboundResult(transcript is null ? [] : [transcript],
-                terminal ? WebSocketSessionSignal.Terminal : WebSocketSessionSignal.None);
+                update.IsTerminal ? WebSocketSessionSignal.Terminal : WebSocketSessionSignal.None);
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
@@ -164,9 +186,9 @@ internal sealed class MetaRealtimeTranscriptCollector
         public bool Complete { get; set; }
     }
     private readonly Dictionary<int, Turn> _turns = [];
-    private readonly List<(string Formatted, string Plain)> _reported = [];
-    private int _nextTurnId = 1;
+    private readonly List<string> _reported = [];
     private int? _activeTurnId;
+    private int? _lastReportedTurnId;
     private string _interim = "";
 
     internal MetaRealtimeTranscriptCollector(string mode)
@@ -175,6 +197,9 @@ internal sealed class MetaRealtimeTranscriptCollector
     }
 
     internal bool UsesDiarization { get; }
+
+    internal bool AllTurnsComplete =>
+        _turns.Values.All(turn => turn.Complete) && string.IsNullOrWhiteSpace(_interim);
 
     internal MetaRealtimeUpdate Apply(string json)
     {
@@ -193,16 +218,15 @@ internal sealed class MetaRealtimeTranscriptCollector
         }
 
         var isFinalEvent = false;
+        var isTerminal = false;
         string? finalText = null;
         switch (type)
         {
             case "speechStart":
-                if (TryGetInt(root, "turnId", out var startedTurnId))
-                {
-                    GetOrCreateTurn(startedTurnId);
-                    _activeTurnId = startedTurnId;
-                    _interim = "";
-                }
+                var startedTurnId = GetTurnId(root);
+                GetOrCreateTurn(startedTurnId);
+                _activeTurnId = startedTurnId;
+                _interim = "";
                 break;
 
             case "speaker":
@@ -219,33 +243,36 @@ internal sealed class MetaRealtimeTranscriptCollector
                 break;
 
             case "speechComplete":
-                if (TryGetInt(root, "turnId", out var completedTurnId))
+            {
+                var completedTurnId = GetTurnId(root);
+                var completedText = GetTranscript(root);
+                var turn = GetOrCreateTurn(completedTurnId);
+                if (turn.Reported)
+                    return default;
+                turn.Transcript = completedText;
+                turn.Complete = true;
+                finalText = DrainCompletedTurns();
+                if (_activeTurnId == completedTurnId)
                 {
-                    var turn = GetOrCreateTurn(completedTurnId);
-                    if (turn.Reported)
-                        return default;
-                    turn.Transcript = GetTranscript(root);
-                    turn.Complete = true;
-                    finalText = DrainCompletedTurns();
-                    if (_activeTurnId == completedTurnId)
-                    {
-                        _activeTurnId = null;
-                        _interim = "";
-                    }
-                    isFinalEvent = true;
+                    _activeTurnId = null;
+                    _interim = "";
                 }
+                isFinalEvent = true;
                 break;
+            }
 
             case "transcript":
                 var transcript = GetTranscript(root);
                 var isFinal = root.TryGetProperty("final", out var finalElement)
                     && finalElement.ValueKind is JsonValueKind.True or JsonValueKind.False
                     && finalElement.GetBoolean();
-                if (isFinal)
+                // In DIARIZATION a final flag ends no turn and no stream; speechComplete does.
+                if (isFinal && !UsesDiarization)
                 {
                     finalText = GetUnreportedTerminalText(transcript);
                     _interim = "";
                     isFinalEvent = true;
+                    isTerminal = true;
                 }
                 else
                 {
@@ -262,7 +289,8 @@ internal sealed class MetaRealtimeTranscriptCollector
             string.IsNullOrWhiteSpace(snapshot)
                 ? null
                 : new StreamingTranscriptEvent(snapshot, isFinalEvent),
-            isFinalEvent);
+            isFinalEvent,
+            isTerminal);
     }
 
     private string GetUnreportedTerminalText(string transcript)
@@ -270,44 +298,34 @@ internal sealed class MetaRealtimeTranscriptCollector
         var remaining = transcript;
         if (_reported.Count > 0 && !string.IsNullOrWhiteSpace(transcript))
         {
-            var formatted = string.Join(UsesDiarization ? "\n" : " ",
-                _reported.Select(turn => turn.Formatted));
-            var plain = string.Join(" ", _reported.Select(turn => turn.Plain));
-            var lines = string.Join("\n", _reported.Select(turn => turn.Formatted));
-            if (IsSegmentPrefix(transcript, formatted))
-                remaining = transcript[formatted.Length..];
+            var joined = string.Join(" ", _reported);
+            var lines = string.Join("\n", _reported);
+            if (IsSegmentPrefix(transcript, joined))
+                remaining = transcript[joined.Length..];
             else if (IsSegmentPrefix(transcript, lines))
                 remaining = transcript[lines.Length..];
-            else if (IsSegmentPrefix(transcript, plain))
-                remaining = transcript[plain.Length..];
             else
             {
-                Trace.WriteLine($"Meta terminal transcript mismatch: revised reported final text; reported segments={_reported.Count}; reported length={formatted.Length}; terminal length={transcript.Length}.");
+                Trace.WriteLine($"Meta terminal transcript mismatch: revised reported final text; reported segments={_reported.Count}; reported length={joined.Length}; terminal length={transcript.Length}.");
                 throw new InvalidOperationException("Meta terminal transcript revised previously reported final text.");
             }
         }
         else if (string.IsNullOrWhiteSpace(transcript))
         {
-            // Format the interim per line, as BuildSnapshot does, so a skipped-turn remainder
-            // does not leave the interim line unlabelled next to its labelled neighbours.
-            var interim = string.IsNullOrWhiteSpace(_interim) ? "" : FormatInterim();
             remaining = string.Join("\n", _turns.Values
                 .Where(turn => turn is { Complete: true, Reported: false }
                     && !string.IsNullOrWhiteSpace(turn.Transcript))
                 .OrderBy(turn => turn.Id)
-                .Select(turn => UsesDiarization ? FormatTurn(turn) : turn.Transcript)
-                .Concat(interim.Length == 0 ? [] : new[] { interim }));
+                .Select(turn => turn.Transcript)
+                .Concat(string.IsNullOrWhiteSpace(_interim) ? [] : new[] { _interim }));
         }
 
         var activeTurn = _activeTurnId is { } id ? GetOrCreateTurn(id) : null;
         if (string.IsNullOrWhiteSpace(remaining) || activeTurn?.Reported == true)
             return "";
 
-        if (UsesDiarization || remaining.StartsWith('\n') || remaining.StartsWith('\r'))
-            remaining = remaining.Trim();
-
-        return UsesDiarization && !remaining.StartsWith("Speaker ", StringComparison.OrdinalIgnoreCase)
-            ? FormatText(remaining, activeTurn?.Speaker)
+        return remaining.StartsWith('\n') || remaining.StartsWith('\r')
+            ? remaining.Trim()
             : remaining;
     }
 
@@ -322,18 +340,21 @@ internal sealed class MetaRealtimeTranscriptCollector
             || (reported.Length > 0 && ".!?…。！？".Contains(reported[^1]));
     }
 
+    // Reports completed turns in turnId order up to the first one still open; Meta documents
+    // overlapping turns but not where numbering starts or whether it is contiguous.
     private string DrainCompletedTurns()
     {
         var parts = new List<string>();
-        while (_turns.TryGetValue(_nextTurnId, out var turn) && turn.Complete)
+        foreach (var turn in _turns.Values.Where(turn => !turn.Reported).OrderBy(turn => turn.Id).ToList())
         {
+            if (!turn.Complete)
+                break;
             turn.Reported = true;
-            _nextTurnId++;
+            _lastReportedTurnId = turn.Id;
             if (string.IsNullOrWhiteSpace(turn.Transcript))
                 continue;
-            var formatted = UsesDiarization ? FormatTurn(turn) : turn.Transcript;
-            _reported.Add((formatted, turn.Transcript));
-            parts.Add(formatted);
+            _reported.Add(turn.Transcript);
+            parts.Add(UsesDiarization ? FormatTurn(turn) : turn.Transcript);
         }
 
         return string.Join("\n", parts);
@@ -381,6 +402,9 @@ internal sealed class MetaRealtimeTranscriptCollector
     {
         if (_turns.TryGetValue(id, out var turn))
             return turn;
+        // Final segments are appended, so an earlier turn can no longer be placed before a reported one.
+        if (id < _lastReportedTurnId)
+            throw new JsonException("Meta reported a turn after a later turn was already final.");
         turn = new Turn(id);
         _turns[id] = turn;
         return turn;
@@ -388,18 +412,19 @@ internal sealed class MetaRealtimeTranscriptCollector
 
     private static string GetTranscript(JsonElement root) =>
         root.TryGetProperty("transcript", out var transcriptElement)
-            ? transcriptElement.GetString()?.Trim() ?? ""
-            : "";
+        && transcriptElement.ValueKind == JsonValueKind.String
+            ? transcriptElement.GetString()!.Trim()
+            : throw new JsonException("Meta returned no string transcript in a realtime event.");
 
-    private static bool TryGetInt(JsonElement root, string propertyName, out int value)
-    {
-        value = 0;
-        return root.TryGetProperty(propertyName, out var element)
-            && element.ValueKind == JsonValueKind.Number
-            && element.TryGetInt32(out value);
-    }
+    private static int GetTurnId(JsonElement root) =>
+        root.TryGetProperty("turnId", out var element)
+        && element.ValueKind == JsonValueKind.Number
+        && element.TryGetInt32(out var value)
+            ? value
+            : throw new JsonException("Meta returned no valid turnId in a realtime turn event.");
 }
 
 internal readonly record struct MetaRealtimeUpdate(
     StreamingTranscriptEvent? Transcript,
-    bool IsFinalEvent);
+    bool IsFinalEvent,
+    bool IsTerminal = false);
