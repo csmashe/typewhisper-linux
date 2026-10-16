@@ -258,6 +258,9 @@ public sealed class OpenRouterPlugin
         var transcriptionModels = await FetchTranscriptionModelsAsync(ct);
         if (transcriptionModels.Count > 0)
             SetFetchedTranscriptionModels(transcriptionModels);
+
+        if (llmModels.Count == 0 && transcriptionModels.Count == 0)
+            throw new InvalidOperationException("Failed to fetch models from OpenRouter.");
     }
 
     internal string? ApiKey { get; private set; }

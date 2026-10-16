@@ -27,6 +27,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly Action<Action> _postToUi;
     private readonly Dictionary<string, RunningSettingsAction> _runningActions = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _refreshingModelPlugins = new(StringComparer.Ordinal);
 
     [ObservableProperty]
     private string _headerSummary = "";
@@ -493,7 +494,8 @@ public partial class PluginsSectionViewModel : ObservableObject
         if (!_pluginById.TryGetValue(row.Id, out var loaded)
             || loaded.Instance is not IModelCatalogProvider provider
             || !_pluginManager.IsEnabled(row.Id)
-            || row.IsRefreshingModels)
+            || row.IsRefreshingModels
+            || _refreshingModelPlugins.Contains(row.Id))
         {
             return;
         }
@@ -504,6 +506,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
+        _refreshingModelPlugins.Add(row.Id);
         row.IsRefreshingModels = true;
         row.Status = Loc.Instance["Plugins.RefreshingModels"];
         try
@@ -525,7 +528,9 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
         finally
         {
+            _refreshingModelPlugins.Remove(row.Id);
             row.IsRefreshingModels = false;
+            ApplyRunningState(row.Id, loaded);
         }
     }
 
@@ -700,6 +705,11 @@ public partial class PluginsSectionViewModel : ObservableObject
         row.IsActionRunning = running is not null;
         row.ActivityMessage = running?.Message ?? (running is null ? null : Loc.Instance["Plugins.ActionRunning"]);
         row.ActivityProgress = running?.Progress;
+        row.IsRefreshingModels = _refreshingModelPlugins.Contains(pluginId);
+        if (row.IsRefreshingModels)
+        {
+            row.Status = Loc.Instance["Plugins.RefreshingModels"];
+        }
     }
 
     private async Task<bool> TrySaveFlatSettingsAsync(
