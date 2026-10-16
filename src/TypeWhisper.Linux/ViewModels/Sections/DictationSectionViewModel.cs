@@ -540,6 +540,8 @@ public partial class DictationSectionViewModel : ObservableObject
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
+                    AppSettings.LocalModelAccelerationVulkan when !CanUseVulkan =>
+                        Loc.Instance["Dictation.AccelVulkanNotSupported"],
                     AppSettings.LocalModelAccelerationVulkan =>
                         Loc.Instance["Dictation.AccelVulkanReady"],
                     _ => Loc.Instance["Dictation.AccelAutoStatus"],
