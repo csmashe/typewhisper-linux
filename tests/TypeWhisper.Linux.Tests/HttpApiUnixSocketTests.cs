@@ -21,6 +21,48 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class HttpApiUnixSocketTests
 {
+    [Fact]
+    public async Task TextProcessRoute_IsListedAndRequiresBearer()
+    {
+        Assert.True(HttpApiRoutes.Contains("POST", "/v1/text/process"));
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: false);
+        using var response = await client.PostAsync("/v1/text/process",
+            new StringContent("""{"text":"hello"}""", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("", "Missing JSON body")]
+    [InlineData("{not json", "Invalid JSON body")]
+    [InlineData("{}", "Missing required field: text")]
+    [InlineData("""{"text":"   "}""", "Missing required field: text")]
+    public async Task TextProcessRoute_RejectsInvalidBodiesBeforeProcessing(string body, string error)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var response = await client.PostAsync("/v1/text/process",
+            new StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(error, json.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task TextProcessRoute_RejectsInvalidLanguageSelection()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var response = await client.PostAsync("/v1/text/process",
+            new StringContent("""{"text":"twenty one","language":"not-a-tag"}""", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("invalid_language_selection", json.RootElement.GetProperty("reason").GetString());
+    }
+
     private static readonly string[] s_helloWorld = ["Hello", "World"];
 
     [Fact]

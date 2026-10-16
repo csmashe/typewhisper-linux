@@ -1277,6 +1277,7 @@ public sealed partial class HttpApiService : IDisposable
                     await HandlePutDictionaryCorrectionAsync(context, ct),
                 ("/v1/dictionary/corrections", "DELETE") =>
                     await HandleDeleteDictionaryCorrectionAsync(context, ct),
+                ("/v1/text/process", "POST") => await HandleTextProcessAsync(context, ct),
                 _ => (404, Serialize(new { error = "Not found" })),
             };
 
@@ -1697,6 +1698,117 @@ public sealed partial class HttpApiService : IDisposable
         {
             // Best-effort temp-file cleanup.
         }
+    }
+
+    private sealed record TextProcessApiRequest(
+        string? Text,
+        string? Language,
+        string? AppProcess,
+        string? Url,
+        string? ProfileId
+    );
+
+    /// <summary>
+    ///     Runs raw text through the final dictation pipeline (profile matching, cleanup,
+    ///     snippets, dictionary, formatting) and returns the result. Nothing is inserted or
+    ///     saved. Quality evals use this to score cleanup on fixed inputs; it does not prove
+    ///     the audio-to-delivery path.
+    /// </summary>
+    private async Task<HttpApiResponse> HandleTextProcessAsync(HttpContext context, CancellationToken ct)
+    {
+        var apiRequest = await HttpApiRequestParser.FromHttpContextAsync(context, MaxJsonRequestBytes, ct);
+        if (apiRequest.Body.Length == 0)
+        {
+            return (400, Serialize(new { error = "Missing JSON body" }));
+        }
+
+        TextProcessApiRequest? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<TextProcessApiRequest>(apiRequest.Body.Span, s_jsonOptions);
+        }
+        catch (JsonException)
+        {
+            return (400, Serialize(new { error = "Invalid JSON body" }));
+        }
+
+        if (payload is null || string.IsNullOrWhiteSpace(payload.Text))
+        {
+            return (400, Serialize(new { error = "Missing required field: text" }));
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload.Language))
+        {
+            try
+            {
+                LanguageSelectionResolver.Resolve(payload.Language);
+            }
+            catch (InvalidLanguageSelectionException ex)
+            {
+                return (400, Serialize(new { error = ex.Message, reason = "invalid_language_selection" }));
+            }
+        }
+
+        if (_dictation is null)
+        {
+            return (501, Serialize(new { error = "Text processing is unavailable.", reason = "not_available" }));
+        }
+
+        TextProcessingResult result;
+        try
+        {
+            result = await _dictation.ProcessTextAsync(
+                new TextProcessingRequest(payload.Text, payload.Language, payload.AppProcess, payload.Url, payload.ProfileId),
+                ct
+            );
+        }
+        catch (InvalidLanguageSelectionException ex)
+        {
+            return (400, Serialize(new { error = ex.Message, reason = "invalid_language_selection" }));
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return (404, Serialize(new { error = ex.Message, reason = "profile_not_found" }));
+        }
+        catch (NotSupportedException ex)
+        {
+            return (501, Serialize(new { error = ex.Message, reason = "not_supported" }));
+        }
+        catch (PluginRequestException ex) when (!ct.IsCancellationRequested)
+        {
+            return (502, Serialize(new { error = ex.Message, reason = "provider_failed" }));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (409, Serialize(new { error = ex.Message, reason = "processing_failed" }));
+        }
+
+        return (200, Serialize(new
+        {
+            text = result.Text,
+            raw_text = result.RawText,
+            language = result.Language,
+            profile_id = result.ProfileId,
+            profile_name = result.ProfileName,
+            cleanup_level = result.CleanupLevel.ToString(),
+            engine = result.EngineProviderId,
+            model = result.EngineModelId,
+            steps = result.Steps.Select(step => new
+            {
+                name = step.Name,
+                milliseconds = step.Milliseconds,
+                changed = step.Changed,
+                succeeded = step.Succeeded,
+            }),
+            llm_calls = result.LlmCalls.Select(call => new
+            {
+                stage = call.Stage,
+                provider = call.ProviderId,
+                model = call.ModelId,
+                ran_locally = call.RanLocally,
+                succeeded = call.Succeeded,
+            }),
+        }));
     }
 
     private async Task<HttpApiResponse> HandleTranscribeLocalFileAsync(
