@@ -22,6 +22,8 @@ internal static class ProviderFailureAssertions
             field.SetValue(plugin, client);
             var host = new Mock<IPluginHostServices>();
             host.Setup(h => h.LoadSecretAsync(It.IsAny<string>())).ReturnsAsync(status == 0 ? null : "test-secret-key");
+            // Cloudflare refuses a malformed account ID before any request.
+            host.Setup(h => h.LoadSecretAsync("account-id")).ReturnsAsync(status == 0 ? null : "0123456789abcdef0123456789abcdef");
             host.Setup(h => h.GetSetting<string>(It.IsAny<string>())).Returns((string key) => key switch
             {
                 "baseUrl" or "baseURL" => status == 0 ? "" : "https://example.test",
