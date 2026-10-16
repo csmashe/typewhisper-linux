@@ -1411,6 +1411,7 @@ public sealed partial class HttpApiService : IDisposable
         return backend switch
         {
             TranscriptionAccelerationBackend.NvidiaCuda => "nvidia-cuda",
+            TranscriptionAccelerationBackend.Vulkan => "vulkan",
             _ => "cpu",
         };
     }
