@@ -168,6 +168,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     // drops its writes rather than corrupting the next dictation's context.
     private int _recordingSession;
     private Task? _recordingSnapshotTask;
+    private Task? _recordingUrlRematchTask;
+    private bool _recordingHasUrlProfiles;
     private DateTime _recordingStart;
     private string? _recordingWindowId;
     private bool _silenceStopRequested;
@@ -186,6 +188,21 @@ public sealed partial class DictationOrchestrator : IDisposable
 
     private EventHandler? _toggleHandler;
     private int _toggleGateCloseOutcome;
+
+    internal static bool ShouldRematchBrowserUrl(string? forcedProfileId, IEnumerable<Profile>? profiles)
+    {
+        if (forcedProfileId is not null || profiles is null)
+        {
+            return false;
+        }
+
+        return profiles.Any(p => p.IsEnabled && p.UrlPatterns is { Count: > 0 });
+    }
+
+    internal static TimeSpan ResolveStopUrlWaitBudget(bool hasActiveUrlProfiles)
+    {
+        return hasActiveUrlProfiles ? TimeSpan.FromMilliseconds(400) : TimeSpan.FromMilliseconds(250);
+    }
 
     public DictationOrchestrator(
         HotkeyService hotkey,
@@ -407,6 +424,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         try
         {
             _recordingSnapshotTask?.Wait(TimeSpan.FromMilliseconds(300));
+            _recordingUrlRematchTask?.Wait(TimeSpan.FromMilliseconds(300));
         }
         catch (Exception ex)
         {
@@ -1047,6 +1065,9 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             startedSessionId = sessionId;
 
+            var hasUrlProfiles = ShouldRematchBrowserUrl(forcedProfileId, _profiles.Profiles);
+            _recordingHasUrlProfiles = hasUrlProfiles;
+
             var recordingSnapshotTask = Task.Run(async () =>
             {
                 ActiveWindowSnapshot? initialSnap = null;
@@ -1136,7 +1157,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     Trace.WriteLine(
                         $"[Dictation] Snapshot for session {sessionId} discarded — session no longer active."
                     );
-                    return;
+                    return (InitialSnap: (ActiveWindowSnapshot?)null, AppProcess: (string?)null, InitialMatch: MatchResult.NoMatch, MatchedProfile: (Profile?)null, SessionValid: false);
                 }
 
                 _audio.TrySetWhisperMode(
@@ -1151,8 +1172,24 @@ public sealed partial class DictationOrchestrator : IDisposable
                     new RecordingStartedEvent { AppName = appTitle, AppProcessName = appProcess }
                 );
 
+                return (InitialSnap: initialSnap, AppProcess: appProcess, InitialMatch: initialMatch, MatchedProfile: matchedProfile, SessionValid: true);
+            });
+            _recordingSnapshotTask = recordingSnapshotTask;
+
+            var recordingUrlRematchTask = Task.Run(async () =>
+            {
                 try
                 {
+                    var snapshotResult = await recordingSnapshotTask.ConfigureAwait(false);
+                    if (!snapshotResult.SessionValid)
+                    {
+                        return;
+                    }
+
+                    var initialSnap = snapshotResult.InitialSnap;
+                    var appProcess = snapshotResult.AppProcess;
+                    var initialMatch = snapshotResult.InitialMatch;
+
                     // AT-SPI URL walks can take 2+ seconds on a busy Gmail tree.
                     // The timeout must exceed the walker's budget so a valid URL
                     // isn't discarded on a close race. Dictation is done; user
@@ -1216,7 +1253,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             // A forced profile must not be overridden by a URL
                             // rematch (ManualOverride is the highest MatchKind,
                             // but an ungated Website rematch could displace it).
-                            if (forcedProfileId is null)
+                            if (forcedProfileId is null && hasUrlProfiles)
                             {
                                 var rematch = _profiles.MatchProfile(appProcess, deferredUrl);
                                 if (
@@ -1254,7 +1291,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 }
             });
-            _recordingSnapshotTask = recordingSnapshotTask;
+            _recordingUrlRematchTask = recordingUrlRematchTask;
 
             // Final in-gate re-check: a lock can land during the slow synchronous setup above, and
             // while StartAsync holds the gate a concurrent session-loss discard times out and bails
@@ -5068,40 +5105,40 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         var snapshotTask = _recordingSnapshotTask;
         _recordingSnapshotTask = null;
-        if (snapshotTask is null)
+        var rematchTask = _recordingUrlRematchTask;
+        _recordingUrlRematchTask = null;
+
+        if (snapshotTask is not null)
         {
-            return;
+            try
+            {
+                await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(500));
+            }
+            catch (TimeoutException)
+            {
+                Trace.WriteLine("[Dictation] Active-window snapshot timed out during stop.");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Active-window snapshot wait failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+            }
         }
 
-        try
+        if (rematchTask is not null)
         {
-            // Cover the deferred URL re-match's full background pipeline:
-            //   - initial snapshot         up to 500 ms
-            //   - AT-SPI URL walker        up to 2 500 ms (WalkBudget)
-            //   - verification snapshot    up to 500 ms (matches initial)
-            //   - rematch + lock overhead  small
-            // Worst case ~3.5 s, so 4 s gives margin without being absurd.
-            // Without this, any dictation shorter than the walker's runtime
-            // would advance _recordingSession before the late URL write
-            // lands, and the session-id guard would drop the write —
-            // silently dropping URL-based profile matches for short
-            // browser dictations.
-            //
-            // Cost: stop-to-transcription latency grows by up to ~4 s on
-            // browser tabs when the walker uses its full budget. Non-
-            // browser processes early-return from GetBrowserUrl in
-            // milliseconds and aren't affected. Long dictations (>3 s of
-            // recording) also aren't affected because the walker has
-            // already completed in the background by the time Stop fires.
-            await snapshotTask.WaitAsync(TimeSpan.FromMilliseconds(4000));
-        }
-        catch (TimeoutException)
-        {
-            Trace.WriteLine("[Dictation] Active-window snapshot timed out during stop.");
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine($"[Dictation] Active-window snapshot wait failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+            var budget = ResolveStopUrlWaitBudget(_recordingHasUrlProfiles);
+            try
+            {
+                await rematchTask.WaitAsync(budget);
+            }
+            catch (TimeoutException)
+            {
+                Trace.WriteLine("[Dictation] Deferred URL rematch timed out during stop.");
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Deferred URL rematch wait failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+            }
         }
     }
 

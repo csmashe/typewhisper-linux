@@ -214,6 +214,78 @@ public sealed class AudioRecordingServiceTests
     }
 
     [Fact]
+    public void GetCurrentBuffer_IncrementalResampling_48kHz_MatchesBatchAndStopIncludesAllSamples()
+    {
+        using var service = new AudioRecordingService(_ => { }, () => 0, () => { });
+        service.CaptureSampleRate = 48000;
+        var session = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service.TryStartRecording(whisperModeEnabled: false)
+        );
+
+        var chunk1 = Enumerable.Range(0, 960).Select(i => (float)Math.Sin(2 * Math.PI * 440 * i / 48000)).ToArray();
+        var chunk2 = Enumerable.Range(960, 960).Select(i => (float)Math.Sin(2 * Math.PI * 440 * i / 48000)).ToArray();
+        var chunk3 = Enumerable.Range(1920, 960).Select(i => (float)Math.Sin(2 * Math.PI * 440 * i / 48000)).ToArray();
+
+        service.ProcessAudioBufferForTest(chunk1);
+        var snapshot1 = Assert.IsType<byte[]>(service.GetCurrentBuffer(session));
+        Assert.True(snapshot1.Length > 44);
+
+        service.ProcessAudioBufferForTest(chunk2);
+        var snapshot2 = Assert.IsType<byte[]>(service.GetCurrentBuffer(session));
+        Assert.True(snapshot2.Length > snapshot1.Length);
+
+        var pcm1 = snapshot1[44..];
+        var pcm2 = snapshot2[44..];
+        Assert.Equal(pcm1, pcm2[..pcm1.Length]);
+
+        service.ProcessAudioBufferForTest(chunk3);
+        var finalWav = service.StopRecording(session);
+        Assert.True(finalWav.Length > snapshot2.Length);
+
+        var finalPcm = finalWav[44..];
+        Assert.Equal(pcm2, finalPcm[..pcm2.Length]);
+
+        var allSamples = chunk1.Concat(chunk2).Concat(chunk3).ToArray();
+        var batchResampled = AudioRecordingService.ResampleToSampleRate(allSamples, 48000, 16000);
+        var expectedFinalPcm = batchResampled.Select(AudioRecordingService.ToPcm16).ToArray();
+        var finalSamples = Enumerable.Range(0, finalPcm.Length / 2)
+            .Select(i => BinaryPrimitives.ReadInt16LittleEndian(finalPcm.AsSpan(i * 2, 2)))
+            .ToArray();
+        Assert.Equal(expectedFinalPcm, finalSamples);
+    }
+
+    [Fact]
+    public void GetCurrentBuffer_IntermediatePollsDoNotAlterFinalWavAtStop()
+    {
+        using var service1 = new AudioRecordingService(_ => { }, () => 0, () => { });
+        service1.CaptureSampleRate = 48000;
+        var session1 = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service1.TryStartRecording(whisperModeEnabled: false)
+        );
+
+        var chunk1 = Enumerable.Range(0, 1200).Select(i => (float)Math.Cos(2 * Math.PI * 220 * i / 48000)).ToArray();
+        var chunk2 = Enumerable.Range(1200, 1200).Select(i => (float)Math.Cos(2 * Math.PI * 220 * i / 48000)).ToArray();
+
+        service1.ProcessAudioBufferForTest(chunk1);
+        _ = service1.GetCurrentBuffer(session1);
+        service1.ProcessAudioBufferForTest(chunk2);
+        _ = service1.GetCurrentBuffer(session1);
+        var finalWavWithPolls = service1.StopRecording(session1);
+
+        using var service2 = new AudioRecordingService(_ => { }, () => 0, () => { });
+        service2.CaptureSampleRate = 48000;
+        var session2 = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            service2.TryStartRecording(whisperModeEnabled: false)
+        );
+
+        service2.ProcessAudioBufferForTest(chunk1);
+        service2.ProcessAudioBufferForTest(chunk2);
+        var finalWavWithoutPolls = service2.StopRecording(session2);
+
+        Assert.Equal(finalWavWithoutPolls, finalWavWithPolls);
+    }
+
+    [Fact]
     public void GetCurrentBuffer_GrowingSnapshotsPreserveEverySampleInOrder()
     {
         using var service = new AudioRecordingService(_ => { }, () => 0, () => { });

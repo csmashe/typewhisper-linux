@@ -1446,6 +1446,17 @@ public sealed class SherpaOnnxPlugin
             );
     }
 
+    public static int ResolveDefaultCpuThreads(int processorCount, string? envOverride = null)
+    {
+        var env = envOverride ?? Environment.GetEnvironmentVariable("TYPEWHISPER_SHERPA_THREADS");
+        if (!string.IsNullOrWhiteSpace(env) && int.TryParse(env, out var custom) && custom > 0)
+        {
+            return custom;
+        }
+
+        return Math.Clamp(processorCount / 2, 1, 4);
+    }
+
     private static OfflineRecognizer CreateParakeetRecognizer(string modelDir, string provider)
     {
         var config = new OfflineRecognizerConfig();
@@ -1453,7 +1464,7 @@ public sealed class SherpaOnnxPlugin
         config.ModelConfig.Transducer.Decoder = Path.Join(modelDir, "decoder.int8.onnx");
         config.ModelConfig.Transducer.Joiner = Path.Join(modelDir, "joiner.int8.onnx");
         config.ModelConfig.Tokens = Path.Join(modelDir, "tokens.txt");
-        config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
+        config.ModelConfig.NumThreads = ResolveDefaultCpuThreads(Environment.ProcessorCount);
         config.ModelConfig.Provider = provider;
         config.ModelConfig.Debug = 0;
         config.DecodingMethod = "greedy_search";
@@ -1474,7 +1485,7 @@ public sealed class SherpaOnnxPlugin
         config.ModelConfig.Canary.TgtLang = tgtLang;
         config.ModelConfig.Canary.UsePnc = 1;
         config.ModelConfig.Tokens = Path.Join(modelDir, "tokens.txt");
-        config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
+        config.ModelConfig.NumThreads = ResolveDefaultCpuThreads(Environment.ProcessorCount);
         config.ModelConfig.Provider = provider;
         config.ModelConfig.Debug = 0;
         config.DecodingMethod = "greedy_search";

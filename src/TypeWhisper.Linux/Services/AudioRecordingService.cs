@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using System.Buffers.Binary;
 using PortAudioSharp;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -15,8 +16,14 @@ namespace TypeWhisper.Linux.Services;
 /// </summary>
 public sealed class AudioRecordingService : IDisposable
 {
-    internal sealed class AudioCaptureSession
+    internal sealed class AudioCaptureSession : IDisposable
     {
+        private readonly Lock _resampleLock = new();
+        private readonly MemoryStream _resampledPcmStream = new();
+        private StreamingSampleRateConverter? _resampler;
+        private int _resampledRawSampleCount;
+        private bool _disposed;
+
         internal AudioCaptureSession(long diagnosticId)
         {
             DiagnosticId = diagnosticId;
@@ -25,6 +32,106 @@ public sealed class AudioRecordingService : IDisposable
         internal long DiagnosticId { get; }
 
         public override string ToString() => $"AudioCaptureSession({DiagnosticId})";
+
+        internal byte[] AppendAndGetPcmSnapshot(RecordedAudioSnapshot snapshot, bool isFinal)
+        {
+            lock (_resampleLock)
+            {
+                if (_disposed)
+                {
+                    return [];
+                }
+
+                var newSampleCount = snapshot.SampleCount - _resampledRawSampleCount;
+                if (newSampleCount > 0)
+                {
+                    var newSamples = ExtractNewSamples(snapshot, _resampledRawSampleCount, newSampleCount);
+                    _resampledRawSampleCount = snapshot.SampleCount;
+
+                    if (snapshot.CaptureSampleRate == SampleRate)
+                    {
+                        AppendPcm16Samples(newSamples);
+                    }
+                    else
+                    {
+                        _resampler ??= new StreamingSampleRateConverter(SampleRate);
+                        var converted = _resampler.Append(newSamples, snapshot.CaptureSampleRate);
+                        AppendPcm16Samples(converted);
+                    }
+                }
+
+                if (isFinal && _resampler is not null)
+                {
+                    var trailing = _resampler.Complete();
+                    AppendPcm16Samples(trailing);
+                }
+
+                return _resampledPcmStream.ToArray();
+            }
+        }
+
+        private static float[] ExtractNewSamples(RecordedAudioSnapshot snapshot, int startIndex, int count)
+        {
+            var result = new float[count];
+            var destOffset = 0;
+            var currentPos = 0;
+
+            foreach (var chunk in snapshot.Chunks)
+            {
+                var chunkStart = currentPos;
+                var chunkEnd = currentPos + chunk.Length;
+                currentPos = chunkEnd;
+
+                var overlapStart = Math.Max(chunkStart, startIndex);
+                var overlapEnd = Math.Min(chunkEnd, startIndex + count);
+                if (overlapEnd > overlapStart)
+                {
+                    var copyLength = overlapEnd - overlapStart;
+                    Array.Copy(chunk, overlapStart - chunkStart, result, destOffset, copyLength);
+                    destOffset += copyLength;
+                }
+            }
+
+            return result;
+        }
+
+        private void AppendPcm16Samples(ReadOnlySpan<float> samples)
+        {
+            if (samples.IsEmpty)
+            {
+                return;
+            }
+
+            Span<byte> buffer = stackalloc byte[Math.Min(samples.Length * 2, 4096)];
+            var sampleOffset = 0;
+            while (sampleOffset < samples.Length)
+            {
+                var batchCount = Math.Min(samples.Length - sampleOffset, buffer.Length / 2);
+                for (var i = 0; i < batchCount; i++)
+                {
+                    var pcm = ToPcm16(samples[sampleOffset + i]);
+                    BinaryPrimitives.WriteInt16LittleEndian(buffer.Slice(i * 2, 2), pcm);
+                }
+                _resampledPcmStream.Write(buffer[..(batchCount * 2)]);
+                sampleOffset += batchCount;
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_resampleLock)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _disposed = true;
+                _resampler?.Reset();
+                _resampler = null;
+                _resampledPcmStream.Dispose();
+            }
+        }
     }
 
     private sealed record LiveFrameSubscription(
@@ -32,7 +139,7 @@ public sealed class AudioRecordingService : IDisposable
         Action<float[]> Sink
     );
 
-    private sealed record RecordedAudioSnapshot(
+    internal sealed record RecordedAudioSnapshot(
         float[][] Chunks,
         int SampleCount,
         int CaptureSampleRate
@@ -124,7 +231,7 @@ public sealed class AudioRecordingService : IDisposable
     private int? _selectedDeviceIndex;
     private PaStream? _stream;
     private int _whisperModeEnabled;
-    internal int CaptureSampleRate { get; private set; } = SampleRate;
+    internal int CaptureSampleRate { get; set; } = SampleRate;
 
     // PortAudio is initialized lazily via EnsurePortAudioInitialized, so
     // constructing this service doesn't load the native library and the
@@ -301,7 +408,9 @@ public sealed class AudioRecordingService : IDisposable
             }
 
             Volatile.Write(ref _disposed, 1);
+            var activeSession = Volatile.Read(ref _activeCaptureSession);
             Volatile.Write(ref _activeCaptureSession, null);
+            activeSession?.Dispose();
             Volatile.Write(ref _liveFrameSink, null);
             Volatile.Write(ref _isPreviewing, 0);
             Volatile.Write(ref _isRecording, 0);
@@ -542,8 +651,9 @@ public sealed class AudioRecordingService : IDisposable
 
             // Keep the capture lock through materialization. A new owner cannot
             // clear or reuse the sample list until this WAV is complete.
-            wav = BuildWavFromRecordedAudio(SnapshotRecordedAudio());
+            wav = BuildWavFromSession(session, SnapshotRecordedAudio(), isFinal: true);
             migrationPending = _preferredDeviceMigrationPending;
+            session.Dispose();
         }
 
         // A default-device change may have been deferred while this recording was in
@@ -601,9 +711,15 @@ public sealed class AudioRecordingService : IDisposable
             snapshot = SnapshotRecordedAudio();
         }
 
+        if (snapshot.SampleCount == 0)
+        {
+            return null;
+        }
+
         // The snapshot owns references to immutable chunks. Conversion can run without
         // blocking stop, device control, or a new capture session.
-        return snapshot.SampleCount == 0 ? null : BuildWavFromRecordedAudio(snapshot);
+        var wav = BuildWavFromSession(session, snapshot, isFinal: false);
+        return wav.Length == 0 ? null : wav;
     }
 
     public bool StartPreview()
@@ -1622,6 +1738,62 @@ public sealed class AudioRecordingService : IDisposable
                 CaptureSampleRate
             );
         }
+    }
+
+    private byte[] BuildWavFromSession(
+        AudioCaptureSession session,
+        RecordedAudioSnapshot snapshot,
+        bool isFinal
+    )
+    {
+        _wavMaterializationObserver?.Invoke(_sampleLock.IsHeldByCurrentThread);
+
+        var pcmBytes = session.AppendAndGetPcmSnapshot(snapshot, isFinal);
+        if (pcmBytes.Length == 0)
+        {
+            return [];
+        }
+
+        var outputSampleCount = pcmBytes.Length / 2;
+        if (isFinal)
+        {
+            Trace.WriteLine(
+                $"[AudioRecordingService] Finalized WAV: capturedSamples={snapshot.SampleCount} @ {snapshot.CaptureSampleRate} Hz "
+                + $"({snapshot.SampleCount / (double)snapshot.CaptureSampleRate:F2}s real-time), "
+                + $"outputSamples={outputSampleCount} @ {SampleRate} Hz "
+                + $"({outputSampleCount / (double)SampleRate:F2}s tagged)."
+            );
+        }
+
+        return Pcm16ToWav(pcmBytes, SampleRate);
+    }
+
+    private static byte[] Pcm16ToWav(byte[] pcmBytes, int sampleRate)
+    {
+        const short bitsPerSample = 16;
+        const short channels = 1;
+        var byteRate = sampleRate * channels * bitsPerSample / 8;
+        const int blockAlign = channels * bitsPerSample / 8;
+        var dataSize = pcmBytes.Length;
+
+        using var ms = new MemoryStream(44 + dataSize);
+        using var w = new BinaryWriter(ms);
+        w.Write("RIFF"u8);
+        w.Write(36 + dataSize);
+        w.Write("WAVE"u8);
+        w.Write("fmt "u8);
+        w.Write(16); // fmt chunk size
+        w.Write((short)1); // PCM
+        w.Write(channels);
+        w.Write(sampleRate);
+        w.Write(byteRate);
+        w.Write((short)blockAlign);
+        w.Write(bitsPerSample);
+        w.Write("data"u8);
+        w.Write(dataSize);
+        w.Write(pcmBytes);
+
+        return ms.ToArray();
     }
 
     private byte[] BuildWavFromRecordedAudio(RecordedAudioSnapshot snapshot)

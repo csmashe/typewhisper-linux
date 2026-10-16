@@ -23,13 +23,24 @@ public sealed class NemoCtcModel : IDisposable
         _onDispose = onDispose;
     }
 
+    public static int ResolveDefaultCpuThreads(int processorCount, string? envOverride = null)
+    {
+        var env = envOverride ?? Environment.GetEnvironmentVariable("TYPEWHISPER_SHERPA_THREADS");
+        if (!string.IsNullOrWhiteSpace(env) && int.TryParse(env, out var custom) && custom > 0)
+        {
+            return custom;
+        }
+
+        return Math.Clamp(processorCount / 2, 1, 4);
+    }
+
     public NemoCtcModel(string path)
     {
         if (!File.Exists(path))
             throw new FileNotFoundException("CTC model file is missing.", path);
         OnnxRuntimeNativeLibrary.EnsureRegistered();
         using var options = new SessionOptions();
-        options.IntraOpNumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
+        options.IntraOpNumThreads = ResolveDefaultCpuThreads(Environment.ProcessorCount);
         options.InterOpNumThreads = 1;
         _session = new InferenceSession(path, options);
         Metadata = _session.ModelMetadata.CustomMetadataMap;
