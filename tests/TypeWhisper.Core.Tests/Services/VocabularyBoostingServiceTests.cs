@@ -144,6 +144,26 @@ public class VocabularyBoostingServiceTests
         Assert.Equal("TypeWhisper", result);
     }
 
+    [Theory]
+    [InlineData("update dictation orchestrator.cs", "update DictationOrchestrator.cs")]
+    [InlineData("update dictation orchestrator dot C S", "update DictationOrchestrator.cs")]
+    [InlineData("update dictation orchestrator cs", "update DictationOrchestrator.cs")]
+    public void Apply_PascalCaseFilenameWithExtension_RewritesSpokenVariations(string input, string expected)
+    {
+        var sut = CreateSut(
+            new DictionaryEntry
+            {
+                Id = "manual-dictation-orchestrator",
+                EntryType = DictionaryEntryType.Term,
+                Original = "DictationOrchestrator.cs",
+            }
+        );
+
+        var result = sut.Apply(input);
+
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public void Apply_DisabledTerms_AreIgnored()
     {

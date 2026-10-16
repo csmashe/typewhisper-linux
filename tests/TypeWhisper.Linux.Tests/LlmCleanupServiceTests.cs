@@ -199,6 +199,36 @@ public sealed class LlmCleanupServiceTests
         Assert.Equal(PromptProcessingService.FormatPromptActionInput("Hello there"), provider.LastUserText);
     }
 
+    [Theory]
+    [InlineData(ProfileStylePreset.FormalEmail)]
+    [InlineData(ProfileStylePreset.CasualMessage)]
+    [InlineData(ProfileStylePreset.MeetingNotes)]
+    public async Task CleanAsync_Medium_WithStylePreset_AppendsPresetInstructionsToPrompt(ProfileStylePreset preset)
+    {
+        var provider = new FakeLlmProviderPlugin("styled text");
+        var sut = CreateService([provider]);
+
+        var result = await sut.CleanAsync("uh hello", CleanupLevel.Medium, stylePreset: preset);
+
+        Assert.Equal("styled text", result);
+        Assert.Equal(CleanupService.GetLlmSystemPrompt(CleanupLevel.Medium, preset), provider.LastSystemPrompt);
+    }
+
+    [Fact]
+    public async Task CleanAsync_Light_WithFormalEmail_AppliesDeterministicEmailFormatting()
+    {
+        var sut = CreateService([]);
+
+        var result = await sut.CleanAsync(
+            "hi Rina um can you review the draft today thanks",
+            CleanupLevel.Light,
+            sourceLanguage: "en",
+            stylePreset: ProfileStylePreset.FormalEmail
+        );
+
+        Assert.Equal("Hi Rina,\n\nCan you review the draft today?\n\nThanks.", result);
+    }
+
     [Fact]
     public async Task CleanAsync_Medium_FallsBackToLightWhenNoProviderAvailable()
     {

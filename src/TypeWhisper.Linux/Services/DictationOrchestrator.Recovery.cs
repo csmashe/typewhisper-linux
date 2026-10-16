@@ -69,7 +69,11 @@ public sealed partial class DictationOrchestrator
             NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
             NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
             SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
-            AppFormatter = AppFormatterService.Format,
+            AppFormatter = (text, processName) =>
+            {
+                var formatted = AppFormatterService.Format(text, processName);
+                return ApplyProfileStyleFormatting(context, formatted);
+            },
             TargetProcessName = context.AppProcess,
             DictionaryCorrector = SelectFinalDictionaryCorrector(
                 usedPreviewFallback,
@@ -88,9 +92,9 @@ public sealed partial class DictationOrchestrator
                             string? provider = null;
                             try { provider = _promptProcessing.GetCleanupProviderSelection(); }
                             catch (PluginRequestException) { /* Final cleanup reports the configuration error. */ }
-                            if (draft.MatchesFinal(cleanupLevel, provider))
+                            if (draft.MatchesFinal(cleanupLevel, provider, context.Profile?.StylePreset))
                             {
-                                var reused = await draft.ReuseAsync(text.Trim(), postProcessingLanguage, context.Capture, token);
+                                var reused = await draft.ReuseAsync(text.Trim(), postProcessingLanguage, context.Capture, token, context.Profile?.StylePreset);
                                 if (reused is not null)
                                 {
                                     Trace.WriteLine("[LiveCleanup] Reused matching draft for final cleanup.");
@@ -110,7 +114,8 @@ public sealed partial class DictationOrchestrator
                             context.Capture,
                             timeout: TimeSpan.FromSeconds(context.CleanupTimeoutSeconds),
                             ct: token,
-                            sourceLanguage: postProcessingLanguage
+                            sourceLanguage: postProcessingLanguage,
+                            stylePreset: context.Profile?.StylePreset
                         );
                     },
             SnippetExpander = text =>

@@ -49,16 +49,47 @@ public static partial class DeveloperFormattingService
         }
 
         var formatted = text;
+        formatted = NormalizeSpokenFileExtensions(formatted);
         foreach (var (pattern, replacement) in s_symbolReplacements)
         {
             formatted = pattern.Replace(formatted, replacement);
         }
 
         formatted = ApplyContextualSymbolReplacements(formatted);
+        formatted = NormalizeSpokenFileExtensions(formatted);
         formatted = FlagWhitespaceRegex().Replace(formatted, "--");
         formatted = SpaceAroundSymbolsRegex().Replace(formatted, "$1");
         formatted = PunctuationLeadingSpaceRegex().Replace(formatted, "$1");
-        return RepeatedWhitespaceRegex().Replace(formatted, " ").Trim();
+        formatted = RepeatedWhitespaceRegex().Replace(formatted, " ").Trim();
+        return NormalizeSpokenFileExtensions(formatted);
+    }
+
+    public static string NormalizeSpokenFileExtensions(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return text;
+        }
+
+        return SpokenFileExtensionRegex().Replace(text, match =>
+        {
+            var preceding = match.Groups["preceding"].Value;
+            var extRaw = match.Groups["ext"].Value.Replace(" ", "").ToLowerInvariant();
+            var ext = extRaw switch
+            {
+                "cs" or "csharp" => ".cs",
+                "ts" => ".ts",
+                "js" => ".js",
+                "py" => ".py",
+                "md" => ".md",
+                "json" => ".json",
+                "yml" => ".yml",
+                "yaml" => ".yaml",
+                _ => null,
+            };
+
+            return ext is not null ? $"{preceding}{ext}" : match.Value;
+        });
     }
 
     private static string ApplyContextualSymbolReplacements(string text)
@@ -127,6 +158,12 @@ public static partial class DeveloperFormattingService
     {
         return value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..];
     }
+
+    [GeneratedRegex(
+        @"(?<preceding>\b[A-Za-z0-9_-]+)\s*(?:(?:\bdot\b|\.)\s*)(?<ext>c\s*sharp|j\s*s\s*o\s*n|y\s*a\s*m\s*l|y\s*m\s*l|c\s*s|t\s*s|j\s*s|p\s*y|m\s*d)\b",
+        RegexOptions.IgnoreCase
+    )]
+    private static partial Regex SpokenFileExtensionRegex();
 
     [GeneratedRegex(@"\bdash\s+dash\b", RegexOptions.IgnoreCase)]
     private static partial Regex DashDashRegex();

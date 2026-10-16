@@ -44,7 +44,8 @@ public sealed class LlmCleanupService
         CancellationToken ct = default,
         string? sourceLanguage = null,
         string? providerOverride = null,
-        bool preparedLightText = false
+        bool preparedLightText = false,
+        ProfileStylePreset? stylePreset = null
     )
     {
         ct.ThrowIfCancellationRequested();
@@ -55,10 +56,10 @@ public sealed class LlmCleanupService
             case CleanupLevel.None:
                 return text;
             case CleanupLevel.Light:
-                return _cleanup.Clean(text, CleanupLevel.Light, sourceLanguage);
+                return _cleanup.Clean(text, CleanupLevel.Light, sourceLanguage, stylePreset);
         }
 
-        var lightText = preparedLightText ? text : PrepareLiveInput(text, sourceLanguage);
+        var lightText = preparedLightText ? text : PrepareLiveInput(text, sourceLanguage, stylePreset);
         if (_promptProcessing.HasNoProviderForRequest(providerOverride))
         {
             await NotifyStatusAsync(
@@ -75,7 +76,7 @@ public sealed class LlmCleanupService
 
         try
         {
-            var prompt = CleanupService.GetLlmSystemPrompt(level);
+            var prompt = CleanupService.GetLlmSystemPrompt(level, stylePreset);
             var cleaned = await ProcessWithinBudgetAsync(
                 prompt,
                 lightText,
@@ -134,8 +135,8 @@ public sealed class LlmCleanupService
         }
     }
 
-    internal string PrepareLiveInput(string text, string? language) =>
-        _cleanup.Clean(text, CleanupLevel.Light, language);
+    internal string PrepareLiveInput(string text, string? language, ProfileStylePreset? stylePreset = null) =>
+        _cleanup.Clean(text, CleanupLevel.Light, language, stylePreset);
 
     // Bound the caller's wait even if a plugin ignores cancellation. The gate stays held
     // until the provider settles, so later dictations cannot accumulate abandoned requests.

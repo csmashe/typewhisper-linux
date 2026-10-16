@@ -12,10 +12,10 @@ namespace TypeWhisper.Core.Services;
 public sealed partial class CleanupService
 {
     public const string MediumSystemPrompt =
-        "Improve readability while preserving meaning, facts, tone, and terminology. Remove filled pauses and accidental repetitions. Resolve explicit self-corrections using the speaker's latest intent. Preserve names, numbers, negation, code, and quoted text. Preserve meaningful uses of words such as like, well, and you know. Do not invent endings for unfinished thoughts. Do not add new information. Return only the cleaned text.";
+        "Improve readability while preserving meaning, facts, tone, and terminology. Remove filled pauses and accidental repetitions. Resolve explicit self-corrections and repair markers (such as scratch that, no wait, never mind, cancel that, I mean, actually) by dropping the retracted phrase or instruction completely and keeping only the corrected intent. Preserve names, numbers, negation, code, and quoted text. Preserve meaningful uses of words such as like, well, and you know. Do not invent endings for unfinished thoughts. Do not add new information. Return only the cleaned text.";
 
     public const string HighSystemPrompt =
-        "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Remove filled pauses and accidental repetitions. Resolve explicit self-corrections using the speaker's latest intent. Preserve names, numbers, negation, code, and quoted text. Preserve meaningful uses of words such as like, well, and you know. Do not invent endings for unfinished thoughts. Do not add new information. Return only the rewritten text.";
+        "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Remove filled pauses and accidental repetitions. Resolve explicit self-corrections and repair markers (such as scratch that, no wait, never mind, cancel that, I mean, actually) by dropping the retracted phrase or instruction completely and keeping only the corrected intent. Preserve names, numbers, negation, code, and quoted text. Preserve meaningful uses of words such as like, well, and you know. Do not invent endings for unfinished thoughts. Do not add new information. Return only the rewritten text.";
 
     // Common filler/connective words that shouldn't seed a single-word bullet list. Cached once
     // (OrdinalIgnoreCase) because IsConservativeSingleWordBulletList probes it per candidate word.
@@ -35,10 +35,29 @@ public sealed partial class CleanupService
         "with",
     };
 
+    private static readonly HashSet<string> s_determinerOrVerbStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a",
+        "an",
+        "the",
+        "this",
+        "that",
+        "to",
+        "please",
+        "just",
+        "dont",
+        "don't",
+    };
+
     // kept instance: injected as a DI/test seam by callers
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
-    public string Clean(string text, CleanupLevel level, string? sourceLanguage = null)
+    public string Clean(
+        string text,
+        CleanupLevel level,
+        string? sourceLanguage = null,
+        ProfileStylePreset? stylePreset = null
+    )
     {
         if (level == CleanupLevel.None || string.IsNullOrWhiteSpace(text))
         {
@@ -47,17 +66,17 @@ public sealed partial class CleanupService
 
         return level switch
         {
-            CleanupLevel.Light => CleanLight(text, sourceLanguage),
+            CleanupLevel.Light => CleanLight(text, sourceLanguage, stylePreset),
             // The Linux service adds the provider-backed pass after these local rules.
-            CleanupLevel.Medium or CleanupLevel.High => CleanLight(text, sourceLanguage),
+            CleanupLevel.Medium or CleanupLevel.High => CleanLight(text, sourceLanguage, stylePreset),
             _ => text,
         };
     }
 
-    public static string GetLlmSystemPrompt(CleanupLevel level)
+    public static string GetLlmSystemPrompt(CleanupLevel level, ProfileStylePreset? stylePreset = null)
     {
         // ReSharper disable once SwitchExpressionHandlesSomeKnownEnumValuesWithExceptionInDefault
-        return level switch
+        var basePrompt = level switch
         {
             CleanupLevel.Medium => MediumSystemPrompt,
             CleanupLevel.High => HighSystemPrompt,
@@ -67,9 +86,24 @@ public sealed partial class CleanupService
                 "Only Medium and High cleanup use LLM prompts."
             ),
         };
+
+        return stylePreset switch
+        {
+            ProfileStylePreset.FormalEmail => basePrompt
+                + " Format as a readable email with finished sentences, a comma and paragraph break after a greeting (such as 'Hi Name,'), question marks on questions, and a paragraph break before a closing sign-off (such as 'Thanks.'), without inventing a subject line or sender name.",
+            ProfileStylePreset.CasualMessage => basePrompt
+                + " Keep a natural, casual chat tone with clean sentence punctuation.",
+            ProfileStylePreset.MeetingNotes => basePrompt
+                + " When the speaker dictates an explicit list (such as 'first... second... third...'), format it as a clean numbered or bulleted list without adding extra items.",
+            _ => basePrompt,
+        };
     }
 
-    private static string CleanLight(string text, string? sourceLanguage)
+    private static string CleanLight(
+        string text,
+        string? sourceLanguage,
+        ProfileStylePreset? stylePreset = null
+    )
     {
         var cleaned = text.Trim();
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
@@ -89,7 +123,7 @@ public sealed partial class CleanupService
         });
         cleaned = ApplyBacktrack(cleaned);
         cleaned = ApplySpokenPunctuation(cleaned);
-        cleaned = ApplySmartFormatting(cleaned);
+        cleaned = ApplySmartFormatting(cleaned, stylePreset);
         // Re-strip leading/trailing noise because spoken-punctuation and backtrack transforms
         // can introduce new noise at the edges (e.g. a leading comma after "scratch that").
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
@@ -105,12 +139,45 @@ public sealed partial class CleanupService
     private static string ApplyBacktrack(string text)
     {
         var cleaned = ScratchThatWholeUtteranceRegex().Replace(text, "");
-        cleaned = ScratchThatReplacementRegex().Replace(cleaned, "${replacement}");
+        cleaned = ApplyRepairMarkerReplacement(cleaned);
         cleaned = OneWordCorrectionRegex().Replace(cleaned, "${prefix}${replacement}${suffix}");
         return cleaned;
     }
 
-    private static string ApplySmartFormatting(string text)
+    private static string ApplyRepairMarkerReplacement(string text)
+    {
+        return RepairMarkerReplacementRegex().Replace(text, match =>
+        {
+            var clause = match.Groups["clause"].Value;
+            var words = WordRegex().Matches(clause);
+            if (words.Count < 2)
+            {
+                return match.Value;
+            }
+
+            var marker = match.Groups["marker"].Value;
+            var lastWord = words[^1].Value;
+            if (marker.StartsWith("scratch", StringComparison.OrdinalIgnoreCase)
+                && s_determinerOrVerbStopWords.Contains(lastWord))
+            {
+                return match.Value;
+            }
+
+            var replacement = match.Groups["replacement"].Value;
+            if (match.Index > 0)
+            {
+                var before = text[..match.Index].TrimEnd();
+                if (before.Length > 0 && before[^1] is '.' or '!' or '?' or '\n')
+                {
+                    replacement = ApplyBasicSentenceCasing(replacement);
+                }
+            }
+
+            return replacement;
+        });
+    }
+
+    private static string ApplySmartFormatting(string text, ProfileStylePreset? stylePreset = null)
     {
         var bullets = TryFormatSpokenBulletList(text);
         if (bullets is not null)
@@ -119,7 +186,21 @@ public sealed partial class CleanupService
         }
 
         var numbered = TryFormatSpokenNumberedList(text);
-        return numbered ?? text;
+        if (numbered is not null)
+        {
+            return numbered;
+        }
+
+        if (stylePreset == ProfileStylePreset.FormalEmail)
+        {
+            var email = TryFormatFormalEmail(text);
+            if (email is not null)
+            {
+                return email;
+            }
+        }
+
+        return text;
     }
 
     private static string ApplySpokenPunctuation(string text)
@@ -251,6 +332,73 @@ public sealed partial class CleanupService
 
     private static string? TryFormatSpokenNumberedList(string text)
     {
+        var ordinal = TryFormatOrdinalNumberedList(text);
+        if (ordinal is not null)
+        {
+            return ordinal;
+        }
+
+        return TryFormatCardinalNumberedList(text);
+    }
+
+    private static string? TryFormatOrdinalNumberedList(string text)
+    {
+        var matches = OrdinalListMarkerRegex().Matches(text);
+        if (matches.Count < 2)
+        {
+            return null;
+        }
+
+        var expected = 1;
+        var items = new List<string>();
+
+        for (var i = 0; i < matches.Count; i++)
+        {
+            var number = SpokenOrdinalToInt(matches[i].Value);
+            if (number != expected)
+            {
+                return null;
+            }
+
+            var itemStart = matches[i].Index + matches[i].Length;
+            var itemEnd = i + 1 < matches.Count ? matches[i + 1].Index : text.Length;
+            var item = text[itemStart..itemEnd]
+                .Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+            if (item.Length == 0)
+            {
+                return null;
+            }
+
+            item = CapitalizeFirstLetter(item);
+            if (i == matches.Count - 1 && !item.EndsWith('.') && !item.EndsWith('!') && !item.EndsWith('?'))
+            {
+                item += ".";
+            }
+
+            items.Add(item);
+            expected++;
+        }
+
+        if (items.Count < 2)
+        {
+            return null;
+        }
+
+        var intro = "";
+        if (matches[0].Index > 0)
+        {
+            var prefix = text[..matches[0].Index].Trim(' ', '\t', ',', ';', ':', '.', '-', '\r', '\n');
+            if (!string.IsNullOrWhiteSpace(prefix))
+            {
+                intro = ApplyBasicSentenceCasing(prefix) + ":\n";
+            }
+        }
+
+        return intro + string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
+    }
+
+    private static string? TryFormatCardinalNumberedList(string text)
+    {
         var matches = NumberedListMarkerRegex().Matches(text);
         if (matches.Count < 2 || matches[0].Index != 0)
         {
@@ -283,6 +431,106 @@ public sealed partial class CleanupService
 
         return items.Count < 2 ? null 
             : string.Join('\n', items.Select((item, index) => $"{index + 1}. {item}"));
+    }
+
+    private static string? TryFormatFormalEmail(string text)
+    {
+        var trimmed = text.Trim();
+        var greetingMatch = EmailGreetingRegex().Match(trimmed);
+        if (!greetingMatch.Success)
+        {
+            return null;
+        }
+
+        var greeting = CapitalizeFirstLetter(greetingMatch.Groups["greeting"].Value.ToLowerInvariant()) + " "
+            + CapitalizeFirstLetter(greetingMatch.Groups["name"].Value) + ",";
+
+        var remainder = trimmed[greetingMatch.Length..].Trim();
+        if (string.IsNullOrEmpty(remainder))
+        {
+            return greeting;
+        }
+
+        string signoff;
+        string body;
+
+        var signoffMatch = EmailSignoffRegex().Match(remainder);
+        if (signoffMatch.Success)
+        {
+            var rawSignoff = signoffMatch.Groups["signoff"].Value;
+            signoff = CapitalizeWords(rawSignoff) + ".";
+            body = remainder[..signoffMatch.Index].Trim(' ', '\t', ',', ';', ':', '-', '\r', '\n');
+        }
+        else
+        {
+            signoff = "";
+            body = remainder;
+        }
+
+        if (body.Length > 0)
+        {
+            body = ApplyBasicSentenceCasing(body);
+            if (!body.EndsWith('.') && !body.EndsWith('!') && !body.EndsWith('?'))
+            {
+                body += QuestionStartRegex().IsMatch(body) ? "?" : ".";
+            }
+        }
+
+        if (signoff.Length > 0 && body.Length > 0)
+        {
+            return $"{greeting}\n\n{body}\n\n{signoff}";
+        }
+
+        if (body.Length > 0)
+        {
+            return $"{greeting}\n\n{body}";
+        }
+
+        if (signoff.Length > 0)
+        {
+            return $"{greeting}\n\n{signoff}";
+        }
+
+        return greeting;
+    }
+
+    private static string CapitalizeFirstLetter(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        return char.ToUpperInvariant(value[0]) + value[1..];
+    }
+
+    private static string CapitalizeWords(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', words.Select(CapitalizeFirstLetter));
+    }
+
+    private static int SpokenOrdinalToInt(string ordinal)
+    {
+        return ordinal.ToLowerInvariant() switch
+        {
+            "first" => 1,
+            "second" => 2,
+            "third" => 3,
+            "fourth" => 4,
+            "fifth" => 5,
+            "sixth" => 6,
+            "seventh" => 7,
+            "eighth" => 8,
+            "ninth" => 9,
+            "tenth" => 10,
+            _ => 0,
+        };
     }
 
     private static int SpokenNumberToInt(string number)
@@ -347,7 +595,7 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"\s+([,.;:!?])")]
     private static partial Regex WhitespaceBeforePunctuationRegex();
 
-    [GeneratedRegex(",{2,}")]
+    [GeneratedRegex(@",{2,}")]
     private static partial Regex DuplicateCommaRegex();
 
     [GeneratedRegex(@"^[\s,.;:!?]+")]
@@ -356,21 +604,41 @@ public sealed partial class CleanupService
     [GeneratedRegex(@"[\s,;:-]+$")]
     private static partial Regex TrailingNoiseRegex();
 
-    [GeneratedRegex(@"(?i)^\s*scratch\s+that\s*$")]
+    [GeneratedRegex(@"(?i)^\s*(?:scratch\s+that|cancel\s+that|never\s+mind)\s*$")]
     private static partial Regex ScratchThatWholeUtteranceRegex();
 
     [GeneratedRegex(
-        @"(?is)^.+?\bscratch\s+that\b[\s,.;:!?-]+(?<replacement>(?:i|we|let's|lets|please|the|a|an|this|that)\b.+)$"
+        @"(?is)(?:^|(?<=[\n.!?]\s*))(?<clause>[^\n.!?]+?)\s*[,;:-]*\s*\b(?<marker>scratch\s+that|no,?\s+wait|never\s+mind|cancel\s+that)\b[\s,.;:!?-]+(?<replacement>[A-Za-z0-9].*)$"
     )]
-    private static partial Regex ScratchThatReplacementRegex();
+    private static partial Regex RepairMarkerReplacementRegex();
 
     [GeneratedRegex(
-        @"(?is)\b(?<prefix>.*\s)(?<original>[A-Za-z][A-Za-z'-]*)\s+(?:actually|i\s+mean)\s+(?<replacement>[A-Za-z][A-Za-z'-]*)(?<suffix>[.?!]?)$"
+        @"(?is)\b(?<prefix>(?:.*\s)?)(?:(?<original>[A-Za-z0-9][A-Za-z0-9'-]*)\s+(?<noun>[A-Za-z][A-Za-z'-]*)\s*[,;:-]*\s+(?:actually|i\s+mean)\s*[,;:-]*\s+(?<replacement>[A-Za-z0-9][A-Za-z0-9'-]*\s+\k<noun>)|(?<original>[A-Za-z0-9][A-Za-z0-9'-]*)\s*[,;:-]*\s+(?:actually|i\s+mean)\s*[,;:-]*\s+(?<replacement>[A-Za-z0-9][A-Za-z0-9'-]*))(?<suffix>[.?!]?)$"
     )]
     private static partial Regex OneWordCorrectionRegex();
 
+    [GeneratedRegex(@"(?i)\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b")]
+    private static partial Regex OrdinalListMarkerRegex();
+
     [GeneratedRegex(@"(?i)\b(?:one|two|three|four|five|six|seven|eight|nine)\b")]
     private static partial Regex NumberedListMarkerRegex();
+
+    [GeneratedRegex(
+        @"^(?i:(?<greeting>hi|hello|dear|hey))\s+(?<name>(?:[A-Z][a-z'-]+|[a-z'-]+)(?:\s+[A-Z][a-z'-]+)?)(?:[\s,]+|$)"
+    )]
+    private static partial Regex EmailGreetingRegex();
+
+    [GeneratedRegex(
+        @"(?:[\s,.]+|\b)(?<signoff>thanks|thank\s+you|best\s+regards|warm\s+regards|kind\s+regards|regards|cheers|sincerely|best)[.!]?\s*$",
+        RegexOptions.IgnoreCase
+    )]
+    private static partial Regex EmailSignoffRegex();
+
+    [GeneratedRegex(
+        @"^(?:can|could|would|will|should|do|does|did|is|are|am|was|were|have|has|had|what|where|when|why|how|who|whom|which)\b",
+        RegexOptions.IgnoreCase
+    )]
+    private static partial Regex QuestionStartRegex();
 
     [GeneratedRegex(
         @"(?i)\b(?<mark>comma|period|full\s+stop|question\s+mark|exclamation\s+(?:mark|point)|colon|semicolon)\b"

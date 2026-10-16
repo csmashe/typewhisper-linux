@@ -5430,6 +5430,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         var level = profile is null ? settings.CleanupLevel
             : profile.CleanupLevelOverride ?? ProfileStylePresetService.Resolve(profile.StylePreset).CleanupLevel;
         var language = LanguageSelectionResolver.ResolveOrAutomatic(profile?.InputLanguage, settings.Language).LanguageTag;
+        var stylePreset = profile?.StylePreset;
         if (rawText.Length > 8192 || !settings.LiveCleanupEnabled || level < CleanupLevel.Medium || action is not null
             || string.Equals(profile?.SelectedTask ?? settings.TranscriptionTask, "translate", StringComparison.OrdinalIgnoreCase)
             || !string.IsNullOrWhiteSpace(profile?.TranslationTarget ?? settings.TranslationTargetLanguage))
@@ -5448,7 +5449,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             lock (_liveCleanupLock)
             {
                 if (_liveCleanupSessionVersion != sessionVersion) return;
-                if (_liveCleanupDraft is null || !_liveCleanupDraft.Matches(level, language, provider))
+                if (_liveCleanupDraft is null || !_liveCleanupDraft.Matches(level, language, provider, stylePreset))
                 {
                     _liveCleanupDraft?.Dispose();
                     LiveCleanupDraft? newDraft = null;
@@ -5458,7 +5459,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             if (ReferenceEquals(_liveCleanupDraft, newDraft) && _settings.Current.LiveCleanupEnabled
                                 && _liveCleanupSessionVersion == sessionVersion && _audio.IsRecordingOwnedBy(captureSession))
                                 SetOverlayState(state => state with { PartialText = output });
-                        });
+                        }, stylePreset);
                     _liveCleanupDraft = newDraft;
                 }
                 _liveCleanupDraft.Submit(rawText.Trim());

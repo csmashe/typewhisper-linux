@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
@@ -13,7 +14,7 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public sealed class VocabularyBoostingService : IVocabularyBoostingService
 {
-    private const int MaxWindowTokens = 4; // sliding window of up to 4 words checked against each term
+    private const int MaxWindowTokens = 6; // sliding window of up to 6 words checked against each term
     private const int MaxReplacements = 10; // safety cap to avoid runaway substitutions on long transcripts
     private const double AmbiguityMargin = 0.08; // discard best candidate when the runner-up is within this score gap
 
@@ -244,11 +245,10 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
                 );
 
                 var best = scoredCandidates[0];
-                var secondScore =
-                    scoredCandidates.Count > 1
-                        ? scoredCandidates[1].Score
-                        : double.NegativeInfinity;
-                if (scoredCandidates.Count > 1 && best.Score - secondScore < AmbiguityMargin)
+                var second = scoredCandidates
+                    .Skip(1)
+                    .FirstOrDefault(c => !string.Equals(c.Term.OutputText, best.Term.OutputText, StringComparison.Ordinal));
+                if (second is not null && best.Score - second.Score < AmbiguityMargin)
                 {
                     continue;
                 }
@@ -389,6 +389,12 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
             aliases.Add(entry.Replacement.Trim());
         }
 
+        ExpandCodeAndFilenameAliases(aliases, entry.Original.Trim());
+        if (!string.IsNullOrWhiteSpace(entry.Replacement))
+        {
+            ExpandCodeAndFilenameAliases(aliases, entry.Replacement.Trim());
+        }
+
         var isPack = entry.Id.StartsWith("pack:", StringComparison.Ordinal);
         foreach (var alias in aliases)
         {
@@ -412,6 +418,48 @@ public sealed class VocabularyBoostingService : IVocabularyBoostingService
                 GetFirstAlphaNumeric(normalized),
                 GetLastAlphaNumeric(normalized)
             );
+        }
+    }
+
+    private static void ExpandCodeAndFilenameAliases(HashSet<string> aliases, string text)
+    {
+        var lastDot = text.LastIndexOf('.');
+        string stem;
+        string? ext = null;
+        if (lastDot > 0 && lastDot < text.Length - 1 && !text[..lastDot].Contains(' '))
+        {
+            stem = text[..lastDot];
+            ext = text[lastDot..]; // e.g. ".cs"
+        }
+        else
+        {
+            stem = text;
+        }
+
+        var spacedStem = Regex.Replace(stem, @"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ");
+        var hasCamelCase = !string.Equals(spacedStem, stem, StringComparison.Ordinal);
+
+        if (ext is not null)
+        {
+            var extNoDot = ext.TrimStart('.');
+            var extSpaced = string.Join(' ', extNoDot.ToCharArray());
+
+            // e.g. "dictation orchestrator.cs"
+            aliases.Add($"{spacedStem}{ext}");
+            // e.g. "dictation orchestrator dot c s"
+            aliases.Add($"{spacedStem} dot {extSpaced}");
+            // e.g. "dictation orchestrator cs"
+            aliases.Add($"{spacedStem} {extNoDot}");
+
+            if (hasCamelCase)
+            {
+                aliases.Add($"{stem} dot {extSpaced}");
+                aliases.Add($"{stem} {extNoDot}");
+            }
+        }
+        else if (hasCamelCase)
+        {
+            aliases.Add(spacedStem);
         }
     }
 

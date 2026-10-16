@@ -48,4 +48,23 @@ public sealed class DeveloperFormattingServiceTests
 
         Assert.Equal(input, result);
     }
+
+    [Theory]
+    [InlineData("update dictation orchestrator dot C S", "update dictation orchestrator.cs")]
+    [InlineData("update DictationOrchestrator.C S", "update DictationOrchestrator.cs")]
+    [InlineData("update dictation orchestrator dot c sharp", "update dictation orchestrator.cs")]
+    [InlineData("open file dot T S", "open file.ts")]
+    [InlineData("edit component.T S", "edit component.ts")]
+    [InlineData("create server dot J S", "create server.js")]
+    [InlineData("run test dot P Y", "run test.py")]
+    [InlineData("see readme dot M D", "see readme.md")]
+    [InlineData("parse package dot J S O N", "parse package.json")]
+    [InlineData("edit config dot Y M L", "edit config.yml")]
+    [InlineData("review workflow dot Y A M L", "review workflow.yaml")]
+    public void Format_NormalizesSpokenFileExtensions(string input, string expected)
+    {
+        var result = DeveloperFormattingService.Format(input);
+
+        Assert.Equal(expected, result);
+    }
 }

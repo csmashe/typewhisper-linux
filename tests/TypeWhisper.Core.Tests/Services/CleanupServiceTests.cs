@@ -208,4 +208,83 @@ public sealed class CleanupServiceTests
         Assert.Contains("Rewrite as concise polished prose", result);
         Assert.Contains("Do not add new information", result);
     }
+
+    [Fact]
+    public void Clean_Light_AppliesRepairs04_ScratchThatImperativeReplacement()
+    {
+        var result = _sut.Clean(
+            "send the report tomorrow scratch that save it as a draft",
+            CleanupLevel.Light
+        );
+
+        Assert.Equal("Save it as a draft", result);
+    }
+
+    [Theory]
+    [InlineData("Send the report, no wait, save it as a draft", "Save it as a draft")]
+    [InlineData("send the report tomorrow no, wait, save it as a draft", "Save it as a draft")]
+    [InlineData("send the report tomorrow never mind save it as a draft", "Save it as a draft")]
+    [InlineData("send the report tomorrow cancel that save it as a draft", "Save it as a draft")]
+    public void Clean_Light_AppliesRepairMarkers_ReplacesRetractedClause(string input, string expected)
+    {
+        var result = _sut.Clean(input, CleanupLevel.Light);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void Clean_Light_AppliesRepairs02_OneWordCorrectionWithRepeatedNoun()
+    {
+        var result = _sut.Clean(
+            "send 47 files I mean 74 files",
+            CleanupLevel.Light
+        );
+
+        Assert.Equal("Send 74 files", result);
+    }
+
+    [Fact]
+    public void Clean_Light_AppliesProfiles01_FormalEmailGreetingAndSignoff()
+    {
+        var result = _sut.Clean(
+            "hi Rina um can you review the draft today thanks",
+            CleanupLevel.Light,
+            "en",
+            ProfileStylePreset.FormalEmail
+        );
+
+        Assert.Equal("Hi Rina,\n\nCan you review the draft today?\n\nThanks.", result);
+    }
+
+    [Fact]
+    public void Clean_Light_AppliesProfiles03_OrdinalNumberedListWithIntroClause()
+    {
+        var result = _sut.Clean(
+            "we need three things first tests second logs third benchmarks",
+            CleanupLevel.Light
+        );
+
+        Assert.Equal("We need three things:\n1. Tests\n2. Logs\n3. Benchmarks.", result);
+    }
+
+    [Fact]
+    public void GetLlmSystemPrompt_ContainsExplicitRepairMarkers()
+    {
+        var medium = CleanupService.GetLlmSystemPrompt(CleanupLevel.Medium);
+        var high = CleanupService.GetLlmSystemPrompt(CleanupLevel.High);
+
+        Assert.Contains("Resolve explicit self-corrections and repair markers (such as scratch that, no wait, never mind, cancel that, I mean, actually)", medium);
+        Assert.Contains("Resolve explicit self-corrections and repair markers (such as scratch that, no wait, never mind, cancel that, I mean, actually)", high);
+    }
+
+    [Theory]
+    [InlineData(ProfileStylePreset.FormalEmail, "Format as a readable email with finished sentences")]
+    [InlineData(ProfileStylePreset.CasualMessage, "Keep a natural, casual chat tone with clean sentence punctuation.")]
+    [InlineData(ProfileStylePreset.MeetingNotes, "When the speaker dictates an explicit list (such as 'first... second... third...'), format it as a clean numbered or bulleted list without adding extra items.")]
+    public void GetLlmSystemPrompt_WithStylePresets_AppendsPresetInstructions(ProfileStylePreset preset, string expectedSuffixFragment)
+    {
+        var prompt = CleanupService.GetLlmSystemPrompt(CleanupLevel.Medium, preset);
+
+        Assert.Contains(expectedSuffixFragment, prompt);
+    }
 }
