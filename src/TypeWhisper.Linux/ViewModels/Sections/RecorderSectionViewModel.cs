@@ -69,6 +69,19 @@ public partial class RecorderSectionViewModel : ObservableObject
     [ObservableProperty]
     private string _statusText = Loc.Instance["Recorder.StatusReady"];
 
+    private string _readyStatus = Loc.Instance["Recorder.StatusReady"];
+
+    // The idle status is computed text; re-resolve it in the new language without replacing
+    // a recording, saving, or error message that is currently shown.
+    private void OnInterfaceLanguageChanged()
+    {
+        var ready = Loc.Instance["Recorder.StatusReady"];
+        if (StatusText == _readyStatus)
+            StatusText = ready;
+        _readyStatus = ready;
+        OnPropertyChanged(nameof(PauseResumeButtonText));
+    }
+
     private Timer? _timer;
 
     public RecorderSectionViewModel(
@@ -132,6 +145,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         _audioPlayback.PlaybackStateChanged += () => _postToUiThread(RefreshPlaybackState);
         RefreshRecorderState();
         LoadExistingRecordings();
+        Loc.Instance.LanguageChanged += (_, _) => _postToUiThread(OnInterfaceLanguageChanged);
     }
 
     public string RecordButtonText =>
