@@ -402,55 +402,67 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider)
         {
-            foreach (var collection in row.Collections)
+            if (!await TrySaveCollectionSettingsAsync(row, loaded, collectionProvider))
             {
-                var items = collection
-                    .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(
-                            field => field.Key,
-                            string? (field) =>
-                                field is { IsSecretKind: true, IsUserModified: false }
-                                    ? null
-                                    : field.Value
-                        )
-                    ))
-                    .ToList();
-
-                var setResult = await TryInvokePluginBoundaryAsync(
-                    loaded,
-                    $"save collection '{collection.Key}'",
-                    ct => collectionProvider.SetItemsAsync(collection.Key, items, ct)
-                );
-                if (!setResult.IsSuccess || setResult.Value is null)
-                {
-                    if (setResult.IsSuccess)
-                    {
-                        ReportPluginBoundaryFailure(
-                            loaded,
-                            $"save collection '{collection.Key}'",
-                            new InvalidOperationException(
-                                "The plugin returned no collection validation result."
-                            )
-                        );
-                    }
-
-                    row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
-                    await ReloadCurrentVisibleRowAsync(row, loaded, true);
-                    return;
-                }
-
-                if (setResult.Value.IsSuccess)
-                {
-                    continue;
-                }
-
-                row.Status = setResult.Value.Message;
                 return;
             }
         }
 
         row.Status = Loc.Instance["Plugins.SettingsSaved"];
         await ReloadCurrentVisibleRowAsync(row, loaded, true);
+    }
+
+    private async Task<bool> TrySaveCollectionSettingsAsync(
+        PluginRow row,
+        LoadedPlugin loaded,
+        IPluginCollectionSettingsProvider collectionProvider
+    )
+    {
+        foreach (var collection in row.Collections)
+        {
+            var items = collection
+                .Items.Select(item => new PluginCollectionItem(
+                    item.Fields.ToDictionary(
+                        field => field.Key,
+                        string? (field) =>
+                            field is { IsSecretKind: true, IsUserModified: false }
+                                ? null
+                                : field.Value
+                    )
+                ))
+                .ToList();
+
+            var setResult = await TryInvokePluginBoundaryAsync(
+                loaded,
+                $"save collection '{collection.Key}'",
+                ct => collectionProvider.SetItemsAsync(collection.Key, items, ct)
+            );
+            if (!setResult.IsSuccess || setResult.Value is null)
+            {
+                if (setResult.IsSuccess)
+                {
+                    ReportPluginBoundaryFailure(
+                        loaded,
+                        $"save collection '{collection.Key}'",
+                        new InvalidOperationException(
+                            "The plugin returned no collection validation result."
+                        )
+                    );
+                }
+
+                row.Status = Loc.Instance["Plugins.SettingsSaveFailed"];
+                await ReloadCurrentVisibleRowAsync(row, loaded, true);
+                return false;
+            }
+
+            if (!setResult.Value.IsSuccess)
+            {
+                row.Status = setResult.Value.Message;
+                return false;
+            }
+        }
+
+        return true;
     }
 
     [RelayCommand]
@@ -506,6 +518,14 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
+        if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider
+            && !await TrySaveCollectionSettingsAsync(row, loaded, collectionProvider))
+        {
+            return;
+        }
+
+        row.CaptureSettingsBaseline();
+
         _refreshingModelPlugins.Add(row.Id);
         row.IsRefreshingModels = true;
         row.Status = Loc.Instance["Plugins.RefreshingModels"];
@@ -524,6 +544,14 @@ public partial class PluginsSectionViewModel : ObservableObject
             row.Status = result.IsSuccess
                 ? Loc.Instance["Plugins.ModelsRefreshed"]
                 : Loc.Instance["Plugins.ModelRefreshFailed"];
+
+            var currentRow = AllRows.FirstOrDefault(candidate => ReferenceEquals(candidate.LoadedPlugin, loaded));
+            if (currentRow is { HasUnsavedSettings: true })
+            {
+                currentRow.Status = row.Status;
+                return;
+            }
+
             await ReloadCurrentVisibleRowAsync(row, loaded, true);
         }
         finally
