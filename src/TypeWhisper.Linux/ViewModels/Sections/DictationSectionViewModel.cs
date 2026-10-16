@@ -551,7 +551,8 @@ public partial class DictationSectionViewModel : ObservableObject
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
-                    AppSettings.LocalModelAccelerationVulkan => "Vulkan selected",
+                    AppSettings.LocalModelAccelerationVulkan =>
+                        Loc.Instance["Dictation.AccelVulkanReady"],
                     _ => Loc.Instance["Dictation.AccelAutoStatus"],
                 };
             }
@@ -1473,6 +1474,7 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshLanguageChoices();
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(CanUseCuda));
+        OnPropertyChanged(nameof(CanUseVulkan));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
         OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
         OnPropertyChanged(nameof(AccelerationStatusText));
@@ -1512,7 +1514,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
         if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
         {
-            const string message = "Vulkan acceleration is available only for local models that support Vulkan.";
+            var message = Loc.Instance["Dictation.AccelVulkanNotSupported"];
             Dispatcher.UIThread.Post(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
