@@ -81,12 +81,14 @@
 
                 <TextBox Grid.Row="1"
                          Grid.Column="0"
+                         AutomationProperties.Name="{loc:Str History.Search}"
                          Text="{Binding SearchQuery}"
                          PlaceholderText="{loc:Str History.SearchPlaceholder}"
                          Margin="0,0,8,0" />
 
                 <ComboBox Grid.Row="1"
                           Grid.Column="1"
+                          AutomationProperties.Name="{loc:Str History.App}"
                           ItemsSource="{Binding AvailableApps}"
                           SelectedItem="{Binding SelectedAppFilter}"
                           Width="160"
@@ -275,6 +277,7 @@
 
                                                             <StackPanel IsVisible="{Binding ShowEditPanel}">
                                                                 <TextBox Text="{Binding EditText}"
+                                                                         AutomationProperties.Name="{loc:Str History.Inspect.FinalText}"
                                                                          TextWrapping="Wrap"
                                                                          AcceptsReturn="True"
                                                                          MinHeight="60"
@@ -350,6 +353,7 @@
 
                                                                                     <TextBox Grid.Row="1"
                                                                                         Grid.Column="1"
+                                                                                        AutomationProperties.Name="{loc:Str History.Original}"
                                                                                         Text="{Binding Original}"
                                                                                         MinWidth="170" />
                                                                                     <TextBlock Grid.Row="1"
@@ -360,6 +364,7 @@
                                                                                         VerticalAlignment="Center" />
                                                                                     <TextBox Grid.Row="1"
                                                                                         Grid.Column="3"
+                                                                                        AutomationProperties.Name="{loc:Str History.Replacement}"
                                                                                         Text="{Binding Replacement}"
                                                                                         MinWidth="170" />
                                                                                 </Grid>

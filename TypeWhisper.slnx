@@ -11,6 +11,7 @@
         <Project Path="tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.PluginSystem.Tests/TypeWhisper.PluginSystem.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj"/>
+        <Project Path="tests/TypeWhisper.UiTests/TypeWhisper.UiTests.csproj"/>
         <Project Path="tests/TypeWhisper.ProcessTestChild/TypeWhisper.ProcessTestChild.csproj"/>
         <Project Path="tests/TypeWhisper.FakeProviderCli/TypeWhisper.FakeProviderCli.csproj"/>
     </Folder>
