@@ -1735,4 +1735,25 @@ public sealed class HotkeyServiceTests
         Assert.Equal(expectedKey, backend.LastSet?.DictationKey);
         Assert.Equal(chord, hotkey.CurrentHotkeyString);
     }
+    [Fact]
+    public void IsSuspended_SuppressesDictationToggleRequestedEvent()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var eventCount = 0;
+        hotkey.DictationToggleRequested += (_, _) => eventCount++;
+
+        backend.RaiseDictationToggle();
+        Assert.Equal(1, eventCount);
+
+        hotkey.IsSuspended = true;
+        backend.RaiseDictationToggle();
+        Assert.Equal(1, eventCount);
+
+        hotkey.IsSuspended = false;
+        backend.RaiseDictationToggle();
+        Assert.Equal(2, eventCount);
+    }
 }

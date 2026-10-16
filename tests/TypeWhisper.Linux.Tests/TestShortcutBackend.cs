@@ -35,11 +35,8 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
         return true;
     }
 
-    public event EventHandler? DictationToggleRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? DictationToggleRequested;
+    public void RaiseDictationToggle() => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
 
     public event EventHandler? DictationStartRequested
     {

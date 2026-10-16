@@ -159,6 +159,11 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             return;
         }
 
+        if (IsCapturingHotkey)
+        {
+            IsCapturingHotkey = false;
+        }
+
         _settings.SettingsChanged -= OnSettingsChanged;
         Interlocked.Increment(ref _keyboardAccessRefreshVersion);
         Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
@@ -1090,6 +1095,11 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             StatusMessage =
                 Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", HotkeyText);
         }
+    }
+
+    partial void OnIsCapturingHotkeyChanged(bool value)
+    {
+        _hotkey.IsSuspended = value;
     }
 
     [RelayCommand]

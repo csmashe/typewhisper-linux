@@ -987,6 +987,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         sut.StartHotkeyCaptureCommand.Execute(null);
 
         Assert.True(sut.IsCapturingHotkey);
+        Assert.True(hotkey.IsSuspended);
         Assert.False(string.IsNullOrWhiteSpace(sut.StatusMessage));
     }
 
@@ -997,10 +998,12 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
         sut.StartHotkeyCaptureCommand.Execute(null);
+        Assert.True(hotkey.IsSuspended);
 
         sut.CancelHotkeyCaptureCommand.Execute(null);
 
         Assert.False(sut.IsCapturingHotkey);
+        Assert.False(hotkey.IsSuspended);
         Assert.False(string.IsNullOrWhiteSpace(sut.StatusMessage));
         Assert.NotEqual("Shortcuts.CaptureCancelled", sut.StatusMessage);
     }
@@ -1012,10 +1015,12 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
         var sut = new ShortcutsSectionViewModel(hotkey, settings);
         sut.StartHotkeyCaptureCommand.Execute(null);
+        Assert.True(hotkey.IsSuspended);
 
         await sut.ApplyCapturedHotkeyAsync("Ctrl+Alt+F8");
 
         Assert.False(sut.IsCapturingHotkey);
+        Assert.False(hotkey.IsSuspended);
         Assert.Equal("Ctrl+Alt+F8", sut.HotkeyText);
         Assert.Equal("Ctrl+Alt+F8", settings.Current.ToggleHotkey);
     }
