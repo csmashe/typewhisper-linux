@@ -63,8 +63,20 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         _entriesChangedHandler = () => Dispatcher.UIThread.Post(NotifyConflictWarningChanged);
         _snippets.SnippetsChanged += _snippetsChangedHandler;
         _dictionary.EntriesChanged += _entriesChangedHandler;
+        // "All tags" is computed text that the tag filter also compares against.
+        _languageChangedHandler = (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            var currentMode = SelectedTriggerMode;
+            TriggerModeOptions = CreateTriggerModeOptions();
+            OnPropertyChanged(nameof(TriggerModeOptions));
+            SelectedTriggerMode = currentMode;
+            Refresh();
+        });
+        Loc.Instance.LanguageChanged += _languageChangedHandler;
         Refresh();
     }
+
+    private readonly EventHandler _languageChangedHandler;
 
     public ObservableCollection<Snippet> FilteredSnippets { get; } = [];
     public ObservableCollection<string> AvailableTags { get; } = [Loc.Instance["Snippets.AllTags"]];
@@ -93,7 +105,10 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     public bool HasConflictWarning => !string.IsNullOrWhiteSpace(ConflictWarningText);
     public string ConflictWarningText => BuildConflictWarning(NewTrigger);
 
-    public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
+    public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; private set; } =
+        CreateTriggerModeOptions();
+
+    private static IReadOnlyList<SnippetTriggerModeOption> CreateTriggerModeOptions() =>
     [
         new(SnippetTriggerMode.Anywhere, Loc.Instance["Snippets.TriggerModeAnywhere"]),
         new(SnippetTriggerMode.ExactPhrase, Loc.Instance["Snippets.TriggerModeExactPhrase"]),
@@ -103,6 +118,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     {
         _snippets.SnippetsChanged -= _snippetsChangedHandler;
         _dictionary.EntriesChanged -= _entriesChangedHandler;
+        Loc.Instance.LanguageChanged -= _languageChangedHandler;
         GC.SuppressFinalize(this);
     }
 

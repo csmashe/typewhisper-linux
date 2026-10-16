@@ -977,6 +977,54 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
     }
 
+    [Fact]
+    public void StartHotkeyCapture_EnablesCapturingAndSetsStatusMessage()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+
+        sut.StartHotkeyCaptureCommand.Execute(null);
+
+        Assert.True(sut.IsCapturingHotkey);
+        Assert.True(hotkey.IsSuspended);
+        Assert.False(string.IsNullOrWhiteSpace(sut.StatusMessage));
+    }
+
+    [Fact]
+    public void CancelHotkeyCapture_DisablesCapturingAndSetsCancelledStatusMessage()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+        sut.StartHotkeyCaptureCommand.Execute(null);
+        Assert.True(hotkey.IsSuspended);
+
+        sut.CancelHotkeyCaptureCommand.Execute(null);
+
+        Assert.False(sut.IsCapturingHotkey);
+        Assert.False(hotkey.IsSuspended);
+        Assert.False(string.IsNullOrWhiteSpace(sut.StatusMessage));
+        Assert.NotEqual("Shortcuts.CaptureCancelled", sut.StatusMessage);
+    }
+
+    [Fact]
+    public async Task ApplyCapturedHotkeyAsync_DisablesCapturingAndUpdatesHotkey()
+    {
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings);
+        sut.StartHotkeyCaptureCommand.Execute(null);
+        Assert.True(hotkey.IsSuspended);
+
+        await sut.ApplyCapturedHotkeyAsync("Ctrl+Alt+F8");
+
+        Assert.False(sut.IsCapturingHotkey);
+        Assert.False(hotkey.IsSuspended);
+        Assert.Equal("Ctrl+Alt+F8", sut.HotkeyText);
+        Assert.Equal("Ctrl+Alt+F8", settings.Current.ToggleHotkey);
+    }
+
     private SettingsService CreateToggleSettings(string toggleHotkey = "Ctrl+Shift+Space")
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));

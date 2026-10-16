@@ -94,6 +94,27 @@ public partial class AboutSectionViewModel : ObservableObject
         _updateCheck.ResultChanged += OnUpdateResultChanged;
         // Reflect any check that already ran (e.g. the startup check).
         ApplyUpdateResult(_updateCheck.LastResult);
+        Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
+    }
+
+    private string _backupStatusDefault = Loc.Instance["About.BackupStatusDefault"];
+    private string _updateStatusDefault = Loc.Instance["About.UpdateStatusDefault"];
+
+    // Status text is computed, not bound to the catalog: re-resolve defaults and the last
+    // update result in the new language. A backup message the user just saw is left alone.
+    private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
+    {
+        var backupDefault = Loc.Instance["About.BackupStatusDefault"];
+        if (BackupStatusText == _backupStatusDefault)
+            BackupStatusText = backupDefault;
+        _backupStatusDefault = backupDefault;
+
+        var updateDefault = Loc.Instance["About.UpdateStatusDefault"];
+        if (UpdateStatusText == _updateStatusDefault)
+            UpdateStatusText = updateDefault;
+        _updateStatusDefault = updateDefault;
+        ApplyUpdateResult(_updateCheck.LastResult);
+        RefreshErrors();
     }
 
     // Prefers AssemblyInformationalVersion (keeps pre-release suffix, strips +hash).
@@ -354,8 +375,8 @@ public partial class AboutSectionViewModel : ObservableObject
         };
         desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
 
-        // Option set unchanged → keep the current selection object as-is.
-        if (CategoryFilters.Select(o => o.Key).SequenceEqual(desired.Select(o => o.Key)))
+        // Option set and display labels unchanged → keep the current selection object as-is.
+        if (CategoryFilters.SequenceEqual(desired))
         {
             return;
         }

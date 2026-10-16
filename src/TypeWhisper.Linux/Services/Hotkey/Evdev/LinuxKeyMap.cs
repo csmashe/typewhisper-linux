@@ -104,6 +104,37 @@ internal static class LinuxKeyMap
             110 => KeyCode.VcInsert,
             111 => KeyCode.VcDelete,
 
+            // Punctuation and symbols
+            12 => KeyCode.VcMinus,
+            13 => KeyCode.VcEquals,
+            26 => KeyCode.VcOpenBracket,
+            27 => KeyCode.VcCloseBracket,
+            39 => KeyCode.VcSemicolon,
+            40 => KeyCode.VcQuote,
+            41 => KeyCode.VcBackQuote,
+            43 => KeyCode.VcBackslash,
+            51 => KeyCode.VcComma,
+            52 => KeyCode.VcPeriod,
+            53 => KeyCode.VcSlash,
+
+            // Keypad
+            55 => KeyCode.VcNumPadMultiply,
+            71 => KeyCode.VcNumPad7,
+            72 => KeyCode.VcNumPad8,
+            73 => KeyCode.VcNumPad9,
+            74 => KeyCode.VcNumPadSubtract,
+            75 => KeyCode.VcNumPad4,
+            76 => KeyCode.VcNumPad5,
+            77 => KeyCode.VcNumPad6,
+            78 => KeyCode.VcNumPadAdd,
+            79 => KeyCode.VcNumPad1,
+            80 => KeyCode.VcNumPad2,
+            81 => KeyCode.VcNumPad3,
+            82 => KeyCode.VcNumPad0,
+            83 => KeyCode.VcNumPadDecimal,
+            96 => KeyCode.VcNumPadEnter,
+            98 => KeyCode.VcNumPadDivide,
+
             // F1–F24
             59 => KeyCode.VcF1,
             60 => KeyCode.VcF2,

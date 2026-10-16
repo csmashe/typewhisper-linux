@@ -17,6 +17,23 @@ public sealed class LinuxKeyMapTests
     [InlineData(88, KeyCode.VcF12)]
     [InlineData(2, KeyCode.Vc1)]
     [InlineData(11, KeyCode.Vc0)]
+    [InlineData(41, KeyCode.VcBackQuote)]
+    [InlineData(12, KeyCode.VcMinus)]
+    [InlineData(13, KeyCode.VcEquals)]
+    [InlineData(26, KeyCode.VcOpenBracket)]
+    [InlineData(27, KeyCode.VcCloseBracket)]
+    [InlineData(39, KeyCode.VcSemicolon)]
+    [InlineData(40, KeyCode.VcQuote)]
+    [InlineData(43, KeyCode.VcBackslash)]
+    [InlineData(51, KeyCode.VcComma)]
+    [InlineData(52, KeyCode.VcPeriod)]
+    [InlineData(53, KeyCode.VcSlash)]
+    [InlineData(82, KeyCode.VcNumPad0)]
+    [InlineData(78, KeyCode.VcNumPadAdd)]
+    [InlineData(74, KeyCode.VcNumPadSubtract)]
+    [InlineData(55, KeyCode.VcNumPadMultiply)]
+    [InlineData(98, KeyCode.VcNumPadDivide)]
+    [InlineData(83, KeyCode.VcNumPadDecimal)]
     public void ToSharpHook_MapsCommonChordKeys(int linuxCode, KeyCode expected)
     {
         Assert.Equal(expected, LinuxKeyMap.ToSharpHook(linuxCode));

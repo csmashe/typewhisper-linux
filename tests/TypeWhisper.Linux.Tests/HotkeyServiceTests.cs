@@ -1709,4 +1709,84 @@ public sealed class HotkeyServiceTests
         Assert.Equal(KeyCode.VcUndefined, backend.LastSet?.DictationKey);
     }
 
+    [Theory]
+    [InlineData("Ctrl+BackQuote", KeyCode.VcBackQuote)]
+    [InlineData("Ctrl+Minus", KeyCode.VcMinus)]
+    [InlineData("Ctrl+Equals", KeyCode.VcEquals)]
+    [InlineData("Ctrl+OpenBracket", KeyCode.VcOpenBracket)]
+    [InlineData("Ctrl+CloseBracket", KeyCode.VcCloseBracket)]
+    [InlineData("Ctrl+Backslash", KeyCode.VcBackslash)]
+    [InlineData("Ctrl+Semicolon", KeyCode.VcSemicolon)]
+    [InlineData("Ctrl+Quote", KeyCode.VcQuote)]
+    [InlineData("Ctrl+Comma", KeyCode.VcComma)]
+    [InlineData("Ctrl+Period", KeyCode.VcPeriod)]
+    [InlineData("Ctrl+Slash", KeyCode.VcSlash)]
+    [InlineData("Ctrl+NumPad0", KeyCode.VcNumPad0)]
+    public async Task TrySetHotkeyFromString_ParsesNamedSharpHookVirtualKeys_AndRoundTrips(string chord, KeyCode expectedKey)
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var parsed = hotkey.TrySetHotkeyFromString(chord);
+        await backend.WaitUntilSettledAsync();
+
+        Assert.True(parsed);
+        Assert.Equal(expectedKey, backend.LastSet?.DictationKey);
+        Assert.Equal(chord, hotkey.CurrentHotkeyString);
+    }
+    [Fact]
+    public void IsSuspended_SuppressesDictationToggleRequestedEvent()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var eventCount = 0;
+        hotkey.DictationToggleRequested += (_, _) => eventCount++;
+
+        backend.RaiseDictationToggle();
+        Assert.Equal(1, eventCount);
+
+        hotkey.IsSuspended = true;
+        backend.RaiseDictationToggle();
+        Assert.Equal(1, eventCount);
+
+        hotkey.IsSuspended = false;
+        backend.RaiseDictationToggle();
+        Assert.Equal(2, eventCount);
+    }
+
+    [Fact]
+    public void IsSuspended_True_RaisesDictationStopRequested()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var stopRaised = false;
+        hotkey.DictationStopRequested += (_, _) => stopRaised = true;
+
+        hotkey.IsSuspended = true;
+
+        Assert.True(stopRaised);
+    }
+
+    [Fact]
+    public void IsSuspended_PreservesDictationStopRequestedEvent()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var stopCount = 0;
+        hotkey.DictationStopRequested += (_, _) => stopCount++;
+
+        hotkey.IsSuspended = true;
+        Assert.Equal(1, stopCount);
+
+        // A key release while suspended still delivers the stop event to end an active session
+        backend.RaiseDictationStop();
+        Assert.Equal(2, stopCount);
+    }
 }

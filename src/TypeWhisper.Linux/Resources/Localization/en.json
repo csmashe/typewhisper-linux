@@ -1136,5 +1136,13 @@
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
   "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}.",
+  "About.ErrorCategoryFilter": "Error category",
+  "Dictation.InsertionStrategy": "Insertion strategy",
+  "Profiles.HotkeyBehavior": "Hotkey behavior",
+  "Snippets.TriggerModeLabel": "Trigger mode",
+  "Shortcuts.RecordShortcut": "Record keys",
+  "Shortcuts.CancelCapture": "Cancel",
+  "Shortcuts.CaptureCancelled": "Recording cancelled.",
+  "Shortcuts.CapturePrompt": "Press a key or key combination. TypeWhisper applies it when you press the final key."
 }

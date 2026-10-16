@@ -1136,5 +1136,13 @@
   "LanguageSelection.Invalid": "Недопустимый язык транскрипции «{0}». Выберите «Авто» или укажите допустимый тег BCP-47.",
   "LanguageSelection.AutomaticNotSupported": "{0} не может определить язык автоматически. Выберите язык явно.",
   "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто».",
-  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}.",
+  "About.ErrorCategoryFilter": "Категория ошибок",
+  "Dictation.InsertionStrategy": "Стратегия вставки",
+  "Profiles.HotkeyBehavior": "Действие горячей клавиши",
+  "Snippets.TriggerModeLabel": "Режим триггера",
+  "Shortcuts.RecordShortcut": "Записать клавиши",
+  "Shortcuts.CancelCapture": "Отмена",
+  "Shortcuts.CaptureCancelled": "Запись отменена.",
+  "Shortcuts.CapturePrompt": "Нажмите клавишу или сочетание клавиш. TypeWhisper применит его после нажатия последней клавиши."
 }

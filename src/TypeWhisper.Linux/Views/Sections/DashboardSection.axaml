@@ -37,7 +37,8 @@
                                    FontWeight="SemiBold" />
                         <TextBlock Text="{loc:Str Dashboard.StatisticsHint}"
                                    FontSize="12"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="0" Grid.Column="1"
@@ -79,7 +80,10 @@
                         Padding="16,20"
                         Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
+                        <!-- The fallback emoji font advances wider than it measures; keep room for the glyph. -->
                         <TextBlock Text="✍"
+                                   MinWidth="24"
+                                   TextAlignment="Center"
                                    FontSize="18"
                                    Foreground="#1593F5"
                                    HorizontalAlignment="Center"
@@ -92,8 +96,10 @@
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
-                                   Margin="0,4,0,0" />
-                        <TextBlock Text="{Binding WordsTrendLabel}" FontSize="11" HorizontalAlignment="Center" />
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center" />
+                        <TextBlock Text="{Binding WordsTrendLabel}" FontSize="11" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Border>
 
@@ -117,8 +123,10 @@
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
-                                   Margin="0,4,0,0" />
-                        <TextBlock Text="{Binding WpmTrendLabel}" FontSize="11" HorizontalAlignment="Center" />
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center" />
+                        <TextBlock Text="{Binding WpmTrendLabel}" FontSize="11" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Border>
 
@@ -142,7 +150,9 @@
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
-                                   Margin="0,4,0,0" />
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center" />
                     </StackPanel>
                 </Border>
 
@@ -165,7 +175,9 @@
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                    HorizontalAlignment="Center"
-                                   Margin="0,4,0,0" />
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center" />
                     </StackPanel>
                 </Border>
             </UniformGrid>
@@ -175,28 +187,28 @@
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding DaysActive}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
-                        <TextBlock Text="{loc:Str Dashboard.DaysActive}" FontSize="12" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.DaysActive}" FontSize="12" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Border>
                 <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding CurrentStreakLabel}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
-                        <TextBlock Text="{loc:Str Dashboard.CurrentStreak}" FontSize="12" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.CurrentStreak}" FontSize="12" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Border>
                 <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding LongestStreakLabel}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
-                        <TextBlock Text="{loc:Str Dashboard.LongestStreak}" FontSize="12" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.LongestStreak}" FontSize="12" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Border>
                 <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding TranscriptionCount}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
-                        <TextBlock Text="{loc:Str Dashboard.Dictations}" FontSize="12" HorizontalAlignment="Center" />
+                        <TextBlock Text="{loc:Str Dashboard.Dictations}" FontSize="12" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
                     </StackPanel>
                 </Border>
             </UniformGrid>
@@ -228,7 +240,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.AvgWordsPerDictation}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Column="1"
@@ -243,7 +256,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.AvgDuration}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -266,7 +280,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.Inserted}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="0"
@@ -282,7 +297,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.ClipboardFallback}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="1"
@@ -298,7 +314,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{Binding InsertedBreakdownLabel}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="1"
@@ -314,7 +331,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.Failed}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -328,7 +346,8 @@
                         <TextBlock Text="{loc:Str Dashboard.NoAppUsage}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   IsVisible="{Binding !HasTopApps}" />
+                                   IsVisible="{Binding !HasTopApps}"
+                                   TextWrapping="Wrap" />
                         <ItemsControl ItemsSource="{Binding TopApps}"
                                       IsVisible="{Binding HasTopApps}">
                             <ItemsControl.ItemTemplate>
@@ -343,7 +362,8 @@
                                                    Text="{Binding Summary}"
                                                    FontSize="11"
                                                    Foreground="#9AA5B3"
-                                                   Margin="12,0,0,0" />
+                                                   Margin="12,0,0,0"
+                                                   TextWrapping="Wrap" />
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -367,7 +387,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.Cleanups}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="0"
@@ -383,7 +404,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.Snippets}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="1"
@@ -399,7 +421,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.Corrections}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="1"
@@ -415,7 +438,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.PromptActions}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="2"
@@ -431,7 +455,8 @@
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Dashboard.Translations}"
                                                FontSize="11"
-                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -444,7 +469,8 @@
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.Activity}" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock Text="{loc:Str Dashboard.NoActivity}" IsVisible="{Binding !HasActivity}"
-                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
                     <ItemsControl ItemsSource="{Binding ActivityDays}" IsVisible="{Binding HasActivity}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DashboardActivityDayRow">
@@ -453,7 +479,7 @@
                                     <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
                                         <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
                                     </Border>
-                                    <TextBlock Grid.Column="2" Text="{Binding Label}" FontSize="11" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Label}" FontSize="11" TextWrapping="Wrap" />
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -466,7 +492,8 @@
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.Languages}" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock Text="{loc:Str Dashboard.NoLanguageData}" IsVisible="{Binding !HasLanguages}"
-                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
                     <ItemsControl ItemsSource="{Binding Languages}" IsVisible="{Binding HasLanguages}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DashboardBreakdownRow">
@@ -475,7 +502,7 @@
                                     <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
                                         <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
                                     </Border>
-                                    <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" TextWrapping="Wrap" />
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -488,7 +515,8 @@
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.Models}" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock Text="{loc:Str Dashboard.NoModelData}" IsVisible="{Binding !HasModels}"
-                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                               FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
                     <ItemsControl ItemsSource="{Binding Models}" IsVisible="{Binding HasModels}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DashboardBreakdownRow">
@@ -497,7 +525,7 @@
                                     <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
                                         <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
                                     </Border>
-                                    <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" TextWrapping="Wrap" />
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -509,7 +537,7 @@
                     BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.UsageByTime}" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Text="{loc:Str Dashboard.NoActivity}" IsVisible="{Binding !HasActivity}" FontSize="12" />
+                    <TextBlock Text="{loc:Str Dashboard.NoActivity}" IsVisible="{Binding !HasActivity}" FontSize="12" TextWrapping="Wrap" />
                     <ItemsControl ItemsSource="{Binding Hours}" IsVisible="{Binding HasActivity}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate><UniformGrid Rows="1" Columns="24" /></ItemsPanelTemplate>
@@ -566,10 +594,12 @@
                                                     Spacing="10">
                                             <TextBlock Text="{Binding LocalTimestamp, StringFormat='{}{0:HH:mm}'}"
                                                        FontSize="11"
-                                                       Foreground="#9BB0C4" />
+                                                       Foreground="#9BB0C4"
+                                                       TextWrapping="Wrap" />
                                             <TextBlock Text="{Binding AppName}"
                                                        FontSize="11"
-                                                       Foreground="#9BB0C4" />
+                                                       Foreground="#9BB0C4"
+                                                       TextWrapping="Wrap" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>
@@ -606,7 +636,8 @@
                                    FontWeight="SemiBold" />
                         <TextBlock Text="{loc:Str Dashboard.SetupWizardHint}"
                                    FontSize="12"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
                 </DockPanel>
             </Border>

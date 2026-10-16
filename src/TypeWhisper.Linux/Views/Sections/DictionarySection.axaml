@@ -84,6 +84,7 @@
                     </StackPanel>
 
                     <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableVocabularyBoosting}"
                                   IsChecked="{Binding VocabularyBoostingEnabled}"
                                   VerticalAlignment="Top" />
                 </Grid>
@@ -111,6 +112,7 @@
                     </StackPanel>
 
                     <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableAcousticBoosting}"
                                   IsChecked="{Binding AcousticVocabularyBoostingEnabled}"
                                   VerticalAlignment="Top" />
                 </Grid>
@@ -158,6 +160,7 @@
                 <Grid ColumnDefinitions="*,Auto"
                       ColumnSpacing="12">
                     <TextBox Grid.Column="0"
+                             AutomationProperties.Name="{loc:Str Dictionary.SearchPlaceholder}"
                              Text="{Binding SearchText}"
                              PlaceholderText="{loc:Str Dictionary.SearchPlaceholder}"
                              IsVisible="{Binding ShowSearchBox}" />
@@ -311,6 +314,7 @@
 
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="4"
+                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"
@@ -367,6 +371,7 @@
 
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="1"
+                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).TogglePackCommand}"
                                                           CommandParameter="{Binding}"
@@ -387,6 +392,7 @@
                     <Grid ColumnDefinitions="*,Auto,*,92,Auto,Auto,Auto,Auto,Auto"
                           ColumnSpacing="10">
                         <TextBox Grid.Column="0"
+                                 AutomationProperties.Name="{loc:Str History.Original}"
                                  Text="{Binding NewOriginal}"
                                  PlaceholderText="{loc:Str Dictionary.OriginalPlaceholder}" />
                         <TextBlock Grid.Column="1"
@@ -394,9 +400,11 @@
                                    VerticalAlignment="Center"
                                    Foreground="#8A9AAE" />
                         <TextBox Grid.Column="2"
+                                 AutomationProperties.Name="{loc:Str Dictionary.ReplacementPlaceholder}"
                                  Text="{Binding NewReplacement}"
                                  PlaceholderText="{loc:Str Dictionary.ReplacementPlaceholder}" />
                         <NumericUpDown Grid.Column="3"
+                                       AutomationProperties.Name="{loc:Str Dictionary.PriorityPlaceholder}"
                                        Minimum="0"
                                        Maximum="999"
                                        Value="{Binding NewPriority}"
