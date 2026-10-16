@@ -881,4 +881,24 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         public void Dispose() { }
     }
+    [Fact]
+    public void SelectedDefaultLlmProvider_UpdatesSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var currentSettings = new AppSettings { DefaultLlmProvider = "initial-provider" };
+        var settingsMock = new Mock<ISettingsService>();
+        settingsMock.SetupGet(s => s.Current).Returns(currentSettings);
+        settingsMock.Setup(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Callback<Func<AppSettings, AppSettings>>(update => currentSettings = update(currentSettings));
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settingsMock.Object);
+        var targetOption = new ProviderOption("plugin:com.typewhisper.openai:gpt-4.1-mini", "OpenAI - GPT-4.1 mini");
+        sut.AvailableProviders.Add(targetOption);
+
+        sut.SelectedDefaultLlmProvider = targetOption;
+
+        settingsMock.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Once);
+        Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", currentSettings.DefaultLlmProvider);
+    }
 }

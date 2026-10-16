@@ -1214,5 +1214,7 @@
   "LanguageSelection.Invalid": "El idioma de transcripción «{0}» no es válido. Elige Auto o introduce una etiqueta BCP-47 válida.",
   "LanguageSelection.AutomaticNotSupported": "{0} no puede detectar el idioma automáticamente. Elige un idioma explícito.",
   "LanguageSelection.ExplicitNotSupported": "{0} no acepta un idioma explícito. Elige Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}.",
+  "Prompts.CleanupProvider": "LLM para la limpieza",
+  "Prompts.CleanupProviderHelp": "La limpieza media y alta envían el texto transcrito localmente a este proveedor y modelo. Las limpiezas ninguna y ligera se quedan en el equipo. Elige un modelo concreto para que la limpieza sea coherente."
 }
