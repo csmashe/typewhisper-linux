@@ -108,8 +108,13 @@
                                     <TextBlock Text="{Binding Name}"
                                                Classes="card-title"
                                                ToolTip.Tip="{Binding Name}" />
-                                    <TextBlock Classes="card-subtitle"
-                                               ToolTip.Tip="{Binding Converter={x:Static converters:ProfileSummaryConverter.Instance}}">
+                                    <TextBlock Classes="card-subtitle">
+                                        <ToolTip.Tip>
+                                            <MultiBinding Converter="{x:Static converters:ProfileSummaryConverter.Instance}">
+                                                <Binding />
+                                                <Binding Path="CurrentLanguage" Source="{x:Static loc:Loc.Instance}" />
+                                            </MultiBinding>
+                                        </ToolTip.Tip>
                                         <Run Text="{Binding ProcessNames.Count, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.AppRulesCount}" />
                                         <Run Text=" · " />
                                         <Run Text="{Binding UrlPatterns.Count, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.UrlRulesCount}" />

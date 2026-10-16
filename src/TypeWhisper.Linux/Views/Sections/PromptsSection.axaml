@@ -129,17 +129,25 @@
                     CornerRadius="12"
                     Padding="14,10"
                     IsVisible="{Binding ShowProviderWarning}">
-                <StackPanel Orientation="Horizontal"
-                            Spacing="12">
-                    <TextBlock Text="!"
+                <Grid ColumnDefinitions="Auto,*"
+                      ColumnSpacing="10">
+                    <TextBlock Grid.Column="0"
+                               Text="!"
                                FontWeight="Bold"
-                               Foreground="#FFD400" />
-                    <TextBlock Text="{loc:Str Prompts.NoProvider}"
-                               FontWeight="SemiBold"
-                               Foreground="White" />
-                    <TextBlock Text="{Binding ProviderWarningText}"
-                               Foreground="#F3E1AF" />
-                </StackPanel>
+                               Foreground="#FFD400"
+                               VerticalAlignment="Top"
+                               Margin="0,2,0,0" />
+                    <StackPanel Grid.Column="1"
+                                Spacing="4">
+                        <TextBlock Text="{loc:Str Prompts.NoProvider}"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding ProviderWarningText}"
+                                   Foreground="#F3E1AF"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Grid>
             </Border>
 
             <Border Classes="panel">
