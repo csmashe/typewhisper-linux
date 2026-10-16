@@ -3909,4 +3909,61 @@ public partial class OpenAiPluginTests
         public void Dispose() { }
     }
 
+    [Fact]
+    public async Task RefreshAvailableLlmModels_SortsCatalogByPriorityThenSlug()
+    {
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse("""
+        {
+          "models": [
+            { "slug": "model-c", "visibility": "list", "priority": 3 },
+            { "slug": "model-a", "visibility": "list", "priority": 1 },
+            { "slug": "model-b", "visibility": "list", "priority": 2 },
+            { "slug": "model-z", "visibility": "list" },
+            { "slug": "model-x", "visibility": "list" }
+          ]
+        }
+        """)));
+
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        SetChatGptPlanRegistration(host);
+        host.Secrets["oauth-access-token"] = "valid-token";
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        await sut.RefreshAvailableLlmModelsAsync(CancellationToken.None);
+
+        Assert.Equal(["model-a", "model-b", "model-c", "model-x", "model-z"],
+            sut.SupportedModels.Select(m => m.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task ValidOAuthCredentialsAsync_ThrowsWhenRefreshRevokesDirectTokenScope()
+    {
+        var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse("""
+        {
+          "access_token": "new-token",
+          "refresh_token": "new-refresh",
+          "expires_in": 3600,
+          "scope": "openid profile"
+        }
+        """)));
+
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices();
+        host.SetSetting("authMode", "chatgpt");
+        SetChatGptPlanRegistration(host);
+        host.Secrets["oauth-access-token"] = "expired-token";
+        host.Secrets["oauth-refresh-token"] = "old-refresh";
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(-1));
+
+        var sut = new OpenAiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
+            sut.ProcessAsync("test", "test", "gpt-5.5", CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.Authentication, ex.FailureKind);
+    }
 }
