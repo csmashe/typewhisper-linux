@@ -44,11 +44,8 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
         remove { }
     }
 
-    public event EventHandler? DictationStopRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? DictationStopRequested;
+    public void RaiseDictationStop() => DictationStopRequested?.Invoke(this, EventArgs.Empty);
 
     public event EventHandler? DictationDiscardRequested
     {

@@ -1756,4 +1756,37 @@ public sealed class HotkeyServiceTests
         backend.RaiseDictationToggle();
         Assert.Equal(2, eventCount);
     }
+
+    [Fact]
+    public void IsSuspended_True_RaisesDictationStopRequested()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var stopRaised = false;
+        hotkey.DictationStopRequested += (_, _) => stopRaised = true;
+
+        hotkey.IsSuspended = true;
+
+        Assert.True(stopRaised);
+    }
+
+    [Fact]
+    public void IsSuspended_PreservesDictationStopRequestedEvent()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+
+        var stopCount = 0;
+        hotkey.DictationStopRequested += (_, _) => stopCount++;
+
+        hotkey.IsSuspended = true;
+        Assert.Equal(1, stopCount);
+
+        // A key release while suspended still delivers the stop event to end an active session
+        backend.RaiseDictationStop();
+        Assert.Equal(2, stopCount);
+    }
 }

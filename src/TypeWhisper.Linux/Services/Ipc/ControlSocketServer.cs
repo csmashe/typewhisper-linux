@@ -593,6 +593,12 @@ internal sealed class ControlSocketServer : IDisposable
 
     private Task<string> HandleStartAsync()
     {
+        if (_hotkey?.IsSuspended == true)
+        {
+            var prev = SnapshotState();
+            return Task.FromResult(JsonControlProtocol.SerializeAction(prev, prev));
+        }
+
         return _startCoordinator.DispatchStart(() => _orchestrator.StartAsync());
     }
 
@@ -632,6 +638,11 @@ internal sealed class ControlSocketServer : IDisposable
     private Task<string> HandleToggleAsync()
     {
         var prev = SnapshotState();
+        if (_hotkey?.IsSuspended == true)
+        {
+            return Task.FromResult(JsonControlProtocol.SerializeAction(prev, prev));
+        }
+
         // Fire-and-forget — toggle can route through StopAsync (pipeline-blocking like stop).
         DispatchOrchestratorAsync(() => _orchestrator.ToggleAsync(), "ToggleAsync");
         // Wire response reflects intent rather than confirmed final state.

@@ -189,24 +189,27 @@
                                     Classes="row-hint" />
                             </StackPanel>
 
-                            <StackPanel Grid.Row="1"
-                                        Orientation="Horizontal"
-                                        Spacing="8"
-                                        HorizontalAlignment="Left">
+                            <WrapPanel Grid.Row="1"
+                                       Orientation="Horizontal"
+                                       HorizontalAlignment="Left">
                                 <TextBox Width="240"
+                                         Margin="0,0,8,8"
                                          AutomationProperties.Name="{loc:Str Shortcuts.MainHotkey}"
                                          Text="{Binding HotkeyText}"
                                          PlaceholderText="Ctrl+Shift+Space" />
                                 <Button Content="{loc:Str Shortcuts.RecordShortcut}"
+                                        Margin="0,0,8,8"
                                         Click="OnStartHotkeyCaptureClick"
                                         IsVisible="{Binding !IsCapturingHotkey}" />
                                 <Button Content="{loc:Str Shortcuts.CancelCapture}"
+                                        Margin="0,0,8,8"
                                         Command="{Binding CancelHotkeyCaptureCommand}"
                                         IsVisible="{Binding IsCapturingHotkey}" />
                                 <Button Content="{loc:Str Common.Apply}"
+                                        Margin="0,0,8,8"
                                         Command="{Binding ApplyHotkeyCommand}"
                                         IsVisible="{Binding !IsCapturingHotkey}" />
-                            </StackPanel>
+                            </WrapPanel>
                         </Grid>
                     </Border>
                     <TextBlock Text="{loc:Str Shortcuts.CapturePrompt}"

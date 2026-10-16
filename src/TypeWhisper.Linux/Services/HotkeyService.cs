@@ -154,7 +154,16 @@ public sealed class HotkeyService : IDisposable
     public bool IsSuspended
     {
         get => _isSuspended;
-        set => _isSuspended = value;
+        set
+        {
+            if (_isSuspended == value) return;
+            _isSuspended = value;
+            if (value)
+            {
+                DictationStopRequested?.Invoke(this, EventArgs.Empty);
+                ProfileDictationStopRequested?.Invoke(this, EventArgs.Empty);
+            }
+        }
     }
 
     public bool BackendRequiresToggleMode => _backendRequiresToggleMode;
@@ -349,11 +358,11 @@ public sealed class HotkeyService : IDisposable
             };
             _onDictationStopRequested = (_, _) =>
             {
-                if (!_isSuspended) DictationStopRequested?.Invoke(this, EventArgs.Empty);
+                DictationStopRequested?.Invoke(this, EventArgs.Empty);
             };
             _onDictationDiscardRequested = (_, _) =>
             {
-                if (!_isSuspended) DictationDiscardRequested?.Invoke(this, EventArgs.Empty);
+                DictationDiscardRequested?.Invoke(this, EventArgs.Empty);
             };
             _onPromptPaletteRequested = (_, _) =>
             {
@@ -377,7 +386,7 @@ public sealed class HotkeyService : IDisposable
             };
             _onCancelRequested = (_, _) =>
             {
-                if (!_isSuspended) CancelRequested?.Invoke(this, EventArgs.Empty);
+                CancelRequested?.Invoke(this, EventArgs.Empty);
             };
             _onPromptActionRequested = (_, actionId) =>
             {
@@ -393,7 +402,7 @@ public sealed class HotkeyService : IDisposable
             };
             _onProfileDictationStopRequested = (_, _) =>
             {
-                if (!_isSuspended) ProfileDictationStopRequested?.Invoke(this, EventArgs.Empty);
+                ProfileDictationStopRequested?.Invoke(this, EventArgs.Empty);
             };
             _onProfileTextProcessingRequested = (_, profileId) =>
             {

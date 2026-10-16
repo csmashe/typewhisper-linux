@@ -375,8 +375,8 @@ public partial class AboutSectionViewModel : ObservableObject
         };
         desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
 
-        // Option set unchanged → keep the current selection object as-is.
-        if (CategoryFilters.Select(o => o.Key).SequenceEqual(desired.Select(o => o.Key)))
+        // Option set and display labels unchanged → keep the current selection object as-is.
+        if (CategoryFilters.SequenceEqual(desired))
         {
             return;
         }

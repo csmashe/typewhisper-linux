@@ -18,8 +18,8 @@ public partial class ShortcutsSection : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
-        KeyDown += OnKeyDown;
-        KeyUp += OnKeyUp;
+        AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel);
         // Re-probe keyboard access and managed desktop-integration state whenever this
         // section is shown. Both checks are read-only; writes remain explicit actions.
         AttachedToVisualTree += (_, _) =>
@@ -77,6 +77,7 @@ public partial class ShortcutsSection : UserControl
 
     private void OnStartHotkeyCaptureClick(object? sender, RoutedEventArgs e)
     {
+        _pendingModifierKey = null;
         if (DataContext is ShortcutsSectionViewModel vm)
         {
             vm.StartHotkeyCaptureCommand.Execute(null);
@@ -179,11 +180,13 @@ public partial class ShortcutsSection : UserControl
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
+        _pendingModifierKey = null;
         // Clipboard access requires a TopLevel reference that only the view has,
         // so the ViewModel raises an event and the view performs the actual copy.
         if (_wired is not null)
         {
             _wired.CopyCustomShortcutRequested -= OnCopyCustomShortcutRequested;
+            _wired.PropertyChanged -= OnViewModelPropertyChanged;
             _wired = null;
         }
 
@@ -192,7 +195,16 @@ public partial class ShortcutsSection : UserControl
         if (DataContext is ShortcutsSectionViewModel vm)
         {
             vm.CopyCustomShortcutRequested += OnCopyCustomShortcutRequested;
+            vm.PropertyChanged += OnViewModelPropertyChanged;
             _wired = vm;
+        }
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ShortcutsSectionViewModel.IsCapturingHotkey))
+        {
+            _pendingModifierKey = null;
         }
     }
 
