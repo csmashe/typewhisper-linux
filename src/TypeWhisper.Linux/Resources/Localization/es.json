@@ -249,7 +249,7 @@
   "Dictation.AccelCudaNotVisible": "CUDA 12 está instalado, pero TypeWhisper todavía no puede detectarlo.",
   "Dictation.AccelCudaReady": "CUDA está listo para los modelos de whisper.cpp y sherpa-onnx. El resto de plugins locales usan la CPU.",
   "Dictation.AccelVulkanNotSupported": "La aceleración de Vulkan solo está disponible para modelos locales compatibles con Vulkan.",
-  "Dictation.AccelVulkanReady": "Vulkan está activo para los modelos whisper.cpp. El resto de plugins locales usan la CPU.",
+  "Dictation.AccelVulkanReady": "Vulkan está listo para los modelos whisper.cpp. El resto de plugins locales usan la CPU.",
   "Dictation.AccelerationAuto": "Automático",
   "Dictation.AccelerationCpu": "CPU",
   "Dictation.AccelerationNvidiaCuda": "NVIDIA CUDA",
