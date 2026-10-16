@@ -41,21 +41,27 @@ internal sealed record OpenAiOAuthTokenResponse(
     [property: JsonPropertyName("id_token")] string? IdToken,
     [property: JsonPropertyName("access_token")] string AccessToken,
     [property: JsonPropertyName("refresh_token")] string? RefreshToken,
-    [property: JsonPropertyName("expires_in")] int? ExpiresIn);
+    [property: JsonPropertyName("expires_in")] int? ExpiresIn,
+    [property: JsonPropertyName("scope")] string? Scope = null);
 
 internal sealed record OpenAiOAuthMetadata(string? AccountId, string? PlanType, DateTimeOffset? ExpiresAt);
+internal sealed record OpenAiOAuthCallback(string Code, string? ClientId);
+internal sealed record OpenAiVerifiedIdentity(string Subject);
 
 internal static class OpenAiOAuthClient
 {
-    public const string ClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
+    public const string DynamicClientId = "dynamic_agent_client";
+    // Compatibility alias for existing plugin consumers. First-time SIWC
+    // registration uses this value; returning accounts use their issued ID.
+    public const string ClientId = DynamicClientId;
     public const string Issuer = "https://auth.openai.com";
-    public const string RedirectUri = "http://localhost:1455/auth/callback";
+    public const string RedirectUri = "http://127.0.0.1:1455/auth/callback";
     public const int CallbackPort = 1455;
-
-    private const string AuthorizeOriginator = "opencode";
+    public const string Resource = "https://api.openai.com/v1";
 
     private static readonly JsonSerializerOptions s_jsonReadOptions =
         new() { PropertyNameCaseInsensitive = true };
+    private static readonly HttpClient s_identityHttpClient = new();
 
     public static OpenAiPkceCodes GeneratePkceCodes()
     {
@@ -67,38 +73,57 @@ internal static class OpenAiOAuthClient
     public static string RandomState() =>
         Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
 
-    public static Uri BuildAuthorizeUri(string state, OpenAiPkceCodes pkce)
+    public static Uri BuildAuthorizeUri(
+        string state,
+        string nonce,
+        OpenAiPkceCodes pkce,
+        string clientId,
+        string hostId,
+        bool isNewRegistration,
+        string? idTokenHint)
     {
         var query = new Dictionary<string, string>
         {
             ["response_type"] = "code",
-            ["client_id"] = ClientId,
+            ["client_id"] = clientId,
             ["redirect_uri"] = RedirectUri,
-            ["scope"] = "openid profile email offline_access",
+            ["scope"] = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
+            ["resource"] = Resource,
             ["code_challenge"] = pkce.Challenge,
             ["code_challenge_method"] = "S256",
-            ["id_token_add_organizations"] = "true",
-            ["codex_cli_simplified_flow"] = "true",
             ["state"] = state,
-            ["originator"] = AuthorizeOriginator,
+            ["nonce"] = nonce,
+            ["ext_agent_host_id"] = hostId,
         };
+        if (isNewRegistration)
+            query["agent_name_hint"] = "TypeWhisper";
+        if (!string.IsNullOrWhiteSpace(idTokenHint))
+            query["id_token_hint"] = idTokenHint;
 
-        return new Uri($"{Issuer}/oauth/authorize?{BuildQuery(query)}");
+        return new Uri($"{Issuer}/api/accounts/authorize?{BuildQuery(query)}");
     }
+
+    // Kept for existing plugin tests and callers that only need to inspect a
+    // basic authorization request. Production sign-in uses the full overload.
+    public static Uri BuildAuthorizeUri(string state, OpenAiPkceCodes pkce) =>
+        BuildAuthorizeUri(state, RandomState(), pkce, DynamicClientId,
+            "urn:uuid:00000000-0000-0000-0000-000000000000", true, null);
 
     public static async Task<OpenAiOAuthTokenResponse> ExchangeAuthorizationCodeAsync(
         HttpClient httpClient,
         string code,
         OpenAiPkceCodes pkce,
+        string clientId,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/api/accounts/oauth/token");
         request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["grant_type"] = "authorization_code",
             ["code"] = code,
             ["redirect_uri"] = RedirectUri,
-            ["client_id"] = ClientId,
+            ["client_id"] = clientId,
+            ["resource"] = Resource,
             ["code_verifier"] = pkce.Verifier,
         });
 
@@ -108,14 +133,16 @@ internal static class OpenAiOAuthClient
     public static async Task<OpenAiOAuthTokenResponse> RefreshTokenAsync(
         HttpClient httpClient,
         string refreshToken,
+        string clientId,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/oauth/token");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Issuer}/api/accounts/oauth/token");
         request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["grant_type"] = "refresh_token",
             ["refresh_token"] = refreshToken,
-            ["client_id"] = ClientId,
+            ["client_id"] = clientId,
+            ["resource"] = Resource,
         });
 
         return await SendTokenRequestAsync(httpClient, request, ct);
@@ -146,6 +173,69 @@ internal static class OpenAiOAuthClient
 
         return new OpenAiOAuthMetadata(accountId, planType, expiresAt);
     }
+
+    public static async Task<OpenAiVerifiedIdentity> ValidateIdTokenAsync(
+        string? token, string clientId, string expectedNonce, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("ChatGPT did not return an identity token.");
+        var parts = token.Split('.');
+        if (parts.Length != 3)
+            throw new InvalidOperationException("ChatGPT returned an invalid identity token.");
+        using var header = JsonDocument.Parse(Base64UrlDecode(parts[0]));
+        var headerRoot = header.RootElement;
+        if (GetString(headerRoot, "alg") != "RS256" || GetString(headerRoot, "kid") is not { } keyId)
+            throw new InvalidOperationException("ChatGPT returned an unsupported identity token.");
+
+        using var jwksStream = await s_identityHttpClient.GetStreamAsync(
+            $"{Issuer}/.well-known/jwks.json", ct);
+        using var jwks = await JsonDocument.ParseAsync(jwksStream, cancellationToken: ct);
+        var key = jwks.RootElement.GetProperty("keys").EnumerateArray()
+            .FirstOrDefault(candidate => GetString(candidate, "kid") == keyId);
+        if (key.ValueKind != JsonValueKind.Object
+            || GetString(key, "kty") != "RSA"
+            || GetString(key, "n") is not { } modulus
+            || GetString(key, "e") is not { } exponent)
+            throw new InvalidOperationException("The ChatGPT signing key was not found.");
+
+        using var rsa = RSA.Create();
+        rsa.ImportParameters(new RSAParameters
+        {
+            Modulus = Base64UrlDecode(modulus),
+            Exponent = Base64UrlDecode(exponent),
+        });
+        var signedData = Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}");
+        if (!rsa.VerifyData(signedData, Base64UrlDecode(parts[2]), HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1))
+            throw new InvalidOperationException("ChatGPT identity token signature validation failed.");
+
+        using var payload = JsonDocument.Parse(Base64UrlDecode(parts[1]));
+        var claims = payload.RootElement;
+        if (GetString(claims, "iss") != Issuer
+            || !HasAudience(claims, clientId)
+            || GetString(claims, "nonce") != expectedNonce
+            || !claims.TryGetProperty("exp", out var expiration)
+            || !expiration.TryGetInt64(out var exp)
+            || DateTimeOffset.FromUnixTimeSeconds(exp) <= DateTimeOffset.UtcNow
+            || GetString(claims, "sub") is not { Length: > 0 } subject)
+            throw new InvalidOperationException("ChatGPT identity token validation failed.");
+        return new OpenAiVerifiedIdentity(subject);
+    }
+
+    private static bool HasAudience(JsonElement claims, string expected)
+    {
+        if (!claims.TryGetProperty("aud", out var audience)) return false;
+        return audience.ValueKind == JsonValueKind.String
+            ? audience.GetString() == expected
+            : audience.ValueKind == JsonValueKind.Array
+              && audience.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.String
+                  && item.GetString() == expected);
+    }
+
+    private static string? GetString(JsonElement element, string key) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(key, out var value)
+        && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private static async Task<OpenAiOAuthTokenResponse> SendTokenRequestAsync(
         HttpClient httpClient,
@@ -299,6 +389,9 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
     }
 
     public async Task<string> WaitForCodeAsync(CancellationToken ct)
+        => (await WaitForAuthorizationCallbackAsync(ct)).Code;
+
+    public async Task<OpenAiOAuthCallback> WaitForAuthorizationCallbackAsync(CancellationToken ct)
     {
         if (_v4Listener is null && _v6Listener is null)
             throw new InvalidOperationException("OAuth callback server was not started.");
@@ -314,10 +407,10 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
             string html;
             try
             {
-                var code = ParseAuthorizationCode(requestLine, _expectedState);
+                var callback = ParseAuthorizationCallback(requestLine, _expectedState);
                 html = SuccessHtml;
                 await SendHtmlAsync(stream, html, ct);
-                return code;
+                return callback;
             }
             catch (Exception ex)
             {
@@ -365,6 +458,9 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
     }
 
     internal static string ParseAuthorizationCode(string requestLine, string expectedState)
+        => ParseAuthorizationCallback(requestLine, expectedState).Code;
+
+    internal static OpenAiOAuthCallback ParseAuthorizationCallback(string requestLine, string expectedState)
     {
         var parts = requestLine.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2)
@@ -389,7 +485,8 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
         if (!query.TryGetValue("code", out var code) || string.IsNullOrWhiteSpace(code))
             throw new InvalidOperationException("The OAuth callback did not include an authorization code.");
 
-        return code;
+        query.TryGetValue("client_id", out var clientId);
+        return new OpenAiOAuthCallback(code, clientId);
     }
 
     private static async Task SendHtmlAsync(Stream stream, string html, CancellationToken ct)
@@ -438,11 +535,3 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 }
-
-internal sealed record OpenAiExistingLoginStore(OpenAiExistingLoginTokens Tokens);
-
-internal sealed record OpenAiExistingLoginTokens(
-    [property: JsonPropertyName("access_token")] string AccessToken,
-    [property: JsonPropertyName("refresh_token")] string RefreshToken,
-    [property: JsonPropertyName("id_token")] string? IdToken,
-    [property: JsonPropertyName("account_id")] string? AccountId);
