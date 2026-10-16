@@ -1741,6 +1741,23 @@ public sealed partial class HttpApiService : IDisposable
             return (400, Serialize(new { error = "Missing required field: text" }));
         }
 
+        if (!string.IsNullOrWhiteSpace(payload.Language))
+        {
+            try
+            {
+                LanguageSelectionResolver.Resolve(payload.Language);
+            }
+            catch (InvalidLanguageSelectionException ex)
+            {
+                return (400, Serialize(new { error = ex.Message, reason = "invalid_language_selection" }));
+            }
+        }
+
+        if (_dictation is null)
+        {
+            return (501, Serialize(new { error = "Text processing is unavailable.", reason = "not_available" }));
+        }
+
         TextProcessingResult result;
         try
         {
@@ -1749,9 +1766,17 @@ public sealed partial class HttpApiService : IDisposable
                 ct
             );
         }
+        catch (InvalidLanguageSelectionException ex)
+        {
+            return (400, Serialize(new { error = ex.Message, reason = "invalid_language_selection" }));
+        }
         catch (KeyNotFoundException ex)
         {
             return (404, Serialize(new { error = ex.Message, reason = "profile_not_found" }));
+        }
+        catch (NotSupportedException ex)
+        {
+            return (501, Serialize(new { error = ex.Message, reason = "not_supported" }));
         }
         catch (PluginRequestException ex) when (!ct.IsCancellationRequested)
         {
