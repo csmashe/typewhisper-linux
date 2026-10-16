@@ -81,8 +81,74 @@ public sealed partial class DictationOrchestrator
             CleanupHandler =
                 cleanupLevel == CleanupLevel.None
                     ? null
-                    : (text, token) =>
-                        _cleanup.CleanAsync(
+                    : async (text, token) =>
+                    {
+                        var timeout = context.CleanupTimeoutSeconds > 0
+                            ? TimeSpan.FromSeconds(context.CleanupTimeoutSeconds)
+                            : Timeout.InfiniteTimeSpan;
+                        var started = Stopwatch.GetTimestamp();
+                        using var budgetCts = timeout == Timeout.InfiniteTimeSpan
+                            ? null
+                            : CancellationTokenSource.CreateLinkedTokenSource(token);
+                        if (budgetCts is not null)
+                            budgetCts.CancelAfter(timeout);
+                        var budgetToken = budgetCts?.Token ?? token;
+
+                        if (context.LiveCleanup is { } draft)
+                        {
+                            string? provider = null;
+                            try { provider = _promptProcessing.GetCleanupProviderSelection(); }
+                            catch (PluginRequestException) { /* Final cleanup reports the configuration error. */ }
+                            if (draft.MatchesFinal(cleanupLevel, provider))
+                            {
+                                string? reused;
+                                try
+                                {
+                                    reused = await draft.ReuseAsync(
+                                        text.Trim(),
+                                        postProcessingLanguage,
+                                        context.Capture,
+                                        budgetToken);
+                                }
+                                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                                {
+                                    throw;
+                                }
+                                catch (OperationCanceledException)
+                                    when (budgetCts?.IsCancellationRequested == true)
+                                {
+                                    reused = null;
+                                }
+                                if (reused is not null)
+                                {
+                                    Trace.WriteLine("[LiveCleanup] Reused matching draft for final cleanup.");
+                                    return reused;
+                                }
+                            }
+                            draft.Dispose();
+                        }
+
+                        var remaining = timeout == Timeout.InfiniteTimeSpan
+                            ? Timeout.InfiniteTimeSpan
+                            : timeout - Stopwatch.GetElapsedTime(started);
+                        if (timeout != Timeout.InfiniteTimeSpan && remaining <= TimeSpan.Zero)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            return await _cleanup.CleanAsync(
+                                text,
+                                CleanupLevel.Light,
+                                message =>
+                                {
+                                    ReportStatus(context, message);
+                                    return Task.CompletedTask;
+                                },
+                                context.Capture,
+                                timeout: TimeSpan.Zero,
+                                ct: token,
+                                sourceLanguage: postProcessingLanguage);
+                        }
+
+                        return await _cleanup.CleanAsync(
                             text,
                             cleanupLevel,
                             message =>
@@ -91,8 +157,11 @@ public sealed partial class DictationOrchestrator
                                 return Task.CompletedTask;
                             },
                             context.Capture,
-                            token
-                        ),
+                            timeout: timeout == Timeout.InfiniteTimeSpan ? TimeSpan.Zero : remaining,
+                            ct: token,
+                            sourceLanguage: postProcessingLanguage
+                        );
+                    },
             SnippetExpander = text =>
                 _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
             LlmHandler = promptAction is not null
@@ -231,6 +300,7 @@ public sealed partial class DictationOrchestrator
             {
                 Capture = _settings.Current.CaptureLlmProvenance ? new LlmCallCapture() : null,
                 TranscriptionTaskUsed = record.TranscriptionTaskUsed,
+                CleanupTimeoutSeconds = Math.Clamp(_settings.Current.CleanupTimeoutSeconds, 0, 120),
             };
             if (IsPromptActionUnavailable(profile?.PromptActionId, ResolvePromptAction(context) is not null))
                 throw new InvalidOperationException(Loc.Instance["History.RetryPromptActionUnavailable"]);

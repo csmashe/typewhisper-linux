@@ -64,6 +64,10 @@ public record AppSettings
     } = new(StringComparer.OrdinalIgnoreCase);
 
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
+    /// <summary>Optional AI cleanup wait limit. Zero waits without a cleanup deadline.</summary>
+    public int CleanupTimeoutSeconds { get; init; } = 5;
+
+    public bool LiveCleanupEnabled { get; init; }
 
     // Hybrid: quick tap toggles, held key acts as push-to-talk. Most forgiving
     // default — avoids the rapid on/off thrash Toggle produces on a held key.

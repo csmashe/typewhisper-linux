@@ -691,20 +691,36 @@
 
                     <Border Grid.Row="10"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
-                                       Classes="row-label" />
-                            <ComboBox Grid.Column="1"
-                                      ItemsSource="{Binding CleanupLevelOptions}"
-                                      SelectedItem="{Binding SelectedCleanupLevelOption}"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:CleanupLevelOption">
-                                        <TextBlock Text="{Binding DisplayName}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </Grid>
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,240">
+                                <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
+                                           Classes="row-label" />
+                                <ComboBox Grid.Column="1"
+                                          ItemsSource="{Binding CleanupLevelOptions}"
+                                          SelectedItem="{Binding SelectedCleanupLevelOption}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:CleanupLevelOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,90" ColumnSpacing="12">
+                                <TextBlock Text="{loc:Str Dictation.CleanupWaitLimit}"
+                                           Classes="row-label" TextWrapping="Wrap" />
+                                <TextBox Grid.Column="1" Text="{Binding CleanupTimeoutSeconds}"
+                                         AutomationProperties.Name="{loc:Str Dictation.CleanupWaitLimit}"
+                                         HorizontalContentAlignment="Right" />
+                            </Grid>
+                            <TextBlock Text="{loc:Str Dictation.CleanupWaitLimitHint}"
+                                       FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
+                            <CheckBox IsChecked="{Binding LiveCleanupEnabled}"
+                                      AutomationProperties.Name="{loc:Str Dictation.LiveCleanup}"
+                                      Content="{loc:Str Dictation.LiveCleanup}" />
+                            <TextBlock Text="{loc:Str Dictation.LiveCleanupHint}"
+                                       FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="11"

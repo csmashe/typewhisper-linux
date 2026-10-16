@@ -17,6 +17,22 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationSectionViewModelTests
 {
     [Theory]
+    [InlineData("0", 0, "0")]
+    [InlineData("-3", 0, "0")]
+    [InlineData("8", 8, "8")]
+    [InlineData("999", 120, "120")]
+    [InlineData("invalid", 12, "invalid")]
+    public void CleanupTimeout_LoadsAndPersistsValidBudget(string input, int expected, string expectedText)
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { CleanupTimeoutSeconds = 12 }, new FakeAudioDeviceEnumerator());
+        Assert.Equal("12", context.Sut.CleanupTimeoutSeconds);
+        context.Sut.CleanupTimeoutSeconds = input;
+        Assert.Equal(expected, context.Settings.Object.Current.CleanupTimeoutSeconds);
+        Assert.Equal(expectedText, context.Sut.CleanupTimeoutSeconds);
+    }
+
+    [Theory]
     [InlineData("-1", -1, "-1")]
     [InlineData("0", 1, "1")]
     [InlineData("900", 365, "365")]
