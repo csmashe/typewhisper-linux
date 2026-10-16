@@ -1214,5 +1214,10 @@
   "LanguageSelection.Invalid": "Ungültige Transkriptionssprache „{0}“. Wählen Sie Auto oder geben Sie ein gültiges BCP-47-Tag ein.",
   "LanguageSelection.AutomaticNotSupported": "{0} kann die Sprache nicht automatisch erkennen. Wählen Sie eine Sprache ausdrücklich aus.",
   "LanguageSelection.ExplicitNotSupported": "{0} akzeptiert keine ausdrückliche Sprachauswahl. Wählen Sie Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}.",
+  "Dictation.CleanupWaitLimit": "Wartezeit für KI-Bereinigung (Sekunden)",
+  "Dictation.LiveCleanup": "Entwürfe während der Aufnahme bereinigen",
+  "Dictation.LiveCleanupHint": "Benötigt Live-Transkription und mittlere oder hohe Bereinigung. Veränderliche Entwürfe werden während des Sprechens an den gewählten KI-Anbieter gesendet. Cloud-Anbieter können pro Entwurf abrechnen. Übersetzungen und Profil-Prompt-Aktionen werden nach dem Stoppen verarbeitet. Text wird einmal nach dem Stoppen eingefügt.",
+  "Dictation.CleanupWaitLimitHint": "Mittlere und hohe Bereinigung verwenden bei Erreichen des Limits die leichte Bereinigung. Gilt auch für Profile. 0 bedeutet kein Limit. Umschreiben und Übersetzung bleiben unverändert.",
+  "Dictation.CleanupTimedOut": "Wartezeit für KI-Bereinigung erreicht. Leichte Bereinigung wird verwendet."
 }

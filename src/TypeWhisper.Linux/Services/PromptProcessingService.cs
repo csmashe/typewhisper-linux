@@ -46,6 +46,12 @@ public sealed class PromptProcessingService
                && !_pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
     }
 
+    public string? GetCleanupProviderSelection()
+    {
+        var (provider, model) = ResolveProvider((string?)null);
+        return provider is null ? null : $"plugin:{provider.GetLlmSelectionId()}:{model}";
+    }
+
     private bool HasSelectedProvider(string? providerOverride)
     {
         return !string.IsNullOrWhiteSpace(providerOverride)
@@ -194,10 +200,11 @@ public sealed class PromptProcessingService
         string systemPrompt,
         string inputText,
         LlmCallCapture? capture = null,
-        CancellationToken ct = default
+        CancellationToken ct = default,
+        string? providerOverride = null
     )
     {
-        var (provider, modelId) = ResolveProvider(providerOverride: null);
+        var (provider, modelId) = ResolveProvider(providerOverride);
         if (provider is null)
         {
             throw new InvalidOperationException(Localization.Loc.Instance["Prompts.NoProvider"]);
@@ -216,6 +223,9 @@ public sealed class PromptProcessingService
 
         var response = await LlmRequestRetryPolicy.ExecuteAsync(
             token => provider.ProcessAsync(systemPrompt, userPrompt, modelId, token), ct);
+        // A timed-out optional cleanup may have already inserted Light output. Its late
+        // response must not be attached to that recording as the cleanup that was used.
+        ct.ThrowIfCancellationRequested();
         provenance?.ResponseReceived = response;
 
         return response;
