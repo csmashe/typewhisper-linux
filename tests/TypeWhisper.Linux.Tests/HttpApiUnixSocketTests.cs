@@ -50,6 +50,19 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(error, json.RootElement.GetProperty("error").GetString());
     }
 
+    [Fact]
+    public async Task TextProcessRoute_RejectsInvalidLanguageSelection()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var response = await client.PostAsync("/v1/text/process",
+            new StringContent("""{"text":"twenty one","language":"not-a-tag"}""", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("invalid_language_selection", json.RootElement.GetProperty("reason").GetString());
+    }
+
     private static readonly string[] s_helloWorld = ["Hello", "World"];
 
     [Fact]

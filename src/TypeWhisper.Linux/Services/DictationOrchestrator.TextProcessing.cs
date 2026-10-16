@@ -59,13 +59,25 @@ public sealed partial class DictationOrchestrator
             Capture = new LlmCallCapture(),
         };
 
+        string? requestLanguageTag = null;
+        if (!string.IsNullOrWhiteSpace(request.Language))
+        {
+            var requestedSelection = LanguageSelectionResolver.Resolve(request.Language);
+            if (!requestedSelection.IsAutomatic)
+            {
+                requestLanguageTag = requestedSelection.LanguageTag;
+            }
+        }
+
         var promptAction = ResolvePromptAction(context);
         if (IsPromptActionUnavailable(profile?.PromptActionId, promptAction is not null))
             throw new InvalidOperationException($"Prompt action '{profile?.PromptActionId}' for this profile is unavailable.");
 
-        var languageHints = LanguageSelectionResolver.ResolveHints(profile, _settings.Current);
-        var configuredLanguage = request.Language ?? LanguageSelectionResolver.ResolvePrimary(languageHints).LanguageTag;
-        var language = ResolvePostProcessingSourceLanguage(request.Language, configuredLanguage, false, false);
+        var languageHints = requestLanguageTag is not null
+            ? (IReadOnlyList<string>)[requestLanguageTag]
+            : LanguageSelectionResolver.ResolveHints(profile, _settings.Current);
+        var configuredLanguage = requestLanguageTag ?? LanguageSelectionResolver.ResolvePrimary(languageHints).LanguageTag;
+        var language = ResolvePostProcessingSourceLanguage(requestLanguageTag, configuredLanguage, false, false);
 
         var modelId = profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
         var engine = _models.GetTranscriptionPlugin(modelId);
@@ -80,10 +92,23 @@ public sealed partial class DictationOrchestrator
                 engineProviderId, engineModelId, timings), ct);
         var finalText = ApplyProfileStyleFormatting(context, VoiceCommandParser.Parse(processed.Text).Text);
 
-        var elapsed = timings.GroupBy(timing => timing.Name)
-            .ToDictionary(group => group.Key, group => group.Sum(timing => timing.Elapsed.TotalMilliseconds));
+        var stepTimingsQueue = new Queue<(string Name, TimeSpan Elapsed)>(timings);
         var steps = processed.Steps
-            .Select(step => new TextProcessingStep(step.Name, elapsed.GetValueOrDefault(step.Name), step.Changed, step.Succeeded))
+            .Select(step =>
+            {
+                double elapsedMs = 0;
+                if (stepTimingsQueue.Count > 0 && stepTimingsQueue.Peek().Name == step.Name)
+                {
+                    elapsedMs = stepTimingsQueue.Dequeue().Elapsed.TotalMilliseconds;
+                }
+                else
+                {
+                    var match = timings.FirstOrDefault(t => t.Name == step.Name);
+                    elapsedMs = match.Elapsed.TotalMilliseconds;
+                }
+
+                return new TextProcessingStep(step.Name, elapsedMs, step.Changed, step.Succeeded);
+            })
             .ToList();
         var calls = context.Capture.Calls
             .Select(call => new TextProcessingLlmCall(call.Stage, call.ProviderId, call.ModelId, call.RanLocally,
