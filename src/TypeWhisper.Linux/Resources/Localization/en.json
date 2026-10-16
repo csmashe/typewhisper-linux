@@ -1140,5 +1140,8 @@
   "About.ErrorCategoryFilter": "Error category",
   "Dictation.InsertionStrategy": "Insertion strategy",
   "Profiles.HotkeyBehavior": "Hotkey behavior",
-  "Snippets.TriggerModeLabel": "Trigger mode"
+  "Snippets.TriggerModeLabel": "Trigger mode",
+  "Shortcuts.RecordShortcut": "Record keys",
+  "Shortcuts.CancelCapture": "Cancel",
+  "Shortcuts.CapturePrompt": "Press a key or key combination. TypeWhisper applies it when you press the final key."
 }

@@ -5,6 +5,7 @@
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.ShortcutsSection"
+             Focusable="True"
              x:DataType="vm:ShortcutsSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.section-panel">
@@ -174,30 +175,45 @@
             <TextBlock Text="{loc:Str Shortcuts.MainCapture}"
                        Classes="section-label" />
             <Border Classes="section-panel">
-                <Border Classes="section-row">
-                    <Grid ColumnDefinitions="*,Auto"
-                          ColumnSpacing="16">
-                        <StackPanel Margin="0,0,16,0">
-                            <TextBlock Text="{loc:Str Shortcuts.MainHotkey}"
-                                       Classes="row-title" />
-                            <TextBlock
-                                Text="{loc:Str Shortcuts.MainHotkeyHint}"
-                                Classes="row-hint" />
-                        </StackPanel>
+                <StackPanel>
+                    <Border Classes="section-row">
+                        <!-- Title above the controls: the record, cancel, and apply buttons are too wide
+                             for a side-by-side row in compact windows and long translations. -->
+                        <Grid RowDefinitions="Auto,Auto"
+                              RowSpacing="10">
+                            <StackPanel>
+                                <TextBlock Text="{loc:Str Shortcuts.MainHotkey}"
+                                           Classes="row-title" />
+                                <TextBlock
+                                    Text="{loc:Str Shortcuts.MainHotkeyHint}"
+                                    Classes="row-hint" />
+                            </StackPanel>
 
-                        <StackPanel Grid.Column="1"
-                                    Orientation="Horizontal"
-                                    Spacing="8"
-                                    VerticalAlignment="Center">
-                            <TextBox Width="240"
-                                     AutomationProperties.Name="{loc:Str Shortcuts.MainHotkey}"
-                                     Text="{Binding HotkeyText}"
-                                     PlaceholderText="Ctrl+Shift+Space" />
-                            <Button Content="{loc:Str Common.Apply}"
-                                    Command="{Binding ApplyHotkeyCommand}" />
-                        </StackPanel>
-                    </Grid>
-                </Border>
+                            <StackPanel Grid.Row="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8"
+                                        HorizontalAlignment="Left">
+                                <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.MainHotkey}"
+                                         Text="{Binding HotkeyText}"
+                                         PlaceholderText="Ctrl+Shift+Space" />
+                                <Button Content="{loc:Str Shortcuts.RecordShortcut}"
+                                        Click="OnStartHotkeyCaptureClick"
+                                        IsVisible="{Binding !IsCapturingHotkey}" />
+                                <Button Content="{loc:Str Shortcuts.CancelCapture}"
+                                        Command="{Binding CancelHotkeyCaptureCommand}"
+                                        IsVisible="{Binding IsCapturingHotkey}" />
+                                <Button Content="{loc:Str Common.Apply}"
+                                        Command="{Binding ApplyHotkeyCommand}"
+                                        IsVisible="{Binding !IsCapturingHotkey}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <TextBlock Text="{loc:Str Shortcuts.CapturePrompt}"
+                               Classes="row-hint"
+                               Margin="18,0,18,14"
+                               IsVisible="{Binding IsCapturingHotkey}" />
+                </StackPanel>
             </Border>
 
             <TextBlock Text="{loc:Str Shortcuts.MoreShortcuts}"

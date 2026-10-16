@@ -1140,5 +1140,8 @@
   "About.ErrorCategoryFilter": "Categoría de error",
   "Dictation.InsertionStrategy": "Estrategia de inserción",
   "Profiles.HotkeyBehavior": "Comportamiento del atajo",
-  "Snippets.TriggerModeLabel": "Modo del disparador"
+  "Snippets.TriggerModeLabel": "Modo del disparador",
+  "Shortcuts.RecordShortcut": "Grabar teclas",
+  "Shortcuts.CancelCapture": "Cancelar",
+  "Shortcuts.CapturePrompt": "Pulsa una tecla o combinación. TypeWhisper la aplicará al pulsar la última tecla."
 }

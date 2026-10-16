@@ -1140,5 +1140,8 @@
   "About.ErrorCategoryFilter": "Fehlerkategorie",
   "Dictation.InsertionStrategy": "Einfügestrategie",
   "Profiles.HotkeyBehavior": "Hotkey-Verhalten",
-  "Snippets.TriggerModeLabel": "Auslösermodus"
+  "Snippets.TriggerModeLabel": "Auslösermodus",
+  "Shortcuts.RecordShortcut": "Tasten aufnehmen",
+  "Shortcuts.CancelCapture": "Abbrechen",
+  "Shortcuts.CapturePrompt": "Drücken Sie eine Taste oder Tastenkombination. TypeWhisper übernimmt sie, sobald Sie die letzte Taste drücken."
 }

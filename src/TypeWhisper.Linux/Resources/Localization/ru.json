@@ -1140,5 +1140,8 @@
   "About.ErrorCategoryFilter": "Категория ошибок",
   "Dictation.InsertionStrategy": "Стратегия вставки",
   "Profiles.HotkeyBehavior": "Действие горячей клавиши",
-  "Snippets.TriggerModeLabel": "Режим триггера"
+  "Snippets.TriggerModeLabel": "Режим триггера",
+  "Shortcuts.RecordShortcut": "Записать клавиши",
+  "Shortcuts.CancelCapture": "Отмена",
+  "Shortcuts.CapturePrompt": "Нажмите клавишу или сочетание клавиш. TypeWhisper применит его после нажатия последней клавиши."
 }
