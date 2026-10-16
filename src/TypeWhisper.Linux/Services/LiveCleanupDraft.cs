@@ -28,7 +28,7 @@ internal sealed class LiveCleanupDraft : IDisposable
             Interlocked.Increment(ref _requests);
             var capture = new LlmCallCapture();
             var output = await cleanup.CleanAsync(input, level, capture: capture,
-                timeout: TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 5), ct: token,
+                timeout: TimeSpan.FromSeconds(Math.Max(0, timeoutSeconds)), ct: token,
                 sourceLanguage: language, providerOverride: provider, preparedLightText: true).ConfigureAwait(false);
             if (!capture.Calls.Any(call => !string.IsNullOrWhiteSpace(call.ResponseReceived))) return null;
             lock (_gate) { _capturedInput = input; _capture = capture; }
