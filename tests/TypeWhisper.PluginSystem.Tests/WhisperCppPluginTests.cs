@@ -116,6 +116,9 @@ public partial class WhisperCppPluginTests
         Assert.Contains(
             TranscriptionAccelerationBackend.NvidiaCuda,
             plugin.SupportedAccelerationBackends);
+        Assert.Contains(
+            TranscriptionAccelerationBackend.Vulkan,
+            plugin.SupportedAccelerationBackends);
     }
 
     [Fact]
@@ -248,12 +251,15 @@ public partial class WhisperCppPluginTests
 
         var managed = WhisperNetVersionRegex().Match(csproj);
         var runtime = WhisperNetRuntimeVersionRegex().Match(csproj);
+        var vulkan = WhisperNetVulkanRuntimeVersionRegex().Match(csproj);
 
         Assert.True(managed.Success, "Could not find the Whisper.net <PackageReference> in the csproj.");
         Assert.True(runtime.Success, "Could not find the Whisper.net.Runtime <PackageReference> in the csproj.");
+        Assert.True(vulkan.Success, "Could not find the Whisper.net.Runtime.Vulkan <PackageReference> in the csproj.");
 
         Assert.Equal(WhisperCudaRuntimeInstaller.RuntimeVersion, managed.Groups[1].Value);
         Assert.Equal(WhisperCudaRuntimeInstaller.RuntimeVersion, runtime.Groups[1].Value);
+        Assert.Equal(WhisperCudaRuntimeInstaller.RuntimeVersion, vulkan.Groups[1].Value);
     }
 
     [GeneratedRegex("""<PackageReference\s+Include="Whisper\.net"\s+Version="([^"]+)"\s*/>""")]
@@ -261,6 +267,9 @@ public partial class WhisperCppPluginTests
 
     [GeneratedRegex("""<PackageReference\s+Include="Whisper\.net\.Runtime"\s+Version="([^"]+)"\s*/>""")]
     private static partial Regex WhisperNetRuntimeVersionRegex();
+
+    [GeneratedRegex("""<PackageReference\s+Include="Whisper\.net\.Runtime\.Vulkan"\s+Version="([^"]+)"\s*/>""")]
+    private static partial Regex WhisperNetVulkanRuntimeVersionRegex();
 
     // CI-portable state-machine test: a CUDA load whose backend is switched to CPU mid-
     // provision must abort rather than pin the process to a backend the user no longer

@@ -598,6 +598,8 @@ public sealed class WhisperCppPlugin
             _gate.Release();
         }
 
+        var requestedBackend = desiredBackend;
+
         // Set if a GPU attempt fails and we fall back to CPU, so the final status
         // can explain why rather than hard-failing an explicit acceleration request.
         string? cudaUnavailableDetail = null;
@@ -805,7 +807,7 @@ public sealed class WhisperCppPlugin
             // Status / TryConfigureComputeBackend).
             AccelerationStatus = cudaUnavailableDetail is null
                 ? CreateLoadedAccelerationStatus(_computeBackend, AccelerationPreference)
-                : CreateGpuUnavailableStatus(_pinnedRuntimeBackend ?? "cuda",
+                : CreateGpuUnavailableStatus(requestedBackend,
                     cudaUnavailableDetail,
                     requiresRestart: _pinnedRuntimeBackend == "cpu"
                 );
