@@ -274,7 +274,8 @@ internal sealed class MetaRealtimeTranscriptCollector
                     isFinalEvent = true;
                     isTerminal = true;
                 }
-                else
+                // A partial belongs to the latest speechStart; once that turn completed, a late one is stale.
+                else if (!UsesDiarization || _activeTurnId is not null || _turns.Count == 0)
                 {
                     _interim = transcript;
                 }

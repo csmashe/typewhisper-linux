@@ -876,6 +876,26 @@ public sealed class MetaPluginTests
     }
 
     [Fact]
+    public async Task Realtime_DiarizationIgnoresPartialArrivingAfterItsTurnCompleted()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        await using var session = await StartDiarizationSessionAsync(transport);
+        var events = new List<StreamingTranscriptEvent>();
+        session.TranscriptReceived += events.Add;
+        transport.EnqueueText("""{"type":"speechStart","turnId":1}""");
+        transport.EnqueueText("""{"type":"speechStart","turnId":2}""");
+        transport.EnqueueText("""{"type":"speechComplete","turnId":2,"transcript":"Second"}""");
+        transport.EnqueueText("""{"type":"transcript","transcript":"Secon","final":false}""");
+        transport.EnqueueText("""{"type":"speechComplete","turnId":1,"transcript":"First"}""");
+        var finalize = session.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueClose();
+        await finalize.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("First\nSecond", Assert.Single(events, evt => evt.IsFinal).Text);
+        Assert.DoesNotContain(events, evt => evt.Text.Contains("Secon\n") || evt.Text.EndsWith("Secon"));
+    }
+
+    [Fact]
     public async Task Realtime_DiarizationFaultsOnAbnormalCloseAfterEndStream()
     {
         var transport = new ScriptedWebSocketTransport();
