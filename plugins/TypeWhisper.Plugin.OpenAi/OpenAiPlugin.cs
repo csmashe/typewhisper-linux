@@ -869,6 +869,8 @@ public sealed class OpenAiPlugin
                 return null;
 
             var visibleModels = SanitizeChatGptModels(catalogModels)
+                .OrderBy(model => model.Priority ?? int.MaxValue)
+                .ThenBy(model => model.Slug, StringComparer.Ordinal)
                 .ToList();
             if (visibleModels.Count == 0)
                 return null;
@@ -1106,8 +1108,9 @@ public sealed class OpenAiPlugin
             throw new InvalidOperationException("ChatGPT did not return the app registration ID.");
         var tokens = await OpenAiOAuthClient.ExchangeAuthorizationCodeAsync(
             _httpClient, callback.Code, pkce, issuedClientId, ct);
-        if (!(tokens.Scope?.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                .Contains("chatgpt.tokens.use.direct", StringComparer.Ordinal) ?? false))
+        if (!string.IsNullOrWhiteSpace(tokens.Scope)
+            && !tokens.Scope.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Contains("chatgpt.tokens.use.direct", StringComparer.Ordinal))
             throw new InvalidOperationException("ChatGPT did not grant permission to use your plan.");
         var identity = await OpenAiOAuthClient.ValidateIdTokenAsync(tokens.IdToken, issuedClientId, nonce, ct);
         await StoreOAuthTokensAsync(tokens, identity.Subject, issuedClientId, ct);
@@ -1367,6 +1370,11 @@ public sealed class OpenAiPlugin
                 credentials.ClientId,
                 credentials.GrantedScopes);
             await CommitOAuthCredentialSnapshotUnderGateAsync(refreshedCredentials);
+            if (!refreshedCredentials.GrantedScopes.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Contains("chatgpt.tokens.use.direct", StringComparer.Ordinal))
+                throw new PluginRequestException(
+                    "ChatGPT plan use was not authorized. Reconnect ChatGPT and enable plan usage.",
+                    PluginRequestFailureKind.Authentication);
             return refreshedCredentials;
         }
         finally

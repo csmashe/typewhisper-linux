@@ -369,7 +369,7 @@ internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
         _v4Listener = TryStartListener(new IPEndPoint(IPAddress.Loopback, OpenAiOAuthClient.CallbackPort));
         _v6Listener = TryStartListener(new IPEndPoint(IPAddress.IPv6Loopback, OpenAiOAuthClient.CallbackPort));
 
-        if (_v4Listener is null && _v6Listener is null)
+        if (_v4Listener is null)
             throw new InvalidOperationException(
                 $"Could not bind the OAuth callback listener on port {OpenAiOAuthClient.CallbackPort}.");
     }
