@@ -133,7 +133,7 @@ internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSess
             && acknowledged.ValueKind == JsonValueKind.False;
         if (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null)
             return new GladiaMessage(type, Error: ParseError(error));
-        if (rejected || type.Contains("error", StringComparison.OrdinalIgnoreCase))
+        if (rejected || type == "error")
             return new GladiaMessage(type, Error: ParseError(root));
 
         if (type != "transcript")
