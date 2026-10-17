@@ -1,6 +1,5 @@
-using System.Buffers.Binary;
+using System.Globalization;
 using System.Net.WebSockets;
-using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -8,32 +7,28 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Gemini;
 
-internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSessionHealth
+internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSessionHealth, IStreamingSessionFinalizeTimeout
 {
     private const string LiveWebSocketUrl =
         "wss://generativelanguage.googleapis.com/ws/"
         + "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
-    internal const string FinalizePayload = """{"realtimeInput":{"audioStreamEnd":true}}""";
-
-    private const float AudibleRmsThreshold = 0.02f;
-    private const int TailCollectionWindowMs = 1500;
+    internal const string ActivityStartPayload = """{"realtimeInput":{"activityStart":{}}}""";
+    internal const string ActivityEndPayload = """{"realtimeInput":{"activityEnd":{}}}""";
 
     private static readonly string[] s_responseModalities = ["TEXT"];
 
     private readonly WebSocketSessionPump _pump;
-    private readonly GeminiWebSocketAdapter _adapter;
-    private readonly IWebSocketTransport _transport;
-    private long _lastAudibleSequence;
 
-    private GeminiStreamingSession(WebSocketSessionPump pump, GeminiWebSocketAdapter adapter, IWebSocketTransport transport)
+    private GeminiStreamingSession(WebSocketSessionPump pump)
     {
         _pump = pump;
-        _adapter = adapter;
-        _transport = transport;
     }
 
     public Exception? Fault => _pump.Fault;
+
+    // The whole recording is one activity, so its only final transcript follows activityEnd.
+    public TimeSpan FinalizeTimeout => TimeSpan.FromSeconds(15);
 
     public event Action<StreamingTranscriptEvent>? TranscriptReceived
     {
@@ -50,15 +45,7 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
         CancellationToken ct)
     {
         var adapter = new GeminiWebSocketAdapter(apiKey, liveModelId, languageHints, customVocabulary, mode);
-        var transport = new ClientWebSocketTransport();
-        var pump = await WebSocketSessionPump.ConnectAsync(
-            adapter, ct, transportFactory: new SessionTransportFactory(transport));
-        return new GeminiStreamingSession(pump, adapter, transport);
-    }
-
-    private sealed class SessionTransportFactory(IWebSocketTransport transport) : IWebSocketTransportFactory
-    {
-        public IWebSocketTransport Create() => transport;
+        return new GeminiStreamingSession(await WebSocketSessionPump.ConnectAsync(adapter, ct));
     }
 
     internal static Task<GeminiStreamingSession> CreateConnectedSessionForTests(WebSocket ws) =>
@@ -68,83 +55,14 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
     {
         var adapter = new GeminiWebSocketAdapter(
             "", GeminiPlugin.DefaultLiveTranscriptionModel, [], [], GeminiTranscriptionMode.Smart);
-        var pump = await WebSocketSessionPump.StartConnectedAsync(adapter, transport, CancellationToken.None);
-        return new GeminiStreamingSession(pump, adapter, transport);
+        return new GeminiStreamingSession(
+            await WebSocketSessionPump.StartConnectedAsync(adapter, transport, CancellationToken.None));
     }
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
-    {
-        var audible = IsAudible(pcm16Audio.Span);
-        await _pump.SendAudioAsync(pcm16Audio, ct);
-        // Take the sequence after sending so finals received in flight leave this audio untranscribed.
-        if (audible)
-            Volatile.Write(ref _lastAudibleSequence, _adapter.NextActivity());
-    }
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
+        _pump.SendAudioAsync(pcm16Audio, ct);
 
-    internal static bool IsAudible(ReadOnlySpan<byte> pcm16Audio)
-    {
-        var sampleCount = pcm16Audio.Length / 2;
-        if (sampleCount == 0)
-            return false;
-
-        double sumSquares = 0;
-        for (var sample = 0; sample < sampleCount; sample++)
-        {
-            var normalized = BinaryPrimitives.ReadInt16LittleEndian(pcm16Audio.Slice(sample * 2, 2)) / 32768f;
-            sumSquares += normalized * normalized;
-        }
-        var rms = Math.Sqrt(sumSquares / sampleCount);
-        return rms >= AudibleRmsThreshold;
-    }
-
-    public async Task FinalizeAsync(CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        ThrowIfPumpFaulted();
-        var completedAtStart = _adapter.CompletedPendingUtterances;
-        await _pump.FinalizeAsync(ct);
-
-        var finalsAtStart = _adapter.FinalCount;
-        var tailExpected = _adapter.HasPendingUtterance
-            || Volatile.Read(ref _lastAudibleSequence) > _adapter.LastFinalSequence;
-
-        // No server completion signal exists: a pending interim or audible audio sent after
-        // the last final is evidence of untranscribed speech. An expected tail fails finalization
-        // when no final arrives after EOF, so the coordinator/orchestrator fall back to batch
-        // transcription of captured audio rather than delivering a partial transcript.
-        // A completed pending utterance ends collection early; finals without interims are
-        // collected until the window closes. The coordinator's grace window follows.
-        // Without tail evidence, keep the bounded window as a safety net for speech below
-        // the energy threshold.
-        var deadline = Environment.TickCount64 + TailCollectionWindowMs;
-        while (_transport.State == WebSocketState.Open)
-        {
-            ct.ThrowIfCancellationRequested();
-            ThrowIfPumpFaulted();
-            if ((_adapter.CompletedPendingUtterances != completedAtStart && !_adapter.HasPendingUtterance)
-                || Environment.TickCount64 >= deadline)
-                break;
-            await Task.Delay(25, ct);
-        }
-
-        ct.ThrowIfCancellationRequested();
-        ThrowIfPumpFaulted();
-        var tailMissing = _adapter.HasPendingUtterance || (tailExpected && _adapter.FinalCount == finalsAtStart);
-        if (tailMissing)
-        {
-            if (_transport.State != WebSocketState.Open)
-                throw new PluginRequestException(
-                    "Gemini streaming connection closed before the tail transcript finalized.",
-                    PluginRequestFailureKind.ServerError);
-            throw new TimeoutException("Gemini streaming tail transcript did not arrive in time.");
-        }
-    }
-
-    private void ThrowIfPumpFaulted()
-    {
-        if (Fault is { } fault)
-            ExceptionDispatchInfo.Capture(fault).Throw();
-    }
+    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
 
     public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
@@ -176,6 +94,14 @@ internal sealed class GeminiStreamingSession : IStreamingSession, IStreamingSess
                     ["responseModalities"] = s_responseModalities,
                 },
                 ["inputAudioTranscription"] = transcription,
+                // One manually marked activity per recording: nothing is dropped as silence.
+                ["realtimeInputConfig"] = new Dictionary<string, object?>
+                {
+                    ["automaticActivityDetection"] = new Dictionary<string, object?>
+                    {
+                        ["disabled"] = true,
+                    },
+                },
             },
         });
     }
@@ -207,26 +133,31 @@ internal sealed class GeminiWebSocketAdapter(
     GeminiTranscriptionMode mode
 ) : IWebSocketSessionAdapter
 {
-    private int _hasPendingUtterance;
-    private int _completedPendingUtterances;
-    private int _finalCount;
-    private long _activitySequence;
-    private long _lastFinalSequence;
-    internal int CompletedPendingUtterances => Volatile.Read(ref _completedPendingUtterances);
-    internal int FinalCount => Volatile.Read(ref _finalCount);
-    internal long LastFinalSequence => Volatile.Read(ref _lastFinalSequence);
-    internal bool HasPendingUtterance => Volatile.Read(ref _hasPendingUtterance) != 0;
+    private const decimal Pcm16BytesPerSecond = 16000 * 2;
 
-    internal long NextActivity() => Interlocked.Increment(ref _activitySequence);
+    // An acknowledged end may be rounded; anything earlier than this means audio is missing.
+    private const decimal AudioOffsetToleranceSeconds = 0.01m;
+
+    // Send side, serialized by the pump's send gate.
+    private bool _activityStarted;
+
+    // Shared with the receive loop.
+    private long _sentAudioBytes;
+    private int _activityEnded;
+
+    // Receive loop only.
+    private bool _finalReceived;
+    private bool _activityEndAcknowledged;
 
     public string ProviderName => "Gemini";
     public WebSocketReadinessPolicy Readiness =>
         WebSocketReadinessPolicy.Require("setupComplete");
 
-    // Google documents no server signal after audioStreamEnd, so a session that ends cleanly
-    // must not fault solely for lacking a terminal signal. The session collects pending tails.
-    // The session also expects a tail when audible audio was sent after the last final.
-    public WebSocketTerminalPolicy Terminal => WebSocketTerminalPolicy.None;
+    // Not in the API reference; upstream's live checks show one final after activityEnd and
+    // ACTIVITY_END at the full sent-audio offset, even across silence. Anything else falls back to batch.
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("the final transcript and activity end");
+
     public WebSocketKeepAlivePolicy? KeepAlive => null;
     public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
 
@@ -237,38 +168,42 @@ internal sealed class GeminiWebSocketAdapter(
     public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(CancellationToken ct) =>
         ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
             [
-                new WebSocketOutboundMessage(
-                    Encoding.UTF8.GetBytes(
-                        GeminiStreamingSession.CreateSetupPayload(
-                            liveModelId,
-                            languageHints,
-                            customVocabulary,
-                            mode)),
-                    WebSocketMessageType.Text),
+                Text(GeminiStreamingSession.CreateSetupPayload(
+                    liveModelId,
+                    languageHints,
+                    customVocabulary,
+                    mode)),
             ]);
 
     public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
         ReadOnlyMemory<byte> pcm16Audio,
         CancellationToken ct
-    ) =>
-        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
-            pcm16Audio.Length == 0
-                ? []
-                : [
-                    new WebSocketOutboundMessage(
-                        Encoding.UTF8.GetBytes(
-                            GeminiStreamingSession.CreateAudioPayload(pcm16Audio.Span)),
-                        WebSocketMessageType.Text),
-                ]);
+    )
+    {
+        if (pcm16Audio.Length == 0)
+            return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([]);
 
-    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct) =>
-        ValueTask.FromResult(
-            new WebSocketFinalizePlan(
-                [
-                    new WebSocketOutboundMessage(
-                        Encoding.UTF8.GetBytes(GeminiStreamingSession.FinalizePayload),
-                        WebSocketMessageType.Text),
-                ]));
+        var audio = Text(GeminiStreamingSession.CreateAudioPayload(pcm16Audio.Span));
+        Interlocked.Add(ref _sentAudioBytes, pcm16Audio.Length);
+        if (_activityStarted)
+            return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([audio]);
+
+        // activityStart is only accepted after setupComplete, which the pump awaits before audio.
+        _activityStarted = true;
+        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            [Text(GeminiStreamingSession.ActivityStartPayload), audio]);
+    }
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
+    {
+        // Without audio there is nothing to transcribe or acknowledge.
+        if (!_activityStarted)
+            return ValueTask.FromResult(new WebSocketFinalizePlan([], AlreadyTerminal: true));
+
+        Volatile.Write(ref _activityEnded, 1);
+        return ValueTask.FromResult(
+            new WebSocketFinalizePlan([Text(GeminiStreamingSession.ActivityEndPayload)]));
+    }
 
     public WebSocketInboundResult HandleMessage(
         WebSocketMessageType type,
@@ -315,42 +250,92 @@ internal sealed class GeminiWebSocketAdapter(
                     Fault: new InvalidOperationException($"Gemini streaming error: {message}"));
             }
 
-            if (!TryGetProperty(root, "serverContent", "server_content", out var serverContent))
-                return WebSocketInboundResult.Empty;
-
-            // turnComplete/generationComplete end a model turn, not the session, so no Terminal
-            // is raised: nothing awaits it (Terminal.None) and it would end the receive loop --
-            // including inside the coordinator's post-finalize grace window, where a turn that
-            // began before the user stopped can complete ahead of the tail transcript. The loop
-            // ends at dispose instead, and the Live API's 10-minute cap closes the socket
-            // normally; the session rejects closure if a known utterance remains pending.
-
-            // Each inputTranscription frame is one finalized utterance; the coordinator joins
-            // them with newlines, so they are emitted as they arrive rather than aggregated.
-            if (TryGetTranscriptText(serverContent, "inputTranscription", "input_transcription")
-                is { } finalText)
+            // voiceActivity sits beside the message union, so it can share a frame with serverContent.
+            if (TryGetProperty(root, "voiceActivity", "voice_activity", out var activity)
+                && TryGetString(activity, "type") == "ACTIVITY_END"
+                && AcknowledgeActivityEnd(activity) is { } activityFault)
             {
-                // Publish the final before the completion counter: FinalizeAsync exits early on
-                // a completed pending utterance and must then see that final as arrived.
-                Volatile.Write(ref _lastFinalSequence, NextActivity());
-                Interlocked.Increment(ref _finalCount);
-                if (Interlocked.Exchange(ref _hasPendingUtterance, 0) != 0)
-                    Interlocked.Increment(ref _completedPendingUtterances);
-                return new WebSocketInboundResult(
-                    [new StreamingTranscriptEvent(finalText, IsFinal: true)]);
+                return new WebSocketInboundResult([], Fault: activityFault);
             }
 
-            if (TryGetTranscriptText(serverContent, "interimInputTranscription", "interim_input_transcription")
-                is not { } interimText)
+            var transcripts = new List<StreamingTranscriptEvent>(1);
+            if (TryGetProperty(root, "serverContent", "server_content", out var serverContent))
             {
-                return WebSocketInboundResult.Empty;
+                // turnComplete/generationComplete end a model turn, not the transcription.
+                if (TryGetProperty(serverContent, "inputTranscription", "input_transcription", out var final)
+                    && final.ValueKind == JsonValueKind.Object)
+                {
+                    // One activity has one final; an early or second one means the server split the recording.
+                    if (Volatile.Read(ref _activityEnded) == 0 || _finalReceived)
+                    {
+                        return new WebSocketInboundResult(
+                            [],
+                            Fault: new InvalidOperationException(
+                                "Gemini finalized an unexpected transcription segment."));
+                    }
+
+                    if (TryGetString(final, "text") is not { } finalText)
+                    {
+                        return new WebSocketInboundResult(
+                            [],
+                            Fault: new InvalidOperationException(
+                                "Gemini sent a final transcription without text."));
+                    }
+
+                    _finalReceived = true;
+                    if (!string.IsNullOrWhiteSpace(finalText))
+                        transcripts.Add(new StreamingTranscriptEvent(finalText.Trim(), IsFinal: true));
+                }
+                else if (!_finalReceived
+                         && TryGetTranscriptText(serverContent, "interimInputTranscription", "interim_input_transcription")
+                             is { } interimText)
+                {
+                    transcripts.Add(new StreamingTranscriptEvent(interimText, IsFinal: false));
+                }
             }
 
-            Volatile.Write(ref _hasPendingUtterance, 1);
-            return new WebSocketInboundResult(
-                [new StreamingTranscriptEvent(interimText, IsFinal: false)]);
+            // The final and the acknowledgement can arrive in either order.
+            if (_finalReceived && _activityEndAcknowledged)
+                return new WebSocketInboundResult(transcripts, WebSocketSessionSignal.Terminal);
+
+            return transcripts.Count == 0
+                ? WebSocketInboundResult.Empty
+                : new WebSocketInboundResult(transcripts);
         }
     }
+
+    private InvalidOperationException? AcknowledgeActivityEnd(JsonElement activity)
+    {
+        if (Volatile.Read(ref _activityEnded) == 0 || _activityEndAcknowledged)
+            return new InvalidOperationException("Gemini acknowledged an unexpected audio boundary.");
+
+        var sentSeconds = Interlocked.Read(ref _sentAudioBytes) / Pcm16BytesPerSecond;
+        if (TryParseDurationSeconds(
+                TryGetString(activity, "audioOffset") ?? TryGetString(activity, "audio_offset"))
+            is not { } offset
+            || offset + AudioOffsetToleranceSeconds < sentSeconds)
+        {
+            return new InvalidOperationException(
+                "Gemini acknowledged less audio than was sent.");
+        }
+
+        _activityEndAcknowledged = true;
+        return null;
+    }
+
+    // Protobuf Duration JSON: decimal seconds with an "s" suffix, e.g. "3.5s".
+    internal static decimal? TryParseDurationSeconds(string? value) =>
+        value is { Length: > 1 } && value[^1] == 's'
+        && decimal.TryParse(
+            value.AsSpan(0, value.Length - 1),
+            NumberStyles.AllowDecimalPoint,
+            CultureInfo.InvariantCulture,
+            out var seconds)
+            ? seconds
+            : null;
+
+    private static WebSocketOutboundMessage Text(string json) =>
+        new(Encoding.UTF8.GetBytes(json), WebSocketMessageType.Text);
 
     private static string? TryGetTranscriptText(
         JsonElement serverContent,

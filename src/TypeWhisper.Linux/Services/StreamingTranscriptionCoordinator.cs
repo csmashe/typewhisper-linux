@@ -23,6 +23,9 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     private const int FinalizeSenderTimeoutMs = 2000;
     private const int FinalizeSessionTimeoutMs = 2000;
 
+    // Cap for IStreamingSessionFinalizeTimeout requests.
+    private static readonly TimeSpan s_maxSessionFinalizeTimeout = TimeSpan.FromSeconds(30);
+
     private const int FinalizeGraceWindowMs = 500;
 
     // Debounce: after a late final arrives in the grace window, wait this long
@@ -381,6 +384,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
         Exception? sessionFinalizeFault = null;
         TimeoutException? sessionFinalizeTimeout = null;
+        var sessionFinalizeBudget = ResolveSessionFinalizeBudget(session);
 
         // ReSharper disable once MoveLocalFunctionAfterJumpStatement
         // Kept beside the sessionFinalizeFault/sessionFinalizeTimeout state it mutates,
@@ -390,12 +394,12 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             Volatile.Write(ref _skipSessionFinalize, true);
             sessionFinalizeTimeout = new TimeoutException(
                 $"Streaming session-finalize deadline exhausted after "
-                + $"{_finalizeSessionTimeout.TotalMilliseconds:0} ms.",
+                + $"{sessionFinalizeBudget.TotalMilliseconds:0} ms.",
                 innerException
             );
             Trace.WriteLine(
                 $"[StreamingCoordinator] Session-finalize deadline exhausted after "
-                + $"{_finalizeSessionTimeout.TotalMilliseconds:0} ms; "
+                + $"{sessionFinalizeBudget.TotalMilliseconds:0} ms; "
                 + "streaming result is ineligible."
             );
         }
@@ -417,7 +421,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
                 // deadlineTask elapses, making it win the race indistinguishably
                 // from on-time success. With one source the WhenAny winner is
                 // authoritative.
-                var deadlineTask = Task.Delay(_finalizeSessionTimeout, CancellationToken.None);
+                var deadlineTask = Task.Delay(sessionFinalizeBudget, CancellationToken.None);
                 var completedTask = await Task.WhenAny(sessionFinalizeTask, deadlineTask)
                     .WaitAsync(ct);
 
@@ -685,6 +689,27 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         }
 
         await DisposeSessionAsync(session, finalizeTimeout);
+    }
+
+    private TimeSpan ResolveSessionFinalizeBudget(IStreamingSession? session)
+    {
+        if (session is not IStreamingSessionFinalizeTimeout requested)
+            return _finalizeSessionTimeout;
+
+        TimeSpan timeout;
+        try
+        {
+            timeout = requested.FinalizeTimeout;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[StreamingCoordinator] Finalize timeout unavailable: {ex.Message}");
+            return _finalizeSessionTimeout;
+        }
+
+        return timeout <= _finalizeSessionTimeout
+            ? _finalizeSessionTimeout
+            : timeout < s_maxSessionFinalizeTimeout ? timeout : s_maxSessionFinalizeTimeout;
     }
 
     // Fault-only continuation for an abandoned task so a late exception cannot

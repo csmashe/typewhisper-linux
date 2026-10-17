@@ -91,6 +91,8 @@ public sealed record WebSocketReadinessPolicy(bool Required, string SignalName)
 
 public sealed record WebSocketTerminalPolicy(bool Required, string SignalName)
 {
+    // ReSharper disable once UnusedMember.Global -- SDK surface for adapters whose provider sends
+    // no terminal signal; no in-tree adapter needs it since Gemini moved to manual activity.
     public static WebSocketTerminalPolicy None { get; } = new(false, "completion");
 
     public static WebSocketTerminalPolicy Require(string signalName) =>
