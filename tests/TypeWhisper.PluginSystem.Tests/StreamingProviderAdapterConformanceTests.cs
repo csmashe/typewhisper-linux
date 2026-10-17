@@ -135,7 +135,9 @@ public sealed class StreamingProviderAdapterConformanceTests
             .GetConnectionOptionsAsync(CancellationToken.None);
         var speechmatics = await new SpeechmaticsWebSocketAdapter(
                 "speechmatics-key",
+                new Uri(SpeechmaticsPlugin.AvailableRegions[0].RealtimeUrl),
                 "de",
+                "enhanced",
                 []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
@@ -164,6 +166,7 @@ public sealed class StreamingProviderAdapterConformanceTests
         Assert.Equal("/base/v1/speech-to-text/realtime", reson8.Uri.AbsolutePath);
         Assert.Equal("test-token", ParseQuery(gladia.Uri)["token"]);
         Assert.Equal("stt-rt.soniox.com", soniox.Uri.Host);
+        Assert.Equal("wss://eu.rt.speechmatics.com/v2", speechmatics.Uri.ToString());
         Assert.Equal(
             "Bearer speechmatics-key",
             speechmatics.Headers!["Authorization"]
@@ -679,7 +682,8 @@ public sealed class StreamingProviderAdapterConformanceTests
             // Speechmatics rejects a null language at StartRecognition; passing null made
             // every Speechmatics case fault during start and tear the transport down, which
             // surfaced as "the channel has been closed" from the first NextSentAsync.
-            "Speechmatics" => new SpeechmaticsWebSocketAdapter("key", "en", []),
+            "Speechmatics" => new SpeechmaticsWebSocketAdapter(
+                "key", new Uri(SpeechmaticsPlugin.AvailableRegions[0].RealtimeUrl), "en", "enhanced", []),
             "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null),
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
