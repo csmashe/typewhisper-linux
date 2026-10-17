@@ -38,7 +38,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     internal OrchestratorCompositionFixture(
         bool soundFeedbackEnabled = false,
         (string Process, string Title)? focusedApp = null,
-        IPostProcessingPipeline? pipeline = null
+        IPostProcessingPipeline? pipeline = null,
+        Func<string, string?>? browserUrlWalk = null
     )
     {
         IntegrationEnvironment.ResetApplicationState();
@@ -117,6 +118,12 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
                     new ScriptedActiveWindowProvider(focused.Process, focused.Title)
                 )
             );
+        }
+
+        if (browserUrlWalk is not null)
+        {
+            services.Replace(ServiceDescriptor.Singleton(
+                new AtSpiUrlExtractor(ProcessRunner, null, browserUrlWalk)));
         }
 
         services.Replace(

@@ -1176,7 +1176,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             });
             _recordingSnapshotTask = recordingSnapshotTask;
 
-            var recordingUrlRematchTask = Task.Run(async () =>
+            var recordingUrlRematchTask = hasUrlProfiles ? Task.Run(async () =>
             {
                 try
                 {
@@ -1290,7 +1290,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 {
                     Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 }
-            });
+            }) : Task.CompletedTask;
             _recordingUrlRematchTask = recordingUrlRematchTask;
 
             // Final in-gate re-check: a lock can land during the slow synchronous setup above, and

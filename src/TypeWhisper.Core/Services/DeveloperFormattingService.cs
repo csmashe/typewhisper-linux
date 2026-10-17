@@ -74,7 +74,7 @@ public static partial class DeveloperFormattingService
         return SpokenFileExtensionRegex().Replace(text, match =>
         {
             var preceding = match.Groups["preceding"].Value;
-            var extRaw = match.Groups["ext"].Value.Replace(" ", "").ToLowerInvariant();
+            var extRaw = string.Concat(match.Groups["ext"].Value.Where(c => !char.IsWhiteSpace(c))).ToLowerInvariant();
             var ext = extRaw switch
             {
                 "cs" or "csharp" => ".cs",
@@ -160,7 +160,7 @@ public static partial class DeveloperFormattingService
     }
 
     [GeneratedRegex(
-        @"(?<preceding>\b[A-Za-z0-9_-]+)\s*(?:(?:\bdot\b|\.)\s*)(?<ext>c\s*sharp|j\s*s\s*o\s*n|y\s*a\s*m\s*l|y\s*m\s*l|c\s*s|t\s*s|j\s*s|p\s*y|m\s*d)\b",
+        @"(?<preceding>\b[A-Za-z0-9_-]+)(?:[ \t]+dot[ \t]+|\.)(?<ext>c[ \t]*sharp|j[ \t]*s[ \t]*o[ \t]*n|y[ \t]*a[ \t]*m[ \t]*l|y[ \t]*m[ \t]*l|c[ \t]*s|t[ \t]*s|j[ \t]*s|p[ \t]*y|m[ \t]*d)\b",
         RegexOptions.IgnoreCase
     )]
     private static partial Regex SpokenFileExtensionRegex();

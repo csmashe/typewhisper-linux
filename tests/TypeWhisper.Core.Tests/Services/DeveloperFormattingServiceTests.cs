@@ -42,11 +42,13 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("see you at 5")]
     [InlineData("price plus tax")]
     [InlineData("Hello, world. How are you?")]
+    [InlineData("Read the docs. JS is supported.")]
+    [InlineData("Read the docs.\nJS is supported.")]
     public void Format_DoesNotCollapseCommonProse(string input)
     {
         var result = DeveloperFormattingService.Format(input);
 
-        Assert.Equal(input, result);
+        Assert.Equal(input.Replace('\n', ' '), result);
     }
 
     [Theory]
@@ -61,6 +63,7 @@ public sealed class DeveloperFormattingServiceTests
     [InlineData("parse package dot J S O N", "parse package.json")]
     [InlineData("edit config dot Y M L", "edit config.yml")]
     [InlineData("review workflow dot Y A M L", "review workflow.yaml")]
+    [InlineData("edit config dot Y\tM\tL", "edit config.yml")]
     public void Format_NormalizesSpokenFileExtensions(string input, string expected)
     {
         var result = DeveloperFormattingService.Format(input);
