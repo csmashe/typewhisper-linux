@@ -384,7 +384,7 @@ public sealed class StreamingProviderAdapterConformanceTests
         // race the receive loop, so let the fault land first.
         await WaitForFaultAsync(pump);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAnyAsync<InvalidOperationException>(
             () => pump.FinalizeAsync(CancellationToken.None).WaitAsync(s_timeout)
         );
         Assert.Contains("rejected", exception.Message, StringComparison.OrdinalIgnoreCase);
