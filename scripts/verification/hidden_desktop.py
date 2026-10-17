@@ -322,9 +322,20 @@ class HiddenDesktop:
         return {"DISPLAY": self.x_display, "XAUTHORITY": str(auth), "DBUS_SESSION_BUS_ADDRESS": self.bus_address,
                 "WAYLAND_DISPLAY": str(self.runtime / self.wayland_display)}
 
+    @staticmethod
+    def _gi_python() -> str:
+        for candidate in [sys.executable, "/usr/bin/python3", "python3"]:
+            try:
+                res = subprocess.run([candidate, "-c", "import gi"], capture_output=True)
+                if res.returncode == 0:
+                    return candidate
+            except Exception:
+                continue
+        return "python3"
+
     def accessibility(self, click: str | None = None) -> dict:
         """The AT-SPI tree, after optionally invoking the first action of the control named `click`."""
-        done = subprocess.run(["python3", "-c", _ATSPI_SCRIPT] + ([click] if click else []),
+        done = subprocess.run([self._gi_python(), "-c", _ATSPI_SCRIPT] + ([click] if click else []),
                               env={**os.environ, "DBUS_SESSION_BUS_ADDRESS": self.bus_address},
                               capture_output=True, text=True, timeout=90)
         if not done.stdout.strip():
@@ -333,20 +344,20 @@ class HiddenDesktop:
 
     def input(self, steps: list[dict]) -> None:
         """Click and type inside the hidden compositor only. Steps: {"click": [x, y]}, {"keys": [...]}, {"wait": s}."""
-        done = subprocess.run(["python3", "-c", _INPUT_SCRIPT, json.dumps(steps)], env=self.env,
+        done = subprocess.run([self._gi_python(), "-c", _INPUT_SCRIPT, json.dumps(steps)], env=self.env,
                               capture_output=True, text=True, timeout=60)
         if done.returncode != 0 or "ok" not in done.stdout:
             raise RuntimeError(f"hidden desktop input failed: {(done.stdout + done.stderr)[-500:]}")
 
     def watch_texts(self, frame: str, seconds: float) -> subprocess.Popen:
         """Start recording every change of the texts shown in `frame`; read JSON lines from stdout."""
-        return subprocess.Popen(["python3", "-c", _WATCH_SCRIPT, frame, str(seconds)],
+        return subprocess.Popen([self._gi_python(), "-c", _WATCH_SCRIPT, frame, str(seconds)],
                                 env={**os.environ, "DBUS_SESSION_BUS_ADDRESS": self.bus_address},
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 
     def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        done = subprocess.run(["python3", "-c", _SCREENSHOT_SCRIPT, str(path)], env=self.env,
+        done = subprocess.run([self._gi_python(), "-c", _SCREENSHOT_SCRIPT, str(path)], env=self.env,
                               capture_output=True, text=True, timeout=60)
         if done.returncode != 0 or not path.is_file():
             raise RuntimeError(f"screenshot failed: {(done.stdout + done.stderr)[-500:]}")
