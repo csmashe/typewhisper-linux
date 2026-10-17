@@ -1163,7 +1163,9 @@ public class GladiaPluginTests
     [InlineData("""{ "type": "transcript", "data": { "id": "1", "is_final": true, "utterance": {} } }""")]
     public void ParseMessage_RejectsMalformedMessages(string json)
     {
-        Assert.ThrowsAny<Exception>(() => GladiaSession.ParseMessage(json));
+        // HandleMessage turns only these into an incomplete-response fault.
+        var exception = Record.Exception(() => GladiaSession.ParseMessage(json));
+        Assert.True(exception is JsonException or FormatException, $"Unexpected: {exception?.GetType()}");
     }
 
     [Fact]
