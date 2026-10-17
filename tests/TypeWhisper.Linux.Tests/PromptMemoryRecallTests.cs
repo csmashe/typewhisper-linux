@@ -111,13 +111,40 @@ public sealed class PromptMemoryRecallTests : IDisposable
         using var manager = CreatePluginManager(_first);
         var sut = CreateService(manager, memoryEnabled: true);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() =>
             RunAsync(sut, streaming, "com.test.missing")
         );
 
         Assert.Equal(Loc.Instance["Memory.SourceUnavailable"], error.Message);
+        Assert.Equal(PluginRequestFailureKind.Configuration, error.FailureKind);
+        Assert.False(error.IsTransient);
         Assert.Equal(0, _llm.CallCount);
         Assert.Equal(0, _first.SearchCount);
+    }
+
+    [Fact]
+    public async Task FailedSelectedSource_IsNotRetriedThroughTheBatchFallback()
+    {
+        _second.Failure = new IOException("disk gone");
+        using var manager = CreatePluginManager(_second);
+        var sut = CreateService(manager, memoryEnabled: false);
+        var batchRuns = 0;
+
+        await Assert.ThrowsAsync<PluginRequestException>(() =>
+            DictationOrchestrator.RunPromptActionStreamWithFallbackAsync(
+                sut.ProcessStreamingAsync(s_action, "dictated words", memorySourceId: _second.PluginId),
+                () =>
+                {
+                    batchRuns++;
+                    return Task.FromResult("batch");
+                },
+                _ => { },
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(0, batchRuns);
+        Assert.Equal(1, _second.SearchCount);
     }
 
     [Fact]
@@ -127,7 +154,7 @@ public sealed class PromptMemoryRecallTests : IDisposable
         using var manager = CreatePluginManager(_second);
         var sut = CreateService(manager, memoryEnabled: false);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() =>
             RunAsync(sut, streaming: false, _second.PluginId)
         );
 
@@ -155,7 +182,7 @@ public sealed class PromptMemoryRecallTests : IDisposable
         _second.OnSearch = () => ActivatedPlugins(manager).Remove(_second.PluginId);
         var sut = CreateService(manager, memoryEnabled: false);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() =>
             RunAsync(sut, streaming: false, _second.PluginId)
         );
 
@@ -175,6 +202,20 @@ public sealed class PromptMemoryRecallTests : IDisposable
             sut.ProcessAsync(s_action, "dictated words", ct: cts.Token)
         );
         Assert.Equal(0, _llm.CallCount);
+    }
+
+    [Fact]
+    public async Task Extraction_RejectedFactDoesNotDropTheRest()
+    {
+        _llm.Response = "- a fact the plugin rejects\n- Chris uses Fedora at work";
+        _first.RejectedContent = "a fact the plugin rejects";
+        using var manager = CreatePluginManager(_first);
+
+        await new MemoryService(manager).ExtractAndStoreAsync(
+            "Today I set up the new laptop with Fedora for work."
+        );
+
+        Assert.Equal(["Chris uses Fedora at work"], _first.Stored);
     }
 
     [Fact]
@@ -323,6 +364,8 @@ public sealed class PromptMemoryRecallTests : IDisposable
         public string? LastQuery { get; private set; }
         public Exception? Failure { get; set; }
         public Action? OnSearch { get; set; }
+        public string? RejectedContent { get; set; }
+        public List<string> Stored { get; } = [];
 
         public Task<IReadOnlyList<string>> SearchAsync(
             string query,
@@ -341,7 +384,17 @@ public sealed class PromptMemoryRecallTests : IDisposable
 
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
         public Task DeactivateAsync() => Task.CompletedTask;
-        public Task StoreAsync(string content, CancellationToken ct = default) => Task.CompletedTask;
+        public Task StoreAsync(string content, CancellationToken ct = default)
+        {
+            if (content == RejectedContent)
+            {
+                throw new ArgumentException("rejected", nameof(content));
+            }
+
+            Stored.Add(content);
+            return Task.CompletedTask;
+        }
+
         public Task<IReadOnlyList<string>> GetAllAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<string>>([fact]);
         public Task DeleteAsync(string content, CancellationToken ct = default) => Task.CompletedTask;
@@ -359,6 +412,7 @@ public sealed class PromptMemoryRecallTests : IDisposable
         public bool IsAvailable => true;
         public IReadOnlyList<PluginModelInfo> SupportedModels => [new("model", "Model")];
         public string? LastSystemPrompt { get; private set; }
+        public string Response { get; set; } = "result";
         public int CallCount { get; private set; }
 
         public Task<string> ProcessAsync(
@@ -370,7 +424,7 @@ public sealed class PromptMemoryRecallTests : IDisposable
         {
             CallCount++;
             LastSystemPrompt = systemPrompt;
-            return Task.FromResult("result");
+            return Task.FromResult(Response);
         }
 
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;

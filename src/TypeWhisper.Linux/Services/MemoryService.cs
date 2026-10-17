@@ -104,7 +104,15 @@ public sealed partial class MemoryService
 
             foreach (var fact in facts)
             {
-                await memoryPlugin.StoreAsync(fact, ct);
+                try
+                {
+                    await memoryPlugin.StoreAsync(fact, ct);
+                }
+                catch (ArgumentException ex)
+                {
+                    // One fact the plugin rejects (e.g. too long) must not drop the rest.
+                    Debug.WriteLine($"[MemoryService] skipped invalid fact: {ex.Message}");
+                }
             }
         }
         catch (Exception ex)
@@ -193,7 +201,7 @@ public sealed partial class MemoryService
             .FirstOrDefault(plugin => plugin.PluginId == sourceId);
         if (source is null)
         {
-            throw new InvalidOperationException(Localization.Loc.Instance["Memory.SourceUnavailable"]);
+            throw SourceProblem("Memory.SourceUnavailable");
         }
 
         if (string.IsNullOrWhiteSpace(query))
@@ -209,7 +217,7 @@ public sealed partial class MemoryService
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             Debug.WriteLine($"[MemoryService] context lookup failed: {ex.Message}");
-            throw new InvalidOperationException(Localization.Loc.Instance["Memory.SourceFailed"], ex);
+            throw SourceProblem("Memory.SourceFailed", ex);
         }
 
         // A source disabled or replaced while it searched must not supply the result.
@@ -218,11 +226,20 @@ public sealed partial class MemoryService
             || !ReferenceEquals(_pluginManager.GetPlugin(sourceId)?.Instance, source)
         )
         {
-            throw new InvalidOperationException(Localization.Loc.Instance["Memory.SourceUnavailable"]);
+            throw SourceProblem("Memory.SourceUnavailable");
         }
 
         return FormatContext(matches);
     }
+
+    // A configuration failure, so streaming does not retry it as batch and search the source again.
+    private static PluginRequestException SourceProblem(string key, Exception? inner = null) =>
+        new(
+            Localization.Loc.Instance[key],
+            PluginRequestFailureKind.Configuration,
+            isTransient: false,
+            innerException: inner
+        );
 
     // At most five facts of at most 1,600 characters, one per line, so a long or multiline
     // entry cannot crowd out the prompt or pose as a separate fact.
