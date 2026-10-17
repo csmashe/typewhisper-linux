@@ -9,6 +9,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.UserData;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -18,6 +19,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
+    private readonly LocalDataExportService _dataExport;
     private readonly SettingsBackupService _settingsBackup;
     private readonly TimeZoneInfo _timeZone;
     private readonly UpdateCheckService _updateCheck;
@@ -28,6 +30,14 @@ public partial class AboutSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isBackupBusy;
+
+    [ObservableProperty]
+    private bool _isExportingData;
+
+    [ObservableProperty]
+    private bool _includeRecordingsInExport = true;
+
+    private CancellationTokenSource? _dataExportCancellation;
 
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(CanCheckForUpdates))]
     private bool _isCheckingForUpdates;
@@ -52,10 +62,11 @@ public partial class AboutSectionViewModel : ObservableObject
     public AboutSectionViewModel(
         IErrorLogService errorLog,
         SettingsBackupService settingsBackup,
+        LocalDataExportService dataExport,
         UpdateCheckService updateCheck,
         UrlLauncher urlLauncher
     )
-        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local) { }
+        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local, dataExport) { }
 
     internal AboutSectionViewModel(
         IErrorLogService errorLog,
@@ -76,11 +87,13 @@ public partial class AboutSectionViewModel : ObservableObject
         SettingsBackupService settingsBackup,
         UpdateCheckService updateCheck,
         UrlLauncher urlLauncher,
-        TimeZoneInfo timeZone
+        TimeZoneInfo timeZone,
+        LocalDataExportService? dataExport = null
     )
     {
         _errorLog = errorLog;
         _settingsBackup = settingsBackup;
+        _dataExport = dataExport ?? new LocalDataExportService();
         _updateCheck = updateCheck;
         _urlLauncher = urlLauncher;
         _timeZone = timeZone;
@@ -193,6 +206,77 @@ public partial class AboutSectionViewModel : ObservableObject
             IsBackupBusy = false;
         }
     }
+
+    public async Task<LocalDataExportResult> ExportAllDataAsync(string path)
+    {
+        if (IsBackupBusy)
+        {
+            throw new InvalidOperationException("A settings backup or restore is already running.");
+        }
+
+        IsBackupBusy = true;
+        IsExportingData = true;
+        BackupStatusText = Loc.Instance["About.ExportingData"];
+        using var cancellation = new CancellationTokenSource();
+        _dataExportCancellation = cancellation;
+        // A progress report can arrive after the export finished; it must not replace the outcome.
+        var gate = new object();
+        var running = true;
+        var progress = new Progress<LocalDataExportProgress>(update =>
+        {
+            lock (gate)
+            {
+                // ReSharper disable once AccessToModifiedClosure -- intended: Finish clears it under the same lock.
+                if (running)
+                {
+                    BackupStatusText = Loc.Instance.GetString(
+                        "About.ExportingDataProgress",
+                        update.FileCount,
+                        update.Bytes / (1024.0 * 1024.0)
+                    );
+                }
+            }
+        });
+        void Finish(string status)
+        {
+            lock (gate)
+            {
+                running = false;
+                BackupStatusText = status;
+            }
+        }
+
+        try
+        {
+            var result = await _dataExport.ExportAsync(
+                path,
+                new LocalDataExportOptions(IncludeRecordingsInExport),
+                progress,
+                cancellation.Token
+            );
+            Finish(Loc.Instance.GetString("About.DataExported", result.FileCount));
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            Finish(Loc.Instance["About.DataExportCanceled"]);
+            throw;
+        }
+        catch
+        {
+            Finish(Loc.Instance["About.DataExportFailed"]);
+            throw;
+        }
+        finally
+        {
+            _dataExportCancellation = null;
+            IsExportingData = false;
+            IsBackupBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void CancelDataExport() => _dataExportCancellation?.Cancel();
 
     [RelayCommand]
     private async Task CheckForUpdatesAsync()
