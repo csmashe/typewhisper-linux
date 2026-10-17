@@ -309,7 +309,7 @@
 
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
-                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
@@ -418,6 +418,29 @@
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
+                                            <TextBlock Text="{loc:Str Profiles.MemorySource}"
+                                                       Classes="row-label" />
+                                            <TextBlock Text="{loc:Str Profiles.MemorySourceHint}"
+                                                       Classes="page-subtitle"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1"
+                                                  ItemsSource="{Binding MemorySourceOptions}"
+                                                  SelectedItem="{Binding SelectedMemorySourceOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:MemorySourceOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="11" Background="#16FFFFFF" />
+
+                                <Border Grid.Row="12" Padding="18,14">
+                                    <Grid ColumnDefinitions="*,320"
+                                          ColumnSpacing="16">
+                                        <StackPanel>
                                             <TextBlock Text="{loc:Str Common.WhisperMode}"
                                                        Classes="row-label" />
                                             <TextBlock
@@ -436,9 +459,9 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="11" Background="#16FFFFFF" />
+                                <Border Grid.Row="13" Background="#16FFFFFF" />
 
-                                <Border Grid.Row="12" Padding="18,14">
+                                <Border Grid.Row="14" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
@@ -461,9 +484,9 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="13" Background="#16FFFFFF" />
+                                <Border Grid.Row="15" Background="#16FFFFFF" />
 
-                                <Border Grid.Row="14" Padding="18,14">
+                                <Border Grid.Row="16" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
@@ -485,9 +508,9 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="15" Background="#16FFFFFF" />
+                                <Border Grid.Row="17" Background="#16FFFFFF" />
 
-                                <Border Grid.Row="16" Padding="18,14">
+                                <Border Grid.Row="18" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
@@ -512,9 +535,9 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="17" Background="#16FFFFFF" />
+                                <Border Grid.Row="19" Background="#16FFFFFF" />
 
-                                <Border Grid.Row="18" Padding="18,14">
+                                <Border Grid.Row="20" Padding="18,14">
                                     <Grid ColumnDefinitions="*,150"
                                           ColumnSpacing="16">
                                         <StackPanel>
@@ -530,9 +553,9 @@
                                                        Value="{Binding EditPriority}" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="19" Background="#16FFFFFF" />
+                                <Border Grid.Row="21" Background="#16FFFFFF" />
 
-                                <Border Grid.Row="20" Padding="18,14">
+                                <Border Grid.Row="22" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
                                           ColumnSpacing="16">
                                         <StackPanel>
