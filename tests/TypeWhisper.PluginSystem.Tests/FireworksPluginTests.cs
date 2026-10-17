@@ -125,6 +125,24 @@ public sealed class FireworksPluginTests
         Assert.Equal("0.1", await sut.GetSettingValueAsync("temperature"));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("provider_default")]
+    [InlineData("Custom")]
+    public async Task TemperatureMode_UnknownValueIsRejectedWithoutSaving(string? value)
+    {
+        var host = new TestPluginHostServices();
+        using var sut = await ActivatedAsync(new CapturingHandler((_, _) => Json(Answer)), host);
+        var writes = host.SettingWrites;
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => sut.SetSettingValueAsync("temperatureMode", value));
+
+        Assert.Equal("Settings.TemperatureModeInvalid", error.Message);
+        Assert.Equal(writes, host.SettingWrites);
+        Assert.Equal("custom", await sut.GetSettingValueAsync("temperatureMode"));
+    }
+
     [Fact]
     public async Task Activate_IgnoresInvalidSavedTemperatureSettings()
     {

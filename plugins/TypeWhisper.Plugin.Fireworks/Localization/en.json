@@ -7,6 +7,7 @@
   "Settings.TemperatureModeDescription": "Provider default sends no temperature; custom sends the value below.",
   "Settings.TemperatureProviderDefault": "Provider default",
   "Settings.TemperatureCustom": "Custom",
+  "Settings.TemperatureModeInvalid": "Choose a temperature mode from the list.",
   "Settings.TemperatureValue": "Temperature value",
   "Settings.TemperatureValueDescription": "From 0 to 2. Lower values give more consistent results. Used only with the custom temperature mode.",
   "Settings.TemperatureInvalid": "Enter a temperature from 0 to 2 using a decimal point.",

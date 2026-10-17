@@ -7,6 +7,7 @@
   "Settings.TemperatureModeDescription": "Bei der Anbietervorgabe wird keine Temperatur gesendet; bei „Benutzerdefiniert“ wird der unten angegebene Wert gesendet.",
   "Settings.TemperatureProviderDefault": "Anbietervorgabe",
   "Settings.TemperatureCustom": "Benutzerdefiniert",
+  "Settings.TemperatureModeInvalid": "Wählen Sie einen Temperaturmodus aus der Liste.",
   "Settings.TemperatureValue": "Temperaturwert",
   "Settings.TemperatureValueDescription": "Von 0 bis 2. Niedrigere Werte liefern konsistentere Ergebnisse. Wird nur im benutzerdefinierten Temperaturmodus verwendet.",
   "Settings.TemperatureInvalid": "Geben Sie eine Temperatur von 0 bis 2 mit einem Punkt als Dezimaltrennzeichen ein.",

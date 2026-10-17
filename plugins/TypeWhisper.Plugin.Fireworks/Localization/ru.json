@@ -7,6 +7,7 @@
   "Settings.TemperatureModeDescription": "В режиме по умолчанию температура не отправляется; в пользовательском режиме отправляется указанное ниже значение.",
   "Settings.TemperatureProviderDefault": "По умолчанию у провайдера",
   "Settings.TemperatureCustom": "Пользовательская",
+  "Settings.TemperatureModeInvalid": "Выберите режим температуры из списка.",
   "Settings.TemperatureValue": "Значение температуры",
   "Settings.TemperatureValueDescription": "От 0 до 2. Более низкие значения дают более стабильные результаты. Используется только в пользовательском режиме температуры.",
   "Settings.TemperatureInvalid": "Введите температуру от 0 до 2, используя точку в качестве десятичного разделителя.",

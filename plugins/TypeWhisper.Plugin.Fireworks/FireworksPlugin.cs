@@ -489,9 +489,11 @@ public sealed class FireworksPlugin
                 SetStreamResponses(ParseBool(value));
                 break;
             case TemperatureModeSettingKey:
-                var mode = NormalizeTemperatureMode(value);
-                _host?.SetSetting(TemperatureModeSettingKey, mode);
-                _temperatureMode = mode;
+                if (value is not (ProviderDefaultTemperatureMode or CustomTemperatureMode))
+                    throw new ArgumentException(Loc.L("Settings.TemperatureModeInvalid"));
+
+                _host?.SetSetting(TemperatureModeSettingKey, value);
+                _temperatureMode = value;
                 break;
             case TemperatureSettingKey:
                 if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var temperature)
@@ -506,7 +508,7 @@ public sealed class FireworksPlugin
         }
     }
 
-    // Anything but an explicit provider default keeps the previous fixed temperature.
+    // For saved values: anything but an explicit provider default keeps the previous fixed temperature.
     private static string NormalizeTemperatureMode(string? value) =>
         value == ProviderDefaultTemperatureMode ? ProviderDefaultTemperatureMode : CustomTemperatureMode;
 
