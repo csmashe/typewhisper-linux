@@ -36,6 +36,8 @@ public partial class DictationSectionViewModel : ObservableObject
     private readonly SpokenFormattingProfileStore _spokenFormattingProfiles;
     private readonly SpokenFormattingStrategyResolver _spokenFormattingResolver;
     private readonly LocalModelStorageService _modelStorage;
+    private readonly Action<Action> _postToUi;
+    private readonly TimeProvider _timeProvider;
 
     // Cached snapshot of the selected engine's CUDA-provisioned state; CanUseCuda reads this
     // instead of probing the plugin inline (see CanUseCuda). Recomputed off the UI thread by
@@ -206,6 +208,9 @@ public partial class DictationSectionViewModel : ObservableObject
     // True when the Dictation page is visible; restarts mic preview after recording
     // ends so the level meter doesn't go dark while the page is still open.
     private bool _previewAttached;
+
+    // The selection the audio service was last pointed at, so reselecting it is a no-op.
+    private (string? PersistentId, int Index)? _appliedDevice;
     private bool _reportedAudioUnavailable;
 
     [ObservableProperty]
@@ -286,13 +291,16 @@ public partial class DictationSectionViewModel : ObservableObject
         Func<IReadOnlyList<AudioInputDevice>> getInputDevices,
         IErrorLogService? errorLog = null,
         IAtSpiEventClient? atSpiClient = null,
-        Action<Action>? dispatchNotification = null
+        Action<Action>? dispatchNotification = null,
+        TimeProvider? timeProvider = null
     )
     {
+        dispatchNotification ??= action => Dispatcher.UIThread.Post(action);
+        _postToUi = dispatchNotification;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _atSpiClient = atSpiClient;
         if (_atSpiClient is not null)
         {
-            dispatchNotification ??= action => Dispatcher.UIThread.Post(action);
             _atSpiClient.RunningChanged += () => dispatchNotification(
                 () => OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable))
             );
@@ -324,6 +332,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
                 if (recording)
                 {
+                    // The audio service ends the test as dictation claims the capture;
+                    // show that now rather than on the next refresh tick.
+                    RefreshMicrophoneTest();
                     _audio.StopPreview();
                     PreviewLevel = 0;
                 }
@@ -810,6 +821,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     public void DeactivatePreview()
     {
+        StopMicrophoneTest(MicrophoneTestEnd.PageClosed);
         _previewAttached = false;
         _audio.StopPreview();
         PreviewLevel = 0;
@@ -1925,17 +1937,44 @@ public partial class DictationSectionViewModel : ObservableObject
                     SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId,
                 }
             );
+        }
+        else
+        {
+            _audio.FollowSystemDefault = false;
+            _audio.SelectedDeviceIndex = value.Index;
+            _settings.Update(current =>
+                current with
+                {
+                    SelectedMicrophoneDevice = value.Index, SelectedMicrophoneDeviceId = value.PersistentId,
+                }
+            );
+        }
+
+        // Refresh reselects the same device after the ComboBox clears it; only a different
+        // device, or one re-indexed after reconnecting, needs the preview reopened.
+        var appliedDevice = (value.PersistentId, value.Index);
+        if (appliedDevice == _appliedDevice)
+        {
             return;
         }
 
-        _audio.FollowSystemDefault = false;
-        _audio.SelectedDeviceIndex = value.Index;
-        _settings.Update(current =>
-            current with
-            {
-                SelectedMicrophoneDevice = value.Index, SelectedMicrophoneDeviceId = value.PersistentId,
-            }
-        );
+        _appliedDevice = appliedDevice;
+        ReopenPreviewOnSelectedDevice();
+    }
+
+    // The preview stream stays bound to the device it opened on, so the meter and any
+    // running test would keep reporting the previous microphone until reopened.
+    private void ReopenPreviewOnSelectedDevice()
+    {
+        StopMicrophoneTest(MicrophoneTestEnd.DeviceChanged);
+        if (!_previewAttached || IsRecording)
+        {
+            return;
+        }
+
+        _audio.StopPreview();
+        PreviewLevel = 0;
+        ActivatePreview();
     }
 
     partial void OnLanguageChanged(string value)
