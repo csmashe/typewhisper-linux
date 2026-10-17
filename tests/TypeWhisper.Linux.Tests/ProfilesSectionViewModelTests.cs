@@ -1204,6 +1204,75 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         }
     }
 
+    [Fact]
+    public void MemorySource_UnavailableSelectionStaysListedAndSaves()
+    {
+        var service = CreateProfileService();
+        service.AddProfile(
+            new Profile { Id = "memory", Name = "Memory", MemorySourceId = "com.test.gone" }
+        );
+        using var pluginManager = CreatePluginManager();
+        var sut = new ProfilesSectionViewModel(
+            service,
+            CreateActiveWindowService().Object,
+            pluginManager,
+            new PromptActionService(Path.Join(_tempDir, "prompt-actions.json")),
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+
+        sut.SelectedProfile = sut.Profiles.Single();
+
+        Assert.Equal(
+            [null, Profile.MemorySourceOff, "com.test.gone"],
+            sut.MemorySourceOptions.Select(option => option.Value)
+        );
+        Assert.Equal(
+            Loc.Instance.GetString("Profiles.MemorySourceUnavailable", "com.test.gone"),
+            sut.SelectedMemorySourceOption!.Label
+        );
+
+        sut.SaveProfileCommand.Execute(null);
+        Assert.Equal("com.test.gone", service.Profiles.Single().MemorySourceId);
+
+        sut.SelectedMemorySourceOption = sut.MemorySourceOptions[1];
+        sut.SaveProfileCommand.Execute(null);
+        Assert.Equal(Profile.MemorySourceOff, service.Profiles.Single().MemorySourceId);
+
+        sut.SelectedMemorySourceOption = sut.MemorySourceOptions[0];
+        sut.SaveProfileCommand.Execute(null);
+        Assert.Null(service.Profiles.Single().MemorySourceId);
+    }
+
+    [Fact]
+    public void MemorySource_ClearedComboBoxDoesNotChangeTheSelection()
+    {
+        var service = CreateProfileService();
+        service.AddProfile(
+            new Profile { Id = "memory", Name = "Memory", MemorySourceId = Profile.MemorySourceOff }
+        );
+        using var pluginManager = CreatePluginManager();
+        var sut = new ProfilesSectionViewModel(
+            service,
+            CreateActiveWindowService().Object,
+            pluginManager,
+            new PromptActionService(Path.Join(_tempDir, "prompt-actions.json")),
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+        sut.SelectedProfile = sut.Profiles.Single();
+
+        sut.SelectedMemorySourceOption = null;
+
+        Assert.Equal(Profile.MemorySourceOff, sut.EditMemorySourceId);
+    }
+
     private ProfileService CreateProfileService()
     {
         return new ProfileService(Path.Join(_tempDir, "profiles.json"));

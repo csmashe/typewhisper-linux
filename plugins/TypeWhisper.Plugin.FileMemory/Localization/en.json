@@ -1,4 +1,18 @@
 {
   "Manifest.Name": "File Memory",
-  "Manifest.Description": "File-based memory storage for extracted facts"
+  "Manifest.Description": "Keeps facts on this device and supplies matching ones to prompt actions",
+  "Action.Name": "Remember in File Memory",
+  "Action.Stored": "Saved to File Memory.",
+  "Action.AlreadyStored": "Already in File Memory.",
+  "Action.Empty": "Nothing to remember: the text is empty.",
+  "Collection.Label": "Memories",
+  "Collection.Description": "Facts kept on this device, one fact or topic per entry. Prompt actions recall up to five matching entries when memory is on in Advanced settings or a profile selects File Memory. To save text from a prompt action, set its action target to \"Remember in File Memory\".",
+  "Collection.DisabledDescription": "Enable File Memory to view and edit its memories.",
+  "Collection.Content": "Memory",
+  "Collection.ContentPlaceholder": "For example: Project Aurora uses British English.",
+  "Collection.Add": "Add memory",
+  "Collection.Unknown": "Unknown memory collection.",
+  "Memory.Empty": "A memory cannot be empty.",
+  "Memory.TooLong": "A memory can be at most {0} characters.",
+  "Memory.Duplicate": "Two memories have the same text. Remove or change one of them."
 }

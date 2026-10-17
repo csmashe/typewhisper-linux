@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
@@ -10,9 +11,12 @@ namespace TypeWhisper.Linux.Services;
 ///     stores them in the configured memory plugin. Facts are queried at
 ///     prompt-processing time to inject relevant context into LLM requests.
 /// </summary>
-public sealed class MemoryService
+public sealed partial class MemoryService
 {
     private const int MinTextLength = 30;
+    internal const int MaxRecalledFacts = 5;
+    internal const int MaxFactLength = 1600;
+
 
     private const string ExtractionPrompt = """
                                             Extract any lasting personal facts from the following transcribed speech.
@@ -146,6 +150,9 @@ public sealed class MemoryService
         return provenance;
     }
 
+    /// <summary>
+    ///     Global recall from the first memory plugin; a failing plugin counts as no context.
+    /// </summary>
     public async Task<string?> GetContextAsync(string query, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -162,15 +169,75 @@ public sealed class MemoryService
 
         try
         {
-            var memories = await memoryPlugin.SearchAsync(query, 10, ct);
-            return memories.Count == 0
-                ? null
-                : string.Join("\n", memories.Select(memory => $"- {memory}"));
+            return FormatContext(await memoryPlugin.SearchAsync(query, MaxRecalledFacts, ct));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             Debug.WriteLine($"[MemoryService] context lookup failed: {ex.Message}");
             return null;
         }
     }
+
+    /// <summary>
+    ///     Recall from the profile's chosen source only. When it is unavailable or fails, the
+    ///     prompt action fails (the dictation stays in History) instead of running without it.
+    /// </summary>
+    public async Task<string?> GetContextFromSourceAsync(
+        string query,
+        string sourceId,
+        CancellationToken ct = default
+    )
+    {
+        var source = _pluginManager
+            .GetPlugins<IMemoryStoragePlugin>()
+            .FirstOrDefault(plugin => plugin.PluginId == sourceId);
+        if (source is null)
+        {
+            throw new InvalidOperationException(Localization.Loc.Instance["Memory.SourceUnavailable"]);
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        IReadOnlyList<string> matches;
+        try
+        {
+            matches = await source.SearchAsync(query, MaxRecalledFacts, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            Debug.WriteLine($"[MemoryService] context lookup failed: {ex.Message}");
+            throw new InvalidOperationException(Localization.Loc.Instance["Memory.SourceFailed"], ex);
+        }
+
+        // A source disabled or replaced while it searched must not supply the result.
+        if (
+            !_pluginManager.IsEnabled(sourceId)
+            || !ReferenceEquals(_pluginManager.GetPlugin(sourceId)?.Instance, source)
+        )
+        {
+            throw new InvalidOperationException(Localization.Loc.Instance["Memory.SourceUnavailable"]);
+        }
+
+        return FormatContext(matches);
+    }
+
+    // At most five facts of at most 1,600 characters, one per line, so a long or multiline
+    // entry cannot crowd out the prompt or pose as a separate fact.
+    internal static string? FormatContext(IReadOnlyList<string> memories)
+    {
+        var lines = memories
+            .Select(memory => Whitespace().Replace(memory, " ").Trim())
+            .Where(memory => memory.Length > 0)
+            .Take(MaxRecalledFacts)
+            .Select(memory => memory.Length > MaxFactLength ? memory[..MaxFactLength] : memory)
+            .Select(memory => $"- {memory}")
+            .ToList();
+        return lines.Count == 0 ? null : string.Join("\n", lines);
+    }
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Whitespace();
 }

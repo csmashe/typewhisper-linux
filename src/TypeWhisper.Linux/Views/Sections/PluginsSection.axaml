@@ -192,6 +192,15 @@
                                                                 TextWrapping="Wrap"
                                                                 Foreground="#8A9AAE"
                                                                 IsVisible="{Binding HasDescription}" />
+                                                            <TextBox
+                                                                Text="{Binding FilterText}"
+                                                                PlaceholderText="{loc:Str Plugins.CollectionSearchPlaceholder}"
+                                                                IsVisible="{Binding IsSearchable}" />
+                                                            <TextBlock
+                                                                Text="{loc:Str Plugins.CollectionNoMatches}"
+                                                                FontSize="11"
+                                                                Foreground="#8A9AAE"
+                                                                IsVisible="{Binding HasNoMatches}" />
 
                                                             <ItemsControl
                                                                 ItemsSource="{Binding Items}">
@@ -199,6 +208,7 @@
                                                                     <DataTemplate
                                                                         x:DataType="vm:PluginCollectionItemRow">
                                                                         <Border
+                                                                            IsVisible="{Binding IsMatch}"
                                                                             Background="#17212B"
                                                                             BorderBrush="#1AFFFFFF"
                                                                             BorderThickness="1"
@@ -213,6 +223,8 @@
                                                                                         Grid.Column="0"
                                                                                         Text="{Binding HeaderText}"
                                                                                         FontWeight="SemiBold"
+                                                                                        MaxLines="1"
+                                                                                        TextTrimming="CharacterEllipsis"
                                                                                         VerticalAlignment="Center" />
                                                                                     <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                                                     <Button
