@@ -346,6 +346,7 @@ internal sealed class MetaRealtimeTranscriptCollector
     private string DrainCompletedTurns()
     {
         var parts = new List<string>();
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the loop breaks at the first open turn and mutates each turn it reports; a query would hide both.
         foreach (var turn in _turns.Values.Where(turn => !turn.Reported).OrderBy(turn => turn.Id).ToList())
         {
             if (!turn.Complete)

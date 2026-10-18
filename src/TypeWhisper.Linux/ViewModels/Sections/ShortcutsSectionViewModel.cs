@@ -39,9 +39,9 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     private bool _activeWriterCached;
 
     // Cached keyboard-access probe result, populated off the UI thread by
-    // RefreshKeyboardAccessAsync. InputDeviceAccessCheck.HasKeyboardAccess() opens
-    // every /dev/input keyboard node and ioctls it — ~0.5s on a typical desktop — so
-    // it must never run during view render. null = not yet probed (treated as "has
+    // RefreshKeyboardAccessAsync. InputDeviceAccessCheck.HasKeyboardAccess() can fall
+    // back to opening every /dev/input node — ~0.5s on a typical desktop — so it must
+    // never run during view render. null = not yet probed (treated as "has
     // access" so the no-access banner/fallback don't flash before the probe returns).
     private bool? _hasKeyboardAccess;
 
@@ -325,8 +325,8 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     }
 
     // Probe keyboard access off the UI thread, then refresh the access-dependent
-    // properties. InputDeviceAccessCheck.HasKeyboardAccess() opens every /dev/input
-    // keyboard node (~0.5s) — running it during the constructor or a binding getter
+    // properties. InputDeviceAccessCheck.HasKeyboardAccess() can fall back to opening
+    // every /dev/input node (~0.5s) — running it during the constructor or a binding getter
     // froze the Shortcuts tab on open. No ConfigureAwait(false): the continuation
     // touches bound properties and must resume on the UI thread.
     private async Task RefreshKeyboardAccessAsync()

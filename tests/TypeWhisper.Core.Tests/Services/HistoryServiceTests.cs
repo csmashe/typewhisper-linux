@@ -298,6 +298,18 @@ public sealed class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void PurgeOldRecords_WithNothingExpired_StillHealsACorruptHistoryResetToEmpty()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+        var corrupt = new HistoryService(_filePath, _audioDirectory);
+
+        corrupt.PurgeOldRecords(TimeSpan.FromHours(1));
+
+        Assert.True(corrupt.TryGetRecords(out var records));
+        Assert.Empty(records);
+    }
+
+    [Fact]
     public void PurgeOldRecords_NullRetentionDoesNothing()
     {
         var record = CreateRecord("keep", DateTime.UtcNow.AddDays(-30));

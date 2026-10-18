@@ -302,7 +302,7 @@ internal static class ServiceRegistrations
         var statistics = new UsageStatisticsService(
             Path.Join(dataPath, "usage-statistics.json"),
             historyBackfillSource: () => ReadHistoryForBackfill(history));
-        if (ReadHistoryForBackfill(history) is { } records)
+        if (statistics.IsHistoryBackfillPending() && ReadHistoryForBackfill(history) is { } records)
         {
             statistics.BackfillFromHistoryIfNeeded(records);
         }
