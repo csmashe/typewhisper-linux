@@ -10,7 +10,7 @@ namespace TypeWhisper.TranscriptionWorkerProbe;
 ///     A local engine for worker tests. The language selects a misbehaviour; otherwise the result
 ///     text reports what the engine saw as <c>key=value</c> pairs separated by semicolons.
 /// </summary>
-public sealed partial class WorkerProbePlugin : ITypeWhisperPlugin, ITranscriptionEngineRole
+public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
 {
     public const string Id = "test.typewhisper.worker-probe";
     private const string SettingKey = "probe-setting";
@@ -42,7 +42,12 @@ public sealed partial class WorkerProbePlugin : ITypeWhisperPlugin, ITranscripti
         TranscriptionAccelerationPreference.Auto;
 
     public TranscriptionAccelerationStatus AccelerationStatus =>
-        new(TranscriptionAccelerationBackend.Cpu, $"Probe {AccelerationPreference} in {Environment.ProcessId}");
+        new(
+            AccelerationPreference == TranscriptionAccelerationPreference.NvidiaCuda
+                ? TranscriptionAccelerationBackend.NvidiaCuda
+                : TranscriptionAccelerationBackend.Cpu,
+            $"Probe {AccelerationPreference} in {Environment.ProcessId}"
+        );
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -106,6 +111,25 @@ public sealed partial class WorkerProbePlugin : ITypeWhisperPlugin, ITranscripti
             case "crash":
                 // A real fault inside native code, which the runtime cannot turn into an exception.
                 _ = memset(8, 0, 1);
+                break;
+            case "crash-once":
+                // Faults in the first worker only; the marker outlives it.
+                var marker = Path.Join(_host!.PluginDataDirectory, "crashed-once");
+                if (!File.Exists(marker))
+                {
+                    Directory.CreateDirectory(_host.PluginDataDirectory);
+                    await File.WriteAllTextAsync(marker, "", ct);
+                    _ = memset(8, 0, 1);
+                }
+
+                break;
+            case "crash-on-gpu":
+                // Like a graphics driver fault: the CPU path works.
+                if (AccelerationPreference != TranscriptionAccelerationPreference.Cpu)
+                {
+                    _ = memset(8, 0, 1);
+                }
+
                 break;
             case "freeze":
                 // Stops every thread, the heartbeat included.
