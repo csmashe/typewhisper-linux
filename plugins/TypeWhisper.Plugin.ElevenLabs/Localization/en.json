@@ -13,6 +13,8 @@
   "Settings.TagAudioEventsDescription": "REST requests only.",
   "Settings.SpeakerCount": "Number of speakers",
   "Settings.SpeakerCountDescription": "0 = automatic, otherwise 1–32. REST requests only.",
+  "Settings.UseDictionaryTerms": "Send dictionary terms as keyterms",
+  "Settings.UseDictionaryTermsDescription": "Biases transcription toward your dictionary terms, sent whole (commas included). ElevenLabs charges 20% more for each request with keyterms, and at least 20 seconds per request above 100 terms. REST requests only; real-time dictation does not send them. When off, only HTTP API requests send dictionary terms.",
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyUnverified": "API key saved, but speech access could not be verified: the key lacks the user_read permission. Try a dictation to confirm Speech-to-Text access.",
