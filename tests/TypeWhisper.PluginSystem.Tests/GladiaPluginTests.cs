@@ -1165,7 +1165,8 @@ public class GladiaPluginTests
     {
         // HandleMessage turns only these into an incomplete-response fault.
         var exception = Record.Exception(() => GladiaSession.ParseMessage(json));
-        Assert.True(exception is JsonException or FormatException, $"Unexpected: {exception?.GetType()}");
+        Assert.NotNull(exception);
+        Assert.True(exception is JsonException or FormatException, $"Unexpected: {exception.GetType()}");
     }
 
     [Fact]

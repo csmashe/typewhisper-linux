@@ -1260,12 +1260,12 @@ public class App : Application
             new(
                 BootstrapStageNames.BundledPluginDeployment,
                 [BootstrapStageNames.PluginRegistryRecovery],
-                () =>
+                async () =>
                 {
                     _ = services.GetRequiredService<BundledPluginDeployer>();
-                    BundledPluginDeployer.DeployIfMissing();
+                    // Off the UI thread: a post-upgrade redeploy copies and fsyncs every bundled plugin.
+                    await Task.Run(BundledPluginDeployer.DeployIfMissing);
                     BootTrace.Stage("BundledPluginDeployer.DeployIfMissing");
-                    return Task.CompletedTask;
                 },
                 Required: false
             ),
@@ -1401,6 +1401,8 @@ public class App : Application
     {
         try
         {
+            // No stage yields on its own; without this they all run before the main window shows.
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
             var report = await BootstrapAsync(services);
             LastBootstrapReport = report;
             return report;

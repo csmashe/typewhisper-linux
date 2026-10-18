@@ -103,6 +103,20 @@ public sealed class UsageStatisticsService : IUsageStatisticsService
         }
     }
 
+    /// <summary>Whether the one-time history backfill is still pending; once done, callers can skip reading history.</summary>
+    public bool IsHistoryBackfillPending()
+    {
+        try
+        {
+            return !_store.Current.HistoryBackfillCompleted;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Trace.WriteLine($"[UsageStatisticsService] Failed to read backfill state: {ex.Message}");
+            return true;
+        }
+    }
+
     public void BackfillFromHistoryIfNeeded(IEnumerable<TranscriptionRecord> records)
     {
         ArgumentNullException.ThrowIfNull(records);

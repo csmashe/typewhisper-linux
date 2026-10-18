@@ -334,6 +334,7 @@ public sealed class MicrophoneTestTests
         var test = audio.TryStartMicrophoneTest(out _);
         Assert.NotNull(test);
 
+        // ReSharper disable once DisposeOnUsingVariable -- the explicit Dispose is what this test exercises; `using` only covers an assert throwing before it.
         audio.Dispose();
 
         Assert.False(test.Snapshot().Running);

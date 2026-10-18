@@ -346,7 +346,7 @@ internal sealed class GladiaWebSocketAdapter(
         if (message.Error is not null)
             return Fault(GladiaStreamingSession.CreateRequestException(message.Error));
 
-        if (message.MessageType == "stop_recording" && message.Acknowledged)
+        if (message is { MessageType: "stop_recording", Acknowledged: true })
             _stopRecordingAcknowledged = true;
 
         if (message.MessageType == "end_session")

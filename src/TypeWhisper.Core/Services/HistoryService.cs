@@ -279,6 +279,14 @@ public sealed partial class HistoryService : IHistoryService
         }
 
         var cutoff = DateTime.UtcNow - retention.Value;
+        // Update serializes the whole history to detect a change; skip it when nothing expired,
+        // unless a corrupt file was reset and this no-op write is what commits a clean primary.
+        var snapshot = _store.GetCurrent(out var resetAfterCorruption);
+        if (!resetAfterCorruption && !snapshot.Any(r => r.CreatedAt < cutoff))
+        {
+            return;
+        }
+
         List<string?> removedAudioFiles = [];
         var changed = false;
         _store.Update(
