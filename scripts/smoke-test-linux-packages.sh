@@ -198,6 +198,28 @@ run_help_probe() {
     || fail "'$executable --help' did not print the expected usage marker."
 }
 
+# Without a host the transcription worker must exit with its usage code, proving the packaged
+# entry point reaches worker mode before any profile setup or UI.
+run_worker_entry_probe() {
+  local executable="$1"
+  local output status
+
+  echo "==> Executing transcription worker entry point: $executable"
+  set +e
+  output=$(
+    timeout --signal=TERM --kill-after=5s 30s \
+      env "${SMOKE_PROFILE_ENV[@]}" "$executable" --transcription-worker 2>&1
+  )
+  status=$?
+  set -e
+  printf '%s\n' "$output"
+
+  [ "$status" -eq 2 ] \
+    || fail "'$executable --transcription-worker' exited with status $status; expected 2."
+  grep -Fq "invalid transcription worker arguments" <<<"$output" \
+    || fail "'$executable --transcription-worker' did not reach the worker entry point."
+}
+
 run_cli_probe() {
   local executable="$1"
   local stdout_file=/tmp/typewhisper-cli-stdout
@@ -426,6 +448,7 @@ container_smoke_tarball() {
 
   run_cli_probe "$app_root/Cli/typewhisper-cli"
   run_help_probe "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
+  run_worker_entry_probe "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
   run_gui_probe "$SMOKE_HOME_ROOT/.local/bin/typewhisper"
 
   echo "==> Uninstalling tarball from isolated HOME/XDG roots"
@@ -467,6 +490,7 @@ container_smoke_appimage() {
 
   run_cli_probe "$cli_executable"
   run_help_probe "$app_run"
+  run_worker_entry_probe "$app_run"
   run_gui_probe "$app_run"
 }
 
@@ -511,6 +535,7 @@ container_smoke_deb() {
   run_cli_probe /opt/typewhisper/Cli/typewhisper-cli
   run_cli_probe /usr/bin/typewhisper-cli
   run_help_probe /usr/bin/typewhisper
+  run_worker_entry_probe /usr/bin/typewhisper
   run_gui_probe /usr/bin/typewhisper
 
   echo "==> Removing deb"
@@ -556,6 +581,7 @@ container_smoke_rpm() {
   run_cli_probe /opt/typewhisper/Cli/typewhisper-cli
   run_cli_probe /usr/bin/typewhisper-cli
   run_help_probe /usr/bin/typewhisper
+  run_worker_entry_probe /usr/bin/typewhisper
   run_gui_probe /usr/bin/typewhisper
 
   echo "==> Removing rpm"
