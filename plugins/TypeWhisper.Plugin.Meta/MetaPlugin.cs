@@ -424,19 +424,7 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
 
             var json = await response.Content.ReadAsStringAsync(ct);
             using var document = JsonDocument.Parse(json);
-            if (!document.RootElement.TryGetProperty("data", out var data)
-                || data.ValueKind != JsonValueKind.Array)
-            {
-                return null;
-            }
-
-            var models = data.EnumerateArray()
-                .Where(element => element.ValueKind == JsonValueKind.Object)
-                .Select(element => new MetaFetchedModel(
-                    element.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
-                    element.TryGetProperty("owned_by", out var owner) ? owner.GetString() : null))
-                .Where(model => !string.IsNullOrWhiteSpace(model.Id))
-                .ToList();
+            var models = ParseModelCatalog(document.RootElement);
             var llmModels = NormalizeModels(models, IsLlmModel);
             var transcriptionModels = NormalizeModels(models, IsTranscriptionModel);
             MetaModelCatalog catalog;
@@ -502,6 +490,37 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
         {
             return ModelRefreshFailed(ex);
         }
+    }
+
+    // A malformed entry fails the whole refresh so a partial list never replaces the saved catalog.
+    private static List<MetaFetchedModel> ParseModelCatalog(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("data", out var data)
+            || data.ValueKind != JsonValueKind.Array)
+        {
+            throw new JsonException("Meta returned no model data array.");
+        }
+
+        var models = new List<MetaFetchedModel>();
+        foreach (var element in data.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object
+                || !element.TryGetProperty("id", out var id)
+                || id.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(id.GetString()))
+            {
+                throw new JsonException("Meta returned a model without a string id.");
+            }
+
+            var owner = element.TryGetProperty("owned_by", out var ownerElement)
+                && ownerElement.ValueKind == JsonValueKind.String
+                    ? ownerElement.GetString()
+                    : null;
+            models.Add(new MetaFetchedModel(id.GetString()!, owner));
+        }
+
+        return models;
     }
 
     internal static bool IsLlmModel(string modelId) =>
@@ -597,9 +616,14 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
-        var transcript = root.TryGetProperty("transcript", out var transcriptElement)
-            ? transcriptElement.GetString()?.Trim() ?? ""
-            : "";
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("transcript", out var transcriptElement)
+            || transcriptElement.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException("Meta returned no string transcript.");
+        }
+
+        var transcript = transcriptElement.GetString()!.Trim();
         var durationSeconds = root.TryGetProperty("audioDurationMs", out var durationElement)
             && durationElement.ValueKind == JsonValueKind.Number
             ? durationElement.GetDouble() / 1000d
@@ -610,9 +634,14 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
         {
             foreach (var turn in turnsElement.EnumerateArray())
             {
-                var text = turn.TryGetProperty("transcript", out var textElement)
-                    ? textElement.GetString()?.Trim() ?? ""
-                    : "";
+                if (turn.ValueKind != JsonValueKind.Object
+                    || !turn.TryGetProperty("transcript", out var textElement)
+                    || textElement.ValueKind != JsonValueKind.String)
+                {
+                    throw new JsonException("Meta returned a turn without a string transcript.");
+                }
+
+                var text = textElement.GetString()!.Trim();
                 if (string.IsNullOrWhiteSpace(text))
                     continue;
 
