@@ -200,7 +200,7 @@ public sealed class TranscriptionWorkerLiveTests(ITestOutputHelper output)
     // Joins the PCM of 16 kHz mono PCM16 WAV files, repeated until the audio is long enough.
     private static byte[] Concatenate(IReadOnlyList<byte[]> wavs, int minimumSeconds)
     {
-        var pcm = new MemoryStream();
+        using var pcm = new MemoryStream();
         while (pcm.Length < minimumSeconds * 16000 * 2)
         {
             foreach (var wav in wavs)
