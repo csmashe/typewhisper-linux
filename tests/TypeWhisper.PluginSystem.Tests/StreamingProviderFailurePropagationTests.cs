@@ -24,7 +24,7 @@ public sealed class StreamingProviderFailurePropagationTests
         var finalReceived = FinalReceived(session);
 
         socket.EnqueueText(
-            """{"type":"Turn","transcript":"A complete prefix.","end_of_turn":true,"turn_is_formatted":true}"""
+            """{"type":"Turn","turn_order":0,"transcript":"A complete prefix.","end_of_turn":true,"turn_is_formatted":true}"""
         );
         await finalReceived.Task.WaitAsync(s_testTimeout);
         socket.EnqueueFault(new WebSocketException("AssemblyAI transport failed."));
@@ -63,10 +63,10 @@ public sealed class StreamingProviderFailurePropagationTests
         Assert.False(finalize.IsCompleted);
 
         socket.EnqueueText(
-            """{"type":"Turn","transcript":"unformatted ending","end_of_turn":true,"turn_is_formatted":false}"""
+            """{"type":"Turn","turn_order":0,"transcript":"unformatted ending","end_of_turn":true,"turn_is_formatted":false}"""
         );
         socket.EnqueueText(
-            """{"type":"Turn","transcript":"Formatted ending.","end_of_turn":true,"turn_is_formatted":true}"""
+            """{"type":"Turn","turn_order":0,"transcript":"Formatted ending.","end_of_turn":true,"turn_is_formatted":true}"""
         );
         socket.EnqueueText(
             """{"type":"Termination","audio_duration_seconds":1.0,"session_duration_seconds":1.1}"""
@@ -125,7 +125,7 @@ public sealed class StreamingProviderFailurePropagationTests
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
-        socket.EnqueueText("""{"type":"Turn","transcript":""");
+        socket.EnqueueText("""{"type":"Turn","turn_order":0,"transcript":""");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => finalize.WaitAsync(s_testTimeout)

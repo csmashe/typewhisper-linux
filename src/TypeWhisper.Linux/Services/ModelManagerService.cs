@@ -741,6 +741,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             ),
             "plugin:com.typewhisper.voxtral:mistral-whisper" =>
                 GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
+            "plugin:com.typewhisper.assemblyai:universal-3-pro" =>
+                GetPluginModelId("com.typewhisper.assemblyai", "universal-3-5-pro"),
             _ => modelId,
         };
     }
@@ -756,6 +758,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             "plugin:com.typewhisper.voxtral:mistral-whisper" =>
                 GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
+            "plugin:com.typewhisper.assemblyai:universal-3-pro" =>
+                GetPluginModelId("com.typewhisper.assemblyai", "universal-3-5-pro"),
             _ => modelId,
         };
     }
