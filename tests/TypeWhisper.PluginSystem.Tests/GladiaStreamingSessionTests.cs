@@ -10,6 +10,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 public sealed class GladiaStreamingSessionTests
 {
     private static readonly TimeSpan s_timeout = TimeSpan.FromSeconds(10);
+    private static readonly HttpClient s_httpClient = new();
 
     [Fact]
     public void Final_CarriesTheUtteranceLanguage()
@@ -245,7 +246,7 @@ public sealed class GladiaStreamingSessionTests
             .StartConnectedAsync(CreateAdapter(), transport, CancellationToken.None)
             .WaitAsync(s_timeout);
 
-    private static GladiaWebSocketAdapter CreateAdapter() => new(new HttpClient(), "key", null, []);
+    private static GladiaWebSocketAdapter CreateAdapter() => new(s_httpClient, "key", null, []);
 
     private static WebSocketInboundResult Handle(GladiaWebSocketAdapter adapter, string json) =>
         adapter.HandleMessage(WebSocketMessageType.Text, Encoding.UTF8.GetBytes(json));
