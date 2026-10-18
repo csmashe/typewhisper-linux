@@ -90,6 +90,18 @@ internal sealed class DictationInsertionOrderGate
     }
 
     /// <summary>Idempotent: releasing a session that is not (or no longer) reserved is a no-op.</summary>
+    /// <summary>True while any stopped session has not yet finished (or abandoned) its insertion.</summary>
+    internal bool HasPending
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _pending.Count > 0;
+            }
+        }
+    }
+
     internal void Release(int sessionId)
     {
         lock (_lock)

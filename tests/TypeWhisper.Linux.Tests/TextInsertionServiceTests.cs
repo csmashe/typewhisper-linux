@@ -2225,6 +2225,95 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_session_locked_while_waiting_only_copies()
+    {
+        var restoreFloor = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            DelayOverride = delay =>
+                delay >= TimeSpan.FromMilliseconds(400) ? restoreFloor.Task : Task.CompletedTask,
+        };
+        var inputAllowed = true;
+        // ReSharper disable once AccessToModifiedClosure -- the test flips inputAllowed to model a lock while the insertion waits.
+        var sut = new TextInsertionService(platform, inputAllowed: () => inputAllowed);
+        var request = new TextInsertionRequest(
+            "text",
+            TargetWindowId: "x11-target",
+            Strategy: TextInsertionStrategy.ClipboardPaste
+        );
+
+        var first = sut.InsertTextAsync(request);
+        var queued = sut.InsertTextAsync(request with { Text = "queued text" });
+        inputAllowed = false;
+        restoreFloor.SetResult();
+
+        Assert.Equal(InsertionResult.Pasted, await first);
+        Assert.Equal(InsertionResult.CopiedToClipboard, await queued);
+        Assert.Equal(1, platform.PasteAttemptCount);
+        Assert.Equal("queued text", platform.Clipboard);
+    }
+
+    [Theory]
+    [InlineData("x11-target", InsertionResult.Pasted)]
+    [InlineData(null, InsertionResult.CopiedToClipboard)]
+    public async Task InsertTextAsync_queued_behind_another_insertion_pastes_only_into_a_window_it_can_reactivate(
+        string? targetWindowId,
+        InsertionResult expected
+    )
+    {
+        var restoreFloor = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            DelayOverride = delay =>
+                delay >= TimeSpan.FromMilliseconds(400) ? restoreFloor.Task : Task.CompletedTask,
+        };
+        var sut = new TextInsertionService(platform);
+        var request = new TextInsertionRequest(
+            "text",
+            TargetWindowId: targetWindowId,
+            Strategy: TextInsertionStrategy.ClipboardPaste
+        );
+
+        var first = sut.InsertTextAsync(request);
+        var queued = sut.InsertTextAsync(request with { Text = "queued text" });
+        restoreFloor.SetResult();
+
+        Assert.Equal(InsertionResult.Pasted, await first);
+        Assert.Equal(expected, await queued);
+    }
+
+    [Fact]
+    public async Task CaptureSelectedTextAsync_while_an_insertion_holds_the_clipboard_sends_no_copy()
+    {
+        var restoreFloor = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the selected text",
+            DelayOverride = delay =>
+                delay >= TimeSpan.FromMilliseconds(400) ? restoreFloor.Task : Task.CompletedTask,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var insertion = sut.InsertTextAsync(
+            new TextInsertionRequest("pasted text", Strategy: TextInsertionStrategy.ClipboardPaste)
+        );
+        var captured = await sut.CaptureSelectedTextAsync();
+
+        // The probe would overwrite the clipboard the insertion has yet to restore.
+        Assert.Equal("", captured);
+        Assert.Equal(0, platform.CopyAttemptCount);
+        Assert.Equal("pasted text", platform.Clipboard);
+
+        restoreFloor.SetResult();
+        Assert.Equal(InsertionResult.Pasted, await insertion);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Equal("the selected text", await sut.CaptureSelectedTextAsync());
+    }
+
+    [Fact]
     public async Task CaptureSelectedTextAsync_returns_selection_and_restores_clipboard()
     {
         var platform = new FakeTextInsertionPlatform
@@ -3724,6 +3813,7 @@ public sealed class TextInsertionServiceTests
         // (e.g. the 500 ms restore floor must be skipped on a confirmed paste).
         public List<TimeSpan> Delays { get; } = [];
         public Action<TimeSpan>? OnDelay { get; init; }
+        public Func<TimeSpan, Task>? DelayOverride { get; init; }
         public Action? OnEnterSent { get; init; }
         public Action? OnActivateWindow { get; init; }
 
@@ -3766,7 +3856,7 @@ public sealed class TextInsertionServiceTests
         {
             Delays.Add(delay);
             OnDelay?.Invoke(delay);
-            return Task.CompletedTask;
+            return DelayOverride?.Invoke(delay) ?? Task.CompletedTask;
         }
 
         public string? GetActiveWindowId()

@@ -35,6 +35,7 @@ public record AppSettings
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string ReadLastTranscriptionHotkey { get; init; } = "";
+    public string PasteLastTranscriptionHotkey { get; init; } = "";
     public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
     /// <summary>Ordered spoken-language hints; the first entry mirrors Language, empty means unrestricted auto-detection.</summary>

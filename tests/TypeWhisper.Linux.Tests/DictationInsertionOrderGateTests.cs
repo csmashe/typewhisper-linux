@@ -8,6 +8,22 @@ public sealed class DictationInsertionOrderGateTests
     private static readonly TimeSpan s_testTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
+    public void HasPending_HoldsFromReserveUntilEveryReleaseIncludingRepeats()
+    {
+        var gate = new DictationInsertionOrderGate();
+        Assert.False(gate.HasPending);
+
+        gate.Reserve(1);
+        gate.Reserve(2);
+        gate.Release(1);
+        gate.Release(1);
+        Assert.True(gate.HasPending);
+
+        gate.Release(2);
+        Assert.False(gate.HasPending);
+    }
+
+    [Fact]
     public void WaitForTurnAsync_CompletesImmediately_ForOldestReservation()
     {
         var gate = new DictationInsertionOrderGate();

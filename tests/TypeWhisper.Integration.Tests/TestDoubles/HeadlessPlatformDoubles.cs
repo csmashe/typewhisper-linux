@@ -206,6 +206,7 @@ internal sealed class HeadlessShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? ReadLastTranscriptionRequested;
+    public event EventHandler? PasteLastTranscriptionRequested;
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? PromptActionRequested;
     public event EventHandler<string>? ProfileDictationToggleRequested;

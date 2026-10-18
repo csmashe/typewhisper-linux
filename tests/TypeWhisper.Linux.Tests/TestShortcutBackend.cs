@@ -89,6 +89,12 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
         remove { }
     }
 
+    public event EventHandler? PasteLastTranscriptionRequested
+    {
+        add { }
+        remove { }
+    }
+
     public event EventHandler? CancelRequested
     {
         add { }

@@ -70,6 +70,8 @@ public sealed class ShortcutMatcherTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             RecordingMode.Toggle,
@@ -121,6 +123,8 @@ public sealed class ShortcutMatcherTests
         // the side information.
         var set = new GlobalShortcutSet(
             KeyCode.VcRightAlt,
+            ModifierMask.None,
+            null,
             ModifierMask.None,
             null,
             ModifierMask.None,
@@ -230,6 +234,8 @@ public sealed class ShortcutMatcherTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             RecordingMode.Toggle,
@@ -244,6 +250,8 @@ public sealed class ShortcutMatcherTests
         return new GlobalShortcutSet(
             KeyCode.VcSpace,
             ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
             null,
             ModifierMask.None,
             null,

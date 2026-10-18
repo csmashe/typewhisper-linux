@@ -26,6 +26,7 @@ public sealed class PromptPaletteService
         Loc.Instance["Prompts.NoProviderConfigure"];
 
     private bool _opening;
+    private int _activeRuns;
 
     public PromptPaletteService(
         IServiceProvider services,
@@ -48,6 +49,9 @@ public sealed class PromptPaletteService
         _dictation = dictation;
     }
 
+    /// <summary>True from selection capture until the result is delivered: the clipboard is in use.</summary>
+    public bool IsActive => Volatile.Read(ref _activeRuns) > 0;
+
     public async Task TogglePaletteAsync()
     {
         if (_opening)
@@ -56,12 +60,14 @@ public sealed class PromptPaletteService
         }
 
         _opening = true;
+        Interlocked.Increment(ref _activeRuns);
         try
         {
             await OpenPaletteAsync();
         }
         finally
         {
+            Interlocked.Decrement(ref _activeRuns);
             _opening = false;
         }
     }
@@ -82,15 +88,23 @@ public sealed class PromptPaletteService
 
         var targetWindowId = _activeWindow.GetActiveWindowId();
 
-        var captured = await _textInsertion.CaptureSelectedTextAsync();
-        if (string.IsNullOrWhiteSpace(captured))
+        Interlocked.Increment(ref _activeRuns);
+        try
         {
-            return;
-        }
+            var captured = await _textInsertion.CaptureSelectedTextAsync();
+            if (string.IsNullOrWhiteSpace(captured))
+            {
+                return;
+            }
 
-        // No palette window: streaming has no UI sink (null → no-op renders),
-        // but the result still streams + falls back to batch before configured delivery.
-        await ExecuteActionAsync(action, captured, null, targetWindowId);
+            // No palette window: streaming has no UI sink (null → no-op renders),
+            // but the result still streams + falls back to batch before configured delivery.
+            await ExecuteActionAsync(action, captured, null, targetWindowId);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeRuns);
+        }
     }
 
     private async Task OpenPaletteAsync()
