@@ -949,9 +949,121 @@ public class GladiaPluginTests
     }
 
     [Fact]
+    public void DeclaresStructuredDictionaryTermsWithVocabularyBudget()
+    {
+        using var sut = new GladiaPlugin();
+
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal(new DictionaryTermsBudget(MaxTerms: 100, MaxTotalChars: 4_000), sut.DictionaryTermsBudget);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_SendsDictionaryTermsWholeAsCustomVocabulary()
+    {
+        JsonElement? initiation = null;
+        var handler = new SuccessfulFlowHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+                initiation = JsonDocument.Parse(body!).RootElement.Clone();
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await sut.TranscribeAsync(
+            [1, 2, 3],
+            "en",
+            translate: false,
+            PluginTranscriptionPrompt.Encode(
+                "Likely spoken languages: en, de.",
+                ["Washington, D.C.", "TypeWhisper"]
+            ),
+            CancellationToken.None
+        );
+
+        var root = Assert.NotNull(initiation);
+        Assert.True(root.GetProperty("custom_vocabulary").GetBoolean());
+        AssertVocabularyConfig(root.GetProperty("custom_vocabulary_config"), "Washington, D.C.", "TypeWhisper");
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_PromptTextWithoutTermsSendsNoCustomVocabulary()
+    {
+        JsonElement? initiation = null;
+        var handler = new SuccessfulFlowHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+                initiation = JsonDocument.Parse(body!).RootElement.Clone();
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await sut.TranscribeAsync(
+            [1, 2, 3],
+            null,
+            translate: false,
+            PluginTranscriptionPrompt.Encode("Alpha, Beta", []),
+            CancellationToken.None
+        );
+
+        var root = Assert.NotNull(initiation);
+        Assert.Equal(["audio_url"], root.EnumerateObject().Select(property => property.Name).ToArray());
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_MalformedPromptEnvelopeFailsBeforeHttp()
+    {
+        var handler = new CountingHandler();
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await Assert.ThrowsAsync<FormatException>(() => sut.TranscribeAsync(
+            [1, 2, 3],
+            null,
+            translate: false,
+            PluginTranscriptionPrompt.EnvelopePrefix + "[]",
+            CancellationToken.None
+        ));
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public void ExtractVocabulary_ClipsTermsToTheBudget()
+    {
+        var terms = Enumerable.Range(1, 150).Select(index => $"Term {index}").ToArray();
+
+        var vocabulary = GladiaPlugin.ExtractVocabulary(PluginTranscriptionPrompt.Encode(null, terms));
+
+        Assert.Equal(terms.Take(100), vocabulary);
+    }
+
+    [Fact]
+    public async Task StartStreamingWithPrompt_SendsTermsAsRealtimeCustomVocabulary()
+    {
+        JsonElement? init = null;
+        var handler = new CapturingHandler((request, body) =>
+        {
+            AssertApiKey(request);
+            Assert.Equal(GladiaSession.InitUrl, request.RequestUri?.ToString());
+            init = JsonDocument.Parse(body!).RootElement.Clone();
+            return JsonResponse("""{ "message": "stop after init" }""", HttpStatusCode.ServiceUnavailable);
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        await Assert.ThrowsAsync<PluginRequestException>(() => sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            [" ", "fr"],
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "TypeWhisper"]),
+            CancellationToken.None
+        ));
+
+        var root = Assert.NotNull(init);
+        Assert.Equal("fr", root.GetProperty("language_config").GetProperty("languages")[0].GetString());
+        Assert.False(root.TryGetProperty("custom_vocabulary", out _));
+        var realtime = root.GetProperty("realtime_processing");
+        Assert.True(realtime.GetProperty("custom_vocabulary").GetBoolean());
+        AssertVocabularyConfig(realtime.GetProperty("custom_vocabulary_config"), "Washington, D.C.", "TypeWhisper");
+    }
+
+    [Fact]
     public void BuildInitRequest_UsesWavPcmAndEnablesPartials()
     {
-        var json = GladiaSession.BuildInitRequest("de", 16000);
+        var json = GladiaSession.BuildInitRequest("de", [], 16000);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -972,10 +1084,11 @@ public class GladiaPluginTests
     [InlineData("")]
     public void BuildInitRequest_OmitsLanguageConfig_ForUnspecifiedLanguage(string? language)
     {
-        var json = GladiaSession.BuildInitRequest(language, 16000);
+        var json = GladiaSession.BuildInitRequest(language, [], 16000);
 
         using var doc = JsonDocument.Parse(json);
         Assert.False(doc.RootElement.TryGetProperty("language_config", out _));
+        Assert.False(doc.RootElement.TryGetProperty("realtime_processing", out _));
     }
 
     [Fact]
@@ -1063,6 +1176,16 @@ public class GladiaPluginTests
             }
         );
         return sut;
+    }
+
+    private static void AssertVocabularyConfig(JsonElement config, params string[] expected)
+    {
+        Assert.Equal(
+            ["vocabulary", "default_intensity"],
+            config.EnumerateObject().Select(property => property.Name).ToArray()
+        );
+        Assert.Equal(expected, config.GetProperty("vocabulary").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.Equal(0.7, config.GetProperty("default_intensity").GetDouble());
     }
 
     private static void AssertApiKey(HttpRequestMessage request)
