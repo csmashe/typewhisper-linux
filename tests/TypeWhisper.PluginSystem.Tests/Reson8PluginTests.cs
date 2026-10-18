@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -225,6 +226,7 @@ public partial class Reson8PluginTests
             Assert.Contains("encoding=pcm_s16le", request.RequestUri?.Query);
             Assert.Contains("sample_rate=16000", request.RequestUri?.Query);
             Assert.Contains("channels=1", request.RequestUri?.Query);
+            Assert.Contains("include_language=true", request.RequestUri?.Query);
             Assert.Contains("language=de", request.RequestUri?.Query);
             Assert.Contains("custom_model_id=domain-model", request.RequestUri?.Query);
             Assert.Equal("ApiKey reson-key", request.Headers.Authorization?.ToString());
@@ -263,7 +265,7 @@ public partial class Reson8PluginTests
         var handler = new CapturingHandler((request, _) =>
         {
             Assert.Equal("https://proxy.example.test/v1/speech-to-text/prerecorded", request.RequestUri?.GetLeftPart(UriPartial.Path));
-            Assert.DoesNotContain("language=", request.RequestUri?.Query);
+            Assert.DoesNotContain("&language=", request.RequestUri?.Query);
             Assert.DoesNotContain("custom_model_id=", request.RequestUri?.Query);
             Assert.True(request.Headers.TryGetValues("X-Api-Key", out var values));
             Assert.Equal("reson-key", Assert.Single(values));
@@ -466,6 +468,7 @@ public partial class Reson8PluginTests
         Assert.Contains("sample_rate=16000", uri.Query);
         Assert.Contains("channels=1", uri.Query);
         Assert.Contains("include_interim=true", uri.Query);
+        Assert.Contains("include_language=true", uri.Query);
         Assert.Contains("language=de", uri.Query);
         Assert.Contains("custom_model_id=domain-model", uri.Query);
 
@@ -473,7 +476,7 @@ public partial class Reson8PluginTests
         Assert.Equal("ws", localUri.Scheme);
         Assert.Equal(8080, localUri.Port);
         Assert.Equal("/base/v1/speech-to-text/realtime", localUri.AbsolutePath);
-        Assert.DoesNotContain("language=", localUri.Query);
+        Assert.DoesNotContain("&language=", localUri.Query);
         Assert.DoesNotContain("custom_model_id=", localUri.Query);
 
         // An explicitly plaintext base URL must not be silently upgraded to wss, or a
@@ -498,6 +501,194 @@ public partial class Reson8PluginTests
 
         Assert.Null(collector.ApplyEvent("""{ "type": "flush_confirmation" }"""));
         Assert.True(collector.IsFlushConfirmed);
+    }
+
+    [Theory]
+    [InlineData("""{ "text": "Hallo", "language": "nl" }""", null, "nl")]
+    [InlineData("""{ "text": "Hallo", "language": "" }""", "de", "de")]
+    [InlineData("""{ "text": "Hallo", "language": "" }""", null, null)]
+    [InlineData("""{ "text": "Hallo" }""", null, null)]
+    public async Task TranscribeAsync_ReportsDetectedLanguageAndIgnoresAnEmptyOne(
+        string response,
+        string? requestedLanguage,
+        string? expectedLanguage)
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.Contains("include_language=true", request.RequestUri?.Query);
+            return JsonResponse(response);
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new Reson8Plugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } });
+
+        var result = await sut.TranscribeAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            requestedLanguage,
+            false,
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(expectedLanguage, result.DetectedLanguage);
+    }
+
+    [Fact]
+    public void StreamingCollector_ReportsLanguageOfFinalsOnly()
+    {
+        var collector = new Reson8TranscriptCollector();
+
+        var interim = collector.ApplyEvent(
+            """{ "type": "transcript", "text": "Hal", "language": "", "is_final": false }""");
+        Assert.Null(interim!.DetectedLanguage);
+
+        var final = collector.ApplyEvent(
+            """{ "type": "transcript", "text": "Hallo", "language": "nl", "is_final": true }""");
+        Assert.Equal("nl", final!.DetectedLanguage);
+    }
+
+    [Theory]
+    [InlineData(new[] { "nl", "NL" }, "nl")]
+    [InlineData(new[] { "nl", "en" }, null)]
+    [InlineData(new[] { "nl", null }, null)]
+    public void StreamingCollector_ClaimsALanguageOnlyWhenEveryFinalAgrees(
+        string?[] languages,
+        string? expected)
+    {
+        var collector = new Reson8TranscriptCollector();
+        foreach (var language in languages)
+            collector.ApplyEvent(new StreamingTranscriptEvent("words", true) { DetectedLanguage = language });
+
+        // An interim never decides the transcript language.
+        collector.ApplyEvent(new StreamingTranscriptEvent("more", false) { DetectedLanguage = "de" });
+
+        Assert.Equal(expected, collector.DetectedLanguage);
+    }
+
+    [Theory]
+    [InlineData(null, "nl")]
+    [InlineData("de", "de")]
+    public async Task TranscribeStreamingAsync_ReturnsConfirmedFinalsWithTheirLanguage(
+        string? requestedLanguage,
+        string expectedLanguage)
+    {
+        var batchCalls = 0;
+        var progress = new List<string>();
+        var session = new FakeStreamingSession
+        {
+            OnFinalize = (fake, _) =>
+            {
+                fake.Raise(new StreamingTranscriptEvent("Hallo", false));
+                fake.Raise(new StreamingTranscriptEvent("Hallo wereld", true) { DetectedLanguage = "nl" });
+                return Task.CompletedTask;
+            },
+        };
+        var sut = await CreateStreamingPluginAsync(
+            (_, _) => Task.FromResult<IStreamingSession>(session),
+            () => batchCalls++);
+
+        var result = await sut.TranscribeStreamingAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            requestedLanguage,
+            false,
+            null,
+            text =>
+            {
+                progress.Add(text);
+                return true;
+            },
+            CancellationToken.None);
+
+        Assert.Equal("Hallo wereld", result.Text);
+        Assert.Equal(expectedLanguage, result.DetectedLanguage);
+        Assert.Equal(["Hallo", "Hallo wereld"], progress);
+        Assert.Equal(0, batchCalls);
+        Assert.True(session.Disposed);
+    }
+
+    [Fact]
+    public async Task TranscribeStreamingAsync_MissingFlushConfirmationFallsBackToBatch()
+    {
+        var batchCalls = 0;
+        var session = new FakeStreamingSession
+        {
+            OnFinalize = (fake, ct) =>
+            {
+                fake.Raise(new StreamingTranscriptEvent("partial", true));
+                return Task.Delay(Timeout.Infinite, ct);
+            },
+        };
+        var sut = await CreateStreamingPluginAsync(
+            (_, _) => Task.FromResult<IStreamingSession>(session),
+            () => batchCalls++);
+
+        var result = await sut.TranscribeStreamingAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            null,
+            false,
+            null,
+            _ => true,
+            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("batch", result.Text);
+        Assert.Equal(1, batchCalls);
+        Assert.True(session.Disposed);
+    }
+
+    [Fact]
+    public async Task TranscribeStreamingAsync_StalledConnectionFallsBackToBatch()
+    {
+        var batchCalls = 0;
+        var sut = await CreateStreamingPluginAsync(
+            async (_, ct) =>
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                throw new UnreachableException();
+            },
+            () => batchCalls++);
+
+        var result = await sut.TranscribeStreamingAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            null,
+            false,
+            null,
+            _ => true,
+            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("batch", result.Text);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeStreamingAsync_CallerCancellationWhileAwaitingConfirmationDoesNotFallBack()
+    {
+        var batchCalls = 0;
+        using var cts = new CancellationTokenSource();
+        var session = new FakeStreamingSession
+        {
+            OnFinalize = (_, ct) =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- runs inside the awaited call below.
+                cts.Cancel();
+                return Task.Delay(Timeout.Infinite, ct);
+            },
+        };
+        var sut = await CreateStreamingPluginAsync(
+            (_, _) => Task.FromResult<IStreamingSession>(session),
+            () => batchCalls++,
+            finalizeGrace: TimeSpan.FromMinutes(5));
+
+        // ReSharper disable once MethodSupportsCancellation -- the cancellation must come from the
+        // plugin; a cancellable WaitAsync would throw it itself and hide a batch fallback.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.TranscribeStreamingAsync(
+                BuildPcm16Wav([0x00, 0x00]),
+                null,
+                false,
+                null,
+                _ => true,
+                cts.Token).WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(0, batchCalls);
     }
 
     [Fact]
@@ -638,6 +829,26 @@ public partial class Reson8PluginTests
         return stream.ToArray();
     }
 
+    private static async Task<Reson8Plugin> CreateStreamingPluginAsync(
+        Func<string?, CancellationToken, Task<IStreamingSession>> connect,
+        Action onBatch,
+        TimeSpan? finalizeGrace = null)
+    {
+        var handler = new CapturingHandler((_, _) =>
+        {
+            onBatch();
+            return JsonResponse("""{ "text": "batch" }""");
+        });
+        var sut = new Reson8Plugin(new HttpClient(handler))
+        {
+            StreamingConnectTimeout = TimeSpan.FromMilliseconds(200),
+            StreamingFinalizeGrace = finalizeGrace ?? TimeSpan.FromMilliseconds(200),
+            StreamingSessionFactory = connect,
+        };
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } });
+        return sut;
+    }
+
     private static HttpResponseMessage JsonResponse(
         string json,
         HttpStatusCode statusCode = HttpStatusCode.OK) =>
@@ -657,6 +868,28 @@ public partial class Reson8PluginTests
                 ? null
                 : await request.Content.ReadAsByteArrayAsync(cancellationToken);
             return responder(request, body);
+        }
+    }
+
+    private sealed class FakeStreamingSession : IStreamingSession
+    {
+        public Func<FakeStreamingSession, CancellationToken, Task> OnFinalize { get; init; } =
+            (_, _) => Task.CompletedTask;
+
+        public bool Disposed { get; private set; }
+
+        public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+
+        public void Raise(StreamingTranscriptEvent transcript) => TranscriptReceived?.Invoke(transcript);
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) => Task.CompletedTask;
+
+        public Task FinalizeAsync(CancellationToken ct) => OnFinalize(this, ct);
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
         }
     }
 

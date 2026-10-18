@@ -30,11 +30,12 @@ internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSess
         HttpClient httpClient,
         string apiKey,
         string? language,
+        IReadOnlyList<string> vocabulary,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new GladiaWebSocketAdapter(httpClient, apiKey, language),
+            new GladiaWebSocketAdapter(httpClient, apiKey, language, vocabulary),
             ct
         );
         return new GladiaStreamingSession(pump);
@@ -47,7 +48,11 @@ internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSess
 
     public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
-    internal static string BuildInitRequest(string? language, int sampleRate)
+    internal static string BuildInitRequest(
+        string? language,
+        IReadOnlyList<string> vocabulary,
+        int sampleRate
+    )
     {
         var body = new Dictionary<string, object>
         {
@@ -69,6 +74,11 @@ internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSess
                 ["languages"] = new[] { language },
             };
         }
+
+        var realtimeProcessing = new Dictionary<string, object>();
+        GladiaPlugin.AddCustomVocabulary(realtimeProcessing, vocabulary);
+        if (realtimeProcessing.Count > 0)
+            body["realtime_processing"] = realtimeProcessing;
 
         return JsonSerializer.Serialize(body);
     }
@@ -147,7 +157,8 @@ internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSess
 internal sealed class GladiaWebSocketAdapter(
     HttpClient httpClient,
     string apiKey,
-    string? language
+    string? language,
+    IReadOnlyList<string> vocabulary
 ) : IWebSocketSessionAdapter
 {
     public string ProviderName => "Gladia";
@@ -167,7 +178,7 @@ internal sealed class GladiaWebSocketAdapter(
         );
         request.Headers.Add("x-gladia-key", apiKey);
         request.Content = new StringContent(
-            GladiaStreamingSession.BuildInitRequest(language, 16000),
+            GladiaStreamingSession.BuildInitRequest(language, vocabulary, 16000),
             Encoding.UTF8,
             "application/json"
         );

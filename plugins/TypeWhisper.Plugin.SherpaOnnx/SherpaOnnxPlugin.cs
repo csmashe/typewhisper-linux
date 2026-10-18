@@ -837,22 +837,25 @@ public sealed class SherpaOnnxPlugin
                     if (model.SupportsTranslation)
                         EnsureCanaryLanguage(language, translate);
 
-                    var coordinator = new SherpaDecodeCoordinator(chunk =>
-                    {
-                        using var stream = _recognizer.CreateStream();
-                        stream.AcceptWaveform(SherpaDecodeCoordinator.SampleRate, chunk);
-                        ct.ThrowIfCancellationRequested();
-                        _recognizer.Decode(stream);
-                        ct.ThrowIfCancellationRequested();
-                        var result = stream.Result;
-                        // result.Durations is garbage in this binding; see SherpaNativeDurations.
-                        return new SherpaDecodeChunk(
-                            result.Text,
-                            result.Tokens,
-                            result.Timestamps,
-                            SherpaNativeDurations.Read(stream, result.Timestamps)
-                        );
-                    });
+                    var coordinator = new SherpaDecodeCoordinator(
+                        chunk =>
+                        {
+                            using var stream = _recognizer.CreateStream();
+                            stream.AcceptWaveform(SherpaDecodeCoordinator.SampleRate, chunk);
+                            ct.ThrowIfCancellationRequested();
+                            _recognizer.Decode(stream);
+                            ct.ThrowIfCancellationRequested();
+                            var result = stream.Result;
+                            // result.Durations is garbage in this binding; see SherpaNativeDurations.
+                            return new SherpaDecodeChunk(
+                                result.Text,
+                                result.Tokens,
+                                result.Timestamps,
+                                SherpaNativeDurations.Read(stream, result.Timestamps)
+                            );
+                        },
+                        message => _host?.Log(PluginLogLevel.Warning, message)
+                    );
                     var decoded = coordinator.Decode(
                         audioSamples,
                         model.SupportsTranslation,

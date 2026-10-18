@@ -94,6 +94,12 @@ public sealed partial class Reson8Plugin
 
     internal string CustomAuthHeader { get; private set; } = DefaultAuthHeader;
 
+    internal TimeSpan StreamingConnectTimeout { get; init; } = TimeSpan.FromSeconds(15);
+
+    internal TimeSpan StreamingFinalizeGrace { get; init; } = TimeSpan.FromSeconds(15);
+
+    internal Func<string?, CancellationToken, Task<IStreamingSession>>? StreamingSessionFactory { get; init; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -165,7 +171,11 @@ public sealed partial class Reson8Plugin
                 // the send/finalize flow halts instead of streaming the whole clip
                 // and returning a result the caller no longer wants.
                 using var streamingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                await using var session = await StartStreamingAsync(language, streamingCts.Token);
+                await using var session = await WithDeadlineAsync(
+                    token => ConnectStreamingSessionAsync(language, token),
+                    StreamingConnectTimeout,
+                    "The Reson8 streaming connection timed out.",
+                    streamingCts.Token);
                 var collector = new Reson8TranscriptCollector();
 
                 session.TranscriptReceived += evt =>
@@ -189,14 +199,24 @@ public sealed partial class Reson8Plugin
                 }
 
                 streamingCts.Token.ThrowIfCancellationRequested();
-                await session.FinalizeAsync(streamingCts.Token);
+                // Recorded audio is sent faster than realtime, so the server may still be
+                // transcribing up to its full duration when the flush request goes out.
+                await WithDeadlineAsync(
+                    async token =>
+                    {
+                        await session.FinalizeAsync(token);
+                        return true;
+                    },
+                    StreamingFinalizeGrace + TimeSpan.FromSeconds(PcmDurationSeconds(pcm16.Length)),
+                    "Reson8 did not confirm the end of the stream in time.",
+                    streamingCts.Token);
 
                 var text = collector.FinalText;
                 return string.IsNullOrWhiteSpace(text)
                     ? null
                     : new PluginTranscriptionResult(
                         text,
-                        NormalizeLanguage(language),
+                        NormalizeLanguage(language) ?? collector.DetectedLanguage,
                         PcmDurationSeconds(pcm16.Length),
                         NoSpeechProbability: null
                     );
@@ -205,6 +225,28 @@ public sealed partial class Reson8Plugin
             ct
         );
     }
+
+    // A TimeoutException falls back to batch; caller cancellation does not.
+    private static async Task<T> WithDeadlineAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        TimeSpan deadline,
+        string timeoutMessage,
+        CancellationToken ct)
+    {
+        using var timeout = new CancellationTokenSource(deadline);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try
+        {
+            return await operation(linked.Token);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(timeoutMessage, ex);
+        }
+    }
+
+    private Task<IStreamingSession> ConnectStreamingSessionAsync(string? language, CancellationToken ct) =>
+        StreamingSessionFactory?.Invoke(language, ct) ?? StartStreamingAsync(language, ct);
 
     internal static async Task<T> RunStreamingWithBatchFallbackAsync<T>(
         Func<Action, Task<T?>> runStreaming,
@@ -398,6 +440,7 @@ public sealed partial class Reson8Plugin
             "encoding=pcm_s16le",
             "sample_rate=16000",
             "channels=1",
+            "include_language=true",
         };
 
         if (!string.IsNullOrWhiteSpace(language))
@@ -421,7 +464,9 @@ public sealed partial class Reson8Plugin
         var root = doc.RootElement;
 
         var text = GetString(root, "text")?.Trim() ?? "";
-        var language = GetString(root, "language") ?? GetString(root, "detected_language") ?? fallbackLanguage;
+        var language = NonEmpty(GetString(root, "language"))
+            ?? NonEmpty(GetString(root, "detected_language"))
+            ?? fallbackLanguage;
         return new PluginTranscriptionResult(text, language, PcmDurationSeconds(pcm16ByteLength), NoSpeechProbability: null);
     }
 
@@ -489,6 +534,9 @@ public sealed partial class Reson8Plugin
 
     private static string NormalizeAuthHeader(string? header) =>
         string.IsNullOrWhiteSpace(header) ? DefaultAuthHeader : header.Trim();
+
+    private static string? NonEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? GetString(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var property)

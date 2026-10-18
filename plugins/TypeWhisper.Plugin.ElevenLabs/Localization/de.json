@@ -13,6 +13,8 @@
   "Settings.TagAudioEventsDescription": "Nur bei REST-Anfragen.",
   "Settings.SpeakerCount": "Anzahl der Sprecher",
   "Settings.SpeakerCountDescription": "0 = automatisch, sonst 1–32. Nur bei REST-Anfragen.",
+  "Settings.UseDictionaryTerms": "Wörterbuchbegriffe als Keyterms senden",
+  "Settings.UseDictionaryTermsDescription": "Richtet die Transkription auf Ihre Wörterbuchbegriffe aus, jeweils vollständig (auch mit Kommas). ElevenLabs berechnet für jede Anfrage mit Keyterms 20 % mehr und bei mehr als 100 Begriffen mindestens 20 Sekunden pro Anfrage. Nur bei REST-Anfragen; Echtzeit-Diktate senden sie nicht. Wenn deaktiviert, senden nur HTTP-API-Anfragen Wörterbuchbegriffe.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyUnverified": "API-Schlüssel gespeichert, aber der Sprachzugriff konnte nicht geprüft werden: dem Schlüssel fehlt die Berechtigung user_read. Starte eine Diktierung, um den Speech-to-Text-Zugriff zu bestätigen.",

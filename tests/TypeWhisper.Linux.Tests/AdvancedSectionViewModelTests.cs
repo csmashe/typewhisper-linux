@@ -4,6 +4,8 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Tests;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -42,6 +44,72 @@ public sealed class AdvancedSectionViewModelTests
         harness.ApplyPostedActions();
         Assert.True(harness.ViewModel.CrashReportingEnabled);
         harness.Settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DiagnosticLog_IsHiddenWithoutTheLogService()
+    {
+        using var harness = await TestHarness.CreateAsync();
+        Assert.False(harness.ViewModel.CanUseDiagnosticLog);
+        Assert.False(harness.ViewModel.DiagnosticLogEnabled);
+    }
+
+    [Fact]
+    public async Task DiagnosticLog_HydratesWithoutSaving_AndUserChangesPersist()
+    {
+        var directory = TestPaths.CreateTempDirectory("TypeWhisper.AdvancedDiagnosticLog");
+        try
+        {
+            using var harness = await TestHarness.CreateAsync(
+                diagnosticLogPath: Path.Join(directory, "diagnostics.jsonl"),
+                diagnosticLogRetentionDays: 30);
+            Assert.True(harness.ViewModel.CanUseDiagnosticLog);
+            Assert.Equal([1, 3, 7, 14, 30], harness.ViewModel.DiagnosticLogRetentionOptions.Select(option => option.Days));
+            Assert.Equal(30, harness.ViewModel.SelectedDiagnosticLogRetention?.Days);
+            harness.Settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+            harness.ViewModel.DiagnosticLogEnabled = true;
+            harness.ViewModel.SelectedDiagnosticLogRetention =
+                harness.ViewModel.DiagnosticLogRetentionOptions.Single(option => option.Days == 14);
+
+            Assert.True(harness.Settings.Object.Current.DiagnosticLogEnabled);
+            Assert.Equal(14, harness.Settings.Object.Current.DiagnosticLogRetentionDays);
+            Assert.Equal("", harness.ViewModel.DiagnosticLogStatus);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task DiagnosticLog_ExportAndDeleteReportTheirResult()
+    {
+        var directory = TestPaths.CreateTempDirectory("TypeWhisper.AdvancedDiagnosticLog");
+        var logPath = Path.Join(directory, "diagnostics.jsonl");
+        try
+        {
+            using var harness = await TestHarness.CreateAsync(diagnosticLogPath: logPath);
+            harness.ViewModel.DiagnosticLogEnabled = true;
+            // ReSharper disable once MethodHasAsyncOverload -- SettingsChanged is a synchronous Action event; RaiseAsync only serves Task-returning handlers.
+            harness.Settings.Raise(service => service.SettingsChanged += null, harness.Settings.Object.Current);
+
+            await harness.ViewModel.ExportDiagnosticLogAsync(Path.Join(directory, "export.jsonl"));
+            Assert.Equal(Loc.Instance.GetString("Advanced.DiagnosticLogExported", 0), harness.ViewModel.DiagnosticLogStatus);
+            // ReSharper disable once MethodHasAsyncOverload -- synchronous read is deliberate in this test assertion.
+            Assert.Single(File.ReadAllLines(Path.Join(directory, "export.jsonl")));
+
+            await harness.ViewModel.ExportDiagnosticLogAsync(Path.Join(directory, "missing", "export.jsonl"));
+            Assert.Equal(Loc.Instance["Advanced.DiagnosticLogExportFailed"], harness.ViewModel.DiagnosticLogStatus);
+
+            await harness.ViewModel.DeleteDiagnosticLogAsync();
+            Assert.Equal(Loc.Instance["Advanced.DiagnosticLogDeleted"], harness.ViewModel.DiagnosticLogStatus);
+            Assert.False(File.Exists(logPath));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -538,9 +606,11 @@ public sealed class AdvancedSectionViewModelTests
             SpeechFeedbackService speechFeedback,
             MutableTtsPlugin plugin,
             AdvancedSectionViewModel viewModel,
-            List<Action> postedActions
+            List<Action> postedActions,
+            LocalDiagnosticLogService? diagnosticLog
         )
         {
+            DiagnosticLog = diagnosticLog;
             Settings = settings;
             PluginManager = pluginManager;
             SpeechFeedback = speechFeedback;
@@ -555,16 +625,20 @@ public sealed class AdvancedSectionViewModelTests
         public MutableTtsPlugin Plugin { get; }
         public AdvancedSectionViewModel ViewModel { get; }
         public List<Action> PostedActions { get; }
+        private LocalDiagnosticLogService? DiagnosticLog { get; }
 
         public static async Task<TestHarness> CreateAsync(
             bool enablePluginBeforeViewModel = true,
-            bool crashReportingEnabled = false
+            bool crashReportingEnabled = false,
+            string? diagnosticLogPath = null,
+            int diagnosticLogRetentionDays = 7
         )
         {
             var settings = TestPluginManagerFactory.CreateSettings(
                 new AppSettings
                 {
                     CrashReportingEnabled = crashReportingEnabled,
+                    DiagnosticLogRetentionDays = diagnosticLogRetentionDays,
                     SpokenFeedbackProviderId = MutableTtsPlugin.ProviderId,
                     SpokenFeedbackVoiceId = "before-voice",
                 }
@@ -601,11 +675,16 @@ public sealed class AdvancedSectionViewModelTests
                 systemProvider
             );
             var postedActions = new List<Action>();
+            var diagnosticLog = diagnosticLogPath is null
+                ? null
+                : new LocalDiagnosticLogService(settings.Object, diagnosticLogPath, TimeProvider.System);
+            diagnosticLog?.Start();
             var viewModel = new AdvancedSectionViewModel(
                 settings.Object,
                 speechFeedback,
                 pluginManager,
-                postedActions.Add
+                postedActions.Add,
+                diagnosticLog
             );
             return new TestHarness(
                 settings,
@@ -613,7 +692,8 @@ public sealed class AdvancedSectionViewModelTests
                 speechFeedback,
                 plugin,
                 viewModel,
-                postedActions
+                postedActions,
+                diagnosticLog
             );
         }
 
@@ -624,6 +704,7 @@ public sealed class AdvancedSectionViewModelTests
 
         public void Dispose()
         {
+            DiagnosticLog?.Dispose();
             SpeechFeedback.Dispose();
             PluginManager.Dispose();
         }

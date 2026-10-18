@@ -434,8 +434,8 @@
           "Sentry": "[6.11.0, )",
           "SharpHook": "[5.3.9, )",
           "Tmds.DBus.Protocol": "[0.92.0, )",
-          "TypeWhisper.Core": "[0.14.1, )",
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.Core": "[0.17.0, )",
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.core": {
@@ -444,7 +444,7 @@
       "typewhisper.plugin.webhook": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.14.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.pluginsdk": {
@@ -452,6 +452,12 @@
       },
       "typewhisper.processtestchild": {
         "type": "Project"
+      },
+      "typewhisper.transcriptionworkerprobe": {
+        "type": "Project",
+        "dependencies": {
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
+        }
       }
     }
   }

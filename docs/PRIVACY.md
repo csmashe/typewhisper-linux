@@ -26,6 +26,12 @@ Reports never include:
 
 No data is written to disk for this feature. Turning the switch off stops reporting immediately.
 
+## Optional local diagnostic log
+
+The local diagnostic log is off by default and is a separate choice from crash reporting. It is enabled via Advanced → Data → "Keep a local diagnostic log" and writes `Logs/diagnostics.jsonl` under the TypeWhisper data directory (readable only by your user). It is never sent anywhere; you can export it to attach to a support request.
+
+It records event names (for example the start and end of a dictation and of its recording, transcription and insertion steps), a random ID linking the steps of one dictation, timings, the outcome of each step, and the same engine, model, mode, cleanup level, language and app/OS version values as the crash reports above, plus error types, method names from the stack and HTTP status or socket error codes. Every value is checked against a fixed list of allowed fields and formats when it is written, pruned and exported, so audio, transcripts, prompts, clipboard contents, window titles, file names or paths, API keys and error message text are never written. Entries older than the chosen retention period (1, 3, 7, 14 or 30 days; 7 by default) are deleted, the file is capped at 2 MB, and settings backups do not include it. Turning the log off or choosing "Delete log" deletes the file.
+
 Local transcription and text processing run on the user's device.
 
 Audio, transcripts, prompts, or API keys leave the device only when the user explicitly configures and uses a cloud provider or integration.

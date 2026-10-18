@@ -151,7 +151,7 @@
                        Classes="section-title" />
 
             <Border Classes="panel">
-                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,Auto">
                     <Border Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="16">
@@ -202,7 +202,49 @@
 
                     <Border Grid.Row="5" Background="#1AFFFFFF" />
 
-                    <Border Grid.Row="6" Padding="18,14">
+                    <Border Grid.Row="6" Padding="18,14" IsVisible="{Binding CanUseDiagnosticLog}">
+                        <StackPanel Spacing="10">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Text="{loc:Str Advanced.DiagnosticLog}"
+                                               FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <TextBlock Text="{loc:Str Advanced.DiagnosticLogHint}"
+                                               FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiagnosticLogEnabled}"
+                                              VerticalAlignment="Center" />
+                            </Grid>
+                            <Grid ColumnDefinitions="*,320" ColumnSpacing="16"
+                                  IsVisible="{Binding DiagnosticLogEnabled}">
+                                <TextBlock Text="{loc:Str Advanced.DiagnosticLogRetention}"
+                                           VerticalAlignment="Center" />
+                                <ComboBox Grid.Column="1"
+                                          HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding DiagnosticLogRetentionOptions}"
+                                          SelectedItem="{Binding SelectedDiagnosticLogRetention}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:DiagnosticLogRetentionOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="8"
+                                        IsVisible="{Binding DiagnosticLogEnabled}">
+                                <Button Content="{loc:Str Advanced.DiagnosticLogExport}"
+                                        Click="OnExportDiagnosticLog" />
+                                <Button Content="{loc:Str Advanced.DiagnosticLogDelete}"
+                                        Click="OnDeleteDiagnosticLog" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding DiagnosticLogStatus}"
+                                       FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap"
+                                       IsVisible="{Binding DiagnosticLogStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="7" Background="#1AFFFFFF" IsVisible="{Binding CanUseDiagnosticLog}" />
+
+                    <Border Grid.Row="8" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
                               ColumnSpacing="16">
                             <TextBlock Text="{loc:Str Advanced.HistoryRetention}"
@@ -221,7 +263,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7"
+                    <Border Grid.Row="9"
                             BorderBrush="#1AFFFFFF"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">

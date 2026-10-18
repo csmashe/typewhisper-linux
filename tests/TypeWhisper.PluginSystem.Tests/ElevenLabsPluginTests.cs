@@ -306,6 +306,61 @@ public class ElevenLabsPluginTests
         Assert.Equal(["TypeWhisper", "ElevenLabs"], terms);
     }
 
+    [Theory]
+    [InlineData(true, new[] { "Acme", "Beta", "Washington, D.C.", "type script" })]
+    [InlineData(false, new[] { "Acme", "Beta" })]
+    public async Task TranscribeAsync_SendsDictionaryTermsWholeOnlyWhenEnabled(bool enabled, string[] expected)
+    {
+        string? capturedBody = null;
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            capturedBody = body;
+            return JsonResponse("""{"text":"ok"}""");
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+        await sut.SetSettingValueAsync("useDictionaryTerms", enabled ? "true" : "false");
+
+        var prompt = PluginTranscriptionPrompt.Encode(
+            "Acme, Beta\nacme",
+            ["Washington, D.C.", "BETA", "bad<term", "one two three four five six", "type script"]);
+        await sut.TranscribeAsync([1, 2, 3], null, false, prompt, CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        Assert.Equal(expected.Length, CountMultipartParts(capturedBody, "keyterms"));
+        foreach (var term in expected)
+            AssertMultipartPart(capturedBody, "keyterms", term);
+        Assert.DoesNotContain(PluginTranscriptionPrompt.EnvelopePrefix.TrimEnd(), capturedBody);
+    }
+
+    [Fact]
+    public async Task UseDictionaryTerms_DefaultsOffAndControlsStructuredTerms()
+    {
+        var host = new TestPluginHostServices();
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.False(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal("false", await sut.GetSettingValueAsync("useDictionaryTerms"));
+
+        await sut.SetSettingValueAsync("useDictionaryTerms", "true");
+
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.True(host.GetSetting<bool>("useDictionaryTerms"));
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+
+        using var reloaded = new ElevenLabsPlugin();
+        await reloaded.ActivateAsync(host);
+        Assert.True(reloaded.SupportsStructuredDictionaryTerms);
+    }
+
+    [Fact]
+    public void ExtractKeyterms_RejectsMalformedEnvelope()
+    {
+        Assert.Throws<FormatException>(() =>
+            ElevenLabsPlugin.ExtractKeyterms(PluginTranscriptionPrompt.EnvelopePrefix + "{\"text\":\"x\"}"));
+    }
+
     [Fact]
     public void BuildRealtimeUri_UsesScribeRealtimeAndManualCommits()
     {
@@ -600,6 +655,9 @@ public class ElevenLabsPluginTests
 
     private static void AssertMultipartPart(string body, string name, string value) =>
         Assert.Contains($"Content-Disposition: form-data; name={name}\r\n\r\n{value}\r\n", body);
+
+    private static int CountMultipartParts(string body, string name) =>
+        body.Split($"Content-Disposition: form-data; name={name}\r\n").Length - 1;
 
     private static JsonElement LoadLocalization(string language)
     {

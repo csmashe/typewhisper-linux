@@ -355,9 +355,16 @@ internal sealed class XaiWebSocketAdapter(
     }
 }
 
+// xAI's speech_final normally restates its utterance's chunk finals, and the host appends every
+// final, so chunks are held until speech_final or transcript.done settles the utterance.
 internal sealed class XaiTranscriptCollector
 {
+    // Event timestamps carry two decimals; a speech_final that restates its utterance starts
+    // where the first chunk did, while a tail-only one starts at least a chunk later.
+    private const double UtteranceStartTolerance = 0.05;
+
     private readonly List<string> _finals = [];
+    private readonly List<(string Text, double? Start)> _pendingChunks = [];
     private string? _doneText;
     private string? _detectedLanguage;
     private double _duration;
@@ -401,7 +408,7 @@ internal sealed class XaiTranscriptCollector
         var text =
             !string.IsNullOrWhiteSpace(_doneText)
                 ? _doneText!
-                : string.Join(" ", _finals).Trim();
+                : JoinNonBlank(_finals.Concat(_pendingChunks.Select(chunk => chunk.Text)));
 
         return new PluginTranscriptionResult(
             text,
@@ -418,28 +425,45 @@ internal sealed class XaiTranscriptCollector
         RememberMetadata(root);
 
         if (!isFinal)
-            return new StreamingTranscriptEvent(text, IsFinal: false);
+            return new StreamingTranscriptEvent(PendingPreview(text), IsFinal: false);
 
-        if (string.IsNullOrWhiteSpace(text))
-            return null;
-
-        if (speechFinal && _finals.Count > 0)
+        if (!speechFinal)
         {
-            var joined = string.Join(" ", _finals);
-            if (
-                text.StartsWith(joined, StringComparison.Ordinal)
-                && (
-                    text.Length == joined.Length
-                    || text[joined.Length] == ' '
-                )
-            )
-            {
+            if (string.IsNullOrWhiteSpace(text))
                 return null;
-            }
+            _pendingChunks.Add((text, GetNumber(root, "start")));
+            return new StreamingTranscriptEvent(PendingPreview(""), IsFinal: false);
         }
 
-        _finals.Add(text);
-        return new StreamingTranscriptEvent(text, IsFinal: true);
+        var utterance = SettleUtterance(text, GetNumber(root, "start"));
+        if (utterance.Length == 0)
+            return null;
+
+        _finals.Add(utterance);
+        return new StreamingTranscriptEvent(utterance, IsFinal: true);
+    }
+
+    private string SettleUtterance(string speechFinalText, double? speechFinalStart)
+    {
+        if (_pendingChunks.Count == 0)
+            return speechFinalText;
+
+        var chunks = JoinNonBlank(_pendingChunks.Select(chunk => chunk.Text));
+        var firstChunkStart = _pendingChunks[0].Start;
+        _pendingChunks.Clear();
+
+        if (speechFinalText.Length == 0)
+            return chunks;
+
+        var restatesChunks =
+            speechFinalStart is { } start && firstChunkStart is { } chunkStart
+                ? start <= chunkStart + UtteranceStartTolerance
+                : speechFinalText.StartsWith(chunks, StringComparison.Ordinal)
+                    && (
+                        speechFinalText.Length == chunks.Length
+                        || IsWordBoundary(speechFinalText[chunks.Length])
+                    );
+        return restatesChunks ? speechFinalText : $"{chunks} {speechFinalText}";
     }
 
     private StreamingTranscriptEvent? ApplyDoneEvent(JsonElement root)
@@ -448,34 +472,54 @@ internal sealed class XaiTranscriptCollector
         RememberMetadata(root);
         IsTerminal = true;
 
+        // Chunks the server locked without closing their utterance are still owed to the host.
+        var unsettled = JoinNonBlank(_pendingChunks.Select(chunk => chunk.Text));
+        _pendingChunks.Clear();
+        if (unsettled.Length > 0)
+            _finals.Add(unsettled);
+
+        if (!string.IsNullOrWhiteSpace(text))
+            _doneText = text;
+
+        var emitted = JoinNonBlank([unsettled, DoneTextBeyondFinals(text)]);
+        return emitted.Length == 0 ? null : new StreamingTranscriptEvent(emitted, IsFinal: true);
+    }
+
+    private string DoneTextBeyondFinals(string text)
+    {
         if (string.IsNullOrWhiteSpace(text))
-            return null;
+            return "";
 
-        _doneText = text;
         if (_finals.Count == 0)
-            return new StreamingTranscriptEvent(text, IsFinal: true);
-
-        var joined = string.Join(" ", _finals);
-        if (text.Equals(joined, StringComparison.Ordinal))
-            return null;
-
-        // ReSharper disable once InvertIf -- the positive form names the case being handled
-        // (done text extends the accumulated finals); the De Morgan negation does not.
-        if (
-            text.StartsWith(joined, StringComparison.Ordinal)
-            && text.Length > joined.Length
-            && text[joined.Length] == ' '
-        )
         {
-            var delta = text[(joined.Length + 1)..].Trim();
-            if (delta.Length == 0)
-                return null;
-            _finals.Add(delta);
-            return new StreamingTranscriptEvent(delta, IsFinal: true);
+            _finals.Add(text);
+            return text;
         }
 
-        return null;
+        var joined = string.Join(" ", _finals);
+        if (
+            !text.StartsWith(joined, StringComparison.Ordinal)
+            || text.Length <= joined.Length
+            || text[joined.Length] != ' '
+        )
+        {
+            return "";
+        }
+
+        var delta = text[(joined.Length + 1)..].Trim();
+        if (delta.Length > 0)
+            _finals.Add(delta);
+        return delta;
     }
+
+    private static bool IsWordBoundary(char next) =>
+        char.IsWhiteSpace(next) || next is ',' or '.' or ';' or ':' or '!' or '?';
+
+    private string PendingPreview(string interim) =>
+        JoinNonBlank(_pendingChunks.Select(chunk => chunk.Text).Append(interim));
+
+    private static string JoinNonBlank(IEnumerable<string> parts) =>
+        string.Join(" ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
 
     private void RememberMetadata(JsonElement root)
     {
@@ -500,6 +544,13 @@ internal sealed class XaiTranscriptCollector
     private static bool GetBool(JsonElement root, string propertyName) =>
         root.TryGetProperty(propertyName, out var element)
         && element.ValueKind == JsonValueKind.True;
+
+    private static double? GetNumber(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var element)
+        && element.ValueKind == JsonValueKind.Number
+        && element.TryGetDouble(out var value)
+            ? value
+            : null;
 
     private static string? GetString(JsonElement root, string propertyName) =>
         root.TryGetProperty(propertyName, out var element)

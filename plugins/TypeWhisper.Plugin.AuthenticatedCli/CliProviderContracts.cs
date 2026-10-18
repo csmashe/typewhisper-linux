@@ -20,6 +20,7 @@ internal enum CliAvailabilityState
     AmbiguousExecutable,
     UnsupportedExecutableType,
     UnsupportedVersion,
+    SessionDirectoryUnavailable,
     SignedOut,
     AuthenticationUnknown,
     ModelCatalogUnavailable,
@@ -97,9 +98,17 @@ internal sealed partial class CliProviderDescriptor
         IReadOnlyList<string> helpArguments,
         IReadOnlyList<string> authenticationArguments,
         IReadOnlyList<string> requiredHelpTokens,
-        IReadOnlyList<string> providerEnvironmentVariables
+        IReadOnlyList<string> providerEnvironmentVariables,
+        string? profileId = null,
+        string? profileName = null,
+        string? profileExecutable = null,
+        IReadOnlyDictionary<string, string>? profileEnvironment = null
     )
     {
+        ProfileId = profileId;
+        ProfileName = profileName;
+        ProfileExecutable = profileExecutable;
+        ProfileEnvironment = profileEnvironment ?? new Dictionary<string, string>(StringComparer.Ordinal);
         Kind = kind;
         Key = key;
         ExecutableName = executableName;
@@ -124,6 +133,22 @@ internal sealed partial class CliProviderDescriptor
     internal IReadOnlyList<string> AuthenticationArguments { get; }
     private IReadOnlyList<string> RequiredHelpTokens { get; }
     internal IReadOnlyList<string> ProviderEnvironmentVariables { get; }
+
+    /// <summary>The user-defined CLI profile this descriptor runs, or null for a built-in provider.</summary>
+    internal string? ProfileId { get; }
+
+    internal string? ProfileName { get; }
+
+    /// <summary>The profile's chosen installation, or null for automatic discovery.</summary>
+    internal string? ProfileExecutable { get; }
+
+    /// <summary>Session-directory overrides the profile applies to every probe and request.</summary>
+    internal IReadOnlyDictionary<string, string> ProfileEnvironment { get; }
+
+    internal bool IsProfile => ProfileId is not null;
+
+    /// <summary>How user-facing errors name this provider: the profile name, else the CLI key.</summary>
+    internal string MessageName => ProfileName ?? Key;
 
     /// <summary>Settings key holding the user's chosen installation for this provider.</summary>
     internal string InstallationSettingKey => $"{Key}Installation";
@@ -188,6 +213,36 @@ internal sealed partial class CliProviderDescriptor
             ["XDG_DATA_HOME"]
         ),
     ];
+
+    internal const string ProfileSelectionIdPrefix = "authenticated-cli-profile-";
+
+    /// <summary>
+    ///     A copy that runs the same CLI contract under a profile's own state key, selection ID
+    ///     and session environment.
+    /// </summary>
+    internal CliProviderDescriptor ForProfile(
+        string profileId,
+        string profileName,
+        string? executable,
+        IReadOnlyDictionary<string, string> environment
+    ) =>
+        new(
+            Kind,
+            ProfileSelectionIdPrefix + profileId,
+            ExecutableName,
+            ProfileSelectionIdPrefix + profileId,
+            DisplayKey,
+            DocumentationUrl,
+            VersionArguments,
+            HelpArguments,
+            AuthenticationArguments,
+            RequiredHelpTokens,
+            ProviderEnvironmentVariables,
+            profileId,
+            profileName,
+            executable,
+            new Dictionary<string, string>(environment, StringComparer.Ordinal)
+        );
 
     internal IReadOnlyList<string> CreateInvocationArguments(
         string workingDirectory,
