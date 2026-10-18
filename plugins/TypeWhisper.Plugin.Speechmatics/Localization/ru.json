@@ -2,8 +2,17 @@
   "Settings.ApiKey": "API-ключ",
   "Settings.ApiKeyDescription": "Требуется для транскрипции Speechmatics.",
   "Settings.TranscriptionModel": "Модель транскрипции",
-  "Settings.ModelDescription": "Выберите модель Speechmatics.",
+  "Settings.ModelDescription": "Enhanced — самая точная. Standard — дешевле.",
   "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
+  "Settings.Region": "Регион",
+  "Settings.RegionDescription": "Где Speechmatics обрабатывает ваше аудио — и для записей, и для транскрипции в реальном времени.",
+  "Settings.RegionEu": "Европа",
+  "Settings.RegionUs": "США",
+  "Settings.RegionAu": "Австралия",
+  "Settings.LiveLanguage": "Язык транскрипции в реальном времени",
+  "Settings.LiveLanguageDescription": "Для транскрипции в реальном времени нужен фиксированный язык. Он используется, когда язык речи — «Автоматически». Без него автоматическая диктовка распознаётся после окончания записи.",
+  "Settings.LiveLanguageNone": "Нет (распознавать после записи)",
+  "Settings.LiveLanguageRequired": "Для транскрипции Speechmatics в реальном времени нужен фиксированный язык. Выберите язык речи или язык транскрипции в реальном времени в настройках Speechmatics.",
   "Manifest.Name": "Speechmatics",
   "Manifest.Description": "Движок распознавания речи Speechmatics"
 }
