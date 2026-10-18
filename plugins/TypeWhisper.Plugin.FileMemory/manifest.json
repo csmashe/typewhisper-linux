@@ -3,9 +3,9 @@
   "name": "File Memory",
   "version": "1.0.0",
   "author": "TypeWhisper",
-  "description": "File-based memory storage for extracted facts",
+  "description": "Keeps facts on this device and supplies matching ones to prompt actions",
   "networkAccess": "local",
-  "categories": ["memory"],
+  "categories": ["memory", "action"],
   "assemblyName": "TypeWhisper.Plugin.FileMemory.dll",
   "pluginClass": "TypeWhisper.Plugin.FileMemory.FileMemoryPlugin"
 }

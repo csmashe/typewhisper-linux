@@ -90,6 +90,20 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.Contains("\"crashReportingEnabled\": true", File.ReadAllText(_filePath));
     }
 
+    [Fact]
+    public void DiagnosticLog_DefaultsOff_AndUnofferedRetentionFallsBackToSevenDays()
+    {
+        Assert.False(new SettingsService(_filePath).Current.DiagnosticLogEnabled);
+        File.WriteAllText(_filePath, "{\"diagnosticLogEnabled\":true,\"diagnosticLogRetentionDays\":999}");
+        var loaded = new SettingsService(_filePath).Current;
+        Assert.True(loaded.DiagnosticLogEnabled);
+        Assert.Equal(7, loaded.DiagnosticLogRetentionDays);
+
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { DiagnosticLogRetentionDays = 14 });
+        Assert.Equal(14, new SettingsService(_filePath).Current.DiagnosticLogRetentionDays);
+    }
+
     [Theory]
     [InlineData("null")]
     [InlineData("[]")]

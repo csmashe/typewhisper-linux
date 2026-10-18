@@ -16,13 +16,14 @@ namespace TypeWhisper.Plugin.AuthenticatedCli;
 ///     providers, so prompt processing can reuse an existing login without TypeWhisper ever
 ///     holding the credentials.
 /// </summary>
-public sealed class AuthenticatedCliPlugin :
+public sealed partial class AuthenticatedCliPlugin :
     ITypeWhisperPlugin,
     IAdditionalLlmProvidersProvider,
     IPluginSettingsActivity,
     IPluginSettingsProvider,
     IPluginLocalizationAware,
-    IModelCatalogProvider
+    IModelCatalogProvider,
+    IPluginCollectionSettingsProvider
 {
     private const int MaximumInputBytes = 512 * 1024;
     internal const int MaximumResultBytes = 512 * 1024;
@@ -44,15 +45,12 @@ public sealed class AuthenticatedCliPlugin :
     private readonly Dictionary<string, CliAvailabilitySnapshot> _snapshots;
     private readonly Dictionary<string, string?> _selectedExecutables = new(StringComparer.Ordinal);
     private readonly CliExecutableDiscovery _discovery;
-    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    // One per provider or profile, so a slow profile cannot hold up the others' refreshes or launches.
+    private readonly Dictionary<string, SemaphoreSlim> _refreshGates = new(StringComparer.Ordinal);
     private readonly ICliProcessRunner? _injectedRunner;
     private ICliProcessRunner? _runner;
     private OpenCodeModelCatalogLoader? _openCodeCatalogLoader;
-    private List<OpenCodeCatalogModel> _openCodeFreeModels = [];
-    private DateTimeOffset? _openCodeCatalogRefreshedAt;
-    private string? _openCodeCatalogLastRefreshError;
-    private bool _openCodeCatalogIsLastKnownGood;
-    private int _openCodeCatalogRevision;
+    private readonly Dictionary<string, OpenCodeCatalogState> _openCodeCatalogs = new(StringComparer.Ordinal);
     private string? _preferredOpenCodeModel;
     private CancellationTokenSource? _lifetimeCancellation;
     private Task? _pollTask;
@@ -76,9 +74,14 @@ public sealed class AuthenticatedCliPlugin :
             _ => CliAvailabilitySnapshot.Initial,
             StringComparer.Ordinal
         );
-        AdditionalLlmProviders = CliProviderDescriptor.All
-            .Select(ILlmProviderRole (descriptor) => new AuthenticatedCliProviderRole(this, descriptor))
+        _descriptors = CliProviderDescriptor.All.ToDictionary(
+            descriptor => descriptor.Key,
+            StringComparer.Ordinal
+        );
+        _builtInRoles = CliProviderDescriptor.All
+            .Select(descriptor => new AuthenticatedCliProviderRole(this, descriptor.Key, descriptor.SelectionId))
             .ToList();
+        _additionalLlmProviders = [.. _builtInRoles];
     }
 
     internal string? RuntimeDirectory { get; set; } = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
@@ -89,7 +92,16 @@ public sealed class AuthenticatedCliPlugin :
 
     public string PluginVersion => PluginBuildInfo.Version;
 
-    public IReadOnlyList<ILlmProviderRole> AdditionalLlmProviders { get; }
+    public IReadOnlyList<ILlmProviderRole> AdditionalLlmProviders
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _additionalLlmProviders;
+            }
+        }
+    }
 
     public event Action<string?>? SettingsActivityChanged;
 
@@ -113,7 +125,11 @@ public sealed class AuthenticatedCliPlugin :
         }
 
         _preferredOpenCodeModel = NullIfBlank(host.GetSetting<string>(OpenCodeModelSettingName));
-        RestoreOpenCodeCatalog(host.GetSetting<OpenCodeModelCatalogCache>(OpenCodeCatalogSettingName));
+        RestoreOpenCodeCatalog(
+            BuiltInOpenCode,
+            host.GetSetting<OpenCodeModelCatalogCache>(OpenCodeCatalogSettingName)
+        );
+        RestoreProfiles(host);
 
         var cancellation = new CancellationTokenSource();
         _shutdownTask = null;
@@ -142,9 +158,11 @@ public sealed class AuthenticatedCliPlugin :
 
             var cancellation = _lifetimeCancellation;
             var pollTask = _pollTask;
+            var profileRefreshTask = _profileRefreshTask;
             var host = _host;
             _lifetimeCancellation = null;
             _pollTask = null;
+            _profileRefreshTask = null;
 
             try
             {
@@ -155,7 +173,7 @@ public sealed class AuthenticatedCliPlugin :
                 host?.Log(PluginLogLevel.Warning, $"event={errorEvent} type={ex.GetType().Name}");
             }
 
-            _shutdownTask = DrainAvailabilityMonitorAsync(cancellation, pollTask, host);
+            _shutdownTask = DrainAvailabilityMonitorAsync(cancellation, pollTask, profileRefreshTask, host);
             return _shutdownTask;
         }
     }
@@ -163,6 +181,7 @@ public sealed class AuthenticatedCliPlugin :
     private static async Task DrainAvailabilityMonitorAsync(
         CancellationTokenSource? cancellation,
         Task? pollTask,
+        Task? profileRefreshTask,
         IPluginHostServices? host
     )
     {
@@ -186,6 +205,12 @@ public sealed class AuthenticatedCliPlugin :
         }
         finally
         {
+            if (profileRefreshTask is not null)
+            {
+                // Logs its own failures; the await only keeps the token alive until it stops.
+                await profileRefreshTask.ConfigureAwait(false);
+            }
+
             // The monitor may still observe its token until the drain completes.
             cancellation?.Dispose();
         }
@@ -194,44 +219,65 @@ public sealed class AuthenticatedCliPlugin :
     private string GetString(string key, params object[] args) =>
         args.Length == 0 ? Loc.L(key) : Loc.L(key, args);
 
+    // A snapshot is only stored while its descriptor is current and is reset when a profile's
+    // connection changes, so a superseded descriptor never sees the new connection's result.
     internal CliAvailabilitySnapshot GetSnapshot(CliProviderDescriptor descriptor)
     {
         lock (_stateLock)
         {
-            return _snapshots[descriptor.Key];
+            return IsCurrent(descriptor)
+                ? _snapshots.GetValueOrDefault(descriptor.Key, CliAvailabilitySnapshot.Initial)
+                : CliAvailabilitySnapshot.Initial;
         }
     }
 
-    internal IReadOnlyList<OpenCodeCatalogModel> GetOpenCodeFreeModels()
+    internal IReadOnlyList<OpenCodeCatalogModel> GetOpenCodeFreeModels() =>
+        GetOpenCodeFreeModels(BuiltInOpenCode);
+
+    internal IReadOnlyList<OpenCodeCatalogModel> GetOpenCodeFreeModels(CliProviderDescriptor descriptor)
     {
         lock (_stateLock)
         {
-            return _openCodeFreeModels.ToList();
+            return IsCurrent(descriptor) && _openCodeCatalogs.TryGetValue(descriptor.Key, out var catalog)
+                ? catalog.FreeModels.ToList()
+                : [];
         }
     }
 
-    internal OpenCodeCatalogStatus GetOpenCodeCatalogStatus()
+    internal OpenCodeCatalogStatus GetOpenCodeCatalogStatus() =>
+        GetOpenCodeCatalogStatus(BuiltInOpenCode);
+
+    internal OpenCodeCatalogStatus GetOpenCodeCatalogStatus(CliProviderDescriptor descriptor)
     {
         lock (_stateLock)
         {
-            return new OpenCodeCatalogStatus(
-                _openCodeFreeModels.Count,
-                _openCodeCatalogRefreshedAt,
-                _openCodeCatalogLastRefreshError,
-                _openCodeCatalogIsLastKnownGood
-            );
+            var catalog = IsCurrent(descriptor)
+                ? _openCodeCatalogs.GetValueOrDefault(descriptor.Key)
+                : null;
+            return catalog is null
+                ? new OpenCodeCatalogStatus(0, null, null, false)
+                : new OpenCodeCatalogStatus(
+                    catalog.FreeModels.Count,
+                    catalog.RefreshedAt,
+                    catalog.LastRefreshError,
+                    catalog.IsLastKnownGood
+                );
         }
     }
+
+    private static CliProviderDescriptor BuiltInOpenCode { get; } =
+        CliProviderDescriptor.All.Single(descriptor => descriptor.Kind == CliProviderKind.OpenCode);
 
     internal async Task RefreshFromSettingsAsync(CancellationToken cancellationToken = default) =>
         await RefreshAllAsync(notifyHost: true, cancellationToken).ConfigureAwait(false);
 
+    // Concurrent: the host gives the whole refresh one short deadline, which sequential probes
+    // would spend on the first profiles every time.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default) =>
-        await RefreshOneAsync(
-            CliProviderDescriptor.All.Single(descriptor => descriptor.Kind == CliProviderKind.OpenCode),
-            notifyHost: true,
-            ct
-        ).ConfigureAwait(false);
+        await Task.WhenAll(CurrentDescriptors()
+                .Where(descriptor => descriptor.Kind == CliProviderKind.OpenCode)
+                .Select(descriptor => RefreshOneAsync(descriptor, notifyHost: true, ct)))
+            .ConfigureAwait(false);
 
     private async Task SelectExecutableAsync(
         CliProviderDescriptor descriptor,
@@ -246,10 +292,21 @@ public sealed class AuthenticatedCliPlugin :
             ?? NullIfBlank(executablePath);
         lock (_stateLock)
         {
+            // The host saves every field together; an untouched one must not wait on a probe.
+            if (string.Equals(_selectedExecutables.GetValueOrDefault(descriptor.Key), selected, StringComparison.Ordinal)
+                && _snapshots[descriptor.Key].CheckedAt != DateTimeOffset.MinValue)
+            {
+                return;
+            }
+        }
+
+        // Cached only once persisted, so a failed write is retried by the next save.
+        _host?.SetSetting(descriptor.InstallationSettingKey, selected);
+        lock (_stateLock)
+        {
             _selectedExecutables[descriptor.Key] = selected;
         }
 
-        _host?.SetSetting(descriptor.InstallationSettingKey, selected);
         await RefreshOneAsync(descriptor, notifyHost: true, cancellationToken).ConfigureAwait(false);
     }
 
@@ -271,6 +328,7 @@ public sealed class AuthenticatedCliPlugin :
             );
         }
 
+        EnsureCurrent(descriptor);
         var snapshot = GetSnapshot(descriptor);
         if (DateTimeOffset.UtcNow - snapshot.CheckedAt > s_requestRefreshAge)
         {
@@ -278,7 +336,7 @@ public sealed class AuthenticatedCliPlugin :
                 .ConfigureAwait(false);
         }
 
-        if (descriptor.Kind == CliProviderKind.OpenCode && !IsCurrentOpenCodeFreeModel(model))
+        if (descriptor.Kind == CliProviderKind.OpenCode && !IsCurrentOpenCodeFreeModel(descriptor, model))
         {
             throw new PluginRequestException(
                 Loc.L("Error.ModelNotFree"),
@@ -308,7 +366,7 @@ public sealed class AuthenticatedCliPlugin :
             if (!ResolvedPathStillMatches(descriptor, snapshot))
             {
                 throw new PluginRequestException(
-                    Loc.L("Error.ExecutableChanged", descriptor.Key),
+                    Loc.L("Error.ExecutableChanged", descriptor.MessageName),
                     PluginRequestFailureKind.Configuration,
                     isTransient: false
                 );
@@ -349,9 +407,7 @@ public sealed class AuthenticatedCliPlugin :
                     cancellationToken
                 ).ConfigureAwait(false);
                 arguments = descriptor.CreateInvocationArguments(tempDirectory, schemaPath, model);
-                environmentOverrides = descriptor.Kind == CliProviderKind.OpenCode
-                    ? CreateOpenCodeEnvironmentOverrides(tempDirectory)
-                    : null;
+                environmentOverrides = CreateEnvironmentOverrides(descriptor, tempDirectory);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -379,10 +435,12 @@ public sealed class AuthenticatedCliPlugin :
             {
                 // Started under the gate so a catalog refresh cannot retire the model between
                 // the check above and the launch; the run itself is awaited outside it.
-                await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                var gate = GetRefreshGate(descriptor);
+                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    if (!IsCurrentOpenCodeFreeModel(model))
+                    EnsureCurrent(descriptor);
+                    if (!IsCurrentOpenCodeFreeModel(descriptor, model))
                     {
                         throw new PluginRequestException(
                             Loc.L("Error.ModelNoLongerFree"),
@@ -395,11 +453,12 @@ public sealed class AuthenticatedCliPlugin :
                 }
                 finally
                 {
-                    _refreshGate.Release();
+                    gate.Release();
                 }
             }
             else
             {
+                EnsureCurrent(descriptor);
                 processTask = Runner.RunAsync(processRequest, cancellationToken);
             }
 
@@ -488,25 +547,32 @@ public sealed class AuthenticatedCliPlugin :
             CliProviderDescriptor Descriptor,
             CliAvailabilitySnapshot Snapshot,
             bool Changed)>();
-        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             NotifySettingsActivity(GetString("Settings.Checking"));
-            foreach (var descriptor in CliProviderDescriptor.All)
+            foreach (var descriptor in CurrentDescriptors())
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var snapshot = await CheckAvailabilityAsync(descriptor, cancellationToken)
-                    .ConfigureAwait(false);
-                pendingNotifications.Add((descriptor, snapshot, StoreSnapshot(descriptor, snapshot)));
+                var gate = GetRefreshGate(descriptor);
+                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var snapshot = await CheckAvailabilityAsync(descriptor, cancellationToken)
+                        .ConfigureAwait(false);
+                    pendingNotifications.Add((descriptor, snapshot, StoreSnapshot(descriptor, snapshot)));
+                }
+                finally
+                {
+                    gate.Release();
+                }
             }
         }
         finally
         {
-            _refreshGate.Release();
             NotifySettingsActivity(null);
         }
 
-        // Published after the gate is released: a host that reacts by refreshing again would
+        // Published after the gates are released: a host that reacts by refreshing again would
         // otherwise deadlock against the refresh that raised the notification.
         foreach (var notification in pendingNotifications)
         {
@@ -519,6 +585,23 @@ public sealed class AuthenticatedCliPlugin :
         }
     }
 
+    // Keyed by the state key: a profile keeps its gate across edits, so a probe of its old
+    // connection and one of the new never overlap.
+    private SemaphoreSlim GetRefreshGate(CliProviderDescriptor descriptor)
+    {
+        lock (_stateLock)
+        {
+            if (_refreshGates.TryGetValue(descriptor.Key, out var gate))
+            {
+                return gate;
+            }
+
+            gate = new SemaphoreSlim(1, 1);
+            _refreshGates[descriptor.Key] = gate;
+            return gate;
+        }
+    }
+
     private async Task<CliAvailabilitySnapshot> RefreshOneAsync(
         CliProviderDescriptor descriptor,
         bool notifyHost,
@@ -527,7 +610,8 @@ public sealed class AuthenticatedCliPlugin :
     {
         CliAvailabilitySnapshot snapshot;
         bool changed;
-        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var gate = GetRefreshGate(descriptor);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             snapshot = await CheckAvailabilityAsync(descriptor, cancellationToken)
@@ -536,7 +620,7 @@ public sealed class AuthenticatedCliPlugin :
         }
         finally
         {
-            _refreshGate.Release();
+            gate.Release();
         }
 
         PublishSnapshotChange(descriptor, snapshot, changed, notifyHost);
@@ -553,7 +637,9 @@ public sealed class AuthenticatedCliPlugin :
         string? configured;
         lock (_stateLock)
         {
-            configured = _selectedExecutables.GetValueOrDefault(descriptor.Key);
+            configured = descriptor.IsProfile
+                ? descriptor.ProfileExecutable
+                : _selectedExecutables.GetValueOrDefault(descriptor.Key);
         }
 
         var selected = candidates.FirstOrDefault(candidate =>
@@ -599,6 +685,17 @@ public sealed class AuthenticatedCliPlugin :
         }
 
         selected ??= candidates[0];
+        if (!HasUsableSessionDirectories(descriptor))
+        {
+            return new CliAvailabilitySnapshot(
+                CliAvailabilityState.SessionDirectoryUnavailable,
+                selected,
+                null,
+                candidates,
+                checkedAt
+            );
+        }
+
         if (CliExecutableDiscovery.ResolveRealPath(selected, descriptor.ExecutableName)
             is not { } resolved)
         {
@@ -703,19 +800,19 @@ public sealed class AuthenticatedCliPlugin :
                 var catalog = await _openCodeCatalogLoader!.LoadAsync(
                     selected,
                     tempDirectory,
-                    CreateOpenCodeEnvironmentOverrides(tempDirectory),
+                    CreateEnvironmentOverrides(descriptor, tempDirectory)!,
                     cancellationToken
                 ).ConfigureAwait(false);
-                UpdateOpenCodeCatalog(catalog);
-                PersistOpenCodeCatalog(catalog);
-                var freeModelCount = GetOpenCodeFreeModels().Count;
+                UpdateOpenCodeCatalog(descriptor, catalog);
+                PersistOpenCodeCatalog(descriptor, catalog);
+                var freeModelCount = GetOpenCodeFreeModels(descriptor).Count;
                 return new CliAvailabilitySnapshot(
                     freeModelCount == 0 ? CliAvailabilityState.NoFreeModels : CliAvailabilityState.Ready,
                     selected,
                     version,
                     candidates,
                     checkedAt,
-                    GetOpenCodeCatalogRevision(),
+                    GetOpenCodeCatalogRevision(descriptor),
                     resolved
                 );
             }
@@ -727,7 +824,7 @@ public sealed class AuthenticatedCliPlugin :
                                        or CliProtocolException
                                        or JsonException)
             {
-                var hasLastKnownGood = RecordOpenCodeCatalogFailure(ex);
+                var hasLastKnownGood = RecordOpenCodeCatalogFailure(descriptor, ex);
                 return new CliAvailabilitySnapshot(
                     hasLastKnownGood
                         ? CliAvailabilityState.Ready
@@ -736,7 +833,7 @@ public sealed class AuthenticatedCliPlugin :
                     version,
                     candidates,
                     checkedAt,
-                    GetOpenCodeCatalogRevision(),
+                    GetOpenCodeCatalogRevision(descriptor),
                     resolved
                 );
             }
@@ -790,9 +887,7 @@ public sealed class AuthenticatedCliPlugin :
                 s_probeTimeout,
                 ProbeStandardOutputBytes,
                 MaximumStandardErrorBytes,
-                descriptor.Kind == CliProviderKind.OpenCode
-                    ? CreateOpenCodeEnvironmentOverrides(workingDirectory)
-                    : null
+                CreateEnvironmentOverrides(descriptor, workingDirectory)
             ),
             cancellationToken
         ).ConfigureAwait(false);
@@ -807,6 +902,12 @@ public sealed class AuthenticatedCliPlugin :
     {
         lock (_stateLock)
         {
+            // A probe that outlived an edit or removal of its profile describes a stale connection.
+            if (!IsCurrent(descriptor))
+            {
+                return false;
+            }
+
             var changed = !_snapshots[descriptor.Key].HasSameCapabilities(snapshot);
             _snapshots[descriptor.Key] = snapshot;
             return changed;
@@ -823,6 +924,11 @@ public sealed class AuthenticatedCliPlugin :
         CliAvailabilitySnapshot updated;
         lock (_stateLock)
         {
+            if (!IsCurrent(descriptor))
+            {
+                return;
+            }
+
             var current = _snapshots[descriptor.Key];
             updated = current with
             {
@@ -865,7 +971,7 @@ public sealed class AuthenticatedCliPlugin :
             $"event=settings-provider-error provider={descriptor?.Key ?? "all"} type={exception.GetType().Name}"
         );
         IEnumerable<CliProviderDescriptor> descriptors = descriptor is null
-            ? CliProviderDescriptor.All
+            ? CurrentDescriptors()
             : [descriptor];
         foreach (var affected in descriptors)
         {
@@ -908,25 +1014,27 @@ public sealed class AuthenticatedCliPlugin :
             $"provider={descriptor.Key} event={operation} exit={result.ExitCode} elapsedMs={(long)result.Elapsed.TotalMilliseconds} stdoutBytes={result.StandardOutputBytes} stderrBytes={result.StandardErrorBytes}"
         );
 
-    private bool IsCurrentOpenCodeFreeModel(string model)
+    private bool IsCurrentOpenCodeFreeModel(CliProviderDescriptor descriptor, string model)
     {
         lock (_stateLock)
         {
             return model.StartsWith("opencode/", StringComparison.Ordinal)
-                   && _openCodeFreeModels.Any(entry =>
+                   && IsCurrent(descriptor)
+                   && _openCodeCatalogs.TryGetValue(descriptor.Key, out var catalog)
+                   && catalog.FreeModels.Any(entry =>
                        string.Equals(entry.Id, model, StringComparison.Ordinal));
         }
     }
 
-    private int GetOpenCodeCatalogRevision()
+    private int GetOpenCodeCatalogRevision(CliProviderDescriptor descriptor)
     {
         lock (_stateLock)
         {
-            return _openCodeCatalogRevision;
+            return _openCodeCatalogs.GetValueOrDefault(descriptor.Key)?.Revision ?? 0;
         }
     }
 
-    private void RestoreOpenCodeCatalog(OpenCodeModelCatalogCache? cache)
+    private void RestoreOpenCodeCatalog(CliProviderDescriptor descriptor, OpenCodeModelCatalogCache? cache)
     {
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
         // The cache is deserialized settings JSON, so a missing "models" really does arrive null.
@@ -953,55 +1061,80 @@ public sealed class AuthenticatedCliPlugin :
 
         lock (_stateLock)
         {
-            _openCodeFreeModels = restored;
-            _openCodeCatalogRefreshedAt = cache.RefreshedAt;
-            _openCodeCatalogLastRefreshError = null;
-            _openCodeCatalogIsLastKnownGood = restored.Count > 0;
+            var catalog = GetOrCreateOpenCodeCatalog(descriptor.Key);
+            catalog.FreeModels = restored;
+            catalog.RefreshedAt = cache.RefreshedAt;
+            catalog.LastRefreshError = null;
+            catalog.IsLastKnownGood = restored.Count > 0;
             if (restored.Count > 0)
             {
-                _openCodeCatalogRevision++;
+                catalog.Revision++;
             }
         }
     }
 
-    private void UpdateOpenCodeCatalog(OpenCodeModelCatalog catalog)
+    private OpenCodeCatalogState GetOrCreateOpenCodeCatalog(string key)
+    {
+        if (_openCodeCatalogs.TryGetValue(key, out var catalog))
+        {
+            return catalog;
+        }
+
+        catalog = new OpenCodeCatalogState();
+        _openCodeCatalogs[key] = catalog;
+        return catalog;
+    }
+
+    private void UpdateOpenCodeCatalog(CliProviderDescriptor descriptor, OpenCodeModelCatalog catalog)
     {
         var freeModels = catalog.Models.Where(model => model.IsFree).ToList();
         lock (_stateLock)
         {
-            var changed = !HaveSameModels(_openCodeFreeModels, freeModels)
-                          || _openCodeCatalogLastRefreshError is not null
-                          || _openCodeCatalogIsLastKnownGood;
-            _openCodeFreeModels = freeModels;
-            _openCodeCatalogRefreshedAt = catalog.RefreshedAt;
-            _openCodeCatalogLastRefreshError = null;
-            _openCodeCatalogIsLastKnownGood = false;
+            if (!IsCurrent(descriptor))
+            {
+                return;
+            }
+
+            var state = GetOrCreateOpenCodeCatalog(descriptor.Key);
+            var changed = !HaveSameModels(state.FreeModels, freeModels)
+                          || state.LastRefreshError is not null
+                          || state.IsLastKnownGood;
+            state.FreeModels = freeModels;
+            state.RefreshedAt = catalog.RefreshedAt;
+            state.LastRefreshError = null;
+            state.IsLastKnownGood = false;
             if (changed)
             {
-                _openCodeCatalogRevision++;
+                state.Revision++;
             }
         }
     }
 
-    private bool RecordOpenCodeCatalogFailure(Exception exception)
+    private bool RecordOpenCodeCatalogFailure(CliProviderDescriptor descriptor, Exception exception)
     {
         lock (_stateLock)
         {
-            var error = exception.GetType().Name;
-            var hasLastKnownGood = _openCodeFreeModels.Count > 0;
-            if (!string.Equals(_openCodeCatalogLastRefreshError, error, StringComparison.Ordinal)
-                || _openCodeCatalogIsLastKnownGood != hasLastKnownGood)
+            if (!IsCurrent(descriptor))
             {
-                _openCodeCatalogRevision++;
+                return false;
             }
 
-            _openCodeCatalogLastRefreshError = error;
-            _openCodeCatalogIsLastKnownGood = hasLastKnownGood;
+            var state = GetOrCreateOpenCodeCatalog(descriptor.Key);
+            var error = exception.GetType().Name;
+            var hasLastKnownGood = state.FreeModels.Count > 0;
+            if (!string.Equals(state.LastRefreshError, error, StringComparison.Ordinal)
+                || state.IsLastKnownGood != hasLastKnownGood)
+            {
+                state.Revision++;
+            }
+
+            state.LastRefreshError = error;
+            state.IsLastKnownGood = hasLastKnownGood;
             return hasLastKnownGood;
         }
     }
 
-    private void PersistOpenCodeCatalog(OpenCodeModelCatalog catalog)
+    private void PersistOpenCodeCatalog(CliProviderDescriptor descriptor, OpenCodeModelCatalog catalog)
     {
         var host = _host;
         if (host is null)
@@ -1009,26 +1142,32 @@ public sealed class AuthenticatedCliPlugin :
             return;
         }
 
+        var cache = new OpenCodeModelCatalogCache(
+            OpenCodeCatalogCacheVersion,
+            catalog.RefreshedAt,
+            catalog.Models
+                .Where(model => model.IsFree)
+                .Select(model => new OpenCodeCachedModel(
+                    model.Id,
+                    model.DisplayName,
+                    model.Variants.ToList()))
+                .ToList());
         try
         {
-            host.SetSetting(
-                OpenCodeCatalogSettingName,
-                new OpenCodeModelCatalogCache(
-                    OpenCodeCatalogCacheVersion,
-                    catalog.RefreshedAt,
-                    catalog.Models
-                        .Where(model => model.IsFree)
-                        .Select(model => new OpenCodeCachedModel(
-                            model.Id,
-                            model.DisplayName,
-                            model.Variants.ToList()))
-                        .ToList()));
+            if (descriptor.IsProfile)
+            {
+                PersistProfileCatalog(host, descriptor, cache);
+            }
+            else
+            {
+                host.SetSetting(OpenCodeCatalogSettingName, cache);
+            }
         }
         catch (Exception ex)
         {
             host.Log(
                 PluginLogLevel.Warning,
-                $"provider=opencode event=catalog-cache-write-failed type={ex.GetType().Name}"
+                $"provider={descriptor.Key} event=catalog-cache-write-failed type={ex.GetType().Name}"
             );
         }
     }
@@ -1042,6 +1181,47 @@ public sealed class AuthenticatedCliPlugin :
             string.Equals(pair.First.Id, pair.Second.Id, StringComparison.Ordinal)
             && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
             && pair.First.Variants.SequenceEqual(pair.Second.Variants, StringComparer.Ordinal));
+
+    /// <summary>
+    ///     The overrides for one probe or request: a profile's session directories, then
+    ///     OpenCode's per-request isolation, which a profile can never replace.
+    /// </summary>
+    private Dictionary<string, string>? CreateEnvironmentOverrides(
+        CliProviderDescriptor descriptor,
+        string requestDirectory
+    )
+    {
+        if (!descriptor.IsProfile && descriptor.Kind != CliProviderKind.OpenCode)
+        {
+            return null;
+        }
+
+        if (!HasUsableSessionDirectories(descriptor))
+        {
+            throw new PluginRequestException(
+                Loc.L("Error.SessionDirectory", descriptor.MessageName),
+                PluginRequestFailureKind.Configuration,
+                isTransient: false
+            );
+        }
+
+        var environment = new Dictionary<string, string>(descriptor.ProfileEnvironment, StringComparer.Ordinal);
+        if (descriptor.Kind != CliProviderKind.OpenCode)
+        {
+            return environment;
+        }
+
+        foreach (var (name, value) in CreateOpenCodeEnvironmentOverrides(requestDirectory))
+        {
+            environment[name] = value;
+        }
+
+        return environment;
+    }
+
+    // Checked again before each run: a directory can be removed after the profile was saved.
+    private static bool HasUsableSessionDirectories(CliProviderDescriptor descriptor) =>
+        descriptor.ProfileEnvironment.Values.All(CliPathSafety.IsSafeLocalDirectory);
 
     internal static IReadOnlyDictionary<string, string> CreateOpenCodeEnvironmentOverrides(
         string requestDirectory
@@ -1122,7 +1302,7 @@ public sealed class AuthenticatedCliPlugin :
                 "timeout"))
         {
             return new PluginRequestException(
-                Loc.L("Error.Network", descriptor.Key),
+                Loc.L("Error.Network", descriptor.MessageName),
                 PluginRequestFailureKind.Network,
                 isTransient: true
             );
@@ -1141,7 +1321,7 @@ public sealed class AuthenticatedCliPlugin :
                 "authentication failed"))
         {
             return new PluginRequestException(
-                Loc.L("Error.Authentication", descriptor.Key),
+                Loc.L("Error.Authentication", descriptor.MessageName),
                 PluginRequestFailureKind.Authentication,
                 isTransient: false
             );
@@ -1150,7 +1330,7 @@ public sealed class AuthenticatedCliPlugin :
         if (ContainsAny(text, "rate limit", "too many requests", "quota"))
         {
             return new PluginRequestException(
-                Loc.L("Error.RateLimit", descriptor.Key),
+                Loc.L("Error.RateLimit", descriptor.MessageName),
                 PluginRequestFailureKind.RateLimit,
                 isTransient: true
             );
@@ -1159,7 +1339,7 @@ public sealed class AuthenticatedCliPlugin :
         if (ContainsAny(text, "permission", "forbidden", "subscription", "entitlement"))
         {
             return new PluginRequestException(
-                Loc.L("Error.Permission", descriptor.Key),
+                Loc.L("Error.Permission", descriptor.MessageName),
                 PluginRequestFailureKind.Permission,
                 isTransient: false
             );
@@ -1175,14 +1355,14 @@ public sealed class AuthenticatedCliPlugin :
                 "unknown option"))
         {
             return new PluginRequestException(
-                Loc.L("Error.InvalidRequest", descriptor.Key),
+                Loc.L("Error.InvalidRequest", descriptor.MessageName),
                 PluginRequestFailureKind.InvalidRequest,
                 isTransient: false
             );
         }
 
         return new PluginRequestException(
-            Loc.L("Error.NoResult", descriptor.Key),
+            Loc.L("Error.NoResult", descriptor.MessageName),
             PluginRequestFailureKind.Unknown,
             isTransient: false
         );
@@ -1208,7 +1388,7 @@ public sealed class AuthenticatedCliPlugin :
             ? PluginRequestFailureKind.Authentication
             : PluginRequestFailureKind.Configuration;
         return new PluginRequestException(
-            Loc.L("Error.NotReady", descriptor.Key, Loc.L($"State.{state}")),
+            Loc.L("Error.NotReady", descriptor.MessageName, Loc.L($"State.{state}")),
             failureKind,
             isTransient: false
         );
@@ -1275,7 +1455,12 @@ public sealed class AuthenticatedCliPlugin :
 
         try
         {
-            Directory.CreateDirectory(dataDirectory);
+            // Owner-only when created here: a umask such as Ubuntu's 0002 would otherwise make it
+            // group-writable and the check below would refuse it.
+            Directory.CreateDirectory(
+                dataDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
             // The host may create this parent as 0755; only shared write access is unsafe.
             if (new DirectoryInfo(dataDirectory).LinkTarget is not null
                 || (File.GetUnixFileMode(dataDirectory) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
@@ -1607,12 +1792,13 @@ public sealed class AuthenticatedCliPlugin :
             RecordSettingsFailure(null, ex);
         }
 
+        var descriptors = CurrentDescriptors();
         var aggregate = string.Join(
             "\n",
-            CliProviderDescriptor.All.Select(descriptor =>
-                $"{GetString(descriptor.DisplayKey)}: {DescribeState(GetSnapshot(descriptor))}")
+            descriptors.Select(descriptor =>
+                $"{GetDisplayName(descriptor)}: {DescribeState(GetSnapshot(descriptor))}")
         );
-        var anyReady = CliProviderDescriptor.All.Any(descriptor =>
+        var anyReady = descriptors.Any(descriptor =>
             GetSnapshot(descriptor).State == CliAvailabilityState.Ready);
         return new PluginSettingsValidationResult(anyReady, aggregate);
     }
@@ -1697,24 +1883,35 @@ public sealed class AuthenticatedCliPlugin :
         _host = null;
     }
 
+    /// <summary>
+    ///     One built-in provider or profile, looked up by its state key on every call so the
+    ///     instance stays stable for the host while the profile behind it is edited.
+    /// </summary>
     private sealed class AuthenticatedCliProviderRole(
         AuthenticatedCliPlugin owner,
-        CliProviderDescriptor descriptor
+        string key,
+        string selectionId
     ) : ILlmProviderRole, ILlmProviderSelectionIdentity
     {
         public string PluginId => owner.PluginId;
-        public string LlmSelectionId => descriptor.SelectionId;
-        public string ProviderName => owner.GetString(descriptor.DisplayKey);
+        public string LlmSelectionId => selectionId;
+
+        public string ProviderName =>
+            owner.FindDescriptor(key) is { } descriptor ? owner.GetDisplayName(descriptor) : selectionId;
 
         public bool IsAvailable =>
-            owner.GetSnapshot(descriptor).State == CliAvailabilityState.Ready
+            owner.FindDescriptor(key) is { } descriptor
+            && owner.GetSnapshot(descriptor).State == CliAvailabilityState.Ready
             && (descriptor.Kind != CliProviderKind.OpenCode
-                || owner.GetOpenCodeFreeModels().Count > 0);
+                || owner.GetOpenCodeFreeModels(descriptor).Count > 0);
 
         public IReadOnlyList<PluginModelInfo> SupportedModels =>
-            descriptor.Kind == CliProviderKind.OpenCode
-                ? CreateOpenCodeModels()
-                : [new PluginModelInfo("default", owner.GetString("Model.Default"))];
+            owner.FindDescriptor(key) switch
+            {
+                null => [],
+                { Kind: CliProviderKind.OpenCode } descriptor => CreateOpenCodeModels(descriptor),
+                _ => [new PluginModelInfo("default", owner.GetString("Model.Default"))],
+            };
 
         public Task<string> ProcessAsync(
             string systemPrompt,
@@ -1722,14 +1919,21 @@ public sealed class AuthenticatedCliPlugin :
             string model,
             CancellationToken ct
         ) =>
-            owner.ProcessAsync(descriptor, systemPrompt, userText, model, ct);
+            owner.FindDescriptor(key) is { } descriptor
+                ? owner.ProcessAsync(descriptor, systemPrompt, userText, model, ct)
+                : Task.FromException<string>(new PluginRequestException(
+                    owner.Loc.L("Error.ProfileRemoved"),
+                    PluginRequestFailureKind.Configuration,
+                    isTransient: false
+                ));
 
         // The configured preferred model, when it is still in the verified free catalog, is what
-        // the host offers first; otherwise the catalog's own first entry is.
-        private List<PluginModelInfo> CreateOpenCodeModels()
+        // the host offers first; otherwise the catalog's own first entry is. Only the built-in
+        // provider has a preferred model.
+        private List<PluginModelInfo> CreateOpenCodeModels(CliProviderDescriptor descriptor)
         {
-            var models = owner.GetOpenCodeFreeModels();
-            var preferred = owner._preferredOpenCodeModel;
+            var models = owner.GetOpenCodeFreeModels(descriptor);
+            var preferred = descriptor.IsProfile ? null : owner._preferredOpenCodeModel;
             var recommended = models.Any(model =>
                 string.Equals(model.Id, preferred, StringComparison.Ordinal))
                 ? preferred

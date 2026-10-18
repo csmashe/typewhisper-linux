@@ -8,6 +8,7 @@ using TypeWhisper.Linux.Cli;
 using TypeWhisper.Linux.Cli.Commands;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Ipc;
+using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
 
 namespace TypeWhisper.Linux;
 
@@ -21,6 +22,14 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        // A worker runs one local engine for the app that started it: no profile setup, no UI,
+        // and its diagnostics go to stderr, which the app keeps for crash reports.
+        if (TranscriptionWorkerServer.IsWorkerInvocation(args))
+        {
+            Trace.Listeners.Add(new ConsoleTraceListener(useErrorStream: true));
+            return TranscriptionWorkerServer.Run(args);
+        }
+
         // Pipe Debug.WriteLine output to stdout so plugin + service logs are
         // visible when the app runs from a terminal.
         Trace.Listeners.Add(new ConsoleTraceListener());

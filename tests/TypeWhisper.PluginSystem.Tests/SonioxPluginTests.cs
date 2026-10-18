@@ -31,7 +31,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_PreservesHintOrder()
     {
-        using var doc = JsonDocument.Parse(SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, ["de-DE", "en"]));
+        using var doc = JsonDocument.Parse(SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, ["de-DE", "en"]));
         Assert.Equal(["de-DE", "en"], doc.RootElement.GetProperty("language_hints").EnumerateArray().Select(e => e.GetString()));
     }
 
@@ -155,16 +155,17 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_IncludesRawPcmFormatAndModel()
     {
-        var json = SonioxSession.BuildConfigMessage("k-123", SonioxSession.RealtimeModel, []);
+        var json = SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, []);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal("k-123", root.GetProperty("api_key").GetString());
-        Assert.Equal("stt-rt-v4", root.GetProperty("model").GetString());
+        Assert.False(root.TryGetProperty("api_key", out _));
+        Assert.Equal("stt-rt-v5", root.GetProperty("model").GetString());
         Assert.Equal("pcm_s16le", root.GetProperty("audio_format").GetString());
         Assert.Equal(16000, root.GetProperty("sample_rate").GetInt32());
         Assert.Equal(1, root.GetProperty("num_channels").GetInt32());
         Assert.True(root.GetProperty("enable_endpoint_detection").GetBoolean());
+        Assert.True(root.GetProperty("enable_language_identification").GetBoolean());
         // No language → no hints.
         Assert.False(root.TryGetProperty("language_hints", out _));
     }
@@ -172,7 +173,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_OmitsLanguageHints_WhenEmpty()
     {
-        var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, []);
+        var json = SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, []);
 
         using var doc = JsonDocument.Parse(json);
         Assert.False(doc.RootElement.TryGetProperty("language_hints", out _));
@@ -181,7 +182,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_AddsLanguageHints_WhenLanguageGiven()
     {
-        var json = SonioxSession.BuildConfigMessage("k", SonioxSession.RealtimeModel, ["de"]);
+        var json = SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, ["de"]);
 
         using var doc = JsonDocument.Parse(json);
         var hints = doc.RootElement.GetProperty("language_hints");
@@ -201,7 +202,7 @@ public class SonioxPluginTests
             """
         );
 
-        Assert.Null(message.ErrorMessage);
+        Assert.Null(message.Error);
         Assert.False(message.Finished);
         Assert.Equal(2, message.Tokens.Count);
         Assert.Equal(new SonioxSession.SonioxToken("Hello", true), message.Tokens[0]);
@@ -215,7 +216,7 @@ public class SonioxPluginTests
 
         Assert.True(message.Finished);
         Assert.Empty(message.Tokens);
-        Assert.Null(message.ErrorMessage);
+        Assert.Null(message.Error);
     }
 
     [Fact]
@@ -225,7 +226,8 @@ public class SonioxPluginTests
             """{ "tokens": [], "error_code": 503, "error_message": "service unavailable" }"""
         );
 
-        Assert.Equal("service unavailable", message.ErrorMessage);
+        Assert.Equal(503, message.Error?.Code);
+        Assert.Equal("service unavailable", message.Error?.Message);
     }
 
     [Fact]
@@ -233,17 +235,13 @@ public class SonioxPluginTests
     {
         var message = SonioxSession.ParseMessage("""{ "error_code": 401 }""");
 
-        Assert.NotNull(message.ErrorMessage);
+        Assert.Equal(401, message.Error?.Code);
     }
 
     [Fact]
-    public void ParseMessage_ReturnsEmpty_OnMalformedJson()
+    public void ParseMessage_Throws_OnMalformedJson()
     {
-        var message = SonioxSession.ParseMessage("not json {");
-
-        Assert.Empty(message.Tokens);
-        Assert.False(message.Finished);
-        Assert.Null(message.ErrorMessage);
+        Assert.ThrowsAny<JsonException>(() => SonioxSession.ParseMessage("not json {"));
     }
 
     [Fact]
@@ -255,9 +253,9 @@ public class SonioxPluginTests
             new SonioxSession.SonioxMessage(
                 [new SonioxSession.SonioxToken("Hello", true),
                  new SonioxSession.SonioxToken(" wor", false)],
-                Finished: false,
-                ErrorMessage: null
-            )
+                Finished: false
+            ),
+            endOfAudioSent: false
         );
         Assert.Equal("Hello wor", first.PreviewText);
         Assert.False(first.Finished);
@@ -268,9 +266,9 @@ public class SonioxPluginTests
             new SonioxSession.SonioxMessage(
                 [new SonioxSession.SonioxToken(" world", true),
                  new SonioxSession.SonioxToken(" how", false)],
-                Finished: false,
-                ErrorMessage: null
-            )
+                Finished: false
+            ),
+            endOfAudioSent: false
         );
         Assert.Equal("Hello world how", second.PreviewText);
         Assert.Equal("Hello world", second.FinalText);
@@ -280,10 +278,11 @@ public class SonioxPluginTests
     public void Aggregator_ProducesFullTranscript_OnFinished()
     {
         var aggregator = new SonioxTranscriptAggregator();
-        aggregator.Apply(Final("Hello"));
-        aggregator.Apply(Final(" there"));
+        aggregator.Apply(Final("Hello"), endOfAudioSent: false);
+        aggregator.Apply(Final(" there"), endOfAudioSent: false);
         var finished = aggregator.Apply(
-            new SonioxSession.SonioxMessage([], Finished: true, ErrorMessage: null)
+            new SonioxSession.SonioxMessage([], Finished: true),
+            endOfAudioSent: true
         );
 
         Assert.True(finished.Finished);
@@ -299,9 +298,9 @@ public class SonioxPluginTests
             new SonioxSession.SonioxMessage(
                 [new SonioxSession.SonioxToken("Hi", true),
                  new SonioxSession.SonioxToken("<end>", true)],
-                Finished: false,
-                ErrorMessage: null
-            )
+                Finished: false
+            ),
+            endOfAudioSent: false
         );
 
         Assert.Equal("Hi", update.FinalText);
@@ -648,6 +647,7 @@ public class SonioxPluginTests
         var adapter = new SonioxWebSocketAdapter("key", connected!, []);
         var options = await adapter.GetConnectionOptionsAsync(CancellationToken.None);
         Assert.Equal(connected, options.Uri);
+        Assert.Equal("Bearer key", options.Headers!["Authorization"]);
     }
 
     [Fact]
@@ -1527,7 +1527,7 @@ public class SonioxPluginTests
     }
 
     private static SonioxSession.SonioxMessage Final(string text) =>
-        new([new SonioxSession.SonioxToken(text, true)], Finished: false, ErrorMessage: null);
+        new([new SonioxSession.SonioxToken(text, true)], Finished: false);
 
     private static JsonElement LoadManifest()
     {

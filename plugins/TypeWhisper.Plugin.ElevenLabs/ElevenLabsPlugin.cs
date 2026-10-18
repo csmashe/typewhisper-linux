@@ -34,7 +34,8 @@ public sealed class ElevenLabsPlugin
     internal const int AutomaticSpeakerCount = 0;
     internal const int MaxSpeakerCount = 32;
     internal const int DefaultSpeakerCount = 1;
-    // No useDictionaryTerms toggle: dictionary terms arrive only through HTTP API prompts; dictation corrects afterward.
+    // Off by default (keyterms cost 20% more): dictionary terms then reach ElevenLabs only as HTTP API comma prompts.
+    internal const string UseDictionaryTermsSettingName = "useDictionaryTerms";
 
     private static readonly SearchValues<char> s_invalidKeytermCharacters = SearchValues.Create("<>{}[]\\");
 
@@ -177,6 +178,7 @@ public sealed class ElevenLabsPlugin
         TagAudioEvents = host.GetSetting<bool?>(TagAudioEventsSettingName) ?? false;
         NoVerbatim = host.GetSetting<bool?>(NoVerbatimSettingName) ?? true;
         SpeakerCount = NormalizeSpeakerCount(host.GetSetting<int?>(SpeakerCountSettingName) ?? DefaultSpeakerCount);
+        UseDictionaryTerms = host.GetSetting<bool?>(UseDictionaryTermsSettingName) ?? false;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -199,6 +201,8 @@ public sealed class ElevenLabsPlugin
 
     public bool SupportsTranslation => false;
     public DictionaryTermsBudget DictionaryTermsBudget => s_dictionaryBudget;
+    // The host reads this per request; realtime sessions ignore the prompt, so terms reach REST requests only.
+    public bool SupportsStructuredDictionaryTerms => UseDictionaryTerms;
     // Audio events and speaker hints are REST-only, so automatic mode uses the complete recording when set; the host reads this live at recording start.
     public bool SupportsStreaming => TranscriptionMode == ElevenLabsTranscriptionMode.Automatic && !TagAudioEvents && SpeakerCount == DefaultSpeakerCount;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
@@ -243,7 +247,7 @@ public sealed class ElevenLabsPlugin
         if (SpeakerCount != AutomaticSpeakerCount)
             form.Add(new StringContent(SpeakerCount.ToString(CultureInfo.InvariantCulture)), "num_speakers");
 
-        foreach (var term in ExtractKeyterms(prompt))
+        foreach (var term in ExtractKeyterms(prompt, UseDictionaryTerms))
             form.Add(new StringContent(term), "keyterms");
 
         request.Content = form;
@@ -277,6 +281,7 @@ public sealed class ElevenLabsPlugin
     internal bool TagAudioEvents { get; private set; }
     internal bool NoVerbatim { get; private set; } = true;
     internal int SpeakerCount { get; private set; } = DefaultSpeakerCount;
+    internal bool UseDictionaryTerms { get; private set; }
 
     internal static int NormalizeSpeakerCount(int count) => Math.Clamp(count, AutomaticSpeakerCount, MaxSpeakerCount);
 
@@ -435,22 +440,20 @@ public sealed class ElevenLabsPlugin
         };
     }
 
-    internal static IReadOnlyList<string> ExtractKeyterms(string? prompt)
+    // Prompt text (an API caller's prompt or the legacy comma list) is split; dictionary terms stay whole.
+    internal static IReadOnlyList<string> ExtractKeyterms(string? prompt, bool includeDictionaryTerms = true)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
-            return [];
+        var parsed = PluginTranscriptionPrompt.Parse(prompt);
+        // The HTTP API merges prompt parts with newlines, so a newline must separate terms.
+        var textTerms = parsed.Text?.Split(
+            [',', '\r', '\n'],
+            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
+        ) ?? [];
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var terms = new List<string>();
-        // The HTTP API merges prompt parts with newlines, so a newline must separate terms.
-        foreach (
-            var part in prompt.Split(
-                [',', '\r', '\n'],
-                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
-            )
-        )
+        foreach (var term in textTerms.Concat(includeDictionaryTerms ? parsed.DictionaryTerms : []))
         {
-            var term = part.Trim();
             if (
                 term.Length == 0
                 || term.Length >= 50
@@ -517,6 +520,12 @@ public sealed class ElevenLabsPlugin
                 Description: Loc.L("Settings.SpeakerCountDescription"),
                 Kind: PluginSettingKind.Text
             ),
+            new(
+                UseDictionaryTermsSettingName,
+                Loc.L("Settings.UseDictionaryTerms"),
+                Description: Loc.L("Settings.UseDictionaryTermsDescription"),
+                Kind: PluginSettingKind.Boolean
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -529,6 +538,7 @@ public sealed class ElevenLabsPlugin
                 NoVerbatimSettingName => NoVerbatim ? "true" : "false",
                 TagAudioEventsSettingName => TagAudioEvents ? "true" : "false",
                 SpeakerCountSettingName => SpeakerCount.ToString(CultureInfo.InvariantCulture),
+                UseDictionaryTermsSettingName => UseDictionaryTerms ? "true" : "false",
                 _ => null,
             }
         );
@@ -568,6 +578,10 @@ public sealed class ElevenLabsPlugin
                     SpeakerCount = NormalizeSpeakerCount(count);
                     _host?.SetSetting(SpeakerCountSettingName, SpeakerCount);
                 }
+                break;
+            case UseDictionaryTermsSettingName:
+                UseDictionaryTerms = ParseBool(value);
+                _host?.SetSetting(UseDictionaryTermsSettingName, UseDictionaryTerms);
                 break;
             case "selectedModel":
                 if (!string.IsNullOrWhiteSpace(value))

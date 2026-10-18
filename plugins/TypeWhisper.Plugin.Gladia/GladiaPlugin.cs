@@ -22,6 +22,9 @@ public sealed class GladiaPlugin
 
     private static readonly TimeSpan s_defaultPollDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan s_defaultPollWindow = TimeSpan.FromMinutes(30);
+    // Gladia documents no vocabulary limits; this matches upstream and bounds the request.
+    private static readonly DictionaryTermsBudget s_vocabularyBudget = new(MaxTerms: 100, MaxTotalChars: 4_000);
+    private const double VocabularyIntensity = 0.7;
 
     private readonly HttpClient _httpClient;
     private readonly TimeSpan _pollDelay;
@@ -95,15 +98,35 @@ public sealed class GladiaPlugin
     public bool SupportsTranslation => false;
 
     public bool SupportsStreaming => true;
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_vocabularyBudget;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
-    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        StartStreamingAsync(language, [], ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct
+    ) =>
+        StartStreamingAsync(
+            languageHints.FirstOrDefault(static hint => !string.IsNullOrWhiteSpace(hint))?.Trim(),
+            ExtractVocabulary(prompt),
+            ct
+        );
+
+    private async Task<IStreamingSession> StartStreamingAsync(
+        string? language,
+        IReadOnlyList<string> vocabulary,
+        CancellationToken ct
+    )
     {
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
-        return await GladiaStreamingSession.ConnectAsync(_httpClient, _apiKey!, language, ct);
+        return await GladiaStreamingSession.ConnectAsync(_httpClient, _apiKey!, language, vocabulary, ct);
     }
 
     public void SelectModel(string modelId)
@@ -125,8 +148,7 @@ public sealed class GladiaPlugin
         if (translate)
             throw new InvalidOperationException("Gladia does not support translation.");
 
-        // Gladia's pre-recorded request has no prompt equivalent.
-        _ = prompt;
+        var vocabulary = ExtractVocabulary(prompt);
 
         // Snapshot the key so a concurrent settings change cannot alter a multi-request job.
         var apiKey = _apiKey;
@@ -134,7 +156,7 @@ public sealed class GladiaPlugin
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
         var audioUrl = await UploadAudioAsync(wavAudio, apiKey, ct);
-        var job = await InitiateTranscriptionAsync(audioUrl, language, apiKey, ct);
+        var job = await InitiateTranscriptionAsync(audioUrl, language, vocabulary, apiKey, ct);
         var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
 
         try
@@ -189,6 +211,7 @@ public sealed class GladiaPlugin
     private async Task<InitiatedJob> InitiateTranscriptionAsync(
         string audioUrl,
         string? language,
+        IReadOnlyList<string> vocabulary,
         string apiKey,
         CancellationToken ct
     )
@@ -197,6 +220,7 @@ public sealed class GladiaPlugin
         {
             ["audio_url"] = audioUrl,
         };
+        AddCustomVocabulary(payload, vocabulary);
 
         if (NormalizeLanguage(language) is { } normalizedLanguage)
         {
@@ -580,6 +604,25 @@ public sealed class GladiaPlugin
         }
 
         return details.Count > 0 ? string.Join(", ", details) : root.GetRawText();
+    }
+
+    // Gladia has no prompt field; API prompt text (possibly the host's language-hint sentence)
+    // is not vocabulary, so it stays unsent as before.
+    internal static IReadOnlyList<string> ExtractVocabulary(string? prompt) =>
+        PluginDictionaryTerms.Clip(PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms, s_vocabularyBudget);
+
+    // Pre-recorded requests take these at the top level, live sessions under realtime_processing.
+    internal static void AddCustomVocabulary(Dictionary<string, object> target, IReadOnlyList<string> vocabulary)
+    {
+        if (vocabulary.Count == 0)
+            return;
+
+        target["custom_vocabulary"] = true;
+        target["custom_vocabulary_config"] = new Dictionary<string, object>
+        {
+            ["vocabulary"] = vocabulary,
+            ["default_intensity"] = VocabularyIntensity,
+        };
     }
 
     private static string? NormalizeLanguage(string? language)

@@ -13,6 +13,7 @@
         <Project Path="tests/TypeWhisper.Cli.Tests/TypeWhisper.Cli.Tests.csproj"/>
         <Project Path="tests/TypeWhisper.ProcessTestChild/TypeWhisper.ProcessTestChild.csproj"/>
         <Project Path="tests/TypeWhisper.FakeProviderCli/TypeWhisper.FakeProviderCli.csproj"/>
+        <Project Path="tests/TypeWhisper.TranscriptionWorkerProbe/TypeWhisper.TranscriptionWorkerProbe.csproj"/>
     </Folder>
     <Folder Name="/plugins/">
         <Project Path="plugins/TypeWhisper.Plugin.AssemblyAi/TypeWhisper.Plugin.AssemblyAi.csproj"/>
