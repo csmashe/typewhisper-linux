@@ -702,7 +702,7 @@ public sealed class LocalDataExportService
         // Null when the file holds more than limit bytes.
         private ReadOnlyMemory<byte>? ReadAll(FileStream source, long limit)
         {
-            var buffer = new MemoryStream((int)Math.Min(Math.Min(source.Length, limit), Array.MaxLength));
+            using var buffer = new MemoryStream((int)Math.Min(Math.Min(source.Length, limit), Array.MaxLength));
             var chunk = new byte[81920];
             int read;
             while ((read = source.Read(chunk, 0, chunk.Length)) > 0)
