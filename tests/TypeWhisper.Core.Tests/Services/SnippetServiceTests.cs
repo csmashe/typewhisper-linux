@@ -50,6 +50,18 @@ public sealed class SnippetServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetSnippets_ReportsACorruptFileResetToEmpty()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+
+        Assert.False(new SnippetService(_filePath).TryGetSnippets(out _));
+
+        File.Delete(_filePath);
+
+        Assert.True(new SnippetService(_filePath).TryGetSnippets(out _));
+    }
+
+    [Fact]
     public void AddSnippet_WithTags_PersistsAndLoads()
     {
         _sut.AddSnippet(

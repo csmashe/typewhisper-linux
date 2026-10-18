@@ -10,6 +10,14 @@ public interface IProfileService
 {
     IReadOnlyList<Profile> Profiles { get; }
 
+    /// <summary>Reads the profiles and reports whether they are stored data.</summary>
+    /// <returns><c>false</c> when the store was reset after corruption, not merely empty.</returns>
+    bool TryGetProfiles(out IReadOnlyList<Profile> profiles)
+    {
+        profiles = Profiles;
+        return true;
+    }
+
     void AddProfile(Profile profile);
     void UpdateProfile(Profile profile);
     void DeleteProfile(string id);

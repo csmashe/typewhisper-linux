@@ -9,6 +9,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.Linux.Services.UserData;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -21,6 +22,7 @@ public partial class AboutSectionViewModel : ObservableObject
     private readonly IErrorLogService _errorLog;
     private readonly LocalDataExportService _dataExport;
     private readonly SettingsBackupService _settingsBackup;
+    private readonly SupportReportService? _supportReport;
     private readonly TimeZoneInfo _timeZone;
     private readonly UpdateCheckService _updateCheck;
     private readonly UrlLauncher _urlLauncher;
@@ -38,6 +40,12 @@ public partial class AboutSectionViewModel : ObservableObject
     private bool _includeRecordingsInExport = true;
 
     private CancellationTokenSource? _dataExportCancellation;
+
+    [ObservableProperty]
+    private bool _isSupportReportBusy;
+
+    [ObservableProperty]
+    private string _supportReportStatusText = Loc.Instance["About.SupportReportDescription"];
 
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(CanCheckForUpdates))]
     private bool _isCheckingForUpdates;
@@ -64,9 +72,10 @@ public partial class AboutSectionViewModel : ObservableObject
         SettingsBackupService settingsBackup,
         LocalDataExportService dataExport,
         UpdateCheckService updateCheck,
-        UrlLauncher urlLauncher
+        UrlLauncher urlLauncher,
+        SupportReportService supportReport
     )
-        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local, dataExport) { }
+        : this(errorLog, settingsBackup, updateCheck, urlLauncher, TimeZoneInfo.Local, dataExport, supportReport) { }
 
     internal AboutSectionViewModel(
         IErrorLogService errorLog,
@@ -88,12 +97,14 @@ public partial class AboutSectionViewModel : ObservableObject
         UpdateCheckService updateCheck,
         UrlLauncher urlLauncher,
         TimeZoneInfo timeZone,
-        LocalDataExportService? dataExport = null
+        LocalDataExportService? dataExport = null,
+        SupportReportService? supportReport = null
     )
     {
         _errorLog = errorLog;
         _settingsBackup = settingsBackup;
         _dataExport = dataExport ?? new LocalDataExportService();
+        _supportReport = supportReport;
         _updateCheck = updateCheck;
         _urlLauncher = urlLauncher;
         _timeZone = timeZone;
@@ -161,6 +172,33 @@ public partial class AboutSectionViewModel : ObservableObject
     public string ExportDiagnostics()
     {
         return _errorLog.ExportDiagnostics();
+    }
+
+    /// <summary>Writes the support report to <paramref name="path" /> and reports the outcome in the status text.</summary>
+    public async Task ExportSupportReportAsync(string path)
+    {
+        if (_supportReport is null || IsSupportReportBusy)
+        {
+            return;
+        }
+
+        IsSupportReportBusy = true;
+        try
+        {
+            var report = await _supportReport.CaptureAsync();
+            await Task.Run(() => report.Export(path));
+            SupportReportStatusText = report.CollectionErrors.Count == 0
+                ? Loc.Instance["About.SupportReportExported"]
+                : Loc.Instance["About.SupportReportPartial"];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SupportReportStatusText = Loc.Instance["About.SupportReportFailed"];
+        }
+        finally
+        {
+            IsSupportReportBusy = false;
+        }
     }
 
     public async Task<SettingsBackupResult> CreateSettingsBackupAsync(string path)

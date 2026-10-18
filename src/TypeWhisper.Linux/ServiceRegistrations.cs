@@ -224,6 +224,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDiagnosticsReporter>(p => new CompositeDiagnosticsReporter(
             p.GetRequiredService<SentryTelemetryService>(),
             p.GetRequiredService<LocalDiagnosticLogService>()));
+        services.AddSingleton<SupportReportService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();

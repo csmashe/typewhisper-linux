@@ -38,6 +38,13 @@ public sealed class ErrorLogService : IErrorLogService
 
     public IReadOnlyList<ErrorLogEntry> Entries => ReadEntries().ToArray();
 
+    public bool TryGetEntries(out IReadOnlyList<ErrorLogEntry> entries)
+    {
+        var available = ReadEntries(out var read, out var reset);
+        entries = read.ToArray();
+        return available && !reset;
+    }
+
     /// <summary>
     ///     A read failure must not stop the app, so it degrades to empty. Safe: a later
     ///     <see cref="AddEntry" /> reloads through the store, which still refuses to
@@ -45,13 +52,22 @@ public sealed class ErrorLogService : IErrorLogService
     /// </summary>
     private ImmutableArray<ErrorLogEntry> ReadEntries()
     {
+        ReadEntries(out var entries, out _);
+        return entries;
+    }
+
+    private bool ReadEntries(out ImmutableArray<ErrorLogEntry> entries, out bool resetAfterCorruption)
+    {
+        resetAfterCorruption = false;
         try
         {
-            return _store.Current;
+            entries = _store.GetCurrent(out resetAfterCorruption);
+            return true;
         }
         catch
         {
-            return [];
+            entries = [];
+            return false;
         }
     }
 

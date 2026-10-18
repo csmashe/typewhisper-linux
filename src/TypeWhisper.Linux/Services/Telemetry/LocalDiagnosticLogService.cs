@@ -180,6 +180,28 @@ public sealed class LocalDiagnosticLogService : IDiagnosticsReporter, IDisposabl
         return await Task.Run(() => _file.Export(destination, Line("diagnostics.export", data: data))).ConfigureAwait(false);
     }
 
+    /// <summary>The retained entries for a support report; none while the log is off, even if a file remains.</summary>
+    /// <exception cref="IOException">The log exists but could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">The log exists but could not be read.</exception>
+    public async Task<SupportReport.LogInfo> CaptureForReportAsync()
+    {
+        var preferences = _file.Preferences;
+        if (preferences.Enabled)
+        {
+            try
+            {
+                await FlushAsync().WaitAsync(s_flushTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // Report what is already on disk.
+            }
+        }
+
+        var entries = await Task.Run(_file.Snapshot).ConfigureAwait(false);
+        return new SupportReport.LogInfo(preferences.Enabled, preferences.RetentionDays, entries);
+    }
+
     /// <summary>
     ///     Deletes the log after every line queued before this call, so no earlier entry can recreate it.
     /// </summary>

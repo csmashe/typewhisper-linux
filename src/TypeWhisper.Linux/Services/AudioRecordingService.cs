@@ -805,10 +805,15 @@ public sealed class AudioRecordingService : IDisposable
         }
     }
 
-    public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId)
-    {
-        var devices = _inputDeviceListProvider();
+    public AudioInputDevice? ResolveConfiguredDevice(int? preferredIndex, string? preferredDeviceId) =>
+        ResolveConfiguredDevice(_inputDeviceListProvider(), preferredIndex, preferredDeviceId);
 
+    internal static AudioInputDevice? ResolveConfiguredDevice(
+        IReadOnlyList<AudioInputDevice> devices,
+        int? preferredIndex,
+        string? preferredDeviceId
+    )
+    {
         // Follow-default sentinel: ignore any pinned index/id and take the current
         // default, so a user who once pinned a device can opt back into auto-follow.
         if (IsFollowSystemDefault(preferredDeviceId))

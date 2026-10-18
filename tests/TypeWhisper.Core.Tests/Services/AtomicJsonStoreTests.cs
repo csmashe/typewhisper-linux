@@ -154,6 +154,51 @@ public sealed class AtomicJsonStoreTests
     }
 
     [Fact]
+    public void GetCurrent_PreserveAndReset_ReportsTheResetUntilAnUpdateCommits()
+    {
+        var directory = TestPaths.CreateTempDirectory("AtomicJsonStoreResetStatus");
+        var path = Path.Join(directory, "state.json");
+        try
+        {
+            Assert.Empty(CreateStore(path).GetCurrent(out var missingReset));
+            Assert.False(missingReset);
+
+            File.WriteAllText(path, "{ not json");
+            var store = CreateStore(path);
+
+            Assert.Empty(store.GetCurrent(out var corruptReset));
+            Assert.True(corruptReset);
+
+            store.Update(current => current.Add("after"));
+
+            Assert.Equal("after", Assert.Single(store.GetCurrent(out var updatedReset)));
+            Assert.False(updatedReset);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void GetCurrent_PreserveAndReset_ReportsACorruptBackupWithoutAPrimary()
+    {
+        var directory = TestPaths.CreateTempDirectory("AtomicJsonStoreBackupResetStatus");
+        var path = Path.Join(directory, "state.json");
+        try
+        {
+            File.WriteAllText(path + ".bak", "{ not json");
+
+            Assert.Empty(CreateStore(path, backup: true).GetCurrent(out var reset));
+            Assert.True(reset);
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void Current_PreserveAndReset_PreservedCopyKeepsOriginalPermissions()
     {
         if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)

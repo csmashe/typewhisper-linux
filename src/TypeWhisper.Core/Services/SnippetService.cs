@@ -48,6 +48,12 @@ public sealed partial class SnippetService : ISnippetService
 
     public IReadOnlyList<Snippet> Snippets => _store.Current.ToArray();
 
+    public bool TryGetSnippets(out IReadOnlyList<Snippet> snippets)
+    {
+        snippets = _store.GetCurrent(out var reset).ToArray();
+        return !reset;
+    }
+
     public IReadOnlyList<string> AllTags
     {
         get

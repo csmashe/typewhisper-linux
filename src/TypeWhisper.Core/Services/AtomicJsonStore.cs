@@ -112,6 +112,7 @@ public sealed class AtomicJsonStore<T>
     private bool _hasCommittedPrimary;
     private bool _loaded;
     private long _loadedRevision;
+    private bool _resetAfterCorruption;
 
     public AtomicJsonStore(
         string path,
@@ -160,6 +161,20 @@ public sealed class AtomicJsonStore<T>
                 EnsureFreshLocked();
                 return _current;
             }
+        }
+    }
+
+    /// <summary>
+    ///     The current snapshot, and whether it is the default a corrupt file was reset to rather than
+    ///     stored data. That stays true until an update commits a new primary.
+    /// </summary>
+    internal T GetCurrent(out bool resetAfterCorruption)
+    {
+        lock (_coordinator.Gate)
+        {
+            EnsureFreshLocked();
+            resetAfterCorruption = _resetAfterCorruption;
+            return _current;
         }
     }
 
@@ -248,6 +263,7 @@ public sealed class AtomicJsonStore<T>
                 _current = candidate;
                 _currentJson = candidateJson;
                 _hasCommittedPrimary = true;
+                _resetAfterCorruption = false;
                 _loaded = true;
                 _coordinator.Revision++;
                 _loadedRevision = _coordinator.Revision;
@@ -320,7 +336,11 @@ public sealed class AtomicJsonStore<T>
             throw backupCorruption;
         }
 
-        return new LoadedSnapshot(_createDefault(), HasCommittedPrimary: false);
+        return new LoadedSnapshot(
+            _createDefault(),
+            HasCommittedPrimary: false,
+            ResetAfterCorruption: backupCorruption is not null
+        );
     }
 
     private bool TryRecoverBackupLocked(
@@ -405,7 +425,7 @@ public sealed class AtomicJsonStore<T>
         }
 
         PreserveCorruptFileLocked(FilePath, corruptBytes, exception);
-        return new LoadedSnapshot(_createDefault(), HasCommittedPrimary: false);
+        return new LoadedSnapshot(_createDefault(), HasCommittedPrimary: false, ResetAfterCorruption: true);
     }
 
     private void PreserveCorruptFileLocked(
@@ -585,6 +605,7 @@ public sealed class AtomicJsonStore<T>
         _current = loaded.Value;
         _currentJson = null;
         _hasCommittedPrimary = loaded.HasCommittedPrimary;
+        _resetAfterCorruption = loaded.ResetAfterCorruption;
         _loaded = true;
     }
 
@@ -628,5 +649,9 @@ public sealed class AtomicJsonStore<T>
         }
     }
 
-    private readonly record struct LoadedSnapshot(T Value, bool HasCommittedPrimary);
+    private readonly record struct LoadedSnapshot(
+        T Value,
+        bool HasCommittedPrimary,
+        bool ResetAfterCorruption = false
+    );
 }
