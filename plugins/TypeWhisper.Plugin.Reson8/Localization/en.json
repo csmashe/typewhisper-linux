@@ -14,6 +14,18 @@
   "Settings.ApiKeyValidWithModels": "API key valid. {0} custom model(s) loaded.",
   "Settings.ApiKeyValidShort": "API key valid.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
+  "Settings.InvalidApiKeyCharacters": "The API key contains a line break or another control character.",
+  "Settings.InvalidBaseUrl": "Enter an absolute http:// or https:// base URL without credentials, query or fragment.",
+  "Settings.InvalidAuthHeader": "Enter a valid HTTP header name as the custom auth header.",
+  "Settings.ServerUnreachable": "Couldn't reach the Reson8 server. Check your connection and the base URL.",
+  "Settings.ServerRedirected": "The Reson8 server redirected the request. Enter the final address as the base URL.",
+  "Settings.CustomModelsRefreshFailed": "API key valid, but custom models couldn't be refreshed ({0}). Previously loaded models are kept.",
+  "Settings.RefreshReasonStatus": "HTTP {0}",
+  "Settings.RefreshReasonUnreachable": "server unreachable",
+  "Settings.RefreshReasonInvalid": "invalid response",
+  "Settings.SettingsChangedDuringValidation": "The settings changed during validation. Validate again.",
+  "Settings.SelectedModelUnavailable": "The selected Reson8 custom model isn't loaded for this API key and server. Validate to refresh custom models, or choose the default model.",
+  "Settings.UnavailableModelOption": "{0} (not available)",
   "Manifest.Name": "Reson8",
   "Manifest.Description": "Cloud transcription via Reson8 speech-to-text API with real-time WebSocket streaming. Requires API key."
 }

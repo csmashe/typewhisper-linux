@@ -23,7 +23,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class Reson8PluginTests
+public partial class Reson8PluginTests
 {
     [Fact]
     public Task RequestFailures_AreClassified() =>
@@ -88,6 +88,8 @@ public class Reson8PluginTests
         Assert.Equal(["__default__", "domain-model"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
         Assert.Equal("https://proxy.example.test", sut.CustomBaseUrl);
         Assert.Equal("X-Api-Key", sut.CustomAuthHeader);
+        // The unscoped list from earlier versions now belongs to the saved connection.
+        Assert.Equal("domain-model", Assert.Single(StoredCatalog(host).Models).Id);
         Assert.Contains("de", sut.SupportedLanguages);
         Assert.DoesNotContain("ja", sut.SupportedLanguages);
     }
@@ -189,8 +191,8 @@ public class Reson8PluginTests
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
 
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.False(await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Invalid, await sut.ValidateApiKeyAsync("probe-key"));
     }
 
     [Fact]
@@ -208,10 +210,10 @@ public class Reson8PluginTests
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
 
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.False(await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Invalid, await sut.ValidateApiKeyAsync("probe-key"));
     }
 
     [Fact]
@@ -329,13 +331,14 @@ public class Reson8PluginTests
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var models = await sut.FetchCustomModelsAsync();
-        sut.SetFetchedCustomModels(models);
+        var fetch = await sut.FetchCustomModelsAsync();
+        sut.SetFetchedCustomModels(fetch.Models!);
 
-        Assert.Equal("domain-model", Assert.Single(models).Id);
+        var model = Assert.Single(fetch.Models!);
+        Assert.Equal(new Reson8CustomModel("domain-model", "Domain Model", "Support vocabulary", 42), model);
         Assert.Equal(["__default__", "domain-model"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
         Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
-        Assert.Equal("domain-model", Assert.Single(host.GetSetting<List<Reson8CustomModel>>("fetchedCustomModels")!).Id);
+        Assert.Equal("domain-model", Assert.Single(StoredCatalog(host).Models).Id);
     }
 
     [Fact]
@@ -902,6 +905,8 @@ public class Reson8PluginTests
         public int NotifyCapabilitiesChangedCount { get; private set; }
         public Exception? StoreSecretException { get; init; }
         public Exception? DeleteSecretException { get; set; }
+        public string? FailSettingName { get; set; }
+        public List<string> LogMessages { get; } = [];
 
         public Task StoreSecretAsync(string key, string value)
         {
@@ -929,15 +934,20 @@ public class Reson8PluginTests
                 ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
-        public void SetSetting<T>(string key, T value) =>
+        public void SetSetting<T>(string key, T value)
+        {
+            if (key == FailSettingName)
+                throw new IOException("setting write failed");
+
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
+        }
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
         public IReadOnlyList<string> AvailableProfileNames => [];
-        public void Log(PluginLogLevel level, string message) { }
+        public void Log(PluginLogLevel level, string message) => LogMessages.Add(message);
         public void NotifyCapabilitiesChanged() => NotifyCapabilitiesChangedCount++;
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
     }
