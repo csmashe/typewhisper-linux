@@ -56,13 +56,13 @@ public sealed class GladiaStreamingSessionTests
     }
 
     [Fact]
-    public async Task EndSession_AfterEveryUtteranceIsConfirmed_IsTerminal()
+    public void EndSession_AfterEveryUtteranceIsConfirmed_IsTerminal()
     {
         var adapter = CreateAdapter();
         Handle(adapter, Transcript("1", "Hel", false));
         Handle(adapter, Transcript("1", "Hello.", true));
         Handle(adapter, Transcript("2", " ", false));
-        await adapter.BeginFinalizeAsync(CancellationToken.None);
+        Handle(adapter, StopAcknowledged);
 
         var result = Handle(adapter, """{"type":"end_session","data":{}}""");
 
@@ -71,23 +71,23 @@ public sealed class GladiaStreamingSessionTests
     }
 
     [Fact]
-    public async Task EndSession_WithAnUnconfirmedUtterance_Faults()
+    public void EndSession_WithAnUnconfirmedUtterance_Faults()
     {
         var adapter = CreateAdapter();
         Handle(adapter, Transcript("1", "Hello.", true));
         Handle(adapter, Transcript("2", "and then", false));
-        await adapter.BeginFinalizeAsync(CancellationToken.None);
+        Handle(adapter, StopAcknowledged);
 
         AssertIncomplete(Handle(adapter, """{"type":"end_session","data":{}}"""));
     }
 
     [Fact]
-    public async Task EndSession_AfterAPartialALaterUtteranceSuperseded_IsTerminal()
+    public void EndSession_AfterAPartialALaterUtteranceSuperseded_IsTerminal()
     {
         var adapter = CreateAdapter();
         Handle(adapter, Transcript("1", "um", false, start: 0.5));
         Handle(adapter, Transcript("2", "Hello.", true, start: 1.2));
-        await adapter.BeginFinalizeAsync(CancellationToken.None);
+        Handle(adapter, StopAcknowledged);
 
         var result = Handle(adapter, """{"type":"end_session","data":{}}""");
 
@@ -99,13 +99,13 @@ public sealed class GladiaStreamingSessionTests
     [InlineData(4.0, 0.0)]
     [InlineData(null, 0.0)]
     [InlineData(4.0, null)]
-    public async Task EndSession_AfterAnEarlierFinal_StillRequiresTheLaterPartial(
+    public void EndSession_AfterAnEarlierFinal_StillRequiresTheLaterPartial(
         double? partialStart, double? finalStart)
     {
         var adapter = CreateAdapter();
         Handle(adapter, Transcript("2", "and then", false, start: partialStart));
         Handle(adapter, Transcript("1", "Hello.", true, start: finalStart));
-        await adapter.BeginFinalizeAsync(CancellationToken.None);
+        Handle(adapter, StopAcknowledged);
 
         AssertIncomplete(Handle(adapter, """{"type":"end_session","data":{}}"""));
     }
@@ -125,6 +125,15 @@ public sealed class GladiaStreamingSessionTests
     public void EndSession_BeforeRecordingStopped_Faults()
     {
         AssertIncomplete(Handle(CreateAdapter(), """{"type":"end_session","data":{}}"""));
+    }
+
+    [Fact]
+    public async Task EndSession_BeforeTheStopIsAcknowledged_Faults()
+    {
+        var adapter = CreateAdapter();
+        await adapter.BeginFinalizeAsync(CancellationToken.None);
+
+        AssertIncomplete(Handle(adapter, """{"type":"end_session","data":{}}"""));
     }
 
     [Theory]
@@ -195,7 +204,7 @@ public sealed class GladiaStreamingSessionTests
 
         var finalize = pump.FinalizeAsync(CancellationToken.None);
         Assert.Equal("""{"type":"stop_recording"}""", Encoding.UTF8.GetString((await transport.NextSentAsync()).Payload.Span));
-        transport.EnqueueText("""{"type":"stop_recording","acknowledged":true,"error":null,"data":{}}""");
+        transport.EnqueueText(StopAcknowledged);
         transport.EnqueueText(Transcript("1", "Hello world.", true, "en"));
         transport.EnqueueText(Transcript("1", "Hello world.", true, "en"));
         transport.EnqueueText("""{"type":"end_recording","data":{}}""");
@@ -207,6 +216,9 @@ public sealed class GladiaStreamingSessionTests
         Assert.Equal("Hello world.", final.Text);
         Assert.Equal("en", final.DetectedLanguage);
     }
+
+    private const string StopAcknowledged =
+        """{"type":"stop_recording","acknowledged":true,"error":null,"data":{}}""";
 
     private static string Transcript(
         string id, string text, bool isFinal, string? language = null, double? start = null)

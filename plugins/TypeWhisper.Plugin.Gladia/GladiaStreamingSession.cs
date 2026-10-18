@@ -116,7 +116,8 @@ internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSess
         bool IsFinal = false,
         string? Language = null,
         GladiaError? Error = null,
-        double? Start = null
+        double? Start = null,
+        bool Acknowledged = false
     );
 
     internal static GladiaMessage ParseMessage(string json)
@@ -137,7 +138,13 @@ internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSess
             return new GladiaMessage(type, Error: ParseError(root));
 
         if (type != "transcript")
-            return new GladiaMessage(type);
+        {
+            return new GladiaMessage(
+                type,
+                Acknowledged: root.TryGetProperty("acknowledged", out var ack)
+                    && ack.ValueKind == JsonValueKind.True
+            );
+        }
 
         if (
             !root.TryGetProperty("data", out var data)
@@ -245,8 +252,7 @@ internal sealed class GladiaWebSocketAdapter(
     // Unconfirmed partials by utterance id.
     private readonly Dictionary<string, (string Text, double? Start)> _pending = new(StringComparer.Ordinal);
 
-    // Set on the send side, read by HandleMessage on the receive loop.
-    private volatile bool _stopRecordingSent;
+    private bool _stopRecordingAcknowledged;
 
     public string ProviderName => "Gladia";
     public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
@@ -305,7 +311,6 @@ internal sealed class GladiaWebSocketAdapter(
 
     public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
     {
-        _stopRecordingSent = true;
         return ValueTask.FromResult(
             new WebSocketFinalizePlan(
                 [
@@ -341,6 +346,9 @@ internal sealed class GladiaWebSocketAdapter(
         if (message.Error is not null)
             return Fault(GladiaStreamingSession.CreateRequestException(message.Error));
 
+        if (message.MessageType == "stop_recording" && message.Acknowledged)
+            _stopRecordingAcknowledged = true;
+
         if (message.MessageType == "end_session")
             return EndSession();
 
@@ -352,8 +360,9 @@ internal sealed class GladiaWebSocketAdapter(
     private WebSocketInboundResult EndSession()
     {
         // Gladia also ends a session on its own (duration limit, inactivity); audio sent
-        // after that point was never transcribed.
-        if (!_stopRecordingSent)
+        // after that point was never transcribed. Only an acknowledged stop proves the
+        // session ended because recording stopped.
+        if (!_stopRecordingAcknowledged)
         {
             return Fault(GladiaStreamingSession.CreateIncompleteException(
                 "Gladia ended the live session before recording stopped."

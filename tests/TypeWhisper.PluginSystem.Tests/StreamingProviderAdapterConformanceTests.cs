@@ -450,6 +450,7 @@ public sealed class StreamingProviderAdapterConformanceTests
 
         var finalize = pump.FinalizeAsync(CancellationToken.None);
         await transport.NextSentAsync();
+        transport.EnqueueText("""{"type":"stop_recording","acknowledged":true}""");
         transport.EnqueueText("""{"type":"end_recording"}""");
         await Task.Delay(50);
         Assert.False(finalize.IsCompleted);
