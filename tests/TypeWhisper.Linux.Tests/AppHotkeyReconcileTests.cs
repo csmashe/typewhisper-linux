@@ -1,3 +1,6 @@
+using Moq;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using Xunit;
 
@@ -5,6 +8,26 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class AppHotkeyReconcileTests
 {
+    [Fact]
+    public void ReconcileHotkeyOnStartup_SecondaryBindingOnTheDefaultChord_SurvivesAMovedDictationChord()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(service => service.Current).Returns(new AppSettings
+        {
+            ToggleHotkey = "Ctrl+Alt+D",
+            PasteLastTranscriptionHotkey = "Ctrl+Shift+Space",
+            CopyLastTranscriptionHotkey = "Ctrl+Alt+D",
+        });
+
+        App.ReconcileHotkeyOnStartup(hotkey, settings.Object);
+
+        Assert.Equal("Ctrl+Alt+D", hotkey.CurrentHotkeyString);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentPasteLastTranscriptionHotkeyString);
+        // A secondary binding that collides with the saved dictation chord loses.
+        Assert.Empty(hotkey.CurrentCopyLastTranscriptionHotkeyString);
+    }
+
     [Theory]
     [InlineData("first appearance", "first", "action-a", 1)]
     [InlineData("persistence", "persistent", "action-a,profile-b/", 2)]

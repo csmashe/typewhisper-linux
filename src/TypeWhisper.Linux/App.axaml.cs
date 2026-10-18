@@ -728,17 +728,13 @@ public class App : Application
             );
     }
 
-    private static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
+    internal static void ReconcileHotkeyOnStartup(HotkeyService hotkey, ISettingsService settings)
     {
         var s = settings.Current;
         hotkey.Mode = s.Mode;
-        hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey);
-        hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey);
-        hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey);
-        hotkey.TrySetReadLastTranscriptionHotkeyFromString(s.ReadLastTranscriptionHotkey);
-        hotkey.TrySetPasteLastTranscriptionHotkeyFromString(s.PasteLastTranscriptionHotkey);
-        hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey);
 
+        // Dictation first: every other binding is checked for collisions against it, so applying
+        // them before the saved chord would test them against the default (Ctrl+Shift+Space).
         // Treat the upstream Windows default ("Ctrl+Shift+F9") as unset on Linux and substitute
         // the Linux default (Ctrl+Shift+Space) to prevent SettingsChanged from rebinding to it.
         var linuxDefault = hotkey.CurrentHotkeyString;
@@ -756,6 +752,13 @@ public class App : Application
             // settings so UI/state agree.
             settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }
+
+        hotkey.TrySetPromptPaletteHotkeyFromString(s.PromptPaletteHotkey);
+        hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey);
+        hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey);
+        hotkey.TrySetReadLastTranscriptionHotkeyFromString(s.ReadLastTranscriptionHotkey);
+        hotkey.TrySetPasteLastTranscriptionHotkeyFromString(s.PasteLastTranscriptionHotkey);
+        hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey);
     }
 
     /// <summary>
