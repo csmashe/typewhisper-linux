@@ -36,6 +36,33 @@ public sealed class HotkeyServiceTests
     }
 
     [Fact]
+    public void TrySetPasteLastTranscriptionHotkeyFromString_CollidesWithCopyLast_IsRejected()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+Alt+V"));
+        Assert.False(hotkey.TrySetPasteLastTranscriptionHotkeyFromString("Ctrl+Alt+V"));
+        Assert.Empty(hotkey.CurrentPasteLastTranscriptionHotkeyString);
+    }
+
+    [Fact]
+    public void TrySetReadLastTranscriptionHotkeyFromString_CollidesWithPasteLast_IsRejected()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetPasteLastTranscriptionHotkeyFromString("Ctrl+Alt+V"));
+        Assert.False(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Alt+V"));
+        Assert.Equal("Ctrl+Alt+V", hotkey.CurrentPasteLastTranscriptionHotkeyString);
+    }
+
+    [Fact]
+    public void TrySetPasteLastTranscriptionHotkeyFromString_Blank_ClearsTheBinding()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetPasteLastTranscriptionHotkeyFromString("Ctrl+Alt+V"));
+        Assert.True(hotkey.TrySetPasteLastTranscriptionHotkeyFromString(" "));
+        Assert.Empty(hotkey.CurrentPasteLastTranscriptionHotkeyString);
+    }
+
+    [Fact]
     public void TrySetHotkeyFromString_ParsesModifiersAndKeys()
     {
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
@@ -1461,6 +1488,7 @@ public sealed class HotkeyServiceTests
         Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+Alt+R"));
         Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+Alt+C"));
         Assert.True(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
+        Assert.True(hotkey.TrySetPasteLastTranscriptionHotkeyFromString("Ctrl+Alt+V"));
         Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+Alt+T"));
         hotkey.SetDynamicHotkeys(
             [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
@@ -1510,6 +1538,14 @@ public sealed class HotkeyServiceTests
         Assert.Equal(
             configured.ReadLastTranscriptionModifiers,
             suppressed.ReadLastTranscriptionModifiers
+        );
+        Assert.Equal(
+            configured.PasteLastTranscriptionKey,
+            suppressed.PasteLastTranscriptionKey
+        );
+        Assert.Equal(
+            configured.PasteLastTranscriptionModifiers,
+            suppressed.PasteLastTranscriptionModifiers
         );
         Assert.Equal(configured.TransformSelectionKey, suppressed.TransformSelectionKey);
         Assert.Equal(
@@ -1612,6 +1648,7 @@ public sealed class HotkeyServiceTests
         Assert.True(hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+R"));
         Assert.True(hotkey.TrySetCopyLastTranscriptionHotkeyFromString("Ctrl+C"));
         Assert.True(hotkey.TrySetReadLastTranscriptionHotkeyFromString("Ctrl+Shift+R"));
+        Assert.True(hotkey.TrySetPasteLastTranscriptionHotkeyFromString("Ctrl+Alt+V"));
         Assert.True(hotkey.TrySetTransformSelectionHotkeyFromString("Ctrl+T"));
         hotkey.SetDynamicHotkeys(
             [new PromptActionHotkey("action", KeyCode.VcF10, ModifierMask.LeftMeta)],
@@ -1667,6 +1704,14 @@ public sealed class HotkeyServiceTests
         Assert.Equal(
             configured.ReadLastTranscriptionModifiers,
             restored.ReadLastTranscriptionModifiers
+        );
+        Assert.Equal(
+            configured.PasteLastTranscriptionKey,
+            restored.PasteLastTranscriptionKey
+        );
+        Assert.Equal(
+            configured.PasteLastTranscriptionModifiers,
+            restored.PasteLastTranscriptionModifiers
         );
         Assert.Equal(configured.TransformSelectionKey, restored.TransformSelectionKey);
         Assert.Equal(

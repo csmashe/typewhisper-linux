@@ -67,6 +67,16 @@ internal sealed class DictationInFlightSessionTracker
         }
     }
 
+    /// <summary>True while a session is starting, recovering, recording or in its post-stop pipeline.</summary>
+    internal bool HasActivity
+    {
+        get
+        {
+            lock (_lock)
+                return _starting || _recovering || _sessions.Count > 0;
+        }
+    }
+
     internal bool Contains(int sessionId)
     {
         lock (_lock)

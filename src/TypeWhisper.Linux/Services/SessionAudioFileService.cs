@@ -19,11 +19,42 @@ public sealed class SessionAudioFileService
     public string SaveDictationCapture(byte[] wav)
     {
         Directory.CreateDirectory(_audioDirectory);
-        var fileName = $"dictation-{Guid.NewGuid():N}.wav";
-        var path = Path.Join(_audioDirectory, fileName);
+        var path = NewCapturePath();
         File.WriteAllBytes(path, wav);
         return path;
     }
+
+    /// <summary>
+    ///     Like <see cref="SaveDictationCapture" />, but returns null when the capture cannot be
+    ///     written (full disk, permissions) and removes any partial file.
+    /// </summary>
+    public string? TrySaveDictationCapture(byte[] wav, out Exception? failure)
+    {
+        var path = NewCapturePath();
+        try
+        {
+            Directory.CreateDirectory(_audioDirectory);
+            File.WriteAllBytes(path, wav);
+            failure = null;
+            return path;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            failure = ex;
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                // Retention removes an unreferenced partial capture later.
+            }
+
+            return null;
+        }
+    }
+
+    private string NewCapturePath() => Path.Join(_audioDirectory, $"dictation-{Guid.NewGuid():N}.wav");
 
     public string? GetAudioPath(string? audioFileName)
     {

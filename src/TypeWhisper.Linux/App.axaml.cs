@@ -414,6 +414,7 @@ public class App : Application
             var lastRecentTranscriptionsApplied = hotkey.CurrentRecentTranscriptionsHotkeyString;
             var lastCopyLastTranscriptionApplied = hotkey.CurrentCopyLastTranscriptionHotkeyString;
             var lastReadLastTranscriptionApplied = hotkey.CurrentReadLastTranscriptionHotkeyString;
+            var lastPasteLastTranscriptionApplied = hotkey.CurrentPasteLastTranscriptionHotkeyString;
             var lastTransformSelectionApplied = hotkey.CurrentTransformSelectionHotkeyString;
             settings.SettingsChanged += s =>
             {
@@ -423,6 +424,7 @@ public class App : Application
                 var recentTranscriptionsHotkeyChanged = false;
                 var copyLastTranscriptionHotkeyChanged = false;
                 var readLastTranscriptionHotkeyChanged = false;
+                var pasteLastTranscriptionHotkeyChanged = false;
                 var transformSelectionHotkeyChanged = false;
                 if (
                     !string.IsNullOrWhiteSpace(s.ToggleHotkey)
@@ -480,6 +482,18 @@ public class App : Application
                 }
 
                 if (
+                    s.PasteLastTranscriptionHotkey != lastPasteLastTranscriptionApplied
+                    && hotkey.TrySetPasteLastTranscriptionHotkeyFromString(
+                        s.PasteLastTranscriptionHotkey
+                    )
+                )
+                {
+                    lastPasteLastTranscriptionApplied =
+                        hotkey.CurrentPasteLastTranscriptionHotkeyString;
+                    pasteLastTranscriptionHotkeyChanged = true;
+                }
+
+                if (
                     s.TransformSelectionHotkey != lastTransformSelectionApplied
                     && hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey)
                 )
@@ -495,7 +509,8 @@ public class App : Application
                         recentTranscriptionsHotkeyChanged,
                         copyLastTranscriptionHotkeyChanged,
                         transformSelectionHotkeyChanged,
-                        readLastTranscriptionHotkeyChanged
+                        readLastTranscriptionHotkeyChanged,
+                        pasteLastTranscriptionHotkeyChanged
                     )
                 )
                 {
@@ -547,6 +562,36 @@ public class App : Application
             hotkey.RecentTranscriptionsRequested += (_, _) => recentTranscriptions.TogglePalette();
             hotkey.CopyLastTranscriptionRequested += (_, _) =>
                 _ = recentTranscriptions.CopyLastTranscriptionToClipboardAsync();
+            var audio = services.GetRequiredService<AudioRecordingService>();
+            var transformSelection = services.GetRequiredService<TransformSelectionService>();
+            // Refused while a dictation, transform or prompt action is capturing or delivering text
+            // (its clipboard snapshot and restore would race this paste) or the recorder holds capture.
+            var pasteLastBusy = () =>
+                dictation.HasDictationInFlight
+                || transformSelection.IsActive
+                || promptPalette.IsActive
+                || audio.IsCaptureReserved;
+            // Off the key-reader and UI threads: the paste waits on focus checks and clipboard restore.
+            hotkey.PasteLastTranscriptionRequested += (_, _) =>
+                FireAndForget(
+                    Task.Run(() =>
+                        recentTranscriptions.PasteLastTranscriptionAsync(
+                            LastTranscriptionPasteTrigger.Shortcut,
+                            pasteLastBusy
+                        )
+                    )
+                );
+            tray.PasteLastTranscriptionRequested += (_, _) =>
+                FireAndForget(
+                    Task.Run(() =>
+                        recentTranscriptions.PasteLastTranscriptionAsync(
+                            LastTranscriptionPasteTrigger.Tray,
+                            pasteLastBusy
+                        )
+                    )
+                );
+            tray.CopyLastTranscriptionRequested += (_, _) =>
+                FireAndForget(recentTranscriptions.CopyLastTranscriptionToClipboardAsync());
             var readback = services.GetRequiredService<LastTranscriptionReadbackService>();
             // Toggle reaches the TTS provider inline and synthesis can block for
             // seconds; the shortcut backend raises this on its key-reader thread,
@@ -559,7 +604,6 @@ public class App : Application
                     message,
                     isError
                 );
-            var transformSelection = services.GetRequiredService<TransformSelectionService>();
             hotkey.TransformSelectionRequested += (_, _) => _ = transformSelection.ToggleAsync();
 
             // Launch hidden to the tray if --minimized was passed.
@@ -627,7 +671,8 @@ public class App : Application
         bool recentTranscriptionsHotkeyChanged,
         bool copyLastTranscriptionHotkeyChanged,
         bool transformSelectionHotkeyChanged,
-        bool readLastTranscriptionHotkeyChanged
+        bool readLastTranscriptionHotkeyChanged,
+        bool pasteLastTranscriptionHotkeyChanged
     )
     {
         return toggleHotkeyChanged
@@ -635,7 +680,8 @@ public class App : Application
             || recentTranscriptionsHotkeyChanged
             || copyLastTranscriptionHotkeyChanged
             || transformSelectionHotkeyChanged
-            || readLastTranscriptionHotkeyChanged;
+            || readLastTranscriptionHotkeyChanged
+            || pasteLastTranscriptionHotkeyChanged;
     }
 
     private static string FormatDynamicHotkeyRejection(
@@ -690,6 +736,7 @@ public class App : Application
         hotkey.TrySetRecentTranscriptionsHotkeyFromString(s.RecentTranscriptionsHotkey);
         hotkey.TrySetCopyLastTranscriptionHotkeyFromString(s.CopyLastTranscriptionHotkey);
         hotkey.TrySetReadLastTranscriptionHotkeyFromString(s.ReadLastTranscriptionHotkey);
+        hotkey.TrySetPasteLastTranscriptionHotkeyFromString(s.PasteLastTranscriptionHotkey);
         hotkey.TrySetTransformSelectionHotkeyFromString(s.TransformSelectionHotkey);
 
         // Treat the upstream Windows default ("Ctrl+Shift+F9") as unset on Linux and substitute

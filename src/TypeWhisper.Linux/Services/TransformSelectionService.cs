@@ -52,6 +52,9 @@ public sealed class TransformSelectionService
         _showWarningDialog = showWarningDialog ?? ShowWarningDialogAsync;
     }
 
+    /// <summary>True while a transform records, runs or delivers its result: the clipboard is in use.</summary>
+    public bool IsActive => _gate.CurrentCount == 0 || Volatile.Read(ref _session) is not null;
+
     public async Task ToggleAsync()
     {
         if (!await _gate.WaitAsync(0))

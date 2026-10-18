@@ -40,6 +40,8 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
             CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.ReadLastTranscriptionRequested += () =>
             ReadLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+        _dispatcher.PasteLastTranscriptionRequested += () =>
+            PasteLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.CancelRequested += () => CancelRequested?.Invoke(this, EventArgs.Empty);
         _dispatcher.PromptActionRequested += actionId =>
             PromptActionRequested?.Invoke(this, actionId);
@@ -84,6 +86,7 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? ReadLastTranscriptionRequested;
+    public event EventHandler? PasteLastTranscriptionRequested;
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? PromptActionRequested;
     public event EventHandler<string>? ProfileDictationToggleRequested;

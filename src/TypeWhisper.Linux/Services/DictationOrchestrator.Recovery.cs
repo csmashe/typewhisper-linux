@@ -141,7 +141,7 @@ public sealed partial class DictationOrchestrator
             "translate", StringComparison.OrdinalIgnoreCase) ? "translate" : "transcribe";
 
     private void AddFailedHistoryRecord(
-        RecordingContext context, string wavPath, double duration, string rawText,
+        RecordingContext context, string? wavPath, double duration, string rawText,
         TranscriptionRecordStatus status, string message, string engine, string? model,
         string? prompt = null)
     {

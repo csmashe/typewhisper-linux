@@ -127,6 +127,7 @@ internal sealed class ShortcutDispatcher
     public event Action? RecentTranscriptionsRequested;
     public event Action? CopyLastTranscriptionRequested;
     public event Action? ReadLastTranscriptionRequested;
+    public event Action? PasteLastTranscriptionRequested;
     public event Action? CancelRequested;
     public event Action<string>? PromptActionRequested;
 
@@ -285,6 +286,12 @@ internal sealed class ShortcutDispatcher
                 }
 
                 Raise(ReadLastTranscriptionRequested, nameof(ReadLastTranscriptionRequested));
+                return;
+
+            case ShortcutMatchKind.PasteLastTranscription:
+                // Dispatched once the whole chord is released, so the synthesized paste chord
+                // is not combined with modifiers the user is still holding.
+                TryClaimSelectionWorkflow(key, SelectionWorkflowKind.PasteLastTranscription);
                 return;
 
             case ShortcutMatchKind.TransformSelection:
@@ -540,6 +547,9 @@ internal sealed class ShortcutDispatcher
             case SelectionWorkflowKind.TransformSelection:
                 Raise(TransformSelectionRequested, nameof(TransformSelectionRequested));
                 break;
+            case SelectionWorkflowKind.PasteLastTranscription:
+                Raise(PasteLastTranscriptionRequested, nameof(PasteLastTranscriptionRequested));
+                break;
         }
     }
 
@@ -603,6 +613,7 @@ internal sealed class ShortcutDispatcher
         PromptAction,
         ProfileTextProcessing,
         TransformSelection,
+        PasteLastTranscription,
     }
 
     private readonly record struct SelectionWorkflowId(

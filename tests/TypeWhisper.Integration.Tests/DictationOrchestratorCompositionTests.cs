@@ -97,6 +97,75 @@ public sealed class DictationOrchestratorCompositionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public Task CaptureCannotBeSaved_StillDeliversAndRemembersTheText()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            // A file where the audio directory belongs makes every capture write fail.
+            if (Directory.Exists(TypeWhisperEnvironment.AudioPath))
+            {
+                Directory.Delete(TypeWhisperEnvironment.AudioPath, true);
+            }
+
+            await File.WriteAllTextAsync(TypeWhisperEnvironment.AudioPath, "");
+            try
+            {
+                fixture.Plugin.EnqueueText("hello question mark");
+                var captured = false;
+                fixture.Orchestrator.RecordingCaptured += (_, _) => captured = true;
+
+                var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+                fixture.FeedNonSilentAudio();
+                var resultTask = fixture.WaitForResultAsync(sessionId);
+                await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+                var result = await BoundedTest.WaitAsync(resultTask);
+
+                Assert.Equal("ready", result.Status);
+                Assert.Equal(["hello? "], fixture.InsertionPlatform.Typed);
+                Assert.False(captured);
+                Assert.Null(Assert.Single(fixture.History.Records).AudioFileName);
+                Assert.Equal("hello?", fixture.RecentStore.LatestEntry(fixture.History.Records)?.FinalText);
+                Assert.False(fixture.Orchestrator.HasDictationInFlight);
+            }
+            finally
+            {
+                File.Delete(TypeWhisperEnvironment.AudioPath);
+            }
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task HasDictationInFlight_StaysTrueWhileTheTextIsInserted()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            fixture.Plugin.EnqueueText("hello");
+            var typing = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // ReSharper disable once AccessToDisposedClosure -- only invoked while the dictation below types, before the fixture is disposed.
+            fixture.InsertionPlatform.OnTyping = _ =>
+                typing.TrySetResult(fixture.Orchestrator.HasDictationInFlight);
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            await BoundedTest.WaitAsync(fixture.WaitForResultAsync(sessionId));
+
+            // The result is published before insertion; paste-last must still see the dictation as busy.
+            Assert.True(await BoundedTest.WaitAsync(typing.Task));
+            for (var attempt = 0; attempt < 100 && fixture.Orchestrator.HasDictationInFlight; attempt++)
+            {
+                await Task.Delay(20);
+            }
+
+            Assert.False(fixture.Orchestrator.HasDictationInFlight);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public Task HistorySavingDisabled_RecordsStatisticsWithoutHistoryEntry()
     {
         return BoundedTest.RunAsync(async () =>

@@ -160,8 +160,12 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
+    // Invoked as text is typed, so tests can observe state while delivery is in progress.
+    internal Action<string>? OnTyping { get; set; }
+
     public Task<bool> TypeTextAsync(string text)
     {
+        OnTyping?.Invoke(text);
         lock (_gate)
         {
             _typed.Add(text);

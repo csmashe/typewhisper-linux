@@ -14,6 +14,7 @@ internal enum ShortcutMatchKind
     RecentTranscriptions,
     CopyLastTranscription,
     ReadLastTranscription,
+    PasteLastTranscription,
     TransformSelection,
     Cancel,
     PromptAction,
@@ -95,6 +96,18 @@ internal static class ShortcutMatcher
             return ShortcutMatchKind.ReadLastTranscription;
         }
 
+        if (
+            Matches(
+                key,
+                pressedMods,
+                set.PasteLastTranscriptionKey,
+                set.PasteLastTranscriptionModifiers
+            )
+        )
+        {
+            return ShortcutMatchKind.PasteLastTranscription;
+        }
+
         if (Matches(key, pressedMods, set.TransformSelectionKey, set.TransformSelectionModifiers))
         {
             return ShortcutMatchKind.TransformSelection;
@@ -164,6 +177,12 @@ internal static class ShortcutMatcher
                 pressedMods,
                 set.ReadLastTranscriptionKey,
                 set.ReadLastTranscriptionModifiers
+            )
+            || Matches(
+                key,
+                pressedMods,
+                set.PasteLastTranscriptionKey,
+                set.PasteLastTranscriptionModifiers
             )
             || Matches(
                 key,

@@ -15,9 +15,11 @@ namespace TypeWhisper.Linux.Services;
 public sealed class TrayIconService : IDisposable
 {
     private readonly IProcessRunner _runner;
+    private NativeMenuItem? _copyLastMenuItem;
     private NativeMenuItem? _dictationMenuItem;
     private bool _disposed;
     private NativeMenuItem? _exitMenuItem;
+    private NativeMenuItem? _pasteLastMenuItem;
     private NativeMenuItem? _settingsMenuItem;
     private TrayIcon? _trayIcon;
     private TrayIcons? _trayIcons;
@@ -132,6 +134,8 @@ public sealed class TrayIconService : IDisposable
     public event EventHandler? ShowSettingsRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler? DictationToggleRequested;
+    public event EventHandler? PasteLastTranscriptionRequested;
+    public event EventHandler? CopyLastTranscriptionRequested;
 
     internal bool IsMenuBuilt =>
         _dictationMenuItem is not null
@@ -188,6 +192,14 @@ public sealed class TrayIconService : IDisposable
         _dictationMenuItem.Click += (_, _) =>
             DictationToggleRequested?.Invoke(this, EventArgs.Empty);
 
+        _pasteLastMenuItem = new NativeMenuItem(Loc.Instance["Tray.PasteLastTranscription"]);
+        _pasteLastMenuItem.Click += (_, _) =>
+            PasteLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+
+        _copyLastMenuItem = new NativeMenuItem(Loc.Instance["Tray.CopyLastTranscription"]);
+        _copyLastMenuItem.Click += (_, _) =>
+            CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+
         _settingsMenuItem = new NativeMenuItem(Loc.Instance["Tray.Settings"]);
         _settingsMenuItem.Click += (_, _) =>
             ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
@@ -196,6 +208,9 @@ public sealed class TrayIconService : IDisposable
         _exitMenuItem.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
 
         menu.Add(_dictationMenuItem);
+        menu.Add(new NativeMenuItemSeparator());
+        menu.Add(_pasteLastMenuItem);
+        menu.Add(_copyLastMenuItem);
         menu.Add(new NativeMenuItemSeparator());
         menu.Add(_settingsMenuItem);
         menu.Add(new NativeMenuItemSeparator());
@@ -212,6 +227,8 @@ public sealed class TrayIconService : IDisposable
         }
 
         _dictationMenuItem!.Header = Loc.Instance["Tray.ToggleDictation"];
+        _pasteLastMenuItem!.Header = Loc.Instance["Tray.PasteLastTranscription"];
+        _copyLastMenuItem!.Header = Loc.Instance["Tray.CopyLastTranscription"];
         _settingsMenuItem!.Header = Loc.Instance["Tray.Settings"];
         _exitMenuItem!.Header = Loc.Instance["Tray.Exit"];
     }
