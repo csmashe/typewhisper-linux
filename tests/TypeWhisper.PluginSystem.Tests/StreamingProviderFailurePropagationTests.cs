@@ -24,7 +24,7 @@ public sealed class StreamingProviderFailurePropagationTests
         var finalReceived = FinalReceived(session);
 
         socket.EnqueueText(
-            """{"type":"Turn","transcript":"A complete prefix.","end_of_turn":true,"turn_is_formatted":true}"""
+            """{"type":"Turn","turn_order":0,"transcript":"A complete prefix.","end_of_turn":true,"turn_is_formatted":true}"""
         );
         await finalReceived.Task.WaitAsync(s_testTimeout);
         socket.EnqueueFault(new WebSocketException("AssemblyAI transport failed."));
@@ -63,10 +63,10 @@ public sealed class StreamingProviderFailurePropagationTests
         Assert.False(finalize.IsCompleted);
 
         socket.EnqueueText(
-            """{"type":"Turn","transcript":"unformatted ending","end_of_turn":true,"turn_is_formatted":false}"""
+            """{"type":"Turn","turn_order":0,"transcript":"unformatted ending","end_of_turn":true,"turn_is_formatted":false}"""
         );
         socket.EnqueueText(
-            """{"type":"Turn","transcript":"Formatted ending.","end_of_turn":true,"turn_is_formatted":true}"""
+            """{"type":"Turn","turn_order":0,"transcript":"Formatted ending.","end_of_turn":true,"turn_is_formatted":true}"""
         );
         socket.EnqueueText(
             """{"type":"Termination","audio_duration_seconds":1.0,"session_duration_seconds":1.1}"""
@@ -125,7 +125,7 @@ public sealed class StreamingProviderFailurePropagationTests
 
         var finalize = session.FinalizeAsync(CancellationToken.None);
         await socket.NextSentAsync();
-        socket.EnqueueText("""{"type":"Turn","transcript":""");
+        socket.EnqueueText("""{"type":"Turn","turn_order":0,"transcript":""");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => finalize.WaitAsync(s_testTimeout)
@@ -526,18 +526,23 @@ public sealed class StreamingProviderFailurePropagationTests
     }
 
     [Fact]
-    public async Task Gemini_OneFinalThenTransportFault_SendAndFinalizeRethrow()
+    public async Task Gemini_InterimThenTransportFault_SendAndFinalizeRethrow()
     {
         var socket = new FakeWebSocket();
         socket.EnqueueText("""{"setupComplete":{}}""");
         await using var session = await GeminiSession.CreateConnectedSessionForTests(socket);
         await socket.NextSentAsync();
-        var finalReceived = FinalReceived(session);
+        var interimReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.TranscriptReceived += transcript =>
+        {
+            if (!transcript.IsFinal)
+                interimReceived.TrySetResult();
+        };
 
         socket.EnqueueText(
-            """{"serverContent":{"inputTranscription":{"text":"A complete prefix."}}}"""
+            """{"serverContent":{"interimInputTranscription":{"text":"A complete prefix"}}}"""
         );
-        await finalReceived.Task.WaitAsync(s_testTimeout);
+        await interimReceived.Task.WaitAsync(s_testTimeout);
         socket.EnqueueFault(new WebSocketException("Gemini transport failed."));
 
         var exception = await WaitForSessionFaultAsync(session);
@@ -547,8 +552,7 @@ public sealed class StreamingProviderFailurePropagationTests
         );
     }
 
-    // Gemini waits for no terminal signal, so finalize would return before the receive loop
-    // observed the failure. Drive sends until the session reports the captured fault.
+    // Drive sends until the session reports the captured fault.
     private static async Task<Exception> WaitForSessionFaultAsync(GeminiSession session)
     {
         var deadline = DateTime.UtcNow + s_testTimeout;

@@ -190,6 +190,7 @@ internal static class ServiceRegistrations
         {
             var audioRecording = sp.GetRequiredService<AudioRecordingService>();
             var settings = sp.GetRequiredService<ISettingsService>();
+            var sessionActivity = sp.GetRequiredService<ISessionActivityMonitor>();
             return new TextInsertionService(
                 sp.GetRequiredService<IErrorLogService>(),
                 sp.GetRequiredService<SystemCommandAvailabilityService>(),
@@ -197,7 +198,8 @@ internal static class ServiceRegistrations
                 sp.GetRequiredService<IProcessRunner>(),
                 isAnotherSessionRecording: () => audioRecording.IsRecording,
                 atSpiClient: sp.GetRequiredService<IAtSpiEventClient>(),
-                learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled
+                learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled,
+                inputAllowed: () => sessionActivity.IsInputAllowed
             );
         });
         services.AddSingleton<YdotoolSetupHelper>();
@@ -222,6 +224,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<IDiagnosticsReporter>(p => new CompositeDiagnosticsReporter(
             p.GetRequiredService<SentryTelemetryService>(),
             p.GetRequiredService<LocalDiagnosticLogService>()));
+        services.AddSingleton<SupportReportService>();
         services.AddSingleton<DictationOrchestrator>();
         services.AddSingleton<PromptProcessingService>();
         services.AddSingleton<LlmCleanupService>();

@@ -1,3 +1,6 @@
+using Moq;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using Xunit;
 
@@ -5,6 +8,26 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class AppHotkeyReconcileTests
 {
+    [Fact]
+    public void ReconcileHotkeyOnStartup_SecondaryBindingOnTheDefaultChord_SurvivesAMovedDictationChord()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(service => service.Current).Returns(new AppSettings
+        {
+            ToggleHotkey = "Ctrl+Alt+D",
+            PasteLastTranscriptionHotkey = "Ctrl+Shift+Space",
+            CopyLastTranscriptionHotkey = "Ctrl+Alt+D",
+        });
+
+        App.ReconcileHotkeyOnStartup(hotkey, settings.Object);
+
+        Assert.Equal("Ctrl+Alt+D", hotkey.CurrentHotkeyString);
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentPasteLastTranscriptionHotkeyString);
+        // A secondary binding that collides with the saved dictation chord loses.
+        Assert.Empty(hotkey.CurrentCopyLastTranscriptionHotkeyString);
+    }
+
     [Theory]
     [InlineData("first appearance", "first", "action-a", 1)]
     [InlineData("persistence", "persistent", "action-a,profile-b/", 2)]
@@ -56,13 +79,14 @@ public sealed class AppHotkeyReconcileTests
     }
 
     [Theory]
-    [InlineData("no fixed setter succeeded (all-failed or mode-only)", false, false, false, false, false, false, false)]
-    [InlineData("toggle", true, false, false, false, false, false, true)]
-    [InlineData("prompt palette", false, true, false, false, false, false, true)]
-    [InlineData("recent transcriptions", false, false, true, false, false, false, true)]
-    [InlineData("copy last transcription", false, false, false, true, false, false, true)]
-    [InlineData("transform selection", false, false, false, false, true, false, true)]
-    [InlineData("read last transcription", false, false, false, false, false, true, true)]
+    [InlineData("no fixed setter succeeded (all-failed or mode-only)", false, false, false, false, false, false, false, false)]
+    [InlineData("toggle", true, false, false, false, false, false, false, true)]
+    [InlineData("prompt palette", false, true, false, false, false, false, false, true)]
+    [InlineData("recent transcriptions", false, false, true, false, false, false, false, true)]
+    [InlineData("copy last transcription", false, false, false, true, false, false, false, true)]
+    [InlineData("transform selection", false, false, false, false, true, false, false, true)]
+    [InlineData("read last transcription", false, false, false, false, false, true, false, true)]
+    [InlineData("paste last transcription", false, false, false, false, false, false, true, true)]
     public void ShouldReconcileDynamicHotkeys_ReflectsFixedSetterSuccessesOnly(
         string description,
         bool toggleChanged,
@@ -71,6 +95,7 @@ public sealed class AppHotkeyReconcileTests
         bool copyLastTranscriptionChanged,
         bool transformSelectionChanged,
         bool readLastTranscriptionChanged,
+        bool pasteLastTranscriptionChanged,
         bool expected
     )
     {
@@ -81,7 +106,8 @@ public sealed class AppHotkeyReconcileTests
             recentTranscriptionsChanged,
             copyLastTranscriptionChanged,
             transformSelectionChanged,
-            readLastTranscriptionChanged
+            readLastTranscriptionChanged,
+            pasteLastTranscriptionChanged
         );
 
         Assert.Equal(expected, actual);

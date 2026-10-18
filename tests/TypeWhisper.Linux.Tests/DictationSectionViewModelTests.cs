@@ -606,6 +606,142 @@ public sealed class DictationSectionViewModelTests
         context.Audio.StopRecording(session);
     }
 
+    [Fact]
+    public void MicrophoneTest_ReportsSignalAndStopsAtTimeLimit()
+    {
+        var clock = new ManualClock();
+        using var context = CreateMicrophoneTestContext(clock);
+
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+
+        Assert.True(context.Sut.IsMicrophoneTestRunning);
+        Assert.Equal(Loc.Instance["Dictation.MicTestStop"], context.Sut.MicrophoneTestButtonText);
+        Assert.Equal([0], context.OpenedDeviceIndices);
+        Assert.Equal(Loc.Instance.GetString("Dictation.MicTestDevice", "Default Mic"), context.Sut.MicrophoneTestDevice);
+        Assert.Equal(Loc.Instance["Dictation.MicTestWaiting"], context.Sut.MicrophoneTestStatus);
+
+        context.Audio.ProcessAudioBufferForTest([0.2f, -0.2f]);
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+        Assert.Equal(Loc.Instance["Dictation.MicTestSignal"], context.Sut.MicrophoneTestStatus);
+
+        clock.Advance(DictationSectionViewModel.MicrophoneTestDuration);
+
+        Assert.False(context.Sut.IsMicrophoneTestRunning);
+        Assert.Equal(Loc.Instance["Dictation.MicTestStart"], context.Sut.MicrophoneTestButtonText);
+        // No buffer arrived after the first, so the final result is "no audio".
+        Assert.Equal(
+            Loc.Instance.GetString("Dictation.MicTestStoppedWithResult", Loc.Instance["Dictation.MicTestNoAudio"]),
+            context.Sut.MicrophoneTestStatus
+        );
+        Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
+    [Fact]
+    public void MicrophoneTest_PageCloseStopsTestAndPreview()
+    {
+        var clock = new ManualClock();
+        using var context = CreateMicrophoneTestContext(clock);
+        context.Sut.ActivatePreview();
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+
+        context.Sut.DeactivatePreview();
+
+        Assert.False(context.Sut.IsMicrophoneTestRunning);
+        Assert.Equal(0, clock.ActiveTimerCount);
+        // The preview closed with the page, so a fresh test has to reopen the device.
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+        Assert.Equal([0, 0, 0], context.OpenedDeviceIndices);
+    }
+
+    [Fact]
+    public void MicrophoneTest_SelectingAnotherDeviceStopsTestAndReopensPreview()
+    {
+        var clock = new ManualClock();
+        using var context = CreateMicrophoneTestContext(clock);
+        context.Sut.ActivatePreview();
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+
+        context.Sut.SelectedDevice = context.Sut.Devices.Single(device => device.Name == "USB Mic");
+
+        Assert.False(context.Sut.IsMicrophoneTestRunning);
+        Assert.Equal(Loc.Instance["Dictation.MicTestDeviceChanged"], context.Sut.MicrophoneTestStatus);
+        Assert.Equal("", context.Sut.MicrophoneTestDevice);
+        Assert.Equal([0, 0, 1], context.OpenedDeviceIndices);
+
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+        Assert.Equal(Loc.Instance.GetString("Dictation.MicTestDevice", "USB Mic"), context.Sut.MicrophoneTestDevice);
+    }
+
+    [Fact]
+    public void MicrophoneTest_ReselectingSameDeviceKeepsTestRunning()
+    {
+        var clock = new ManualClock();
+        using var context = CreateMicrophoneTestContext(clock);
+        context.Sut.ActivatePreview();
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+        var selected = context.Sut.SelectedDevice;
+
+        // Refresh rebuilds the list; the ComboBox clears the selection before it is restored.
+        context.Sut.SelectedDevice = null;
+        context.Sut.RefreshDevicesCommand.Execute(null);
+        context.Sut.SelectedDevice = selected;
+
+        Assert.True(context.Sut.IsMicrophoneTestRunning);
+        Assert.Equal([0, 0], context.OpenedDeviceIndices);
+    }
+
+    [Fact]
+    public void MicrophoneTest_ShowsWhyDictationEndedIt()
+    {
+        var clock = new ManualClock();
+        using var context = CreateMicrophoneTestContext(clock);
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+
+        var session = context.Audio.TryStartRecording(false);
+        Assert.NotNull(session);
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+
+        Assert.False(context.Sut.IsMicrophoneTestRunning);
+        Assert.Equal(Loc.Instance["Dictation.MicTestDictationStarted"], context.Sut.MicrophoneTestStatus);
+
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+        Assert.False(context.Sut.IsMicrophoneTestRunning);
+        Assert.Equal(Loc.Instance["Dictation.MicTestBusy"], context.Sut.MicrophoneTestStatus);
+        context.Audio.StopRecording(session);
+    }
+
+    [Fact]
+    public void MicrophoneTest_NamesAutomaticEntryWhenFollowingDefault()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { SelectedMicrophoneDeviceId = AppSettings.FollowSystemDefaultMicrophoneId },
+            new FakeAudioDeviceEnumerator(new FakeDevice(0, "default", 1, isDefault: true)),
+            dispatchNotification: static action => action(),
+            timeProvider: new ManualClock()
+        );
+
+        context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+
+        Assert.Equal(
+            Loc.Instance.GetString("Dictation.MicTestDevice", Loc.Instance["Dictation.FollowSystemDefaultMic"]),
+            context.Sut.MicrophoneTestDevice
+        );
+    }
+
+    private static ViewModelTestContext CreateMicrophoneTestContext(ManualClock clock)
+    {
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true),
+            new FakeDevice(1, "USB Mic", 1, isDefault: false)
+        );
+        return new ViewModelTestContext(
+            AppSettings.Default,
+            devices,
+            dispatchNotification: static action => action(),
+            timeProvider: clock
+        );
+    }
+
     private sealed class ViewModelTestContext : IDisposable
     {
         public ViewModelTestContext(
@@ -613,7 +749,8 @@ public sealed class DictationSectionViewModelTests
             FakeAudioDeviceEnumerator devices,
             IReadOnlyList<ITranscriptionEngineRole>? engines = null,
             IAtSpiEventClient? atSpiClient = null,
-            Action<Action>? dispatchNotification = null
+            Action<Action>? dispatchNotification = null,
+            TimeProvider? timeProvider = null
         )
         {
             Settings = TestPluginManagerFactory.CreateSettings(initialSettings);
@@ -630,7 +767,9 @@ public sealed class DictationSectionViewModelTests
                 devices.GetDevices,
                 OpenedDeviceIndices.Add,
                 () => devices.GetDevices().Single(device => device.IsDefault).Index,
-                static () => { }
+                static () => { },
+                timeProvider: timeProvider,
+                postToUiThread: static _ => { }
             );
             // ReSharper disable once InconsistentNaming -- "a11y" is the standard numeronym for accessibility.
             var a11yBus = new Mock<IAccessibilityBusActivation>();
@@ -651,7 +790,8 @@ public sealed class DictationSectionViewModelTests
                 a11yBus.Object,
                 devices.GetDevices,
                 atSpiClient: atSpiClient,
-                dispatchNotification: dispatchNotification
+                dispatchNotification: dispatchNotification,
+                timeProvider: timeProvider
             );
             Settings.Invocations.Clear();
         }

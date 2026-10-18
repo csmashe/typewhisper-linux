@@ -32,6 +32,14 @@ The local diagnostic log is off by default and is a separate choice from crash r
 
 It records event names (for example the start and end of a dictation and of its recording, transcription and insertion steps), a random ID linking the steps of one dictation, timings, the outcome of each step, and the same engine, model, mode, cleanup level, language and app/OS version values as the crash reports above, plus error types, method names from the stack and HTTP status or socket error codes. Every value is checked against a fixed list of allowed fields and formats when it is written, pruned and exported, so audio, transcripts, prompts, clipboard contents, window titles, file names or paths, API keys and error message text are never written. Entries older than the chosen retention period (1, 3, 7, 14 or 30 days; 7 by default) are deleted, the file is capped at 2 MB, and settings backups do not include it. Turning the log off or choosing "Delete log" deletes the file.
 
+## Support report
+
+About → Support Report → "Export Report" saves a JSON file describing the app's current state, to attach to a support request. It is written only to the location you choose and is never sent anywhere.
+
+It contains the app version and install kind, kernel and distribution versions, CPU architecture, .NET runtime, locale, UTC offset and process memory; the desktop session type; the selected engine and model, their readiness and acceleration; whether the local API is enabled and running and its port; microphones numbered within the report, with default, selected and channel-count flags; installed plugins with their version, enabled and active state and each role's readiness; per-profile and per-prompt metadata (counts of app and website rules, style, language, task, engine, model, provider and memory source IDs, and whether a hotkey or prompt is set); behavior settings such as recording mode, cleanup level and retention; counts of history records, dictionary entries, snippets and error-log entries; and the entries of the local diagnostic log described above, only while that log is on.
+
+It never contains audio, transcripts, prompt or snippet text, dictionary entries, profile or prompt names, app or website rules, hotkeys, microphone names or hardware IDs, file paths, API keys or tokens, or error messages. Identifiers that could be a path, URL or free text, including model IDs with a slash, are replaced with `[omitted]`, as are model IDs of user-controlled endpoints (for example an OpenAI-compatible server, whose model names you or your server choose) and of third-party plugins. A section that cannot be read is left out and listed by name with only its error type and code.
+
 Local transcription and text processing run on the user's device.
 
 Audio, transcripts, prompts, or API keys leave the device only when the user explicitly configures and uses a cloud provider or integration.

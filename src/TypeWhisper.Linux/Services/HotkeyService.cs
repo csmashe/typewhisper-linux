@@ -84,6 +84,8 @@ public sealed class HotkeyService : IDisposable
     private ModifierMask _copyLastTranscriptionModifiers = ModifierMask.None;
     private KeyCode? _readLastTranscriptionKey;
     private ModifierMask _readLastTranscriptionModifiers = ModifierMask.None;
+    private KeyCode? _pasteLastTranscriptionKey;
+    private ModifierMask _pasteLastTranscriptionModifiers = ModifierMask.None;
     private int _disposed;
 
     private KeyCode _key = KeyCode.VcSpace;
@@ -94,6 +96,7 @@ public sealed class HotkeyService : IDisposable
     private EventHandler? _onCancelRequested;
     private EventHandler? _onCopyLastTranscriptionRequested;
     private EventHandler? _onReadLastTranscriptionRequested;
+    private EventHandler? _onPasteLastTranscriptionRequested;
     private EventHandler? _onDictationStartRequested;
     private EventHandler? _onDictationStopRequested;
     private EventHandler? _onDictationDiscardRequested;
@@ -228,6 +231,11 @@ public sealed class HotkeyService : IDisposable
             ? ""
             : FormatHotkey(_readLastTranscriptionKey.Value, _readLastTranscriptionModifiers);
 
+    public string CurrentPasteLastTranscriptionHotkeyString =>
+        _pasteLastTranscriptionKey is null
+            ? ""
+            : FormatHotkey(_pasteLastTranscriptionKey.Value, _pasteLastTranscriptionModifiers);
+
     public string CurrentTransformSelectionHotkeyString =>
         _transformSelectionKey is null
             ? ""
@@ -344,6 +352,8 @@ public sealed class HotkeyService : IDisposable
                 CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
             _onReadLastTranscriptionRequested = (_, _) =>
                 ReadLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            _onPasteLastTranscriptionRequested = (_, _) =>
+                PasteLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
             _onTransformSelectionRequested = (_, _) =>
                 TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
             _onCancelRequested = (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
@@ -366,6 +376,7 @@ public sealed class HotkeyService : IDisposable
             backend.RecentTranscriptionsRequested += _onRecentTranscriptionsRequested;
             backend.CopyLastTranscriptionRequested += _onCopyLastTranscriptionRequested;
             backend.ReadLastTranscriptionRequested += _onReadLastTranscriptionRequested;
+            backend.PasteLastTranscriptionRequested += _onPasteLastTranscriptionRequested;
             backend.TransformSelectionRequested += _onTransformSelectionRequested;
             backend.CancelRequested += _onCancelRequested;
             backend.PromptActionRequested += _onPromptActionRequested;
@@ -602,6 +613,45 @@ public sealed class HotkeyService : IDisposable
 
             _readLastTranscriptionKey = key;
             _readLastTranscriptionModifiers = modifiers;
+            PushShortcutsIfRunning();
+            return true;
+        }
+    }
+
+    public bool TrySetPasteLastTranscriptionHotkeyFromString(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            lock (_lock)
+            {
+                _pasteLastTranscriptionKey = null;
+                _pasteLastTranscriptionModifiers = ModifierMask.None;
+                PushShortcutsIfRunning();
+            }
+
+            return true;
+        }
+
+        if (!TryParseHotkey(text, out var key, out var modifiers))
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            if (
+                HotkeyMatchesAny(
+                    key!.Value,
+                    modifiers,
+                    GetBoundHotkeys(HotkeyBinding.PasteLastTranscription)
+                )
+            )
+            {
+                return false;
+            }
+
+            _pasteLastTranscriptionKey = key;
+            _pasteLastTranscriptionModifiers = modifiers;
             PushShortcutsIfRunning();
             return true;
         }
@@ -1194,6 +1244,7 @@ public sealed class HotkeyService : IDisposable
     public event EventHandler? RecentTranscriptionsRequested;
     public event EventHandler? CopyLastTranscriptionRequested;
     public event EventHandler? ReadLastTranscriptionRequested;
+    public event EventHandler? PasteLastTranscriptionRequested;
     public event EventHandler? TransformSelectionRequested;
     public event EventHandler? CancelRequested;
     public event EventHandler<string>? PromptActionHotkeyTriggered;
@@ -1254,6 +1305,11 @@ public sealed class HotkeyService : IDisposable
             backend.ReadLastTranscriptionRequested -= _onReadLastTranscriptionRequested;
         }
 
+        if (_onPasteLastTranscriptionRequested is not null)
+        {
+            backend.PasteLastTranscriptionRequested -= _onPasteLastTranscriptionRequested;
+        }
+
         if (_onTransformSelectionRequested is not null)
         {
             backend.TransformSelectionRequested -= _onTransformSelectionRequested;
@@ -1302,6 +1358,7 @@ public sealed class HotkeyService : IDisposable
         _onRecentTranscriptionsRequested = null;
         _onCopyLastTranscriptionRequested = null;
         _onReadLastTranscriptionRequested = null;
+        _onPasteLastTranscriptionRequested = null;
         _onTransformSelectionRequested = null;
         _onCancelRequested = null;
         _onPromptActionRequested = null;
@@ -1337,6 +1394,8 @@ public sealed class HotkeyService : IDisposable
             _copyLastTranscriptionModifiers,
             _readLastTranscriptionKey,
             _readLastTranscriptionModifiers,
+            _pasteLastTranscriptionKey,
+            _pasteLastTranscriptionModifiers,
             _transformSelectionKey,
             _transformSelectionModifiers,
             suppressCancel ? KeyCode.VcUndefined : CancelKey,
@@ -1558,6 +1617,11 @@ public sealed class HotkeyService : IDisposable
             yield return (_readLastTranscriptionKey, _readLastTranscriptionModifiers);
         }
 
+        if (exclude != HotkeyBinding.PasteLastTranscription)
+        {
+            yield return (_pasteLastTranscriptionKey, _pasteLastTranscriptionModifiers);
+        }
+
         if (exclude != HotkeyBinding.TransformSelection)
         {
             yield return (_transformSelectionKey, _transformSelectionModifiers);
@@ -1772,6 +1836,7 @@ public sealed class HotkeyService : IDisposable
         RecentTranscriptions,
         CopyLastTranscription,
         ReadLastTranscription,
+        PasteLastTranscription,
         TransformSelection,
     }
 }

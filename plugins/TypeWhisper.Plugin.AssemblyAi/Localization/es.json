@@ -2,13 +2,15 @@
   "Settings.ApiKey": "Clave de API",
   "Settings.ApiKeyDescription": "Necesaria para la transcripción y el streaming de AssemblyAI.",
   "Settings.TranscriptionModel": "Modelo de transcripción",
-  "Settings.ModelDescription": "Elige el modelo de voz de AssemblyAI.",
+  "Settings.ModelDescription": "Elige el modelo de voz de AssemblyAI. Universal-3.5 Pro admite 18 idiomas y Universal-2 unos 100. El dictado en tiempo real usa Universal-3.6 Pro Streaming con Universal-3.5 Pro, y Universal-Streaming con Universal-2 cuando se selecciona inglés, español, alemán, francés, portugués o italiano; con la detección automática u otros idiomas, Universal-2 transcribe después de la grabación.",
   "Settings.UseDictionaryTerms": "Enviar términos del diccionario como keyterms",
-  "Settings.UseDictionaryTermsDescription": "Orienta la transcripción hacia los términos de su diccionario, enviados completos (con comas incluidas). AssemblyAI cobra un recargo por los keyterms con Universal-3 Pro y en el dictado en tiempo real que no es en inglés; Universal-2 los incluye. El dictado en tiempo real envía como máximo 100 términos de hasta 50 caracteres. Si está desactivado, AssemblyAI no recibe términos del diccionario.",
+  "Settings.UseDictionaryTermsDescription": "Orienta la transcripción hacia los términos de su diccionario, enviados completos (con comas incluidas). AssemblyAI cobra un recargo por los keyterms en las grabaciones y en el dictado en tiempo real en inglés con Universal-2; el resto del dictado en tiempo real los incluye. El dictado en tiempo real envía como máximo 100 términos de hasta 50 caracteres. Si está desactivado, AssemblyAI no recibe términos del diccionario.",
+  "Settings.SpeakerLabels": "Identificar hablantes",
+  "Settings.SpeakerLabelsDescription": "Antepone a cada intervención su hablante («Speaker A: …») y conserva sus marcas de tiempo. AssemblyAI cobra un recargo. Desactiva el dictado en tiempo real, por lo que el texto aparece después de la grabación.",
   "Settings.EnterApiKey": "Primero introduce una clave de API.",
   "Settings.ApiKeyValid": "La clave de API es válida.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin sin configurar. Se requiere una clave de API.",
   "Manifest.Name": "AssemblyAI",
-  "Manifest.Description": "Motor de transcripción AssemblyAI Universal-2"
+  "Manifest.Description": "Motor de transcripción AssemblyAI Universal-3.5 Pro y Universal-2"
 }

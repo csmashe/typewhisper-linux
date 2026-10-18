@@ -3,6 +3,7 @@ using System.Diagnostics;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
 using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -34,6 +35,13 @@ public sealed class PluginManager : IDisposable
     private readonly IErrorLogService? _errorLog;
     private readonly string _secretProtectionKeyFilePath;
     private readonly IProcessRunner _processRunner;
+    private readonly TranscriptionIsolation? _transcriptionIsolation;
+
+    // Worker adapters per plugin activation, keyed by the in-process engine they present.
+    // Guarded by _lock.
+    private readonly Dictionary<string, Dictionary<ITranscriptionEngineRole, IsolatedTranscriptionEngine>>
+        _isolatedEngines = [];
+
     private List<IActionPlugin> _actionPlugins = [];
 
     // Debounce guard for on-demand model re-polls (triggered when a dropdown opens).
@@ -65,7 +73,8 @@ public sealed class PluginManager : IDisposable
             [TypeWhisperEnvironment.PluginsPath],
             errorLog,
             processRunner: processRunner,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            transcriptionIsolation: TranscriptionIsolation.CreateDefault()
         )
     {
     }
@@ -81,10 +90,12 @@ public sealed class PluginManager : IDisposable
         TimeSpan? pluginShutdownTimeout = null,
         string? secretProtectionKeyFilePath = null,
         IProcessRunner? processRunner = null,
-        IDiagnosticsReporter? diagnostics = null
+        IDiagnosticsReporter? diagnostics = null,
+        TranscriptionIsolation? transcriptionIsolation = null
     )
     {
         _diagnostics = diagnostics;
+        _transcriptionIsolation = transcriptionIsolation;
         _loader = loader;
         EventBus = eventBus;
         _activeWindow = activeWindow;
@@ -231,6 +242,7 @@ public sealed class PluginManager : IDisposable
             _allPlugins.Clear();
             _hostServices.Clear();
             _activatedPlugins.Clear();
+            _isolatedEngines.Clear();
             _llmProviders.Clear();
             _transcriptionEngines.Clear();
             _postProcessors.Clear();
@@ -293,6 +305,14 @@ public sealed class PluginManager : IDisposable
         {
             if (deactivate)
             {
+                // Bounded: retiring the plugin's processes below ends a worker that did not stop.
+                if (!ReleaseIsolatedEnginesAsync(plugin.Manifest.Id).Wait(_pluginShutdownTimeout))
+                {
+                    Trace.WriteLine(
+                        $"[PluginManager] Timed out stopping transcription workers of {plugin.Manifest.Id}"
+                    );
+                }
+
                 try
                 {
                     var deactivationTask = plugin.Instance.DeactivateAsync();
@@ -586,6 +606,9 @@ public sealed class PluginManager : IDisposable
 
         // Unload is authoritative even when a plugin's deactivation failed: release
         // host-owned process/session state before dropping the collectible context.
+        // Adapters recreated after a failed deactivation would otherwise keep it alive.
+        await ReleaseIsolatedEnginesAsync(pluginId);
+        ForgetIsolatedEngines(pluginId);
         RetirePluginProcesses(pluginId);
         lock (_lock)
         {
@@ -860,6 +883,8 @@ public sealed class PluginManager : IDisposable
         var deactivated = false;
         try
         {
+            // Workers use this activation's services, so they end before the plugin does.
+            await ReleaseIsolatedEnginesAsync(plugin.Manifest.Id);
             await plugin.Instance.DeactivateAsync();
 
             lock (_lock)
@@ -877,6 +902,9 @@ public sealed class PluginManager : IDisposable
             Trace.WriteLine(
                 $"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}"
             );
+            // The plugin stays active; its released workers are replaced by new adapters.
+            ForgetIsolatedEngines(plugin.Manifest.Id);
+            RebuildCapabilityIndices();
             return false;
         }
         finally
@@ -886,6 +914,7 @@ public sealed class PluginManager : IDisposable
             // so its work is merely stopped.
             if (deactivated)
             {
+                ForgetIsolatedEngines(plugin.Manifest.Id);
                 hostServices?.ProcessScope?.Retire();
             }
             else
@@ -912,10 +941,10 @@ public sealed class PluginManager : IDisposable
     {
         lock (_lock)
         {
-            var activePlugins = _allPlugins
+            var activeLoaded = _allPlugins
                 .Where(p => _activatedPlugins.Contains(p.Manifest.Id))
-                .Select(p => p.Instance)
                 .ToList();
+            var activePlugins = activeLoaded.Select(p => p.Instance).ToList();
 
             // Fold in extra provider/engine roles contributed by a single plugin
             // (e.g. OpenAI-compatible profiles), then de-dup by selection ID so a
@@ -937,13 +966,18 @@ public sealed class PluginManager : IDisposable
                 .Select(group => group.First().Provider)
                 .ToList();
             _transcriptionEngines = ValidTranscriptionEngines(
-                    activePlugins
-                        .OfType<ITranscriptionEnginePlugin>()
+                    activeLoaded
+                        .Where(p => p.Instance is ITranscriptionEnginePlugin)
+                        .Select(p => Isolate(p.Manifest.Id, p.PluginDirectory, (ITranscriptionEnginePlugin)p.Instance))
                         .Concat(
-                            activePlugins
+                            activeLoaded
                                 // ReSharper disable once SuspiciousTypeConversion.Global -- plugin instances are loaded from external assemblies (AssemblyLoadContext) that implement this capability interface; the cross-assembly implementer is not visible in-solution.
-                                .OfType<IAdditionalTranscriptionEnginesProvider>()
-                                .SelectMany(SafeAdditionalTranscriptionEngines)
+                                .Where(p => p.Instance is IAdditionalTranscriptionEnginesProvider)
+                                .SelectMany(p => SafeAdditionalTranscriptionEngines(
+                                        (IAdditionalTranscriptionEnginesProvider)p.Instance
+                                    )
+                                    .Select(engine => Isolate(p.Manifest.Id, p.PluginDirectory, engine))
+                                )
                         )
                 )
                 .GroupBy(entry => entry.SelectionId, StringComparer.Ordinal)
@@ -960,6 +994,92 @@ public sealed class PluginManager : IDisposable
 
         // Raise outside _lock to avoid deadlock if a handler calls back into PluginManager.
         PluginStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // Callers hold _lock. One adapter per engine and activation keeps the identity callers compare stable.
+    private ITranscriptionEngineRole Isolate(string pluginId, string packageDirectory, ITranscriptionEngineRole engine)
+    {
+        if (_transcriptionIsolation is not { IsEnabled: true }
+            || !_hostServices.TryGetValue(pluginId, out var services))
+        {
+            return engine;
+        }
+
+        if (!_isolatedEngines.TryGetValue(pluginId, out var isolated))
+        {
+            isolated = new Dictionary<ITranscriptionEngineRole, IsolatedTranscriptionEngine>(
+                ReferenceEqualityComparer.Instance
+            );
+            _isolatedEngines[pluginId] = isolated;
+        }
+
+        if (isolated.TryGetValue(engine, out var existing))
+        {
+            return existing;
+        }
+
+        IsolatedTranscriptionEngine? created;
+        try
+        {
+            created = _transcriptionIsolation.TryIsolate(
+                engine,
+                pluginId,
+                packageDirectory,
+                _loader.PluginDataRoot,
+                services,
+                services.SettingsFingerprint
+            );
+        }
+        catch (Exception ex)
+        {
+            // An invalid selection id is reported once the engine is validated below.
+            Trace.WriteLine($"[PluginManager] {pluginId} stays in process: {ex.Message}");
+            return engine;
+        }
+
+        if (created is null)
+        {
+            return engine;
+        }
+
+        isolated[engine] = created;
+        return created;
+    }
+
+    // Ends the plugin's workers. The adapters stay cached until ForgetIsolatedEngines, so a rebuild
+    // meanwhile cannot bind new ones to the activation being torn down.
+    private async Task ReleaseIsolatedEnginesAsync(string pluginId)
+    {
+        IsolatedTranscriptionEngine[] engines;
+        lock (_lock)
+        {
+            if (!_isolatedEngines.TryGetValue(pluginId, out var isolated))
+            {
+                return;
+            }
+
+            engines = [.. isolated.Values];
+        }
+
+        foreach (var engine in engines)
+        {
+            try
+            {
+                await engine.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Trace.WriteLine($"[PluginManager] Stopping a transcription worker of {pluginId} failed: {ex.Message}");
+            }
+        }
+    }
+
+    private void ForgetIsolatedEngines(string pluginId)
+    {
+        lock (_lock)
+        {
+            _isolatedEngines.Remove(pluginId);
+        }
     }
 
     private IEnumerable<(ILlmProviderRole Provider, string SelectionId)> ValidLlmProviders(
@@ -1055,7 +1175,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    private static IEnumerable<ITranscriptionEngineRole> SafeAdditionalTranscriptionEngines(
+    private static List<ITranscriptionEngineRole> SafeAdditionalTranscriptionEngines(
         IAdditionalTranscriptionEnginesProvider provider
     )
     {

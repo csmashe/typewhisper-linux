@@ -18,7 +18,7 @@ public interface IHistoryService
     ///     that must distinguish "no records" from "could not read" never see the two answers disagree.
     /// </summary>
     /// <param name="records">The records read, or an empty list when the read failed.</param>
-    /// <returns><c>true</c> when the records are trustworthy.</returns>
+    /// <returns><c>true</c> when the records are trustworthy, which a corrupt file reset to empty is not.</returns>
     bool TryGetRecords(out IReadOnlyList<TranscriptionRecord> records)
     {
         records = Records;

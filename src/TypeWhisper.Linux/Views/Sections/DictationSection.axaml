@@ -242,7 +242,7 @@
             <TextBlock Text="{loc:Str Dictation.Microphone}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
-                <Grid RowDefinitions="Auto,1,Auto">
+                <Grid RowDefinitions="Auto,1,Auto,1,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,320">
@@ -277,6 +277,41 @@
                                          Value="{Binding PreviewLevel}"
                                          Height="8"
                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3"
+                            Background="#18FFFFFF" />
+
+                    <Border Grid.Row="4"
+                            Classes="row">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="12">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="{loc:Str Dictation.MicTest}"
+                                           Classes="row-label" />
+                                <TextBlock Text="{loc:Str Dictation.MicTestHint}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding MicrophoneTestStatus}"
+                                           AutomationProperties.LiveSetting="Polite"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding MicrophoneTestDevice}"
+                                           IsVisible="{Binding MicrophoneTestDevice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding MicrophoneTestDetail}"
+                                           IsVisible="{Binding MicrophoneTestDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    VerticalAlignment="Top"
+                                    Content="{Binding MicrophoneTestButtonText}"
+                                    Command="{Binding ToggleMicrophoneTestCommand}" />
                         </Grid>
                     </Border>
                 </Grid>

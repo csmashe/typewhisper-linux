@@ -351,6 +351,21 @@ public sealed class PluginHostServices : IPluginHostServices
         );
     }
 
+    /// <summary>
+    ///     The saved settings without secrets, as text that changes only when a value does. A
+    ///     transcription worker reads them once, so it is replaced when this changes.
+    /// </summary>
+    internal string SettingsFingerprint()
+    {
+        return string.Join(
+            '\n',
+            LoadSettings()
+                .Where(entry => !entry.Key.StartsWith(SecretPrefix, StringComparison.Ordinal))
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => entry.Key + "=" + entry.Value.GetRawText())
+        );
+    }
+
     public IPluginStateStore<T> OpenStateStore<T>(
         string fileName,
         Func<T> createDefault,
