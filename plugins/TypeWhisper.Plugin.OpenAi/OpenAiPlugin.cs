@@ -238,6 +238,8 @@ public sealed class OpenAiPlugin
 
     public DictionaryTermsBudget DictionaryTermsBudget => s_dictionaryBudget;
 
+    public bool SupportsStructuredDictionaryTerms => true;
+
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation =>
@@ -284,6 +286,7 @@ public sealed class OpenAiPlugin
         if (translate && !entry.SupportsTranslation)
             throw new InvalidOperationException(Loc.L("Settings.TranslationUnsupported", entry.DisplayName));
 
+        var (promptText, keywords) = SplitPrompt(entry, prompt);
         var normalizedLanguageHints = NormalizeLanguageHints(languageHints);
         if (entry.Transport == TranscriptionTransport.Realtime)
         {
@@ -292,8 +295,9 @@ public sealed class OpenAiPlugin
                 entry.ApiModelName,
                 wavAudio,
                 normalizedLanguageHints,
-                prompt,
-                ct);
+                promptText,
+                ct,
+                keywords);
         }
 
         if (entry.LanguageFormat == TranscriptionLanguageFormat.Plural)
@@ -306,7 +310,8 @@ public sealed class OpenAiPlugin
                 wavAudio,
                 normalizedLanguageHints,
                 entry.ResponseFormat,
-                prompt,
+                promptText,
+                keywords,
                 ct);
         }
 
@@ -320,7 +325,7 @@ public sealed class OpenAiPlugin
             translate,
             entry.ResponseFormat ?? "json",
             ct,
-            prompt);
+            promptText);
     }
 
     public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
@@ -328,8 +333,14 @@ public sealed class OpenAiPlugin
             NormalizeLanguage(language) is { } normalizedLanguage ? [normalizedLanguage] : [],
             ct);
 
-    public async Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
         IReadOnlyList<string> languageHints,
+        CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAndPromptAsync(languageHints, null, ct);
+
+    public async Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
         CancellationToken ct)
     {
         if (AuthMode == OpenAiAuthMode.ChatGpt)
@@ -339,17 +350,46 @@ public sealed class OpenAiPlugin
         if (SelectedModelEntry is not { Transport: TranscriptionTransport.Realtime } entry)
             throw new NotSupportedException(Loc.L("Settings.StreamingRequiresRealtimeModel"));
 
+        var (promptText, keywords) = SplitPrompt(entry, prompt);
         return await OpenAiRealtimeStreamingSession.ConnectAsync(
             OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
             OpenAiRealtimeStreamingSession.CreateRealtimeHeaders(ApiKey!),
             entry.ApiModelName,
             NormalizeLanguageHints(languageHints),
-            prompt: null,
+            promptText,
             useServerVad: true,
             realtimeProtocol: "auto",
             ct,
-            _transportFactory);
+            _transportFactory,
+            keywords);
     }
+
+    // GPT Transcribe and GPT Live Transcribe take terms as keywords; older models read only the prompt.
+    // OpenAI rejects keywords containing '<', '>' or a line break, so those terms go into the prompt.
+    // Control characters and Unicode line/paragraph separators are treated as line breaks.
+    private static (string? Prompt, IReadOnlyList<string> Keywords) SplitPrompt(
+        TranscriptionModelEntry entry,
+        string? prompt)
+    {
+        var parsed = PluginTranscriptionPrompt.Parse(prompt);
+        if (entry.LanguageFormat != TranscriptionLanguageFormat.Plural)
+            return (parsed.ToPlainText(), []);
+
+        var keywords = new List<string>();
+        var promptTerms = new List<string>();
+        foreach (var term in parsed.DictionaryTerms)
+            (term.Any(IsInvalidKeywordChar) ? promptTerms : keywords).Add(term);
+
+        var promptText = promptTerms.Count == 0 ? parsed.Text
+            : parsed.Text is null ? string.Join(", ", promptTerms)
+            : parsed.Text + Environment.NewLine + string.Join(", ", promptTerms);
+        return (promptText, keywords);
+    }
+
+    private static bool IsInvalidKeywordChar(char c) =>
+        c is '<' or '>'
+        || char.IsControl(c)
+        || char.GetUnicodeCategory(c) is UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
 
     // ILlmProviderPlugin
 
