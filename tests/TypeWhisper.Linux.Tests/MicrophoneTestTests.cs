@@ -330,7 +330,7 @@ public sealed class MicrophoneTestTests
     [Fact]
     public void Service_DisposeEndsTest()
     {
-        var audio = CreateService([]);
+        using var audio = CreateService([]);
         var test = audio.TryStartMicrophoneTest(out _);
         Assert.NotNull(test);
 
