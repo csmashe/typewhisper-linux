@@ -2,6 +2,8 @@ using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.UserData;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Tests;
 using Xunit;
@@ -88,6 +90,43 @@ public sealed class AboutSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ExportAllData_ReportsTheResultAndReleasesTheCard()
+    {
+        var dataDir = Path.Join(_tempDir, "data");
+        Directory.CreateDirectory(Path.Join(dataDir, "Data"));
+        await File.WriteAllTextAsync(Path.Join(dataDir, "Data", "history.json"), "[]");
+        var sut = CreateViewModel(new FakeProcessRunner(), new LocalDataExportService(dataDir));
+
+        var result = await sut.ExportAllDataAsync(Path.Join(_tempDir, "export.zip"));
+
+        Assert.Equal(1, result.FileCount);
+        Assert.Equal(Loc.Instance.GetString("About.DataExported", 1), sut.BackupStatusText);
+        Assert.False(sut.IsBackupBusy);
+        Assert.False(sut.IsExportingData);
+    }
+
+    [Fact]
+    public async Task CancelDataExport_StopsTheExportWithoutWritingAFile()
+    {
+        var dataDir = Path.Join(_tempDir, "data");
+        Directory.CreateDirectory(Path.Join(dataDir, "Data"));
+        await File.WriteAllTextAsync(Path.Join(dataDir, "Data", "history.json"), "[]");
+        AboutSectionViewModel? sut = null;
+        sut = CreateViewModel(
+            new FakeProcessRunner(),
+            // ReSharper disable once AccessToModifiedClosure -- reads the view model assigned just below, once the export runs.
+            new LocalDataExportService(dataDir, _ => sut!.CancelDataExportCommand.Execute(null))
+        );
+        var destination = Path.Join(_tempDir, "export.zip");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.ExportAllDataAsync(destination));
+
+        Assert.False(File.Exists(destination));
+        Assert.Equal(Loc.Instance["About.DataExportCanceled"], sut.BackupStatusText);
+        Assert.False(sut.IsBackupBusy);
+    }
+
+    [Fact]
     public void InstallAndDataLocations_AreRootedPaths()
     {
         var runner = new FakeProcessRunner();
@@ -99,7 +138,10 @@ public sealed class AboutSectionViewModelTests : IDisposable
         Assert.True(Path.IsPathRooted(sut.DataLocation));
     }
 
-    private AboutSectionViewModel CreateViewModel(FakeProcessRunner runner)
+    private AboutSectionViewModel CreateViewModel(
+        FakeProcessRunner runner,
+        LocalDataExportService? dataExport = null
+    )
     {
         var errorLog = new Mock<IErrorLogService>();
         errorLog.SetupGet(service => service.Entries).Returns([]);
@@ -111,7 +153,8 @@ public sealed class AboutSectionViewModelTests : IDisposable
             new SettingsBackupService(_tempDir),
             new UpdateCheckService(preferences),
             new UrlLauncher(runner),
-            TimeZoneInfo.Utc
+            TimeZoneInfo.Utc,
+            dataExport
         );
     }
 }

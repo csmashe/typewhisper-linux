@@ -22,7 +22,7 @@ internal sealed class SecretProtectionMigrationService
 {
     private const int QuarantineVersion = 1;
     private const int RetirementFailureThreshold = 3;
-    private const string SecretPrefix = "secret:";
+    internal const string SecretPrefix = "secret:";
     private const string QuarantineFileName = "retired-provider-secrets.quarantine.json";
 
     private const UnixFileMode QuarantineFileMode =
@@ -36,6 +36,9 @@ internal sealed class SecretProtectionMigrationService
         "openAiApiKey",
         "apiServerBearerToken",
     ];
+
+    // Root settings properties that hold a secret; plugin settings mark theirs with SecretPrefix.
+    internal static IReadOnlyList<string> RootSecretProperties => s_rootSecretProperties;
 
     private static readonly string[] s_retiredProviderProperties =
     [

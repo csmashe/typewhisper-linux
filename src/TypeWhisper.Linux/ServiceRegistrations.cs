@@ -16,6 +16,7 @@ using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Setup;
 using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.UserData;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -240,6 +241,7 @@ internal static class ServiceRegistrations
                 secretMigration: sp.GetRequiredService<SecretProtectionMigrationService>()
             )
         );
+        services.AddSingleton<LocalDataExportService>();
         services.AddSingleton<ApiDiscoveryFile>();
         services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();
