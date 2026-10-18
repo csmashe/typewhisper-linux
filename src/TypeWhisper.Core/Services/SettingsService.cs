@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services.Diagnostics;
 
 namespace TypeWhisper.Core.Services;
 
@@ -190,6 +191,8 @@ public sealed class SettingsService : ISettingsService
         {
             DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays == -1
                 ? -1 : Math.Clamp(settings.DictationRecoveryRetentionDays, 1, 365),
+            DiagnosticLogRetentionDays =
+                DiagnosticLogPreferences.NormalizeRetentionDays(settings.DiagnosticLogRetentionDays),
         };
 
     // The picker writes Language while the hint list writes LanguageHints: whichever side an
