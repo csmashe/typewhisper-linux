@@ -756,6 +756,39 @@ public sealed class StreamingTranscriptionCoordinatorTests
         Assert.False(coord.Faulted);
     }
 
+    [Theory]
+    [InlineData(400, true)]
+    // A request below the default never shortens it.
+    [InlineData(50, false)]
+    // A session whose request throws keeps the default.
+    [InlineData(-1, false)]
+    public async Task FinalizeAsync_SessionRequestedFinalizeTimeout_ExtendsTheDeadline(
+        int requestedMs, bool succeeds)
+    {
+        var inner = new FakeStreamingSession { OnFinalize = ct => Task.Delay(250, ct) };
+        var session = new FinalizeTimeoutSession(
+            inner,
+            requestedMs < 0 ? null : TimeSpan.FromMilliseconds(requestedMs));
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        await using var coord = new StreamingTranscriptionCoordinator(
+            plugin,
+            LanguageSelection.Automatic, [],
+            1,
+            (_, _) => { },
+            _ => { },
+            finalizeSessionTimeout: TimeSpan.FromMilliseconds(100)
+        );
+        await coord.StartAsync(CancellationToken.None);
+        inner.RaiseFinal("complete");
+
+        var observed = await Record.ExceptionAsync(() => coord.FinalizeAsync(CancellationToken.None));
+
+        if (succeeds)
+            Assert.Null(observed);
+        else
+            Assert.IsType<TimeoutException>(observed);
+    }
+
     [Fact]
     public async Task FinalizeAsync_SessionFinalizeDeadline_CancellationHonoringPlugin_StillThrows()
     {
@@ -1372,6 +1405,26 @@ public sealed class StreamingTranscriptionCoordinatorTests
             Disposed = true;
             if (OnDispose is not null) await OnDispose();
         }
+    }
+
+    private sealed class FinalizeTimeoutSession(FakeStreamingSession inner, TimeSpan? requested)
+        : IStreamingSession, IStreamingSessionFinalizeTimeout
+    {
+        public TimeSpan FinalizeTimeout =>
+            requested ?? throw new InvalidOperationException("No finalize timeout.");
+
+        public event Action<StreamingTranscriptEvent>? TranscriptReceived
+        {
+            add => inner.TranscriptReceived += value;
+            remove => inner.TranscriptReceived -= value;
+        }
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) =>
+            inner.SendAudioAsync(pcm16, ct);
+
+        public Task FinalizeAsync(CancellationToken ct) => inner.FinalizeAsync(ct);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     private sealed class FakePlugin : ITranscriptionEnginePlugin

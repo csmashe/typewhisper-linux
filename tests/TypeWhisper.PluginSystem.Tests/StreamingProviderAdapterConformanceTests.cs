@@ -340,11 +340,6 @@ public sealed class StreamingProviderAdapterConformanceTests
         string provider
     )
     {
-        // Skipped for Gemini: it documents no signal after audioStreamEnd, so a clean close
-        // before one is the normal end of its session rather than a fault.
-        if (!CreateAdditionalProviderAdapter(provider).Terminal.Required)
-            return;
-
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAdditionalProviderAsync(
             provider,
@@ -477,7 +472,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     }
 
     [Fact]
-    public async Task Gemini_FinalizeCompletesWithoutDocumentedTerminalSignal()
+    public async Task Gemini_FinalizeEndsTheActivityAndAwaitsBothCompletionSignals()
     {
         var transport = new ScriptedWebSocketTransport();
         await using var pump = await StartAdditionalProviderAsync("Gemini", transport);
@@ -485,11 +480,14 @@ public sealed class StreamingProviderAdapterConformanceTests
         var finalize = pump.FinalizeAsync(CancellationToken.None);
         var frame = await transport.NextSentAsync();
 
-        Assert.Contains(
-            "audioStreamEnd",
-            Encoding.UTF8.GetString(frame.Payload.Span),
-            StringComparison.Ordinal
+        Assert.Equal(
+            """{"realtimeInput":{"activityEnd":{}}}""",
+            Encoding.UTF8.GetString(frame.Payload.Span)
         );
+        transport.EnqueueText("""{"serverContent":{"inputTranscription":{"text":"Done."}}}""");
+        await Task.Delay(50);
+        Assert.False(finalize.IsCompleted);
+        transport.EnqueueText("""{"voiceActivity":{"type":"ACTIVITY_END","audioOffset":"0.0001s"}}""");
         await finalize.WaitAsync(s_timeout);
     }
 
@@ -735,7 +733,14 @@ public sealed class StreamingProviderAdapterConformanceTests
                 );
                 await FirstSentOrStartFailureAsync(starting, transport);
                 transport.EnqueueText("""{"setupComplete":{}}""");
-                return await starting.WaitAsync(s_timeout);
+                var gemini = await starting.WaitAsync(s_timeout);
+                // Audio opens the activity; without it finalize has nothing to wait for.
+                await gemini
+                    .SendAudioAsync(new byte[] { 1, 0 }, CancellationToken.None)
+                    .WaitAsync(s_timeout);
+                await transport.NextSentAsync();
+                await transport.NextSentAsync();
+                return gemini;
             }
         }
 

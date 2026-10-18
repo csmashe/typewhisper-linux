@@ -526,18 +526,23 @@ public sealed class StreamingProviderFailurePropagationTests
     }
 
     [Fact]
-    public async Task Gemini_OneFinalThenTransportFault_SendAndFinalizeRethrow()
+    public async Task Gemini_InterimThenTransportFault_SendAndFinalizeRethrow()
     {
         var socket = new FakeWebSocket();
         socket.EnqueueText("""{"setupComplete":{}}""");
         await using var session = await GeminiSession.CreateConnectedSessionForTests(socket);
         await socket.NextSentAsync();
-        var finalReceived = FinalReceived(session);
+        var interimReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.TranscriptReceived += transcript =>
+        {
+            if (!transcript.IsFinal)
+                interimReceived.TrySetResult();
+        };
 
         socket.EnqueueText(
-            """{"serverContent":{"inputTranscription":{"text":"A complete prefix."}}}"""
+            """{"serverContent":{"interimInputTranscription":{"text":"A complete prefix"}}}"""
         );
-        await finalReceived.Task.WaitAsync(s_testTimeout);
+        await interimReceived.Task.WaitAsync(s_testTimeout);
         socket.EnqueueFault(new WebSocketException("Gemini transport failed."));
 
         var exception = await WaitForSessionFaultAsync(session);
@@ -547,8 +552,7 @@ public sealed class StreamingProviderFailurePropagationTests
         );
     }
 
-    // Gemini waits for no terminal signal, so finalize would return before the receive loop
-    // observed the failure. Drive sends until the session reports the captured fault.
+    // Drive sends until the session reports the captured fault.
     private static async Task<Exception> WaitForSessionFaultAsync(GeminiSession session)
     {
         var deadline = DateTime.UtcNow + s_testTimeout;
