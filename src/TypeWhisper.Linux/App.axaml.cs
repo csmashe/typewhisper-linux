@@ -74,6 +74,8 @@ public class App : Application
                 Trace.WriteLine($"[Telemetry] Startup failed: {ex.Message}");
             }
 
+            StartLocalDiagnosticLog(services.GetRequiredService<LocalDiagnosticLogService>());
+
             // Interface language: snapshot the real OS locale BEFORE any
             // override (so "Auto (System)" can restore it), load the JSON
             // catalogs, then apply the saved preference. Must run before
@@ -189,6 +191,8 @@ public class App : Application
                 try
                 {
                     services.GetRequiredService<SentryTelemetryService>().MarkStartupWindowShown();
+                    services.GetRequiredService<LocalDiagnosticLogService>()
+                        .MarkStartupWindowShown(Program.BootStopwatch.ElapsedMilliseconds);
                 }
                 catch (Exception ex)
                 {
@@ -525,7 +529,12 @@ public class App : Application
 
                 if (!string.IsNullOrWhiteSpace(profile.PromptActionId))
                 {
-                    FireAndForget(promptPalette.ExecuteActionDirectAsync(profile.PromptActionId));
+                    FireAndForget(
+                        promptPalette.ExecuteActionDirectAsync(
+                            profile.PromptActionId,
+                            profile.MemorySourceId
+                        )
+                    );
                 }
                 // else: nothing linked — no-op.
             };
@@ -795,6 +804,30 @@ public class App : Application
         }
     }
 
+    private static void StartLocalDiagnosticLog(LocalDiagnosticLogService log)
+    {
+        try
+        {
+            log.Start();
+            AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            {
+                if (args.ExceptionObject is Exception error)
+                {
+                    log.CaptureCrash(error, "app.crash");
+                }
+            };
+            // The scheduler wraps the fault; its type and stack are on the inner exception.
+            TaskScheduler.UnobservedTaskException += (_, args) => log.CaptureException(
+                args.Exception.InnerExceptions is [var single] ? single : args.Exception,
+                "task.unobserved-exception");
+            BootTrace.Stage("diagnosticLog.Start");
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Diagnostics] Startup failed: {ex.GetType().Name}");
+        }
+    }
+
     /// <summary>
     ///     Best-effort ordered shutdown of services that own native threads.
     ///     Runs before desktop.Shutdown() so the Host isn't left racing
@@ -809,6 +842,15 @@ public class App : Application
         catch (Exception ex)
         {
             Trace.WriteLine($"[Telemetry] Shutdown failed: {ex.Message}");
+        }
+
+        try
+        {
+            services.GetService<LocalDiagnosticLogService>()?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Diagnostics] Shutdown failed: {ex.GetType().Name}");
         }
 
 

@@ -944,6 +944,203 @@ public partial class OpenAiPluginTests
         Assert.Equal("TypeWhisper, OpenAI", fields.Single(field => field.Name == "prompt").Value);
     }
 
+    private static readonly string s_structuredPrompt = PluginTranscriptionPrompt.Encode(
+        "A support call about billing.",
+        ["Washington, D.C.", "say \"hi\"", "Zürich", "a<b", "line\nbreak", "AC-42"])!;
+
+    [Fact]
+    public void StructuredDictionaryTerms_AreSupported()
+    {
+        using var sut = new OpenAiPlugin();
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+    }
+
+    [Theory]
+    [InlineData("A support call about billing.")]
+    [InlineData(null)]
+    public async Task GPTTranscribe_StructuredPrompt_SendsTermsAsKeywordsBesidePromptText(string? text)
+    {
+        var fields = new List<(string Name, string Value)>();
+        using var client = new HttpClient(new CapturingHandler(async (request, _) =>
+        {
+            foreach (var part in Assert.IsType<MultipartFormDataContent>(request.Content))
+                fields.Add((part.Headers.ContentDisposition!.Name!.Trim('"'), await part.ReadAsStringAsync()));
+            return JsonResponse("""{"text":"hello"}""");
+        }));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        sut.SelectModel("gpt-transcribe");
+
+        await sut.TranscribeWithLanguageHintsAsync(
+            [0], ["en"], false,
+            PluginTranscriptionPrompt.Encode(text, ["Washington, D.C.", "say \"hi\"", "Zürich", "a<b", "line\nbreak", "AC-42"]),
+            CancellationToken.None);
+
+        Assert.Equal(
+            ["Washington, D.C.", "say \"hi\"", "Zürich", "AC-42"],
+            fields.Where(field => field.Name == "keywords[]").Select(field => field.Value).ToArray());
+        Assert.Equal(
+            text is null ? "a<b, line\nbreak" : text + Environment.NewLine + "a<b, line\nbreak",
+            fields.Single(field => field.Name == "prompt").Value);
+    }
+
+    [Fact]
+    public async Task GPTTranscribe_StructuredPromptWithOnlyValidKeywords_KeepsPromptText()
+    {
+        var fields = new List<(string Name, string Value)>();
+        using var client = new HttpClient(new CapturingHandler(async (request, _) =>
+        {
+            foreach (var part in Assert.IsType<MultipartFormDataContent>(request.Content))
+                fields.Add((part.Headers.ContentDisposition!.Name!.Trim('"'), await part.ReadAsStringAsync()));
+            return JsonResponse("""{"text":"hello"}""");
+        }));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        sut.SelectModel("gpt-transcribe");
+
+        await sut.TranscribeWithLanguageHintsAsync(
+            [0], ["en"], false, PluginTranscriptionPrompt.Encode(null, ["AC-42"]), CancellationToken.None);
+
+        Assert.Equal("AC-42", fields.Single(field => field.Name == "keywords[]").Value);
+        Assert.DoesNotContain(fields, field => field.Name == "prompt");
+    }
+
+    [Theory]
+    [InlineData("tab\tterm")]
+    [InlineData("line\u2028separator")]
+    [InlineData("paragraph\u2029separator")]
+    [InlineData("nul\0term")]
+    [InlineData("a>b")]
+    public async Task GPTTranscribe_InvalidKeywordTerm_GoesIntoPrompt(string term)
+    {
+        var fields = new List<(string Name, string Value)>();
+        using var client = new HttpClient(new CapturingHandler(async (request, _) =>
+        {
+            foreach (var part in Assert.IsType<MultipartFormDataContent>(request.Content))
+                fields.Add((part.Headers.ContentDisposition!.Name!.Trim('"'), await part.ReadAsStringAsync()));
+            return JsonResponse("""{"text":"hello"}""");
+        }));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        sut.SelectModel("gpt-transcribe");
+
+        await sut.TranscribeWithLanguageHintsAsync(
+            [0], ["en"], false, PluginTranscriptionPrompt.Encode(null, [term, "AC-42"]), CancellationToken.None);
+
+        Assert.Equal("AC-42", fields.Single(field => field.Name == "keywords[]").Value);
+        Assert.Equal(term, fields.Single(field => field.Name == "prompt").Value);
+    }
+
+    [Theory]
+    [InlineData("whisper-1")]
+    [InlineData("gpt-4o-transcribe")]
+    [InlineData("gpt-4o-mini-transcribe")]
+    public async Task OlderModels_StructuredPrompt_SendsTermsAsPlainPromptText(string model)
+    {
+        var fields = new List<(string Name, string Value)>();
+        using var client = new HttpClient(new CapturingHandler(async (request, _) =>
+        {
+            foreach (var part in Assert.IsType<MultipartFormDataContent>(request.Content))
+                fields.Add((part.Headers.ContentDisposition!.Name!.Trim('"'), await part.ReadAsStringAsync()));
+            return JsonResponse("""{"text":"hello","language":"en"}""");
+        }));
+        using var sut = new OpenAiPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        sut.SelectModel(model);
+
+        await sut.TranscribeWithLanguageHintsAsync([0], ["en"], false, s_structuredPrompt, CancellationToken.None);
+
+        Assert.Equal(
+            "A support call about billing." + Environment.NewLine
+            + "Washington, D.C., say \"hi\", Zürich, a<b, line\nbreak, AC-42",
+            fields.Single(field => field.Name == "prompt").Value);
+        Assert.DoesNotContain(fields, field => field.Name == "keywords[]");
+    }
+
+    [Fact]
+    public async Task MalformedDictionaryEnvelope_FailsBeforeSending()
+    {
+        var requests = 0;
+        using var client = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(JsonResponse("""{"text":"hello"}"""));
+        }));
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var sut = new OpenAiPlugin(client, new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        const string malformed = PluginTranscriptionPrompt.EnvelopePrefix + "{}";
+
+        await Assert.ThrowsAsync<FormatException>(() =>
+            sut.TranscribeWithLanguageHintsAsync([0], [], false, malformed, CancellationToken.None));
+        sut.SelectModel(OpenAiRealtimeStreamingSession.LiveModelId);
+        await Assert.ThrowsAsync<FormatException>(() =>
+            sut.StartStreamingWithLanguageHintsAndPromptAsync([], malformed, CancellationToken.None));
+
+        Assert.Equal(0, requests);
+        Assert.Null(transport.ConnectionOptions);
+    }
+
+    [Fact]
+    public async Task LiveStreaming_StructuredPrompt_SendsKeywordsInSessionUpdate()
+    {
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var client = new HttpClient();
+        using var sut = new OpenAiPlugin(client, new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        sut.SelectModel(OpenAiRealtimeStreamingSession.LiveModelId);
+
+        await using var session = await sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["en"], s_structuredPrompt, CancellationToken.None);
+        var transcription = ReadSessionTranscription(await transport.NextSentAsync());
+
+        Assert.Equal(
+            "A support call about billing." + Environment.NewLine + "a<b, line\nbreak",
+            transcription.GetProperty("prompt").GetString());
+        Assert.Equal(
+            ["Washington, D.C.", "say \"hi\"", "Zürich", "AC-42"],
+            transcription.GetProperty("keywords").EnumerateArray().Select(keyword => keyword.GetString()!).ToArray());
+    }
+
+    [Fact]
+    public async Task LegacyRealtimeStreaming_StructuredPrompt_SendsPlainPromptText()
+    {
+        var transport = new ScriptedWebSocketTransport(connected: false);
+        using var client = new HttpClient();
+        using var sut = new OpenAiPlugin(client, new ScriptedWebSocketTransportFactory(transport));
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "sk-test" } });
+        sut.SelectModel(OpenAiRealtimeStreamingSession.LegacyModelId);
+
+        await using var session = await sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["en"], s_structuredPrompt, CancellationToken.None);
+        var transcription = ReadSessionTranscription(await transport.NextSentAsync());
+
+        Assert.Equal(
+            "A support call about billing." + Environment.NewLine
+            + "Washington, D.C., say \"hi\", Zürich, a<b, line\nbreak, AC-42",
+            transcription.GetProperty("prompt").GetString());
+        Assert.False(transcription.TryGetProperty("keywords", out _));
+    }
+
+    [Fact]
+    public void RealtimeLegacySessionUpdatePayload_IgnoresKeywords()
+    {
+        using var doc = JsonDocument.Parse(OpenAiRealtimeStreamingSession.CreateSessionUpdatePayload(
+            OpenAiRealtimeStreamingSession.LegacyModelId, ["en"], null, useServerVad: true, keywords: ["AC-42"]));
+        var transcription = doc.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input")
+            .GetProperty("transcription");
+
+        Assert.False(transcription.TryGetProperty("keywords", out _));
+    }
+
+    private static JsonElement ReadSessionTranscription(WebSocketOutboundMessage message)
+    {
+        using var doc = JsonDocument.Parse(message.Payload);
+        Assert.Equal("session.update", doc.RootElement.GetProperty("type").GetString());
+        return doc.RootElement.GetProperty("session").GetProperty("audio").GetProperty("input")
+            .GetProperty("transcription").Clone();
+    }
+
     [Fact]
     public void RealtimeLiveSnapshotSessionUpdatePayload_UsesLiveModelShape()
     {

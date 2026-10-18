@@ -1,12 +1,19 @@
 {
   "Settings.AccountId": "ID de cuenta",
-  "Settings.AccountIdDescription": "Identificador de cuenta de Cloudflare obligatorio.",
+  "Settings.AccountIdDescription": "Tu ID de cuenta de Cloudflare de 32 caracteres, visible en el panel de Cloudflare.",
   "Settings.ApiToken": "Token de API",
-  "Settings.ApiTokenDescription": "Token de API de Cloudflare con acceso a Workers AI.",
+  "Settings.ApiTokenDescription": "Token de API de Cloudflare con acceso a Workers AI en esta cuenta.",
   "Settings.TranscriptionModel": "Modelo de transcripción",
-  "Settings.ModelDescription": "Elige el modelo de ASR de Cloudflare.",
+  "Settings.ModelDescription": "Whisper Large V3 Turbo acepta un idioma elegido y términos del diccionario; Whisper detecta el idioma automáticamente.",
   "Settings.EnterAccountIdAndApiToken": "Introduce primero el ID de cuenta y el token de API.",
-  "Settings.CredentialsSaved": "Credenciales guardadas. La validación remota aún no está implementada.",
+  "Settings.InvalidAccountId": "El ID de cuenta de Cloudflare debe tener 32 caracteres hexadecimales.",
+  "Settings.CredentialsValid": "El ID de cuenta y el token de API son válidos para Workers AI.",
+  "Settings.TokenRejected": "Cloudflare rechazó el token de API para esta cuenta. Usa un token con acceso a Workers AI en esta cuenta.",
+  "Settings.ValidationFailedStatus": "Cloudflare devolvió HTTP {0}. Revisa el ID de cuenta y el token de API.",
+  "Settings.InvalidValidationResponse": "Cloudflare devolvió una respuesta inesperada. Inténtalo de nuevo.",
+  "Settings.CloudflareUnreachable": "No se pudo conectar con Cloudflare. Revisa tu conexión e inténtalo de nuevo.",
+  "Settings.SettingsChangedDuringValidation": "La configuración cambió durante la validación. Valida de nuevo.",
+  "Errors.RecordingTooLarge": "La grabación es demasiado grande para este modelo de Cloudflare. Usa una grabación más corta.",
   "Manifest.Name": "Cloudflare ASR",
   "Manifest.Description": "Motor de transcripción Whisper de Cloudflare Workers AI"
 }

@@ -1,12 +1,19 @@
 {
   "Settings.AccountId": "ID аккаунта",
-  "Settings.AccountIdDescription": "Обязательный идентификатор аккаунта Cloudflare.",
+  "Settings.AccountIdDescription": "32-символьный ID аккаунта Cloudflare из панели Cloudflare.",
   "Settings.ApiToken": "API-токен",
-  "Settings.ApiTokenDescription": "API-токен Cloudflare с доступом к Workers AI.",
+  "Settings.ApiTokenDescription": "API-токен Cloudflare с доступом к Workers AI для этого аккаунта.",
   "Settings.TranscriptionModel": "Модель транскрипции",
-  "Settings.ModelDescription": "Выберите модель Cloudflare ASR.",
+  "Settings.ModelDescription": "Whisper Large V3 Turbo принимает выбранный язык речи и термины словаря; Whisper определяет язык автоматически.",
   "Settings.EnterAccountIdAndApiToken": "Сначала введите ID аккаунта и API-токен.",
-  "Settings.CredentialsSaved": "Учётные данные сохранены. Удалённая проверка ещё не реализована.",
+  "Settings.InvalidAccountId": "ID аккаунта Cloudflare должен состоять из 32 шестнадцатеричных символов.",
+  "Settings.CredentialsValid": "ID аккаунта и API-токен действительны для Workers AI.",
+  "Settings.TokenRejected": "Cloudflare отклонил API-токен для этого аккаунта. Используйте токен с доступом к Workers AI для этого аккаунта.",
+  "Settings.ValidationFailedStatus": "Cloudflare вернул HTTP {0}. Проверьте ID аккаунта и API-токен.",
+  "Settings.InvalidValidationResponse": "Cloudflare вернул неожиданный ответ. Попробуйте ещё раз.",
+  "Settings.CloudflareUnreachable": "Не удалось подключиться к Cloudflare. Проверьте подключение и попробуйте ещё раз.",
+  "Settings.SettingsChangedDuringValidation": "Настройки изменились во время проверки. Проверьте ещё раз.",
+  "Errors.RecordingTooLarge": "Запись слишком велика для этой модели Cloudflare. Используйте запись покороче.",
   "Manifest.Name": "Cloudflare ASR",
   "Manifest.Description": "Движок транскрипции Cloudflare Workers AI Whisper"
 }

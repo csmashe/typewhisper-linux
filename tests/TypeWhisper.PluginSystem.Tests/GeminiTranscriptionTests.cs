@@ -626,6 +626,137 @@ public sealed class GeminiTranscriptionTests
     }
 
     [Fact]
+    public async Task TranscriptionRole_OptsIntoStructuredDictionaryTerms()
+    {
+        using var sut = new GeminiPlugin();
+        await sut.ActivateAsync(new GeminiTestHost { Secrets = { ["api-key"] = "gemini-key" } });
+
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal(new DictionaryTermsBudget(MaxTerms: 100, MaxTotalChars: 4_000), sut.DictionaryTermsBudget);
+    }
+
+    [Fact]
+    public void ExtractVocabulary_KeepsEnvelopeTermsWhole()
+    {
+        string[] terms =
+        [
+            "Washington, D.C.",
+            "Äpfel; Öl",
+            "quoted \"name\"",
+            "line\nbreak",
+            "a term with more than eight words in it stays whole",
+        ];
+
+        Assert.Equal(terms, GeminiPlugin.ExtractVocabulary(PluginTranscriptionPrompt.Encode(null, terms)));
+    }
+
+    [Fact]
+    public void ExtractVocabulary_PutsApiPromptItemsBeforeDictionaryTermsWithinBudget()
+    {
+        var prompt = PluginTranscriptionPrompt.Encode(
+            "Kubernetes, BigQuery\nThe speaker discusses Kubernetes at length in this recording",
+            ["bigquery", "Washington, D.C."]);
+
+        Assert.Equal(["Kubernetes", "BigQuery", "Washington, D.C."], GeminiPlugin.ExtractVocabulary(prompt));
+
+        var manyTerms = PluginTranscriptionPrompt.Encode(
+            "first",
+            Enumerable.Range(0, 200).Select(index => $"term{index}"));
+        var clipped = GeminiPlugin.ExtractVocabulary(manyTerms);
+        Assert.Equal(100, clipped.Count);
+        Assert.Equal("first", clipped[0]);
+        Assert.Equal("term98", clipped[^1]);
+    }
+
+    [Fact]
+    public void ExtractVocabulary_RejectsMalformedEnvelope()
+    {
+        Assert.Throws<FormatException>(
+            () => GeminiPlugin.ExtractVocabulary(PluginTranscriptionPrompt.EnvelopePrefix + "{\"dictionaryTerms\":[1]}"));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_SendsEnvelopeTermsWholeAsCustomVocabulary()
+    {
+        string? interactionBody = null;
+        using var client = new HttpClient(new GeminiCapturingHandler((request, body) =>
+        {
+            var uri = request.RequestUri!.ToString();
+            if (uri.EndsWith("/upload/v1beta/files", StringComparison.Ordinal))
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.OK);
+                response.Headers.TryAddWithoutValidation("X-Goog-Upload-URL", "https://upload.example/session-1");
+                return response;
+            }
+
+            if (uri == "https://upload.example/session-1")
+                return JsonResponse("""{"file":{"name":"files/audio-123","uri":"https://files.example/audio-123"}}""");
+
+            // ReSharper disable once InvertIf -- one branch per route, as in the other fixtures.
+            if (uri.EndsWith("/v1beta/interactions", StringComparison.Ordinal))
+            {
+                interactionBody = body;
+                return JsonResponse(
+                    """{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}""");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NoContent);
+        }));
+        using var sut = new GeminiPlugin(client);
+        await sut.ActivateAsync(new GeminiTestHost { Secrets = { ["api-key"] = "gemini-key" } });
+
+        await sut.TranscribeAsync(
+            CreatePcm16Wav(),
+            "en",
+            translate: false,
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "TypeWhisper"]),
+            CancellationToken.None);
+
+        using var payload = JsonDocument.Parse(Assert.IsType<string>(interactionBody));
+        Assert.Equal(
+            ["Washington, D.C.", "TypeWhisper"],
+            payload.RootElement
+                .GetProperty("generation_config")
+                .GetProperty("transcription_config")
+                .GetProperty("custom_vocabulary")
+                .EnumerateArray()
+                .Select(value => value.GetString()!)
+                .ToArray());
+    }
+
+    [Fact]
+    public async Task StartStreaming_SendsPromptTermsToTheLiveSession()
+    {
+        List<GeminiLiveConnectionOptions> connections = [];
+        using var sut = new GeminiPlugin(
+            new HttpClient(),
+            (options, _) =>
+            {
+                connections.Add(options);
+                return Task.FromResult<IStreamingSession>(new StubSession());
+            });
+        await sut.ActivateAsync(new GeminiTestHost { Secrets = { ["api-key"] = "gemini-key" } });
+
+        await using (await sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["de", "en"],
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "TypeWhisper"]),
+            CancellationToken.None))
+        {
+        }
+
+        await using (await sut.StartStreamingAsync("en", CancellationToken.None))
+        {
+        }
+
+        Assert.Equal(2, connections.Count);
+        Assert.Equal(GeminiPlugin.DefaultLiveTranscriptionModel, connections[0].LiveModelId);
+        Assert.Equal(["de", "en"], connections[0].LanguageHints);
+        Assert.Equal(["Washington, D.C.", "TypeWhisper"], connections[0].CustomVocabulary);
+        Assert.Equal(["en"], connections[1].LanguageHints);
+        Assert.Empty(connections[1].CustomVocabulary);
+    }
+
+    [Fact]
     public async Task StreamingAdapter_RunsTheLiveTranscriptionProtocol()
     {
         var transport = new ScriptedWebSocketTransport();
@@ -964,6 +1095,14 @@ public sealed class GeminiTranscriptionTests
         writer.Write(new byte[dataSize]);
         writer.Flush();
         return stream.ToArray();
+    }
+
+    private sealed class StubSession : IStreamingSession
+    {
+        public event Action<StreamingTranscriptEvent>? TranscriptReceived { add { } remove { } }
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) => Task.CompletedTask;
+        public Task FinalizeAsync(CancellationToken ct) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private static HttpResponseMessage JsonResponse(string json) =>

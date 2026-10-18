@@ -99,6 +99,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private string? _editPromptActionId;
 
     [ObservableProperty]
+    private string? _editMemorySourceId;
+
+    [ObservableProperty]
     private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
 
     [ObservableProperty]
@@ -160,7 +163,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         _profiles.ProfilesChanged += () => Dispatcher.UIThread.Post(RefreshProfiles);
         _pluginManager.PluginStateChanged += (_, _) =>
-            Dispatcher.UIThread.Post(RefreshModelOptions);
+            Dispatcher.UIThread.Post(() =>
+            {
+                RefreshModelOptions();
+                RefreshMemorySourceOptions();
+            });
         _promptActions.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshPromptActionOptions);
         UrlPatternChips.CollectionChanged += (_, _) =>
         {
@@ -190,6 +197,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         RefreshModelOptions();
         RefreshPromptActionOptions();
+        RefreshMemorySourceOptions();
         foreach (var option in TranslationModelInfo.ProfileTargetOptions)
         {
             TranslationTargetOptions.Add(option);
@@ -205,6 +213,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
     public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
+    public ObservableCollection<MemorySourceOption> MemorySourceOptions { get; } = [];
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
 
     internal Task CurrentWindowUpdateTask { get; private set; } = Task.CompletedTask;
@@ -381,6 +390,30 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    public MemorySourceOption? SelectedMemorySourceOption
+    {
+        get =>
+            MemorySourceOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, EditMemorySourceId, StringComparison.Ordinal)
+            );
+        set
+        {
+            // A rebuilt list briefly clears the ComboBox; that null is not a user choice.
+            if (value is null)
+            {
+                return;
+            }
+
+            if (string.Equals(value.Value, EditMemorySourceId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            EditMemorySourceId = value.Value;
+            OnPropertyChanged();
+        }
+    }
+
     public ProfileStylePresetOption? SelectedStylePresetOption
     {
         get => StylePresetOptions.FirstOrDefault(option => option.Value == EditStylePreset);
@@ -511,6 +544,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditWhisperModeOverride = null;
             EditModelId = null;
             EditPromptActionId = null;
+            EditMemorySourceId = null;
             EditHotkeyData = null;
             EditHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
             EditContextMatchMode = ProfileContextMatchMode.All;
@@ -530,6 +564,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditWhisperModeOverride = value.WhisperModeOverride;
         EditModelId = value.TranscriptionModelOverride;
         EditPromptActionId = value.PromptActionId;
+        EditMemorySourceId = value.MemorySourceId;
         EditHotkeyData = value.HotkeyData;
         EditHotkeyBehavior = value.HotkeyBehavior;
         EditContextMatchMode = value.ContextMatchMode;
@@ -567,6 +602,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         HotkeyValidationMessage = null;
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+    }
+
+    partial void OnEditMemorySourceIdChanged(string? value)
+    {
+        // A saved source that is no longer installed or enabled stays listed as unavailable.
+        if (MemorySourceOptions.All(option => option.Value != value))
+        {
+            RefreshMemorySourceOptions();
+        }
+
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
     }
 
     partial void OnEditStylePresetChanged(ProfileStylePreset value)
@@ -696,6 +742,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
                 ? null
                 : EditModelId,
             PromptActionId = promptActionId,
+            MemorySourceId = string.IsNullOrWhiteSpace(EditMemorySourceId) ? null : EditMemorySourceId,
             HotkeyData = hotkeyData,
             HotkeyBehavior = EditHotkeyBehavior,
             ContextMatchMode = EditContextMatchMode,
@@ -1065,6 +1112,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         RefreshModelOptions();
         RefreshPromptActionOptions();
+        RefreshMemorySourceOptions();
         ReplaceCollection(StylePresetOptions, CreateStylePresetOptions());
         ReplaceCollection(HotkeyBehaviorOptions, CreateHotkeyBehaviorOptions());
         ReplaceCollection(ContextMatchModeOptions, CreateContextMatchModeOptions());
@@ -1083,6 +1131,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         OnPropertyChanged(nameof(SelectedModelOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
         OnPropertyChanged(nameof(SelectedStylePresetOption));
         OnPropertyChanged(nameof(SelectedHotkeyBehaviorOption));
         OnPropertyChanged(nameof(SelectedContextMatchModeOption));
@@ -1205,6 +1254,36 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditPromptActionId = PromptActionOptions.Any(option => option.Value == selected)
             ? selected
             : null;
+    }
+
+    private void RefreshMemorySourceOptions()
+    {
+        var selected = EditMemorySourceId;
+        MemorySourceOptions.Clear();
+        MemorySourceOptions.Add(new MemorySourceOption(null, Loc.Instance["Profiles.MemoryUseGlobal"]));
+        MemorySourceOptions.Add(
+            new MemorySourceOption(Profile.MemorySourceOff, Loc.Instance["Profiles.MemoryOff"])
+        );
+        foreach (
+            var source in _pluginManager
+                .GetPlugins<IMemoryStoragePlugin>()
+                .OrderBy(source => source.PluginName, StringComparer.CurrentCultureIgnoreCase)
+        )
+        {
+            MemorySourceOptions.Add(new MemorySourceOption(source.PluginId, source.PluginName));
+        }
+
+        if (MemorySourceOptions.All(option => option.Value != selected))
+        {
+            MemorySourceOptions.Add(
+                new MemorySourceOption(
+                    selected,
+                    Loc.Instance.GetString("Profiles.MemorySourceUnavailable", selected!)
+                )
+            );
+        }
+
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
     }
 
     private void SelectById(string id)
@@ -1476,6 +1555,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedModelOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
         OnPropertyChanged(nameof(SelectedStylePresetOption));
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
@@ -1512,6 +1592,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
 public sealed record ProfileModelOption(string? Value, string Label);
 
 public sealed record PromptActionOption(string? Value, string Label);
+
+public sealed record MemorySourceOption(string? Value, string Label);
 
 public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label);
 

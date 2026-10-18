@@ -18,6 +18,15 @@ internal static partial class UnixPeerCredentials
         return credentials.Uid == geteuid();
     }
 
+    /// <summary>Whether the peer is exactly <paramref name="processId" />, running as this user.</summary>
+    internal static bool IsProcessOfEffectiveUser(Socket socket, int processId)
+    {
+        ArgumentNullException.ThrowIfNull(socket);
+
+        var credentials = Get(socket);
+        return credentials.Pid == processId && credentials.Uid == geteuid();
+    }
+
     private static PeerCredentials Get(Socket socket)
     {
         ArgumentNullException.ThrowIfNull(socket);

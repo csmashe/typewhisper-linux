@@ -3,6 +3,8 @@
   "Settings.ApiKeyDescription": "Erforderlich für AssemblyAI-Transkription und -Streaming.",
   "Settings.TranscriptionModel": "Transkriptionsmodell",
   "Settings.ModelDescription": "Wählen Sie das AssemblyAI-Sprachmodell.",
+  "Settings.UseDictionaryTerms": "Wörterbuchbegriffe als Keyterms senden",
+  "Settings.UseDictionaryTermsDescription": "Richtet die Transkription auf Ihre Wörterbuchbegriffe aus, jeweils vollständig (auch mit Kommas). AssemblyAI berechnet für Keyterms mit Universal-3 Pro und bei nicht-englischen Echtzeit-Diktaten einen Aufpreis; bei Universal-2 sind sie enthalten. Echtzeit-Diktate senden höchstens 100 Begriffe mit bis zu 50 Zeichen. Wenn deaktiviert, erhält AssemblyAI keine Wörterbuchbegriffe.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",

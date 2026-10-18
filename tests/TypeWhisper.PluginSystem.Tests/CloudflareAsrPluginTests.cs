@@ -9,6 +9,8 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class CloudflareAsrPluginTests
 {
+    private const string AccountId = "0123456789abcdef0123456789ABCDEF";
+    private const string OtherAccountId = "fedcba9876543210fedcba9876543210";
     [Fact]
     public Task RequestFailures_AreClassified() =>
         ProviderFailureAssertions.VerifyAsync<CloudflareAsrPlugin>();
@@ -21,7 +23,7 @@ public class CloudflareAsrPluginTests
         {
             Secrets =
             {
-                ["account-id"] = " account-123 ",
+                ["account-id"] = $" {AccountId} ",
                 ["api-token"] = " token-123 ",
             },
         };
@@ -32,7 +34,7 @@ public class CloudflareAsrPluginTests
 
         Assert.True(sut.IsConfigured);
         Assert.Equal("whisper", sut.SelectedModelId);
-        Assert.Equal("account-123", await sut.GetSettingValueAsync("account-id"));
+        Assert.Equal(AccountId, await sut.GetSettingValueAsync("account-id"));
         Assert.Equal("token-123", await sut.GetSettingValueAsync("api-token"));
         Assert.False(sut.SupportsTranslation);
     }
@@ -61,7 +63,7 @@ public class CloudflareAsrPluginTests
         {
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal(
-                "https://api.cloudflare.com/client/v4/accounts/account-123/ai/run/@cf/openai/whisper",
+                $"https://api.cloudflare.com/client/v4/accounts/{AccountId}/ai/run/@cf/openai/whisper",
                 request.RequestUri?.ToString()
             );
             Assert.Equal("Bearer token-123", request.Headers.Authorization?.ToString());
@@ -71,6 +73,7 @@ public class CloudflareAsrPluginTests
             return JsonResponse(
                 """
                 {
+                  "success": true,
                   "result": {
                     "text": " Hallo Welt ",
                     "language": "de",
@@ -102,7 +105,7 @@ public class CloudflareAsrPluginTests
     public async Task TranscribeAsync_AcceptsExplicitEmptyResultText()
     {
         var handler = new StubHttpMessageHandler((_, _) =>
-            Task.FromResult(JsonResponse("""{ "result": { "text": "" } }"""))
+            Task.FromResult(JsonResponse("""{ "success": true, "result": { "text": "" } }"""))
         );
         using var sut = await CreateConfiguredPluginAsync(handler);
 
@@ -118,12 +121,11 @@ public class CloudflareAsrPluginTests
     }
 
     [Theory]
-    // ReSharper disable once RawStringCanBeSimplified -- kept raw to match the sibling InlineData rows, which need raw strings for their quotes.
-    [InlineData("""{}""")]
-    [InlineData("""{ "result": null }""")]
-    [InlineData("""{ "result": {} }""")]
-    [InlineData("""{ "result": { "text": null } }""")]
-    [InlineData("""{ "result": { "text": 42 } }""")]
+    [InlineData("""{ "success": true }""")]
+    [InlineData("""{ "success": true, "result": null }""")]
+    [InlineData("""{ "success": true, "result": {} }""")]
+    [InlineData("""{ "success": true, "result": { "text": null } }""")]
+    [InlineData("""{ "success": true, "result": { "text": 42 } }""")]
     public async Task TranscribeAsync_RejectsResponseWithoutStringResultText(string responseBody)
     {
         var handler = new StubHttpMessageHandler((_, _) =>
@@ -131,7 +133,7 @@ public class CloudflareAsrPluginTests
         );
         using var sut = await CreateConfiguredPluginAsync(handler);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
             () =>
                 sut.TranscribeAsync(
                     [1],
@@ -146,6 +148,7 @@ public class CloudflareAsrPluginTests
             "Invalid Cloudflare transcription response: required field 'result.text' must be a string.",
             exception.Message
         );
+        Assert.Equal(PluginRequestFailureKind.OutputIncomplete, exception.FailureKind);
     }
 
     [Fact]
@@ -188,7 +191,7 @@ public class CloudflareAsrPluginTests
         {
             requestStarted.SetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-            return JsonResponse("""{ "result": { "text": "unreachable" } }""");
+            return JsonResponse("""{ "success": true, "result": { "text": "unreachable" } }""");
         });
         using var sut = await CreateConfiguredPluginAsync(handler);
         using var cancellation = new CancellationTokenSource();
@@ -267,7 +270,7 @@ public class CloudflareAsrPluginTests
     public async Task TranscribeAsync_TreatsBlankAndAutoAsAutomaticDetection(string? language)
     {
         var handler = new StubHttpMessageHandler((_, _) =>
-            Task.FromResult(JsonResponse("""{ "result": { "text": "ok" } }"""))
+            Task.FromResult(JsonResponse("""{ "success": true, "result": { "text": "ok" } }"""))
         );
         using var sut = await CreateConfiguredPluginAsync(handler);
 
@@ -317,18 +320,298 @@ public class CloudflareAsrPluginTests
         Assert.Equal(0, handler.CallCount);
     }
 
+    [Fact]
+    public void SelectModel_SwitchesLanguageAndDictionaryCapabilities()
+    {
+        using var sut = new CloudflareAsrPlugin();
+
+        sut.SelectModel("whisper");
+        Assert.Equal(LanguageSelectionSupport.Supported, sut.AutomaticDetectionSupport);
+        Assert.Equal(LanguageSelectionSupport.Unsupported, sut.ExplicitSelectionSupport);
+        Assert.Empty(sut.SupportedLanguages);
+        Assert.False(sut.SupportsStructuredDictionaryTerms);
+
+        sut.SelectModel("whisper-large-v3-turbo");
+        Assert.Equal(LanguageSelectionSupport.Supported, sut.AutomaticDetectionSupport);
+        Assert.Equal(LanguageSelectionSupport.Supported, sut.ExplicitSelectionSupport);
+        Assert.Contains("de", sut.SupportedLanguages);
+        Assert.Contains("haw", sut.SupportedLanguages);
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_FallsBackToWhisperForUnknownSavedModel()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("selectedModel", "retired-model");
+        using var sut = new CloudflareAsrPlugin();
+
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("whisper", sut.SelectedModelId);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_Turbo_PostsJsonWithLanguageAndDictionaryPrompt()
+    {
+        var audio = Enumerable.Range(0, 12_288 * 2 + 5).Select(i => (byte)(i * 31)).ToArray();
+        JsonElement? body = null;
+        var handler = new StubHttpMessageHandler(async (request, ct) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(
+                $"https://api.cloudflare.com/client/v4/accounts/{AccountId}/ai/run/@cf/openai/whisper-large-v3-turbo",
+                request.RequestUri?.ToString()
+            );
+            Assert.Equal("Bearer token-123", request.Headers.Authorization?.ToString());
+            Assert.Equal("application/json", request.Content?.Headers.ContentType?.MediaType);
+            var contentLength = request.Content!.Headers.ContentLength;
+            var bytes = await request.Content.ReadAsByteArrayAsync(ct);
+            Assert.Equal(contentLength, bytes.Length);
+            body = JsonDocument.Parse(bytes).RootElement.Clone();
+
+            return JsonResponse(
+                """
+                {
+                  "success": true,
+                  "result": {
+                    "text": " Guten Tag ",
+                    "transcription_info": { "language": "de", "duration": 2.5 }
+                  }
+                }
+                """
+            );
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler, "whisper-large-v3-turbo");
+
+        var result = await sut.TranscribeAsync(
+            audio,
+            " DE ",
+            translate: false,
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "TypeWhisper"]),
+            CancellationToken.None
+        );
+
+        Assert.NotNull(body);
+        Assert.Equal(audio, Convert.FromBase64String(body.Value.GetProperty("audio").GetString()!));
+        Assert.Equal("transcribe", body.Value.GetProperty("task").GetString());
+        Assert.Equal("de", body.Value.GetProperty("language").GetString());
+        Assert.Equal("Washington, D.C., TypeWhisper", body.Value.GetProperty("initial_prompt").GetString());
+        Assert.Equal("Guten Tag", result.Text);
+        Assert.Equal("de", result.DetectedLanguage);
+        Assert.Equal(2.5, result.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_Turbo_OmitsLanguageAndPromptWhenAbsent()
+    {
+        JsonElement? body = null;
+        var handler = new StubHttpMessageHandler(async (request, ct) =>
+        {
+            body = JsonDocument.Parse(await request.Content!.ReadAsByteArrayAsync(ct)).RootElement.Clone();
+            return JsonResponse("""{ "success": true, "result": { "text": "ok" } }""");
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler, "whisper-large-v3-turbo");
+
+        var result = await sut.TranscribeAsync([1, 2, 3], "auto", translate: false, prompt: null, CancellationToken.None);
+
+        Assert.NotNull(body);
+        Assert.Equal(
+            ["audio", "task"],
+            body.Value.EnumerateObject().Select(property => property.Name).ToArray()
+        );
+        Assert.Equal("ok", result.Text);
+        Assert.Null(result.DetectedLanguage);
+        Assert.Equal(0, result.DurationSeconds);
+    }
+
+    [Theory]
+    [InlineData("xx")]
+    [InlineData("de-DE")]
+    public async Task TranscribeAsync_Turbo_RejectsUnsupportedLanguageBeforeSendingHttpRequest(string language)
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse("""{ "success": true, "result": { "text": "unexpected" } }"""))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler, "whisper-large-v3-turbo");
+
+        await Assert.ThrowsAsync<NotSupportedException>(
+            () => sut.TranscribeAsync([1], language, translate: false, prompt: null, CancellationToken.None)
+        );
+
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData("whisper", 100_000_000)]
+    [InlineData("whisper-large-v3-turbo", 74_000_000)]
+    public async Task TranscribeAsync_RejectsRecordingAboveModelUploadLimit(string modelId, int limit)
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse("""{ "success": true, "result": { "text": "unexpected" } }"""))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler, modelId);
+
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
+            () => sut.TranscribeAsync(new byte[limit + 1], null, translate: false, prompt: null, CancellationToken.None)
+        );
+
+        Assert.Equal(PluginRequestFailureKind.RequestTooLarge, exception.FailureKind);
+        Assert.Equal("Errors.RecordingTooLarge", exception.Message);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData("account-123")]
+    [InlineData("0123456789abcdef0123456789abcde/")]
+    [InlineData("../0123456789abcdef0123456789abcd")]
+    public async Task TranscribeAsync_RejectsMalformedAccountIdBeforeSendingHttpRequest(string accountId)
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse("""{ "success": true, "result": { "text": "unexpected" } }"""))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler);
+        await sut.SetSettingValueAsync("account-id", accountId);
+
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
+            () => sut.TranscribeAsync([1], null, translate: false, prompt: null, CancellationToken.None)
+        );
+
+        Assert.Equal(PluginRequestFailureKind.Configuration, exception.FailureKind);
+        Assert.Equal("Settings.InvalidAccountId", exception.Message);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData("""{ "result": { "text": "unconfirmed" } }""", "'success' must be true")]
+    [InlineData("""{ "success": false, "result": { "text": "failed" } }""", "'success' must be true")]
+    [InlineData("[]", "'success' must be true")]
+    [InlineData("not json", "the body is not valid JSON")]
+    public async Task TranscribeAsync_RejectsUnconfirmedOrMalformedResponse(string responseBody, string reason)
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(JsonResponse(responseBody)));
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var exception = await Assert.ThrowsAsync<PluginRequestException>(
+            () => sut.TranscribeAsync([1], null, translate: false, prompt: null, CancellationToken.None)
+        );
+
+        Assert.Equal($"Invalid Cloudflare transcription response: {reason}.", exception.Message);
+        Assert.Equal(PluginRequestFailureKind.OutputIncomplete, exception.FailureKind);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ListsOneWorkersAiModelForTheAccount()
+    {
+        // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- the stub exists to assert the outgoing request.
+        var handler = new StubHttpMessageHandler((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal(
+                $"https://api.cloudflare.com/client/v4/accounts/{AccountId}/ai/models/search?per_page=1",
+                request.RequestUri?.ToString()
+            );
+            Assert.Equal("Bearer token-123", request.Headers.Authorization?.ToString());
+            Assert.Null(request.Content);
+            return Task.FromResult(JsonResponse("""{ "success": true, "result": [{ "name": "@cf/openai/whisper" }] }"""));
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Settings.CredentialsValid", result.Message);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, "{}", "Settings.TokenRejected")]
+    [InlineData(HttpStatusCode.Forbidden, "{}", "Settings.TokenRejected")]
+    [InlineData(HttpStatusCode.NotFound, "{}", "Settings.ValidationFailedStatus")]
+    [InlineData(HttpStatusCode.Found, "{}", "Settings.ValidationFailedStatus")]
+    [InlineData(HttpStatusCode.InternalServerError, "{}", "Settings.ValidationFailedStatus")]
+    [InlineData(HttpStatusCode.OK, """{ "success": false, "result": [] }""", "Settings.InvalidValidationResponse")]
+    [InlineData(HttpStatusCode.OK, """{ "success": true, "result": {} }""", "Settings.InvalidValidationResponse")]
+    [InlineData(HttpStatusCode.OK, "not json", "Settings.InvalidValidationResponse")]
+    public async Task ValidateAsync_ReportsRejectedOrUnexpectedResponses(
+        HttpStatusCode statusCode,
+        string responseBody,
+        string expectedMessage
+    )
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(JsonResponse(responseBody, statusCode)));
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(expectedMessage, result.Message);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ReportsNetworkFailureAsUnreachable()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => throw new HttpRequestException("connection refused"));
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.CloudflareUnreachable", result.Message);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_RejectsMalformedAccountIdWithoutRequest()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(JsonResponse("{}")));
+        using var sut = await CreateConfiguredPluginAsync(handler);
+        await sut.SetSettingValueAsync("account-id", "account-123");
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.InvalidAccountId", result.Message);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_DoesNotReportStaleResultAfterCredentialsChange()
+    {
+        var plugin = new TaskCompletionSource<CloudflareAsrPlugin>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new StubHttpMessageHandler(async (_, ct) =>
+        {
+            await (await plugin.Task).SetSettingValueAsync("account-id", OtherAccountId, ct);
+            return JsonResponse("""{ "success": true, "result": [] }""");
+        });
+        using var sut = await CreateConfiguredPluginAsync(handler);
+        plugin.SetResult(sut);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.SettingsChangedDuringValidation", result.Message);
+    }
+
     private static async Task<CloudflareAsrPlugin> CreateConfiguredPluginAsync(
-        StubHttpMessageHandler handler
+        StubHttpMessageHandler handler,
+        string? modelId = null
     )
     {
         var host = new TestPluginHostServices
         {
             Secrets =
             {
-                ["account-id"] = "account-123",
+                ["account-id"] = AccountId,
                 ["api-token"] = "token-123",
             },
         };
+        if (modelId is not null)
+            host.SetSetting("selectedModel", modelId);
         var sut = new CloudflareAsrPlugin(new HttpClient(handler));
         await sut.ActivateAsync(host);
         return sut;

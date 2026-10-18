@@ -166,22 +166,7 @@ public sealed partial class SettingsBackupService
 
             using (var archive = ZipFile.Open(tempPath, ZipArchiveMode.Create))
             {
-                var manifest = new
-                {
-                    app = ManifestApp,
-                    kind = ManifestKind,
-                    createdUtc = DateTimeOffset.UtcNow,
-                    includes = s_manifestIncludes,
-                    excludes = s_manifestExcludes,
-                };
-                var manifestEntry = archive.CreateEntry(
-                    ManifestEntryName,
-                    CompressionLevel.Optimal
-                );
-                using (var writer = new StreamWriter(manifestEntry.Open()))
-                {
-                    writer.Write(JsonSerializer.Serialize(manifest, s_jsonOptions));
-                }
+                WriteManifest(archive);
 
                 foreach (var relativeFile in s_rootFiles)
                 {
@@ -251,6 +236,69 @@ public sealed partial class SettingsBackupService
                 }
             }
         }
+    }
+
+    /// <summary>
+    ///     Writes a settings backup that Restore accepts, one file at a time from contents the
+    ///     caller already read, so it matches what the caller exported beside it.
+    /// </summary>
+    internal sealed class PortableBackupWriter : IDisposable
+    {
+        private readonly ZipArchive _archive;
+
+        public PortableBackupWriter(Stream destination)
+        {
+            _archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
+            WriteManifest(_archive);
+        }
+
+        /// <summary>Whether a path relative to the data folder belongs in a settings backup.</summary>
+        public static bool Carries(string relativePath)
+        {
+            var entryName = NormalizeEntryName(relativePath);
+            return IsAllowedEntry(entryName, isDirectory: false)
+                && !IsExecutableEntry(entryName)
+                && !ShouldSkipPortableEntry(entryName);
+        }
+
+        public void Add(string relativePath, ReadOnlySpan<byte> content, DateTimeOffset lastWriteTime)
+        {
+            if (!Carries(relativePath))
+            {
+                throw new ArgumentException(
+                    $"'{relativePath}' is not part of a settings backup.",
+                    nameof(relativePath)
+                );
+            }
+
+            var entry = _archive.CreateEntry(NormalizeEntryName(relativePath), CompressionLevel.Optimal);
+            entry.LastWriteTime = lastWriteTime.Year is < 1980 or > 2107
+                ? new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero)
+                : lastWriteTime;
+            using var stream = entry.Open();
+            stream.Write(content);
+        }
+
+        public void Dispose() => _archive.Dispose();
+    }
+
+    // Restore's size guard, so a caller can leave out a backup that could not be restored.
+    internal static bool FitsRestoreLimits(int fileCount, long bytes) =>
+        fileCount <= MaxRestoreEntries && bytes <= MaxRestoreBytes;
+
+    private static void WriteManifest(ZipArchive archive)
+    {
+        var manifest = new
+        {
+            app = ManifestApp,
+            kind = ManifestKind,
+            createdUtc = DateTimeOffset.UtcNow,
+            includes = s_manifestIncludes,
+            excludes = s_manifestExcludes,
+        };
+        var manifestEntry = archive.CreateEntry(ManifestEntryName, CompressionLevel.Optimal);
+        using var writer = new StreamWriter(manifestEntry.Open());
+        writer.Write(JsonSerializer.Serialize(manifest, s_jsonOptions));
     }
 
     public SettingsBackupResult StageRestore(string sourceZipPath)
@@ -1354,7 +1402,7 @@ public sealed partial class SettingsBackupService
         return path.Replace('\\', '/');
     }
 
-    private enum BackupEntryKind
+    internal enum BackupEntryKind
     {
         Absent,
         RegularFile,
@@ -1363,14 +1411,14 @@ public sealed partial class SettingsBackupService
         Unsupported,
     }
 
-    private readonly record struct FileIdentity(uint DevMajor, uint DevMinor, ulong Ino);
+    internal readonly record struct FileIdentity(uint DevMajor, uint DevMinor, ulong Ino);
 
-    private readonly record struct GuardedSecretFile(FileIdentity Identity, string Description);
+    internal readonly record struct GuardedSecretFile(FileIdentity Identity, string Description);
 
     // The quarantine file's legacy ciphertext is protected only by a derivation
     // from guessable inputs (username and home path), so a backup that exports
     // it hands its secrets to the recipient — it gets the key's inode guard.
-    private GuardedSecretFile[] CaptureGuardedSecretFiles()
+    internal GuardedSecretFile[] CaptureGuardedSecretFiles()
     {
         var guarded = new List<GuardedSecretFile>(2);
         if (
@@ -1397,7 +1445,7 @@ public sealed partial class SettingsBackupService
         return guarded.ToArray();
     }
 
-    private static partial class NativeFile
+    internal static partial class NativeFile
     {
         private const int AtCurrentWorkingDirectory = -100;
         private const int AtSymlinkNoFollow = 0x100;

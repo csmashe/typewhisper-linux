@@ -128,7 +128,8 @@ public sealed class StreamingProviderAdapterConformanceTests
         var gladia = await new GladiaWebSocketAdapter(
                 gladiaHttp,
                 "gladia-key",
-                "de"
+                "de",
+                []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
         var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), ["de"])
@@ -167,6 +168,7 @@ public sealed class StreamingProviderAdapterConformanceTests
         Assert.Equal("test-token", ParseQuery(gladia.Uri)["token"]);
         Assert.Equal("stt-rt.soniox.com", soniox.Uri.Host);
         Assert.Equal("wss://eu.rt.speechmatics.com/v2", speechmatics.Uri.ToString());
+        Assert.Equal("Bearer soniox-key", soniox.Headers!["Authorization"]);
         Assert.Equal(
             "Bearer speechmatics-key",
             speechmatics.Headers!["Authorization"]
@@ -387,7 +389,7 @@ public sealed class StreamingProviderAdapterConformanceTests
         // race the receive loop, so let the fault land first.
         await WaitForFaultAsync(pump);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAnyAsync<InvalidOperationException>(
             () => pump.FinalizeAsync(CancellationToken.None).WaitAsync(s_timeout)
         );
         Assert.Contains("rejected", exception.Message, StringComparison.OrdinalIgnoreCase);
@@ -684,7 +686,7 @@ public sealed class StreamingProviderAdapterConformanceTests
             // surfaced as "the channel has been closed" from the first NextSentAsync.
             "Speechmatics" => new SpeechmaticsWebSocketAdapter(
                 "key", new Uri(SpeechmaticsPlugin.AvailableRegions[0].RealtimeUrl), "en", "enhanced", []),
-            "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null),
+            "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null, []),
             "xAI" => new XaiWebSocketAdapter("key", null),
             _ => new OpenAiRealtimeWebSocketAdapter(
                 OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,

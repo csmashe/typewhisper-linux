@@ -1194,6 +1194,52 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         );
     }
 
+    [Fact]
+    public void Filter_HidesNonMatchingRowsButKeepsThemForSave()
+    {
+        var row = CreateCollectionRow(CreateItem("Aurora notes"), CreateItem("Groceries"));
+        row.Items[1].Fields.Single(field => field.Key == "api-key").Value = "aurora-secret";
+
+        row.FilterText = " aurora ";
+
+        Assert.True(row.Items[0].IsMatch);
+        Assert.False(row.Items[1].IsMatch);
+        Assert.False(row.HasNoMatches);
+        Assert.Equal(2, row.Items.Count);
+
+        row.FilterText = "nothing";
+        Assert.True(row.HasNoMatches);
+
+        row.FilterText = "";
+        Assert.All(row.Items, item => Assert.True(item.IsMatch));
+    }
+
+    [Fact]
+    public void Filter_NewRowStaysVisibleWhileFiltering()
+    {
+        var row = CreateCollectionRow(CreateItem("Aurora notes"));
+        row.FilterText = "nothing";
+
+        row.AddItemCommand.Execute(null);
+
+        Assert.True(row.Items[^1].IsMatch);
+        Assert.False(row.HasNoMatches);
+    }
+
+    [Fact]
+    public void Searchable_FollowsTheDefinition()
+    {
+        Assert.False(CreateCollectionRow().IsSearchable);
+
+        var ownerRow = CreateCollectionRow().OwnerRow;
+        var searchable = new PluginCollectionRow(
+            ThingsDefinition() with { IsSearchable = true },
+            ownerRow,
+            []
+        );
+        Assert.True(searchable.IsSearchable);
+    }
+
     private static PluginCollectionRow CreateCollectionRow(params PluginCollectionItem[] items)
     {
         var ownerRow = new PluginRow(
