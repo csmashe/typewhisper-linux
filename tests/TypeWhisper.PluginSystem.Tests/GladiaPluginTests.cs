@@ -1070,9 +1070,10 @@ public class GladiaPluginTests
         Assert.Equal("wav/pcm", root.GetProperty("encoding").GetString());
         Assert.Equal(16, root.GetProperty("bit_depth").GetInt32());
         Assert.Equal(16000, root.GetProperty("sample_rate").GetInt32());
-        Assert.True(
-            root.GetProperty("messages_config").GetProperty("receive_partial_transcripts").GetBoolean()
-        );
+        var messages = root.GetProperty("messages_config");
+        Assert.True(messages.GetProperty("receive_partial_transcripts").GetBoolean());
+        // Finalize waits for end_session, a lifecycle event Gladia sends only on request.
+        Assert.True(messages.GetProperty("receive_lifecycle_events").GetBoolean());
         Assert.Equal(
             "de",
             root.GetProperty("language_config").GetProperty("languages")[0].GetString()
@@ -1114,13 +1115,16 @@ public class GladiaPluginTests
         var msg = GladiaSession.ParseMessage(
             """
             { "type": "transcript",
-              "data": { "is_final": true, "utterance": { "text": " Hello world" } } }
+              "data": { "id": "00-00000011", "is_final": true,
+                        "utterance": { "text": " Hello world", "language": "en" } } }
             """
         );
 
         Assert.Equal("transcript", msg.MessageType);
+        Assert.Equal("00-00000011", msg.UtteranceId);
         Assert.Equal(" Hello world", msg.Text);
         Assert.True(msg.IsFinal);
+        Assert.Equal("en", msg.Language);
     }
 
     [Fact]
@@ -1129,30 +1133,53 @@ public class GladiaPluginTests
         var msg = GladiaSession.ParseMessage(
             """
             { "type": "transcript",
-              "data": { "is_final": false, "utterance": { "text": "Hello" } } }
+              "data": { "id": "00-00000011", "is_final": false, "utterance": { "text": "Hello" } } }
             """
         );
 
         Assert.Equal("Hello", msg.Text);
         Assert.False(msg.IsFinal);
+        Assert.Null(msg.Language);
     }
 
     [Fact]
     public void ParseMessage_IgnoresNonTranscriptTypes()
     {
-        var msg = GladiaSession.ParseMessage("""{ "type": "audio_chunk_acknowledgment" }""");
+        var msg = GladiaSession.ParseMessage(
+            """{ "type": "audio_chunk", "acknowledged": true, "error": null, "data": {} }"""
+        );
 
-        Assert.Equal("audio_chunk_acknowledgment", msg.MessageType);
+        Assert.Equal("audio_chunk", msg.MessageType);
         Assert.Null(msg.Text);
+        Assert.Null(msg.Error);
+    }
+
+    [Theory]
+    [InlineData("garbage {")]
+    [InlineData("[]")]
+    [InlineData("""{ "type": "transcript", "data": { "is_final": true, "utterance": { "text": "a" } } }""")]
+    [InlineData("""{ "type": "transcript", "data": { "id": "1", "utterance": { "text": "a" } } }""")]
+    [InlineData("""{ "type": "transcript", "data": { "id": "1", "is_final": "yes", "utterance": { "text": "a" } } }""")]
+    [InlineData("""{ "type": "transcript", "data": { "id": "1", "is_final": true, "utterance": {} } }""")]
+    public void ParseMessage_RejectsMalformedMessages(string json)
+    {
+        // HandleMessage turns only these into an incomplete-response fault.
+        var exception = Record.Exception(() => GladiaSession.ParseMessage(json));
+        Assert.True(exception is JsonException or FormatException, $"Unexpected: {exception?.GetType()}");
     }
 
     [Fact]
-    public void ParseMessage_ReturnsEmpty_OnMalformedJson()
+    public void ParseMessage_ReadsRejectedAcknowledgment()
     {
-        var msg = GladiaSession.ParseMessage("garbage {");
+        var msg = GladiaSession.ParseMessage(
+            """
+            { "type": "stop_recording", "acknowledged": false,
+              "error": { "status_code": 409, "exception": "ConflictError", "message": "Recording already stopped" },
+              "data": {} }
+            """
+        );
 
-        Assert.Equal("", msg.MessageType);
-        Assert.Null(msg.Text);
+        Assert.Equal(new GladiaSession.GladiaError(409, "ConflictError", "Recording already stopped"), msg.Error);
     }
 
     private static async Task<GladiaPlugin> CreateConfiguredPluginAsync(
