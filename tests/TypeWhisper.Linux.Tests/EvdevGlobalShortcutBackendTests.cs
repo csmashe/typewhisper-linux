@@ -601,6 +601,8 @@ public sealed class EvdevGlobalShortcutBackendTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             RecordingMode.Toggle,

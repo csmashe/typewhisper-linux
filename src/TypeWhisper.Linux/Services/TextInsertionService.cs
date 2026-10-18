@@ -106,11 +106,17 @@ public sealed class TextInsertionService
 
     private readonly IAtSpiEventClient? _atSpiClient;
     private readonly IErrorLogService? _errorLog;
+    private readonly Func<bool> _inputAllowed;
     private readonly Func<bool> _isRecording;
     private readonly Func<bool> _learningConsent;
     private readonly IPasteConfirmationSource? _pasteConfirmation;
 
     private readonly ITextInsertionPlatform _platform;
+
+    // Held for a whole insertion (typing, or clipboard snapshot through restore) and for a
+    // selection probe, so dictation, paste-last, palette, prompt action and transform output
+    // never interleave keystrokes or clipboard contents.
+    private readonly SemaphoreSlim _insertionGate = new(1, 1);
 
     // DI-preferred ctor: passes the shared SystemCommandAvailabilityService so the platform
     // subscribes to snapshot refreshes and rebuilds its chain live after ydotool setup —
@@ -122,7 +128,8 @@ public sealed class TextInsertionService
         IProcessRunner? processRunner = null,
         Func<bool>? isAnotherSessionRecording = null,
         IAtSpiEventClient? atSpiClient = null,
-        Func<bool>? learningConsent = null
+        Func<bool>? learningConsent = null,
+        Func<bool>? inputAllowed = null
     )
         : this(
             new LinuxTextInsertionPlatform(commands, processRunner),
@@ -130,7 +137,8 @@ public sealed class TextInsertionService
             pasteConfirmation,
             isAnotherSessionRecording,
             atSpiClient,
-            learningConsent
+            learningConsent,
+            inputAllowed
         )
     {
     }
@@ -141,7 +149,8 @@ public sealed class TextInsertionService
         IPasteConfirmationSource? pasteConfirmation = null,
         Func<bool>? isAnotherSessionRecording = null,
         IAtSpiEventClient? atSpiClient = null,
-        Func<bool>? learningConsent = null
+        Func<bool>? learningConsent = null,
+        Func<bool>? inputAllowed = null
     )
     {
         _platform = platform;
@@ -150,6 +159,7 @@ public sealed class TextInsertionService
         _pasteConfirmation = pasteConfirmation;
         _isRecording = isAnotherSessionRecording ?? (static () => false);
         _learningConsent = learningConsent ?? (static () => true);
+        _inputAllowed = inputAllowed ?? (static () => true);
     }
 
     /// <summary>
@@ -262,6 +272,33 @@ public sealed class TextInsertionService
 
     public async Task<InsertionResult> InsertTextAsync(TextInsertionRequest request)
     {
+        var queued = !await _insertionGate.WaitAsync(0);
+        if (queued)
+        {
+            await _insertionGate.WaitAsync();
+        }
+
+        try
+        {
+            // The caller verified focus before queueing. Without a window id to re-activate, focus
+            // may have moved to another window while this waited, so only copy the text.
+            // ReSharper disable once InvertIf -- inverting would duplicate the single insertion call below.
+            if (queued && string.IsNullOrEmpty(request.TargetWindowId) && (request.AutoPaste || request.AutoEnter))
+            {
+                LogInsertionFallback("Auto paste fell back to clipboard: the insertion waited for another and its target cannot be re-activated.");
+                request = request with { AutoPaste = false, AutoEnter = false };
+            }
+
+            return await InsertTextCoreAsync(request);
+        }
+        finally
+        {
+            _insertionGate.Release();
+        }
+    }
+
+    private async Task<InsertionResult> InsertTextCoreAsync(TextInsertionRequest request)
+    {
         LastFailureReason = InsertionFailureReason.None;
         LastTypingDeliveredPartialText = false;
 
@@ -272,6 +309,15 @@ public sealed class TextInsertionService
         var targetWindowTitle = request.TargetWindowTitle;
         var autoEnter = request.AutoEnter;
         var strategy = request.Strategy;
+
+        // Callers check for a locked session before inserting, but this may have waited on the
+        // insertion gate since; never synthesize keystrokes into a lock screen.
+        if ((autoPaste || autoEnter) && !_inputAllowed())
+        {
+            LogInsertionFallback("Auto paste fell back to clipboard: the session was locked while the insertion waited.");
+            autoPaste = false;
+            autoEnter = false;
+        }
 
         if (string.IsNullOrEmpty(text))
         {
@@ -340,6 +386,27 @@ public sealed class TextInsertionService
             return InsertionResult.MissingClipboardTool;
         }
 
+        return await InsertViaClipboardAsync(
+            request with { AutoEnter = autoEnter },
+            text,
+            autoPaste,
+            targetIsTerminal,
+            requiresSafeTerminalPaste,
+            pasteShortcut
+        );
+    }
+
+    private async Task<InsertionResult> InsertViaClipboardAsync(
+        TextInsertionRequest request,
+        string text,
+        bool autoPaste,
+        bool targetIsTerminal,
+        bool requiresSafeTerminalPaste,
+        string pasteShortcut
+    )
+    {
+        var targetWindowId = request.TargetWindowId;
+        var autoEnter = request.AutoEnter;
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
         var previousClipboardHasNonTextFormats =
             await _platform.ClipboardHasNonTextFormatsAsync();
@@ -535,7 +602,24 @@ public sealed class TextInsertionService
         // leftover, so a failed copy probe means empty. targetIsTerminal switches the probe to
         // Ctrl+Shift+C — a plain Ctrl+C in a terminal is SIGINT, not copy, so it captures nothing and
         // would interrupt whatever is running there.
-        var captured = await ProbeSelectionViaCopyAsync(targetIsTerminal);
+        // Not queued behind another insertion: the caller's focus snapshot (and with it
+        // the terminal-safe copy chord) would be stale by the time the probe ran.
+        if (!await _insertionGate.WaitAsync(0))
+        {
+            LogInsertionFallback("Selection capture skipped: another insertion is in progress.");
+            return "";
+        }
+
+        string captured;
+        try
+        {
+            captured = await ProbeSelectionViaCopyAsync(targetIsTerminal);
+        }
+        finally
+        {
+            _insertionGate.Release();
+        }
+
         return string.IsNullOrWhiteSpace(captured) ? "" : captured;
     }
 

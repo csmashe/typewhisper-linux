@@ -29,6 +29,33 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
+    public void PasteLastTranscription_WaitsUntilTheWholeChordIsReleased()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        const ModifierMask modifiers = ModifierMask.LeftCtrl | ModifierMask.LeftAlt;
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle) with
+        {
+            PasteLastTranscriptionKey = KeyCode.VcV,
+            PasteLastTranscriptionModifiers = modifiers,
+        });
+        var calls = 0;
+        dispatcher.PasteLastTranscriptionRequested += () => calls++;
+
+        dispatcher.Handle(KeyCode.VcV, modifiers, true);
+        dispatcher.Handle(KeyCode.VcV, modifiers, true);
+        dispatcher.Handle(KeyCode.VcV, modifiers, false);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.LeftAlt, false);
+        Assert.Equal(0, calls);
+
+        dispatcher.Handle(KeyCode.VcLeftAlt, ModifierMask.None, false);
+        Assert.Equal(1, calls);
+
+        dispatcher.Handle(KeyCode.VcV, modifiers, true);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.None, false);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
     public void PromptAction_WaitsForTriggerAndAllModifiers_ThenFiresWithId()
     {
         var d = new ShortcutDispatcher();
@@ -755,6 +782,8 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             mode,
@@ -779,6 +808,8 @@ public sealed class ShortcutDispatcherTests
             ModifierMask.None,
             null,
             ModifierMask.None,
+            null,
+            ModifierMask.None,
             KeyCode.VcEscape,
             ModifierMask.None,
             mode,
@@ -795,6 +826,8 @@ public sealed class ShortcutDispatcherTests
         return new GlobalShortcutSet(
             KeyCode.VcSpace,
             ModifierMask.LeftCtrl | ModifierMask.LeftShift,
+            null,
+            ModifierMask.None,
             null,
             ModifierMask.None,
             null,

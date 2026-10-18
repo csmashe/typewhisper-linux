@@ -238,6 +238,232 @@ public sealed class RecentTranscriptionsServiceTests
         );
     }
 
+    [Fact]
+    public async Task PaletteInsertion_PassesTargetProcessTitleAndStrategy()
+    {
+        var captured = Snapshot("kitty", "shell", "x11-target", "kitty");
+        var fixture = new Fixture("x11-target", captured, captured)
+        {
+            Strategies = { ["kitty"] = TextInsertionStrategy.ClipboardPaste },
+        };
+
+        await fixture.CaptureAndInsertAsync();
+
+        var request = Assert.Single(fixture.InsertionRequests);
+        Assert.Equal("kitty", request.TargetProcessName);
+        Assert.Equal("shell", request.TargetWindowTitle);
+        Assert.Equal(TextInsertionStrategy.ClipboardPaste, request.Strategy);
+        Assert.False(request.AutoEnter);
+    }
+
+    [Fact]
+    public async Task PasteLast_Shortcut_InsertsLatestTextIntoTheFocusedWindow()
+    {
+        var focused = Snapshot("kitty", "shell", "x11-target", "kitty");
+        var fixture = new Fixture("x11-target", focused);
+        fixture.Record("older text");
+        fixture.Record("line one\nline two");
+
+        var outcome = await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+
+        Assert.Equal(LastTranscriptionPasteOutcome.Delivered, outcome);
+        var request = Assert.Single(fixture.InsertionRequests);
+        Assert.Equal("line one\nline two", request.Text);
+        Assert.True(request.AutoPaste);
+        Assert.Equal("x11-target", request.TargetWindowId);
+        // The process name lets insertion recognise the terminal and paste multiline text safely.
+        Assert.Equal("kitty", request.TargetProcessName);
+        Assert.Empty(fixture.Delays);
+        Assert.Equal(
+            (Loc.Instance["RecentTranscriptions.Pasted"], false),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
+    [Fact]
+    public async Task PasteLast_ShortcutOnWaylandWithoutWindowInfo_StillUsesNormalInsertion()
+    {
+        var fixture = new Fixture(true, null, (ActiveWindowSnapshot?)null);
+        fixture.Record("hello");
+
+        await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+
+        var request = Assert.Single(fixture.InsertionRequests);
+        Assert.True(request.AutoPaste);
+        Assert.Null(request.TargetWindowId);
+        Assert.Null(request.TargetProcessName);
+    }
+
+    [Fact]
+    public async Task PasteLast_MultilineIntoAnUnknownWindow_CopiesToClipboardOnly()
+    {
+        var fixture = new Fixture(true, null, (ActiveWindowSnapshot?)null);
+        fixture.Record("rm -rf build\nmake");
+
+        await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+
+        Assert.False(Assert.Single(fixture.InsertionRequests).AutoPaste);
+    }
+
+    [Fact]
+    public async Task PasteLast_NoTranscription_ReportsEmptyWithoutInserting()
+    {
+        var fixture = new Fixture("x11-target", Snapshot("editor", "Doc", "x11-target", "editor"));
+
+        var outcome = await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+
+        Assert.Equal(LastTranscriptionPasteOutcome.Empty, outcome);
+        Assert.Empty(fixture.InsertionRequests);
+        Assert.Equal(
+            (Loc.Instance["Overlay.NoRecentTranscriptions"], false),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
+    [Fact]
+    public async Task PasteLast_WhileBusy_ReportsBusyWithoutInserting()
+    {
+        var fixture = new Fixture("x11-target", Snapshot("editor", "Doc", "x11-target", "editor"));
+        fixture.Record("hello");
+
+        var outcome = await fixture.PasteLastAsync(
+            LastTranscriptionPasteTrigger.Shortcut,
+            () => true
+        );
+
+        Assert.Equal(LastTranscriptionPasteOutcome.Busy, outcome);
+        Assert.Empty(fixture.InsertionRequests);
+        Assert.Equal(
+            (Loc.Instance["RecentTranscriptions.PasteLastBusy"], false),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
+    [Fact]
+    public async Task PasteLast_DictationStartsWhileTheTrayMenuCloses_DoesNotInsert()
+    {
+        var fixture = new Fixture("x11-target", Snapshot("editor", "Doc", "x11-target", "editor"));
+        fixture.Record("hello");
+        var checks = 0;
+
+        var outcome = await fixture.PasteLastAsync(
+            LastTranscriptionPasteTrigger.Tray,
+            () => ++checks > 1
+        );
+
+        Assert.Equal(LastTranscriptionPasteOutcome.Busy, outcome);
+        Assert.Equal(2, checks);
+        Assert.Empty(fixture.InsertionRequests);
+    }
+
+    [Fact]
+    public async Task PasteLast_InputNotAllowed_IsIgnoredSilently()
+    {
+        var fixture = new Fixture("x11-target", Snapshot("editor", "Doc", "x11-target", "editor"))
+        {
+            InputAllowed = false,
+        };
+        fixture.Record("hello");
+
+        var outcome = await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+
+        Assert.Equal(LastTranscriptionPasteOutcome.Ignored, outcome);
+        Assert.Empty(fixture.InsertionRequests);
+        Assert.Empty(fixture.Feedback);
+    }
+
+    [Fact]
+    public async Task PasteLast_SecondRequestWhileTheFirstIsInserting_IsIgnored()
+    {
+        var fixture = new Fixture("x11-target", Snapshot("editor", "Doc", "x11-target", "editor"));
+        fixture.Record("hello");
+        var release = new TaskCompletionSource<InsertionResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        fixture.InsertOverride = _ => release.Task;
+
+        var first = fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+        var second = await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+        release.SetResult(InsertionResult.Pasted);
+
+        Assert.Equal(LastTranscriptionPasteOutcome.Ignored, second);
+        Assert.Equal(LastTranscriptionPasteOutcome.Delivered, await first);
+        Assert.Single(fixture.InsertionRequests);
+    }
+
+    [Fact]
+    public async Task PasteLast_Tray_WaitsForTheMenuThenPastesIntoTheAppWindow()
+    {
+        var fixture = new Fixture("x11-target", Snapshot("editor", "Doc", "x11-target", "editor"));
+        fixture.Record("hello");
+
+        await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Tray);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(250), Assert.Single(fixture.Delays));
+        var request = Assert.Single(fixture.InsertionRequests);
+        Assert.True(request.AutoPaste);
+        Assert.Equal("editor", request.TargetProcessName);
+    }
+
+    [Theory]
+    [InlineData("plasmashell")]
+    [InlineData("gnome-shell")]
+    [InlineData("typewhisper")]
+    public async Task PasteLast_TrayFocusOnPanelOrTypeWhisper_CopiesToClipboardOnly(string process)
+    {
+        var fixture = new Fixture("x11-target", Snapshot(process, "Panel", "x11-target", process));
+        fixture.Record("hello");
+
+        await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Tray);
+
+        var request = Assert.Single(fixture.InsertionRequests);
+        Assert.False(request.AutoPaste);
+        Assert.Null(request.TargetWindowId);
+        Assert.Equal(
+            (Loc.Instance["RecentTranscriptions.CopiedToClipboard"], false),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
+    [Fact]
+    public async Task PasteLast_TrayWithOnlyAnX11WindowId_CopiesToClipboardOnly()
+    {
+        var fixture = new Fixture("x11-target", (ActiveWindowSnapshot?)null);
+        fixture.Record("hello");
+
+        await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Tray);
+
+        Assert.False(Assert.Single(fixture.InsertionRequests).AutoPaste);
+    }
+
+    [Fact]
+    public async Task PasteLast_TrayOnWaylandWithoutWindowInfo_CopiesToClipboardOnly()
+    {
+        var fixture = new Fixture(true, null, (ActiveWindowSnapshot?)null);
+        fixture.Record("hello");
+
+        await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Tray);
+
+        Assert.False(Assert.Single(fixture.InsertionRequests).AutoPaste);
+    }
+
+    [Fact]
+    public async Task PasteLast_InsertionFails_ReportsTheFailure()
+    {
+        var fixture = new Fixture("x11-target", Snapshot("editor", "Doc", "x11-target", "editor"))
+        {
+            InsertionResultOverride = InsertionResult.Failed,
+        };
+        fixture.Record("hello");
+
+        await fixture.PasteLastAsync(LastTranscriptionPasteTrigger.Shortcut);
+
+        Assert.Equal(
+            (Loc.Instance["RecentTranscriptions.InsertionFailed"], true),
+            Assert.Single(fixture.Feedback)
+        );
+    }
+
     public static TheoryData<string?, bool> NullIdentityCases =>
         new()
         {
@@ -260,6 +486,7 @@ public sealed class RecentTranscriptionsServiceTests
     {
         private readonly RecentTranscriptionsService _service;
         private readonly Queue<ActiveWindowSnapshot?> _snapshots;
+        private readonly RecentTranscriptionStore _store = new();
         private ActiveWindowSnapshot? _lastSnapshot;
 
         public Fixture(string? targetWindowId, params ActiveWindowSnapshot?[] snapshots)
@@ -278,20 +505,29 @@ public sealed class RecentTranscriptionsServiceTests
             history.SetupGet(service => service.Records).Returns([]);
             _service = new RecentTranscriptionsService(
                 history.Object,
-                new RecentTranscriptionStore(),
+                _store,
                 () => true,
                 () => targetWindowId,
                 _ => Task.FromResult(NextSnapshot()),
                 InsertAsync,
                 DelayAsync,
                 () => PasteToolHint,
-                isWaylandSession: isWayland
+                isWaylandSession: isWayland,
+                inputAllowedProvider: () => InputAllowed,
+                insertionStrategyProvider: processName =>
+                    processName is not null
+                    && Strategies.TryGetValue(processName, out var strategy)
+                        ? strategy
+                        : TextInsertionStrategy.Auto
             );
             _service.FeedbackRequested += (message, isError) =>
                 Feedback.Add((message, isError));
         }
 
         public InsertionResult? InsertionResultOverride { get; init; }
+        public bool InputAllowed { get; init; } = true;
+        public Dictionary<string, TextInsertionStrategy> Strategies { get; } = [];
+        public Func<TextInsertionRequest, Task<InsertionResult>>? InsertOverride { get; set; }
         public RecentTranscriptionPasteToolHint PasteToolHint { get; init; } =
             RecentTranscriptionPasteToolHint.X11;
         public List<TextInsertionRequest> InsertionRequests { get; } = [];
@@ -301,6 +537,19 @@ public sealed class RecentTranscriptionsServiceTests
         public Task CopyLastTranscriptionToClipboardAsync()
         {
             return _service.CopyLastTranscriptionToClipboardAsync();
+        }
+
+        public void Record(string text)
+        {
+            _store.RecordTranscription(Guid.NewGuid().ToString(), text, DateTime.UtcNow, null, null);
+        }
+
+        public Task<LastTranscriptionPasteOutcome> PasteLastAsync(
+            LastTranscriptionPasteTrigger trigger,
+            Func<bool>? isBusy = null
+        )
+        {
+            return _service.PasteLastTranscriptionAsync(trigger, isBusy ?? (static () => false));
         }
 
         public async Task<InsertionResult> CaptureAndInsertAsync()
@@ -332,6 +581,11 @@ public sealed class RecentTranscriptionsServiceTests
         private Task<InsertionResult> InsertAsync(TextInsertionRequest request)
         {
             InsertionRequests.Add(request);
+            if (InsertOverride is not null)
+            {
+                return InsertOverride(request);
+            }
+
             return Task.FromResult(
                 InsertionResultOverride
                 ?? (
