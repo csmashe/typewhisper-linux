@@ -54,7 +54,7 @@ public sealed class SharedHelperStreamingCohortTests
         var (chunks, body, url) = await StreamAsync(h => new FireworksPlugin(h), "apiKey", "fw-test");
 
         Assert.Equal(["Hel", "lo"], chunks);
-        Assert.Equal("https://api.fireworks.ai/v1/chat/completions", url);
+        Assert.Equal("https://api.fireworks.ai/inference/v1/chat/completions", url);
         AssertStreamBody(body, "fw-test");
     }
 
