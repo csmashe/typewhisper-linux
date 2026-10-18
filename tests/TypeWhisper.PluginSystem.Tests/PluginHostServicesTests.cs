@@ -228,6 +228,51 @@ public sealed class PluginHostServicesTests : IDisposable
     }
 
     [Fact]
+    [SupportedOSPlatform("linux")]
+    public void PluginDataDirectory_IsCreatedOwnerOnlyWhateverTheUmask()
+    {
+        var services = CreateServices();
+
+        var directory = services.PluginDataDirectory;
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(directory)
+        );
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void PluginDataDirectory_IsOwnerOnlyWhenASettingsWriteCreatesItFirst()
+    {
+        var services = CreateServices();
+        var directory = Path.Join(_tempDir, "PluginData", "test-plugin");
+
+        services.SetSetting("executable", "/usr/bin/codex");
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(directory)
+        );
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public async Task PluginDataDirectory_IsOwnerOnlyWhenAStateStoreCreatesItFirst()
+    {
+        var services = CreateServices();
+        var directory = Path.Join(_tempDir, "PluginData", "test-plugin");
+
+        await services.OpenStateStore("state.json", () => new Dictionary<string, string>())
+            .UpdateAsync(state => new Dictionary<string, string>(state) { ["key"] = "value" });
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(directory)
+        );
+    }
+
+    [Fact]
     public void PluginAssetDirectory_WithSettingsAndNoCustomPath_UsesInjectedRoot()
     {
         var settings = new Mock<ISettingsService>();

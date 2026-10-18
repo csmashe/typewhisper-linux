@@ -356,13 +356,13 @@ public sealed class WebSocketSessionPump : IStreamingSession, IStreamingSessionH
                 var chunk = await _transport.ReceiveAsync(receiveBuffer, ct);
                 if (chunk.EndOfStream)
                 {
-                    HandleStreamEnd(isClose: false, chunk);
+                    HandleStreamEnd(isClose: false, chunk, messagePending: messageType is not null);
                     return;
                 }
 
                 if (chunk.MessageType == WebSocketMessageType.Close)
                 {
-                    HandleStreamEnd(isClose: true, chunk);
+                    HandleStreamEnd(isClose: true, chunk, messagePending: messageType is not null);
                     return;
                 }
 
@@ -468,7 +468,7 @@ public sealed class WebSocketSessionPump : IStreamingSession, IStreamingSessionH
         }
     }
 
-    private void HandleStreamEnd(bool isClose, WebSocketReceiveChunk chunk)
+    private void HandleStreamEnd(bool isClose, WebSocketReceiveChunk chunk, bool messagePending)
     {
         if (_adapter.Readiness.Required && !_readyCompletion.Task.IsCompleted)
         {
@@ -487,6 +487,13 @@ public sealed class WebSocketSessionPump : IStreamingSession, IStreamingSessionH
 
         if (_adapter.Terminal.Required && !_terminalCompletion.Task.IsCompleted)
         {
+            // A close that cuts a fragmented message short loses output the adapter never saw.
+            if (isClose && !messagePending && _adapter is IWebSocketCloseAwareAdapter closeAware
+                && TryCompleteOnClose(closeAware, chunk))
+            {
+                return;
+            }
+
             var close = isClose
                 ? FormatClose(chunk.CloseStatus, chunk.CloseDescription)
                 : "reached EOF";
@@ -513,6 +520,35 @@ public sealed class WebSocketSessionPump : IStreamingSession, IStreamingSessionH
                 )
             );
         }
+    }
+
+    private bool TryCompleteOnClose(IWebSocketCloseAwareAdapter adapter, WebSocketReceiveChunk chunk)
+    {
+        WebSocketInboundResult result;
+        try
+        {
+            result = adapter.HandleClose(chunk.CloseStatus, chunk.CloseDescription);
+        }
+        catch (Exception ex)
+        {
+            CaptureFault(ex);
+            return true;
+        }
+
+        foreach (var transcript in result.Transcripts)
+            Emit(transcript);
+
+        if (result.Fault is not null)
+        {
+            CaptureFault(result.Fault);
+            return true;
+        }
+
+        if ((result.Signals & WebSocketSessionSignal.Terminal) == 0)
+            return false;
+
+        _terminalCompletion.TrySetResult();
+        return true;
     }
 
     private static string FormatClose(

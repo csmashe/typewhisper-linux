@@ -3067,13 +3067,14 @@ public sealed partial class DictationOrchestrator : IDisposable
             var retryBudget = new LlmRequestRetryBudget();
             var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
                 _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token,
-                    retryBudget: retryBudget),
+                    retryBudget: retryBudget, memorySourceId: context.Profile?.MemorySourceId),
                 () => _promptProcessing.ProcessAsync(
                     promptAction,
                     text,
                     context.Capture,
                     token,
-                    retryBudget: retryBudget
+                    retryBudget: retryBudget,
+                    memorySourceId: context.Profile?.MemorySourceId
                 ),
                 accumulated =>
                 {
@@ -3337,7 +3338,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             if (!canStreamDirectly)
             {
                 var oneShot = await _promptProcessing
-                    .ProcessAsync(action, input, context.Capture, commandToken, wrapInput)
+                    .ProcessAsync(action, input, context.Capture, commandToken, wrapInput,
+                        memorySourceId: context.Profile?.MemorySourceId)
                     .ConfigureAwait(false);
                 failureOutput = oneShot;
                 if (string.IsNullOrWhiteSpace(oneShot) || IsTrivialCommandResult(oneShot))
@@ -3360,6 +3362,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 action,
                 input,
                 wrapInput,
+                context.Profile?.MemorySourceId,
                 context.Capture,
                 context.AppProcess,
                 async () =>
@@ -3548,6 +3551,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         PromptAction action,
         string input,
         bool wrapInput,
+        string? memorySourceId,
         LlmCallCapture? capture,
         string? targetProcessName,
         Func<Task<bool>> onFirstType,
@@ -3564,7 +3568,8 @@ public sealed partial class DictationOrchestrator : IDisposable
         try
         {
             await foreach (var delta in _promptProcessing
-                               .ProcessStreamingAsync(action, input, capture, token, wrapInput))
+                               .ProcessStreamingAsync(action, input, capture, token, wrapInput,
+                                   memorySourceId: memorySourceId))
             {
                 if (string.IsNullOrEmpty(delta))
                 {
@@ -3671,7 +3676,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             // faulted/empty streaming attempt and the batch retry that produced the result,
             // instead of a history entry whose recorded response doesn't match the inserted
             // text (mirrors the prompt-action streaming→batch fallback).
-            var batch = await _promptProcessing.ProcessAsync(action, input, capture, token, wrapInput)
+            var batch = await _promptProcessing
+                .ProcessAsync(action, input, capture, token, wrapInput, memorySourceId: memorySourceId)
                 .ConfigureAwait(false);
             if (string.IsNullOrEmpty(batch))
             {

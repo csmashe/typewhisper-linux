@@ -13,6 +13,8 @@
   "Settings.TagAudioEventsDescription": "Только для запросов REST.",
   "Settings.SpeakerCount": "Число говорящих",
   "Settings.SpeakerCountDescription": "0 = автоматически, иначе от 1 до 32. Только для запросов REST.",
+  "Settings.UseDictionaryTerms": "Отправлять термины словаря как keyterms",
+  "Settings.UseDictionaryTermsDescription": "Настраивает распознавание на термины из вашего словаря; каждый термин отправляется целиком (вместе с запятыми). ElevenLabs берёт на 20 % больше за каждый запрос с keyterms, а при более чем 100 терминах — не меньше чем за 20 секунд на запрос. Только для запросов REST; диктовка в реальном времени их не отправляет. Если выключено, термины словаря отправляют только запросы HTTP API.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyValid": "API-ключ действителен.",
   "Settings.ApiKeyUnverified": "Ключ API сохранён, но доступ к распознаванию речи проверить не удалось: у ключа нет разрешения user_read. Попробуйте диктовку, чтобы подтвердить доступ к Speech-to-Text.",

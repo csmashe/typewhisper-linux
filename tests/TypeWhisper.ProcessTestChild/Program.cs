@@ -33,6 +33,7 @@ internal static class Program
                 args[1],
                 int.Parse(args[2])
             ),
+            "fake-transcription-worker" => await FakeTranscriptionWorker.RunAsync(args),
             _ => 2,
         };
     }

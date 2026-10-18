@@ -680,166 +680,186 @@ public class XaiPluginTests
     }
 
     [Fact]
-    public void TranscriptCollector_EmitsPerSegmentDeltasAndSuppressesCumulativeFinals()
+    public async Task StreamingSession_DeliversEachUtteranceOnceWithItsTail()
     {
-        // Coordinator contract: every IsFinal=true event appends to
-        // _finalSegments. Cumulative final text would double-append, so the
-        // collector must emit segment deltas only.
+        // The coordinator appends every final: the first utterance must keep the words that
+        // only reached speech_final, and the second must not repeat the first.
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+        socket.EnqueueText("""{"type":"transcript.created","id":"s"}""");
+        await using var session = await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var finals = new List<string>();
+        session.TranscriptReceived += e =>
+        {
+            if (e.IsFinal)
+                finals.Add(e.Text);
+        };
+
+        socket.EnqueueText(Partial("hello world", isFinal: true, speechFinal: false, start: 0.0));
+        socket.EnqueueText(Partial("hello world how are you", isFinal: true, speechFinal: true, start: 0.0));
+        socket.EnqueueText(Partial("fine thanks", isFinal: true, speechFinal: false, start: 3.0));
+        socket.EnqueueText(Partial("fine thanks and you", isFinal: true, speechFinal: true, start: 3.0));
+        var finalizeTask = session.FinalizeAsync(CancellationToken.None);
+        // The documented transcript.done carries empty text; the finals are the transcript.
+        socket.EnqueueText("""{"type":"transcript.done","text":"","words":[],"duration":5.2}""");
+        await finalizeTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(["hello world how are you", "fine thanks and you"], finals);
+    }
+
+    [Fact]
+    public void TranscriptCollector_HoldsChunkFinalsAsPreviewUntilTheUtteranceSettles()
+    {
         var collector = new XaiTranscriptCollector();
 
         Assert.Null(collector.ApplyEvent("""{"type":"transcript.created"}"""));
 
-        // Non-final partial: interim text passes through.
-        var interim = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":false,"speech_final":false}""");
-        Assert.NotNull(interim);
-        Assert.Equal("hello", interim.Text);
-        Assert.False(interim.IsFinal);
+        var interim = collector.ApplyEvent(Partial("hello", isFinal: false, speechFinal: false, start: 0.0));
+        Assert.Equal(new StreamingTranscriptEvent("hello", IsFinal: false), interim);
 
-        // First final segment.
-        var seg1 = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello world","is_final":true,"speech_final":false}""");
-        Assert.NotNull(seg1);
-        Assert.Equal("hello world", seg1.Text);
-        Assert.True(seg1.IsFinal);
+        // A locked chunk is not final for the host yet: speech_final will restate it.
+        var chunk = collector.ApplyEvent(Partial("hello world", isFinal: true, speechFinal: false, start: 0.0));
+        Assert.Equal(new StreamingTranscriptEvent("hello world", IsFinal: false), chunk);
 
-        // Second final segment: emits the new segment as a delta (not cumulative).
-        var seg2 = collector.ApplyEvent("""{"type":"transcript.partial","text":"how are you","is_final":true,"speech_final":false}""");
-        Assert.NotNull(seg2);
-        Assert.Equal("how are you", seg2.Text);
+        var nextInterim = collector.ApplyEvent(Partial("how", isFinal: false, speechFinal: false, start: 1.5));
+        Assert.Equal(new StreamingTranscriptEvent("hello world how", IsFinal: false), nextInterim);
 
-        // speech_final=true after per-segment finals is xAI's cumulative
-        // summary — must be suppressed to avoid re-appending.
-        var summary = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello world how are you","is_final":true,"speech_final":true}""");
-        Assert.Null(summary);
+        var utterance = collector.ApplyEvent(Partial("hello world how are you", isFinal: true, speechFinal: true, start: 0.0));
+        Assert.Equal(new StreamingTranscriptEvent("hello world how are you", IsFinal: true), utterance);
 
-        // transcript.done after finals is also cumulative; suppress.
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world how are you","language":"en","duration":1.25}""");
-        Assert.Null(done);
-
-        // FinalResult (used outside the coordinator path) reflects metadata + done text.
+        Assert.Null(collector.ApplyEvent("""{"type":"transcript.done","text":"hello world how are you","duration":1.25}"""));
         var final = collector.FinalResult("en");
         Assert.Equal("hello world how are you", final.Text);
-        Assert.Equal("en", final.DetectedLanguage);
         Assert.Equal(1.25, final.DurationSeconds);
     }
 
     [Fact]
-    public void TranscriptCollector_DoneEmitsSuffixWhenItExtendsPriorFinals()
+    public void TranscriptCollector_KeepsChunksWhenSpeechFinalStartsAfterThem()
     {
-        // Regression: previously the done event was suppressed any time
-        // per-segment finals had arrived, dropping a trailing utterance that
-        // xAI only finalized via transcript.done. Now the done text is
-        // checked against the joined finals — exact match suppresses, but a
-        // strict extension (joined + " " + suffix) emits the suffix as a
-        // delta so the coordinator captures the tail.
+        // A speech_final that starts after the held chunks carries only the tail.
         var collector = new XaiTranscriptCollector();
 
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        collector.ApplyEvent(Partial("first", isFinal: true, speechFinal: false, start: 0.0));
+        var utterance = collector.ApplyEvent(Partial("second", isFinal: true, speechFinal: true, start: 0.8));
 
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","language":"en","duration":0.5}""");
-        Assert.NotNull(done);
-        Assert.Equal("world", done.Text);
-        Assert.True(done.IsFinal);
+        Assert.Equal(new StreamingTranscriptEvent("first second", IsFinal: true), utterance);
+    }
+
+    [Theory]
+    [InlineData("hello world", "hello world, how are you?", "hello world, how are you?")]
+    [InlineData("hello", "hello", "hello")]
+    // Without a word boundary the shared letters are not a restatement.
+    [InlineData("I", "I'm here", "I I'm here")]
+    [InlineData("first", "second", "first second")]
+    public void TranscriptCollector_WithoutTimingsTreatsOnlyAPrefixAsRestated(
+        string chunk,
+        string speechFinal,
+        string expected)
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial(chunk, isFinal: true, speechFinal: false, start: null));
+        var utterance = collector.ApplyEvent(Partial(speechFinal, isFinal: true, speechFinal: true, start: null));
+
+        Assert.Equal(new StreamingTranscriptEvent(expected, IsFinal: true), utterance);
+    }
+
+    [Fact]
+    public void TranscriptCollector_PreservesRepeatedChunks()
+    {
+        // Saying "yes" twice locks two identical chunks; both belong in the utterance.
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("yes", isFinal: true, speechFinal: false, start: 0.0));
+        collector.ApplyEvent(Partial("yes", isFinal: true, speechFinal: false, start: 0.6));
+        var utterance = collector.ApplyEvent(Partial("", isFinal: true, speechFinal: true, start: 1.2));
+
+        Assert.Equal(new StreamingTranscriptEvent("yes yes", IsFinal: true), utterance);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneDeliversUnsettledChunks()
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
+        collector.ApplyEvent(Partial("still talking", isFinal: true, speechFinal: false, start: 1.0));
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"","words":[],"duration":2.0}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("still talking", IsFinal: true), done);
+        Assert.Equal("hello still talking", collector.FinalResult(null).Text);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneEmitsOnlyTextBeyondTheFinals()
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","duration":0.5}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("world", IsFinal: true), done);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneJoinsUnsettledChunksWithItsExtension()
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: false, start: 0.0));
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","duration":0.5}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("hello world", IsFinal: true), done);
     }
 
     [Fact]
     public void TranscriptCollector_DoneSuppressesExactCumulative()
     {
-        // The other half of the extends-prior-finals rule: when done text
-        // matches the joined finals exactly, it's a redundant summary and
-        // must NOT re-emit (would double-append).
         var collector = new XaiTranscriptCollector();
 
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"world","is_final":true,"speech_final":false}""");
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
+        collector.ApplyEvent(Partial("world", isFinal: true, speechFinal: true, start: 1.0));
 
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","language":"en","duration":0.5}""");
-        Assert.Null(done);
+        Assert.Null(collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","duration":0.5}"""));
     }
 
     [Fact]
     public void TranscriptCollector_DoneEmitsAsFinalWhenNoSegmentFinalsArrived()
     {
-        // Edge case: xAI sends transcript.done without preceding per-segment
-        // finals. The done text must reach the coordinator as a single final.
         var collector = new XaiTranscriptCollector();
 
         Assert.Null(collector.ApplyEvent("""{"type":"transcript.created"}"""));
 
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"single shot transcript","language":"en","duration":0.5}""");
-        Assert.NotNull(done);
-        Assert.Equal("single shot transcript", done.Text);
-        Assert.True(done.IsFinal);
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"single shot transcript","duration":0.5}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("single shot transcript", IsFinal: true), done);
     }
 
     [Fact]
     public void TranscriptCollector_IsTerminalFlipsOnDoneEvent()
     {
-        // The session uses this to unblock FinalizeAsync as soon as xAI
-        // declares the stream complete.
         var collector = new XaiTranscriptCollector();
         Assert.False(collector.IsTerminal);
 
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
         Assert.False(collector.IsTerminal);
 
-        collector.ApplyEvent("""{"type":"transcript.done","text":"hello","language":"en","duration":0.5}""");
+        collector.ApplyEvent("""{"type":"transcript.done","text":"hello","duration":0.5}""");
         Assert.True(collector.IsTerminal);
     }
 
-    [Fact]
-    public void TranscriptCollector_SpeechFinalOnFreshSegmentIsNotSuppressed()
+    private static string Partial(string text, bool isFinal, bool speechFinal, double? start)
     {
-        // speech_final=true alone is NOT a cumulative-summary signal — it's
-        // just an end-of-utterance marker that can appear on a normal final
-        // segment. The cumulative-summary suppression only fires when the
-        // text actually starts with the joined existing finals.
-        var collector = new XaiTranscriptCollector();
-
-        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"first","is_final":true,"speech_final":false}""");
-        Assert.NotNull(first);
-        Assert.Equal("first", first.Text);
-
-        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"second","is_final":true,"speech_final":true}""");
-        Assert.NotNull(second);
-        Assert.Equal("second", second.Text);
-        Assert.True(second.IsFinal);
-    }
-
-    [Fact]
-    public void TranscriptCollector_SpeechFinalPrefixWithoutWordBoundaryIsNotSuppressed()
-    {
-        // Regression: bare StartsWith would suppress a fresh segment that
-        // happens to begin with the same letters as the previous final
-        // (e.g. previous "I", next "I'm here"). The cumulative-summary
-        // suppression must require the prefix to end on a word boundary.
-        var collector = new XaiTranscriptCollector();
-
-        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"I","is_final":true,"speech_final":false}""");
-        Assert.Equal("I", first?.Text);
-
-        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"I'm here","is_final":true,"speech_final":true}""");
-        Assert.NotNull(second);
-        Assert.Equal("I'm here", second.Text);
-        Assert.True(second.IsFinal);
-    }
-
-    [Fact]
-    public void TranscriptCollector_PreservesRepeatedFinalSegments()
-    {
-        // A user genuinely saying the same word twice (e.g. "yes" then "yes")
-        // produces two finalized segments with identical text. Both must
-        // reach the coordinator — exact-text alone is not a retransmission
-        // signal, only cumulative speech_final=true after segment finals is.
-        var collector = new XaiTranscriptCollector();
-
-        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
-        Assert.NotNull(first);
-        Assert.Equal("yes", first.Text);
-
-        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
-        Assert.NotNull(second);
-        Assert.Equal("yes", second.Text);
-        Assert.True(second.IsFinal);
+        var timing = start is { } value
+            ? $",\"start\":{value.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"duration\":0.5"
+            : "";
+        return $$"""{"type":"transcript.partial","text":{{JsonSerializer.Serialize(text)}},"words":[],"is_final":{{(isFinal ? "true" : "false")}},"speech_final":{{(speechFinal ? "true" : "false")}}{{timing}}}""";
     }
 
     [Fact]

@@ -16,6 +16,7 @@ internal static class OpenAiTranscriptionClient
         IReadOnlyList<string> languageHints,
         string? responseFormat,
         string? prompt,
+        IReadOnlyList<string> keywords,
         CancellationToken ct)
     {
         using var content = new MultipartFormDataContent();
@@ -31,6 +32,9 @@ internal static class OpenAiTranscriptionClient
 
         if (!string.IsNullOrWhiteSpace(prompt))
             content.Add(new StringContent(prompt), "prompt");
+
+        foreach (var keyword in keywords)
+            content.Add(new StringContent(keyword), "keywords[]");
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,

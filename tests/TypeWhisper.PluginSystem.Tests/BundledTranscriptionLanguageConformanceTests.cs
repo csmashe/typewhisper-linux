@@ -117,6 +117,19 @@ public sealed class BundledTranscriptionLanguageConformanceTests
             Assert.Null(deepgram.ToLegacyLanguage(LanguageSelection.Automatic));
         }
 
+        // Cloudflare's original Whisper only auto-detects; Turbo also takes an explicit language.
+        using var cloudflare = new CloudflareAsrPlugin();
+        cloudflare.SelectModel("whisper");
+        Assert.True(cloudflare.ResolveEffectiveSelection(LanguageSelection.Explicit("de")).IsAutomatic);
+        cloudflare.SelectModel("whisper-large-v3-turbo");
+        Assert.Equal(
+            "de",
+            cloudflare.ToLegacyLanguage(LanguageSelection.Explicit("de-DE"))
+        );
+        Assert.Throws<TranscriptionLanguageNotSupportedException>(
+            () => cloudflare.ToLegacyLanguage(LanguageSelection.Explicit("tlh"))
+        );
+
         using var sherpa = new SherpaOnnxPlugin();
         sherpa.SelectModel("parakeet-tdt-0.6b");
         Assert.Equal(

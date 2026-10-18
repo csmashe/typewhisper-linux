@@ -1,12 +1,19 @@
 {
   "Settings.AccountId": "Konto-ID",
-  "Settings.AccountIdDescription": "Erforderliche Cloudflare-Konto-ID.",
+  "Settings.AccountIdDescription": "Ihre 32-stellige Cloudflare-Konto-ID aus dem Cloudflare-Dashboard.",
   "Settings.ApiToken": "API-Token",
-  "Settings.ApiTokenDescription": "Cloudflare-API-Token mit Workers-AI-Zugriff.",
+  "Settings.ApiTokenDescription": "Cloudflare-API-Token mit Workers-AI-Zugriff auf dieses Konto.",
   "Settings.TranscriptionModel": "Transkriptionsmodell",
-  "Settings.ModelDescription": "Wählen Sie das Cloudflare-ASR-Modell.",
+  "Settings.ModelDescription": "Whisper Large V3 Turbo akzeptiert eine gewählte Sprache und Wörterbuchbegriffe; Whisper erkennt die Sprache automatisch.",
   "Settings.EnterAccountIdAndApiToken": "Geben Sie zuerst Konto-ID und API-Token ein.",
-  "Settings.CredentialsSaved": "Anmeldedaten gespeichert. Die Remote-Validierung ist noch nicht implementiert.",
+  "Settings.InvalidAccountId": "Die Cloudflare-Konto-ID muss aus 32 Hexadezimalzeichen bestehen.",
+  "Settings.CredentialsValid": "Konto-ID und API-Token sind für Workers AI gültig.",
+  "Settings.TokenRejected": "Cloudflare hat das API-Token für dieses Konto abgelehnt. Verwenden Sie ein Token mit Workers-AI-Zugriff auf dieses Konto.",
+  "Settings.ValidationFailedStatus": "Cloudflare hat HTTP {0} zurückgegeben. Prüfen Sie Konto-ID und API-Token.",
+  "Settings.InvalidValidationResponse": "Cloudflare hat eine unerwartete Antwort zurückgegeben. Versuchen Sie es erneut.",
+  "Settings.CloudflareUnreachable": "Cloudflare ist nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+  "Settings.SettingsChangedDuringValidation": "Die Einstellungen wurden während der Prüfung geändert. Prüfen Sie erneut.",
+  "Errors.RecordingTooLarge": "Die Aufnahme ist für dieses Cloudflare-Modell zu groß. Verwenden Sie eine kürzere Aufnahme.",
   "Manifest.Name": "Cloudflare ASR",
   "Manifest.Description": "Cloudflare-Workers-AI-Whisper-Transkriptions-Engine"
 }

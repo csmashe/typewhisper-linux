@@ -141,6 +141,63 @@ public partial class AboutSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnExportAllData(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AboutSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.StorageProvider is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+                new FilePickerSaveOptions
+                {
+                    Title = Loc.Instance["Dialog.ExportAllData"],
+                    SuggestedFileName = $"typewhisper-data-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+                    DefaultExtension = "zip",
+                    FileTypeChoices =
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
+                }
+            );
+
+            var path = file?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            var result = await viewModel.ExportAllDataAsync(path);
+            var message = Loc.Instance.GetString("About.DataExported", result.FileCount);
+            if (!result.IncludesSettingsBackup)
+            {
+                message += "\n\n" + Loc.Instance["About.DataExportNoSettingsBackup"];
+            }
+
+            if (result.Skipped.Count > 0)
+            {
+                message += "\n\n" + Loc.Instance.GetString("About.DataExportSkipped", result.Skipped.Count);
+            }
+
+            await ShowMessage(Loc.Instance["About.AllData"], message);
+        }
+        catch (OperationCanceledException)
+        {
+            // The status line already says the export was canceled.
+        }
+        catch (Exception ex)
+        {
+            await ShowMessage(Loc.Instance["About.DataExportFailed"], ex.Message);
+        }
+    }
+
     private static async Task ShowMessage(string title, string message)
     {
         var dialog = new MessageDialogWindow();

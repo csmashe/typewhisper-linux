@@ -58,7 +58,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         bool useServerVad,
         string realtimeProtocol,
         CancellationToken ct,
-        IWebSocketTransportFactory? transportFactory = null
+        IWebSocketTransportFactory? transportFactory = null,
+        IReadOnlyList<string>? keywords = null
     )
     {
         var adapter = new OpenAiRealtimeWebSocketAdapter(
@@ -69,7 +70,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
             prompt,
             useServerVad,
             sendSessionUpdate: true,
-            realtimeProtocol
+            realtimeProtocol,
+            keywords
         );
         var pump = await WebSocketSessionPump.ConnectAsync(adapter, ct, transportFactory: transportFactory);
         return new OpenAiRealtimeStreamingSession(pump, adapter);
@@ -107,7 +109,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         byte[] wavAudio,
         IReadOnlyList<string> languageHints,
         string? prompt,
-        CancellationToken ct
+        CancellationToken ct,
+        IReadOnlyList<string>? keywords = null
     ) =>
         TranscribeWavAsync(
             OpenAiRealtimeEndpoint,
@@ -117,7 +120,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
             languageHints,
             prompt,
             realtimeProtocol: "auto",
-            ct
+            ct,
+            keywords: keywords
         );
 
     public static async Task<PluginTranscriptionResult> TranscribeWavAsync(
@@ -129,7 +133,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         string? prompt,
         string realtimeProtocol,
         CancellationToken ct,
-        IWebSocketTransportFactory? transportFactory = null
+        IWebSocketTransportFactory? transportFactory = null,
+        IReadOnlyList<string>? keywords = null
     )
     {
         await using var session = await ConnectAsync(
@@ -141,7 +146,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
             useServerVad: false,
             realtimeProtocol,
             ct,
-            transportFactory
+            transportFactory,
+            keywords
         );
         var pcm = ExtractPcm16Data(wavAudio);
         const int chunkBytes = SourceSampleRate * sizeof(short) / 5;
@@ -180,7 +186,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         IReadOnlyList<string> languageHints,
         string? prompt,
         bool useServerVad,
-        string realtimeProtocol = "auto"
+        string realtimeProtocol = "auto",
+        IReadOnlyList<string>? keywords = null
     )
     {
         var transcription = new Dictionary<string, object?>
@@ -192,6 +199,8 @@ internal sealed class OpenAiRealtimeStreamingSession : IStreamingSession, IStrea
         {
             if (languageHints.Count > 0)
                 transcription["languages"] = languageHints;
+            if (keywords is { Count: > 0 })
+                transcription["keywords"] = keywords;
             transcription["delay"] = "low";
         }
         else if ((languageHints.Count > 0 ? languageHints[0] : null) is { } language)
@@ -361,7 +370,8 @@ internal sealed class OpenAiRealtimeWebSocketAdapter(
     string? prompt,
     bool useServerVad,
     bool sendSessionUpdate,
-    string realtimeProtocol = "auto"
+    string realtimeProtocol = "auto",
+    IReadOnlyList<string>? keywords = null
 ) : IWebSocketSessionAdapter
 {
     private readonly Lock _audioStateLock = new();
@@ -407,7 +417,8 @@ internal sealed class OpenAiRealtimeWebSocketAdapter(
                             languageHints,
                             prompt,
                             useServerVad,
-                            realtimeProtocol
+                            realtimeProtocol,
+                            keywords
                         )
                     ),
                 ]

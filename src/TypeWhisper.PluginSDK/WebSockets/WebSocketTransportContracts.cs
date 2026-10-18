@@ -157,3 +157,15 @@ public interface IWebSocketSessionAdapter
     );
 }
 // ReSharper restore UnusedParameter.Global
+
+/// <summary>
+///     Optional for adapters whose protocol can end with a close frame instead of a terminal
+///     message. When the server closes while a required terminal signal is still missing, the
+///     pump asks the adapter first: a result carrying <see cref="WebSocketSessionSignal.Terminal" />
+///     completes the session, a fault fails it, and anything else keeps the pump's default fault.
+///     Runs on the receive loop, like <see cref="IWebSocketSessionAdapter.HandleMessage" />.
+/// </summary>
+public interface IWebSocketCloseAwareAdapter
+{
+    WebSocketInboundResult HandleClose(WebSocketCloseStatus? status, string? description);
+}

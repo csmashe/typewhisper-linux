@@ -61,6 +61,108 @@ public sealed class WebSocketSessionPumpConformanceTests
     }
 
     [Fact]
+    public async Task CloseAwareAdapter_CanCompleteRequiredTerminalOnClose()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        (WebSocketCloseStatus? Status, string? Description)? seen = null;
+        var adapter = new TestAdapter
+        {
+            OnClose = (status, description) =>
+            {
+                seen = (status, description);
+                return new WebSocketInboundResult(
+                    [new StreamingTranscriptEvent("tail", true)],
+                    WebSocketSessionSignal.Terminal
+                );
+            },
+        };
+        await using var pump = await StartAsync(adapter, transport);
+        var events = new List<StreamingTranscriptEvent>();
+        pump.TranscriptReceived += events.Add;
+
+        var finalize = pump.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueClose(WebSocketCloseStatus.NormalClosure, "done");
+
+        await finalize.WaitAsync(s_timeout);
+        Assert.Equal((WebSocketCloseStatus.NormalClosure, "done"), seen);
+        Assert.Equal("tail", Assert.Single(events).Text);
+        Assert.Null(pump.Fault);
+    }
+
+    [Fact]
+    public async Task CloseAwareAdapter_FaultOnCloseFailsFinalize()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        var adapter = new TestAdapter
+        {
+            OnClose = (_, _) => new WebSocketInboundResult(
+                [],
+                Fault: new TestProviderException("incomplete on close")
+            ),
+        };
+        await using var pump = await StartAsync(adapter, transport);
+
+        var finalize = pump.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueClose();
+
+        var exception = await Assert.ThrowsAsync<TestProviderException>(
+            () => finalize.WaitAsync(s_timeout)
+        );
+        Assert.Equal("incomplete on close", exception.Message);
+    }
+
+    [Fact]
+    public async Task CloseAwareAdapter_IsNotAskedWhenCloseInterruptsAMessage()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        var asked = false;
+        var adapter = new TestAdapter
+        {
+            OnClose = (_, _) =>
+            {
+                asked = true;
+                return new WebSocketInboundResult([], WebSocketSessionSignal.Terminal);
+            },
+        };
+        await using var pump = await StartAsync(adapter, transport);
+
+        var finalize = pump.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueText("""{"type":""", endOfMessage: false);
+        transport.EnqueueClose();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => finalize.WaitAsync(s_timeout));
+        Assert.Contains("before terminal", exception.Message);
+        Assert.False(asked);
+        Assert.Empty(adapter.Messages);
+    }
+
+    [Fact]
+    public async Task CloseAwareAdapter_IsNotAskedAboutEof()
+    {
+        var transport = new ScriptedWebSocketTransport();
+        var asked = false;
+        var adapter = new TestAdapter
+        {
+            OnClose = (_, _) =>
+            {
+                asked = true;
+                return new WebSocketInboundResult([], WebSocketSessionSignal.Terminal);
+            },
+        };
+        await using var pump = await StartAsync(adapter, transport);
+
+        var finalize = pump.FinalizeAsync(CancellationToken.None);
+        await transport.NextSentAsync();
+        transport.EnqueueEof();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => finalize.WaitAsync(s_timeout));
+        Assert.False(asked);
+    }
+
+    [Fact]
     public async Task AbnormalCloseBeforeTerminal_PreservesStatusAndReason()
     {
         var transport = new ScriptedWebSocketTransport();
@@ -307,8 +409,11 @@ public sealed class WebSocketSessionPumpConformanceTests
 
     private sealed class TestProviderException(string message) : Exception(message);
 
-    private sealed class TestAdapter : IWebSocketSessionAdapter
+    private sealed class TestAdapter : IWebSocketSessionAdapter, IWebSocketCloseAwareAdapter
     {
+        // Null answers like an adapter with no close-based completion, keeping the default fault.
+        internal Func<WebSocketCloseStatus?, string?, WebSocketInboundResult>? OnClose { get; init; }
+
         internal List<(WebSocketMessageType Type, byte[] Payload)> Messages { get; } =
             [];
         internal TaskCompletionSource TwoMessages { get; } =
@@ -396,5 +501,8 @@ public sealed class WebSocketSessionPumpConformanceTests
                 _ => WebSocketInboundResult.Empty,
             };
         }
+
+        public WebSocketInboundResult HandleClose(WebSocketCloseStatus? status, string? description) =>
+            OnClose?.Invoke(status, description) ?? WebSocketInboundResult.Empty;
     }
 }

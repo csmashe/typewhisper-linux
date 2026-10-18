@@ -94,6 +94,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
             "sample_rate=16000",
             "channels=1",
             "include_interim=true",
+            "include_language=true",
         };
 
         if (!string.IsNullOrWhiteSpace(language))
@@ -280,10 +281,17 @@ internal sealed class Reson8WebSocketAdapter(
 internal sealed class Reson8TranscriptCollector
 {
     private readonly List<string> _finals = [];
+    private readonly HashSet<string> _finalLanguages = new(StringComparer.OrdinalIgnoreCase);
+    private bool _finalWithoutLanguage;
     private string _interim = "";
 
     public bool IsFlushConfirmed { get; private set; }
     public string FinalText => string.Join(" ", _finals);
+
+    // Reson8 detects the language per utterance, so only a transcript whose finals all
+    // report the same one has a language.
+    public string? DetectedLanguage =>
+        !_finalWithoutLanguage && _finalLanguages.Count == 1 ? _finalLanguages.Single() : null;
 
     public StreamingTranscriptEvent? ApplyEvent(string json)
     {
@@ -311,6 +319,11 @@ internal sealed class Reson8TranscriptCollector
             return null;
 
         var isFinal = GetBool(root, "is_final");
+        // Interim results carry an empty language.
+        var language = GetString(root, "language")?.Trim();
+        if (string.IsNullOrEmpty(language))
+            language = null;
+
         if (isFinal)
         {
             _finals.Add(text);
@@ -321,7 +334,7 @@ internal sealed class Reson8TranscriptCollector
             _interim = text;
         }
 
-        return new StreamingTranscriptEvent(text, isFinal);
+        return new StreamingTranscriptEvent(text, isFinal) { DetectedLanguage = language };
     }
 
     public string ApplyEvent(StreamingTranscriptEvent evt)
@@ -330,7 +343,14 @@ internal sealed class Reson8TranscriptCollector
         {
             var trimmed = evt.Text.Trim();
             if (!string.IsNullOrWhiteSpace(trimmed))
+            {
                 _finals.Add(trimmed);
+                if (evt.DetectedLanguage is { } language)
+                    _finalLanguages.Add(language);
+                else
+                    _finalWithoutLanguage = true;
+            }
+
             _interim = "";
         }
         else

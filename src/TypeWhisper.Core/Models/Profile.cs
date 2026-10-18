@@ -10,6 +10,9 @@ namespace TypeWhisper.Core.Models;
 /// </summary>
 public sealed record Profile
 {
+    /// <summary>The <see cref="MemorySourceId" /> that turns memory recall off for the profile.</summary>
+    public const string MemorySourceOff = "off";
+
     public required string Id { get; init; }
     public required string Name { get; init; }
     public bool IsEnabled { get; init; } = true;
@@ -25,6 +28,13 @@ public sealed record Profile
     public bool? WhisperModeOverride { get; init; }
     public string? TranscriptionModelOverride { get; init; }
     public string? PromptActionId { get; init; }
+
+    /// <summary>
+    ///     Where the profile's prompt actions recall memories from: null follows the global
+    ///     memory setting, <see cref="MemorySourceOff" /> recalls nothing, and a memory plugin
+    ///     ID queries only that plugin, failing the action while it is unavailable.
+    /// </summary>
+    public string? MemorySourceId { get; init; }
     public string? HotkeyData { get; init; }
     public ProfileHotkeyBehavior HotkeyBehavior { get; init; } = ProfileHotkeyBehavior.StartDictation;
     public ProfileStylePreset StylePreset { get; init; } = ProfileStylePreset.Raw;
