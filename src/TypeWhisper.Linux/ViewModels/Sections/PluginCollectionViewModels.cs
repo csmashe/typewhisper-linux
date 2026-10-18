@@ -20,6 +20,7 @@ public partial class PluginCollectionRow : ObservableObject
         AddButtonLabel = definition.AddButtonLabel ?? "Add item";
         ItemFields = definition.ItemFields;
         ItemLabelFieldKey = definition.ItemLabelFieldKey;
+        IsSearchable = definition.IsSearchable;
         OwnerRow = ownerRow;
 
         foreach (var item in items)
@@ -37,8 +38,25 @@ public partial class PluginCollectionRow : ObservableObject
     private IReadOnlyList<PluginSettingDefinition> ItemFields { get; }
     private string? ItemLabelFieldKey { get; }
     public ObservableCollection<PluginCollectionItemRow> Items { get; } = [];
+    public bool IsSearchable { get; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasNoMatches))]
+    private string _filterText = string.Empty;
+
+    public bool HasNoMatches => Items.Count > 0 && !Items.Any(item => item.IsMatch);
     // ReSharper disable once UnusedAutoPropertyAccessor.Global  parent back-reference retained in the row's object graph; not safely removable without changing the constructor contract
     public PluginRow OwnerRow { get; }
+
+    // Applied when the query changes, not on every edit, so a row being typed into stays visible.
+    partial void OnFilterTextChanged(string value)
+    {
+        var query = value.Trim();
+        foreach (var item in Items)
+        {
+            item.IsMatch = query.Length == 0 || item.Contains(query);
+        }
+    }
 
     [RelayCommand]
     private void AddItem()
@@ -75,12 +93,14 @@ public partial class PluginCollectionRow : ObservableObject
             ItemLabelFieldKey
         ) { OwnerCollection = this };
         Items.Add(item);
+        OnPropertyChanged(nameof(HasNoMatches));
     }
 
     [RelayCommand]
     private void RemoveItem(PluginCollectionItemRow item)
     {
         Items.Remove(item);
+        OnPropertyChanged(nameof(HasNoMatches));
     }
 
     [RelayCommand]
@@ -104,7 +124,7 @@ public partial class PluginCollectionRow : ObservableObject
     }
 }
 
-public class PluginCollectionItemRow : ObservableObject
+public partial class PluginCollectionItemRow : ObservableObject
 {
     private readonly PluginSettingFieldRow? _labelField;
 
@@ -204,6 +224,16 @@ public class PluginCollectionItemRow : ObservableObject
     public ObservableCollection<PluginSettingFieldRow> Fields { get; } = [];
 
     public PluginCollectionRow? OwnerCollection { get; init; }
+
+    [ObservableProperty]
+    private bool _isMatch = true;
+
+    // Only visible text counts: a search must not reveal a masked secret or match "true".
+    internal bool Contains(string query) =>
+        Fields.Any(field =>
+            field is { IsHidden: false, IsSecretKind: false, IsSecretMultiline: false, IsBooleanKind: false }
+            && field.Value.Contains(query, StringComparison.OrdinalIgnoreCase)
+        );
 
     public string HiddenId
     {

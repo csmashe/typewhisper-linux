@@ -71,8 +71,10 @@ public sealed class PromptPaletteService
     ///     without opening the palette. Manual-only actions are not filtered here
     ///     (that's the B13 flag's purpose). Disabled actions are filtered by
     ///     <see cref="IPromptActionService.EnabledActions" /> so stale hotkeys are no-ops.
+    ///     <paramref name="memorySourceId" /> is the triggering profile's
+    ///     <see cref="Profile.MemorySourceId" />; null follows the global memory setting.
     /// </summary>
-    public async Task ExecuteActionDirectAsync(string actionId)
+    public async Task ExecuteActionDirectAsync(string actionId, string? memorySourceId = null)
     {
         var action = _promptActions.EnabledActions.FirstOrDefault(a => a.Id == actionId);
         if (action is null)
@@ -90,7 +92,7 @@ public sealed class PromptPaletteService
 
         // No palette window: streaming has no UI sink (null → no-op renders),
         // but the result still streams + falls back to batch before configured delivery.
-        await ExecuteActionAsync(action, captured, null, targetWindowId);
+        await ExecuteActionAsync(action, captured, null, targetWindowId, memorySourceId);
     }
 
     private async Task OpenPaletteAsync()
@@ -130,14 +132,15 @@ public sealed class PromptPaletteService
             return;
         }
 
-        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId);
+        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId, null);
     }
 
     private async Task ExecuteActionAsync(
         PromptAction action,
         string capturedText,
         PromptPaletteWindow? window,
-        string? targetWindowId
+        string? targetWindowId,
+        string? memorySourceId
     )
     {
         if (_processing.HasNoProviderForRequest(action.ProviderOverride))
@@ -162,7 +165,7 @@ public sealed class PromptPaletteService
         string result;
         try
         {
-            result = await RunActionAsync(action, capturedText, window, userCts.Token);
+            result = await RunActionAsync(action, capturedText, window, memorySourceId, userCts.Token);
 
             // Don't paste a result the user aborted while it was being finalized.
             userCts.Token.ThrowIfCancellationRequested();
@@ -321,6 +324,7 @@ public sealed class PromptPaletteService
         PromptAction action,
         string capturedText,
         PromptPaletteWindow? window,
+        string? memorySourceId,
         CancellationToken userToken
     )
     {
@@ -336,7 +340,8 @@ public sealed class PromptPaletteService
         try
         {
             streamed = await pump.RunAsync(
-                _processing.ProcessStreamingAsync(action, capturedText, ct: streamCts.Token),
+                _processing.ProcessStreamingAsync(action, capturedText, ct: streamCts.Token,
+                    memorySourceId: memorySourceId),
                 streamCts.Token
             );
         }
@@ -353,7 +358,7 @@ public sealed class PromptPaletteService
         )
         {
             // Streaming timed out (no user cancel) — fall back to batch.
-            return await BatchAsync(action, capturedText, userToken);
+            return await BatchAsync(action, capturedText, memorySourceId, userToken);
         }
 
         pump.ThrowIfNonRetryableFault();
@@ -361,13 +366,14 @@ public sealed class PromptPaletteService
         // Fall back to batch when the pump faulted or yielded nothing. A single
         // empty chunk (bulk-yield path) still sets ReceivedAnyChunk so it is not re-run.
         return pump.Faulted || !pump.ReceivedAnyChunk
-            ? await BatchAsync(action, capturedText, userToken)
+            ? await BatchAsync(action, capturedText, memorySourceId, userToken)
             : streamed;
     }
 
     private async Task<string> BatchAsync(
         PromptAction action,
         string capturedText,
+        string? memorySourceId,
         CancellationToken userToken
     )
     {
@@ -376,7 +382,8 @@ public sealed class PromptPaletteService
         batchCts.CancelAfter(TimeSpan.FromSeconds(60));
         try
         {
-            return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token);
+            return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token,
+                memorySourceId: memorySourceId);
         }
         catch (Exception ex) when (
             ClassifyCancellationOrigin(ex, userToken, batchCts.Token)

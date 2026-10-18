@@ -53,7 +53,15 @@ public sealed record PluginCollectionDefinition(
     IReadOnlyList<PluginSettingDefinition> ItemFields,
     string? ItemLabelFieldKey = null,
     string? AddButtonLabel = null
-);
+)
+{
+    /// <summary>
+    ///     Shows a search box above the items that hides rows whose visible text does not
+    ///     contain the query. Filtering only affects the view; saving still sends every item.
+    /// </summary>
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    public bool IsSearchable { get; init; }
+}
 
 /// <summary>A single item in a plugin collection, represented as a field-value map.</summary>
 // ReSharper disable once UnusedType.Global

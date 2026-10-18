@@ -529,7 +529,12 @@ public class App : Application
 
                 if (!string.IsNullOrWhiteSpace(profile.PromptActionId))
                 {
-                    FireAndForget(promptPalette.ExecuteActionDirectAsync(profile.PromptActionId));
+                    FireAndForget(
+                        promptPalette.ExecuteActionDirectAsync(
+                            profile.PromptActionId,
+                            profile.MemorySourceId
+                        )
+                    );
                 }
                 // else: nothing linked — no-op.
             };
