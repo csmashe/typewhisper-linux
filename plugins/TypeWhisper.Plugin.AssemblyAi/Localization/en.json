@@ -3,6 +3,8 @@
   "Settings.ApiKeyDescription": "Required for AssemblyAI transcription and streaming.",
   "Settings.TranscriptionModel": "Transcription model",
   "Settings.ModelDescription": "Choose the AssemblyAI speech model.",
+  "Settings.UseDictionaryTerms": "Send dictionary terms as keyterms",
+  "Settings.UseDictionaryTermsDescription": "Biases transcription toward your dictionary terms, each sent whole (commas included). AssemblyAI charges extra for keyterms with Universal-3 Pro and in non-English real-time dictation; Universal-2 includes them. Real-time dictation sends at most 100 terms of up to 50 characters. When off, AssemblyAI receives no dictionary terms.",
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyInvalid": "API key is invalid.",

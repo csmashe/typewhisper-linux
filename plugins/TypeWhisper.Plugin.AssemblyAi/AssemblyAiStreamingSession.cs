@@ -37,11 +37,12 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession, IStreaming
     public static async Task<AssemblyAiStreamingSession> ConnectAsync(
         string apiKey,
         string? language,
+        IReadOnlyList<string> keyterms,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new AssemblyAiWebSocketAdapter(apiKey, language),
+            new AssemblyAiWebSocketAdapter(apiKey, language, keyterms),
             ct
         );
         return new AssemblyAiStreamingSession(pump);
@@ -57,7 +58,8 @@ internal sealed class AssemblyAiStreamingSession : IStreamingSession, IStreaming
 
 internal sealed class AssemblyAiWebSocketAdapter(
     string apiKey,
-    string? language
+    string? language,
+    IReadOnlyList<string>? keyterms = null
 ) : IWebSocketSessionAdapter
 {
     internal const int MinimumChunkBytes = 1600;
@@ -84,6 +86,9 @@ internal sealed class AssemblyAiWebSocketAdapter(
         {
             url += "&speech_model=universal-streaming-multilingual";
         }
+
+        if (keyterms is { Count: > 0 })
+            url += "&keyterms_prompt=" + Uri.EscapeDataString(JsonSerializer.Serialize(keyterms));
 
         IReadOnlyDictionary<string, string> headers =
             new Dictionary<string, string>

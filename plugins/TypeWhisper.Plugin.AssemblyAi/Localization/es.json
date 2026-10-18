@@ -3,6 +3,8 @@
   "Settings.ApiKeyDescription": "Necesaria para la transcripción y el streaming de AssemblyAI.",
   "Settings.TranscriptionModel": "Modelo de transcripción",
   "Settings.ModelDescription": "Elige el modelo de voz de AssemblyAI.",
+  "Settings.UseDictionaryTerms": "Enviar términos del diccionario como keyterms",
+  "Settings.UseDictionaryTermsDescription": "Orienta la transcripción hacia los términos de su diccionario, enviados completos (con comas incluidas). AssemblyAI cobra un recargo por los keyterms con Universal-3 Pro y en el dictado en tiempo real que no es en inglés; Universal-2 los incluye. El dictado en tiempo real envía como máximo 100 términos de hasta 50 caracteres. Si está desactivado, AssemblyAI no recibe términos del diccionario.",
   "Settings.EnterApiKey": "Primero introduce una clave de API.",
   "Settings.ApiKeyValid": "La clave de API es válida.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
