@@ -233,6 +233,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<RecentTranscriptionsService>();
         services.AddSingleton<LastTranscriptionReadbackService>();
         services.AddSingleton<MemoryService>();
+        services.AddSingleton<DictionaryAliasSuggestionService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
