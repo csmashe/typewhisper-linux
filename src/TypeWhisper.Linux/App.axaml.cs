@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using System.Net.Sockets;
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -16,6 +17,7 @@ using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.UserData;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -44,6 +46,27 @@ public class App : Application
     ///     desktop.Shutdown(). Access is UI-thread-only.
     /// </summary>
     private static bool ClosePermitted { get; set; }
+
+    /// <summary>Set by <see cref="RequestRestart" />; Program starts the app again once it has exited.</summary>
+    internal static bool RestartRequested { get; private set; }
+
+    /// <summary>
+    ///     Quits through the normal shutdown, which finishes or stops active work, and starts the app
+    ///     again afterwards. False when the app is already quitting. Call on the UI thread.
+    /// </summary>
+    internal static bool RequestRestart()
+    {
+        if (ShuttingDown
+            || Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            return false;
+        }
+
+        ShuttingDown = true;
+        RestartRequested = true;
+        _ = ShutdownAndExitAsync(Program.Services, desktop);
+        return true;
+    }
 
     // ReSharper disable once UnusedAutoPropertyAccessor.Global -- diagnostic seam, kept for degraded-startup inspection.
     internal BootstrapReport? LastBootstrapReport { get; private set; }
@@ -181,6 +204,29 @@ public class App : Application
                     await dialog.ShowMessageAsync(
                         Loc.Instance["Security.SecretMigrationWarningTitle"],
                         secretMigrationWarning
+                    );
+                };
+            }
+
+            if (services.GetRequiredService<LocalDataResetService>().TakeIncompleteReport() is { } resetReport)
+            {
+                var resetReportShown = false;
+                main.Opened += async (_, _) =>
+                {
+                    if (resetReportShown)
+                    {
+                        return;
+                    }
+
+                    resetReportShown = true;
+                    await new MessageDialogWindow().ShowMessageAsync(
+                        Loc.Instance["About.ResetIncompleteTitle"],
+                        Loc.Instance.GetString(
+                            "About.ResetIncomplete",
+                            resetReport.RemainingCount,
+                            TypeWhisperEnvironment.BasePath,
+                            string.Join("\n", resetReport.Remaining)
+                        )
                     );
                 };
             }
