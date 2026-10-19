@@ -1,7 +1,7 @@
 {
   "id": "com.typewhisper.fireworks",
   "name": "Fireworks",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "TypeWhisper",
   "description": "Fireworks AI fast LLM inference",
   "networkAccess": "network",
