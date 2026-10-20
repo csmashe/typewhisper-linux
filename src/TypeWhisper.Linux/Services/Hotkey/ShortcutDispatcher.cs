@@ -39,6 +39,19 @@ internal sealed class ShortcutDispatcher
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
+    private bool _captureSuspended;
+    private bool _drainingCapture;
+    private readonly HashSet<KeyCode> _pressedKeys = [];
+
+    public void SetCaptureSuspended(bool suspended)
+    {
+        lock (_lock)
+        {
+            _captureSuspended = suspended;
+            _drainingCapture = _pressedKeys.Count != 0;
+            _pendingSelectionWorkflows.Clear();
+        }
+    }
 
     internal ShortcutDispatcher(TimeProvider? timeProvider = null)
     {
@@ -66,6 +79,8 @@ internal sealed class ShortcutDispatcher
             _readLastKeyDown = false;
             _mainDictationHeld = null;
             _recentKeyDown = false;
+            _pressedKeys.Clear();
+            _drainingCapture = false;
         }
     }
 
@@ -87,6 +102,8 @@ internal sealed class ShortcutDispatcher
             _readLastKeyDown = false;
             _mainDictationHeld = null;
             _recentKeyDown = false;
+            _pressedKeys.Clear();
+            _drainingCapture = false;
         }
 
         // Main and profile dictation share one recording session, so a single discard covers both.
@@ -105,8 +122,28 @@ internal sealed class ShortcutDispatcher
             return;
         }
 
+        bool suppress;
+        lock (_lock)
+        {
+            suppress = _captureSuspended || _drainingCapture;
+            if (pressed) _pressedKeys.Add(key);
+            else _pressedKeys.Remove(key);
+            if (_drainingCapture && _pressedKeys.Count == 0 && ShortcutMatcher.ModifiersMatch(mods, ModifierMask.None))
+                _drainingCapture = false;
+            if (suppress) _pendingSelectionWorkflows.Clear();
+        }
+
         if (pressed)
         {
+            // Cancel remains available during capture. Releases still stop an existing PTT session.
+            if (suppress)
+            {
+                if (ShortcutMatcher.Match(key, mods, set) == ShortcutMatchKind.Cancel
+                    && set.IsCancelEnabled && !ShortcutMatcher.CancelCollidesWithAnyBinding(set)
+                    && TryClaimKeyDown(ref _cancelKeyDown))
+                    Raise(CancelRequested, nameof(CancelRequested));
+                return;
+            }
             HandlePress(key, mods, set);
         }
         else

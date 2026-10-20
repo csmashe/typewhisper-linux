@@ -35,90 +35,38 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
         return true;
     }
 
-    public event EventHandler? DictationToggleRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? DictationToggleRequested;
 
-    public event EventHandler? DictationStartRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? DictationStartRequested;
 
-    public event EventHandler? DictationStopRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? DictationStopRequested;
 
-    public event EventHandler? DictationDiscardRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? DictationDiscardRequested;
 
-    public event EventHandler? PromptPaletteRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? PromptPaletteRequested;
 
-    public event EventHandler? TransformSelectionRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? TransformSelectionRequested;
 
-    public event EventHandler? RecentTranscriptionsRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? RecentTranscriptionsRequested;
 
-    public event EventHandler? CopyLastTranscriptionRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? CopyLastTranscriptionRequested;
 
-    public event EventHandler? ReadLastTranscriptionRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? ReadLastTranscriptionRequested;
 
-    public event EventHandler? PasteLastTranscriptionRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? PasteLastTranscriptionRequested;
 
-    public event EventHandler? CancelRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? CancelRequested;
 
     public event EventHandler<string>? PromptActionRequested;
 
     public event EventHandler<string>? ProfileDictationToggleRequested;
-    public event EventHandler<string>? ProfileDictationStartRequested { add { } remove { } }
+    public event EventHandler<string>? ProfileDictationStartRequested;
 
-    public event EventHandler? ProfileDictationStopRequested
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler? ProfileDictationStopRequested;
 
     public event EventHandler<string>? ProfileTextProcessingRequested;
 
-    public event EventHandler<string>? Failed
-    {
-        add { }
-        remove { }
-    }
+    public event EventHandler<string>? Failed { add { } remove { } }
 
     public static HotkeyService CreateHotkeyService()
     {
@@ -128,6 +76,26 @@ internal sealed class TestShortcutBackend : IGlobalShortcutBackend
     public void RaisePromptAction(string actionId)
     {
         PromptActionRequested?.Invoke(this, actionId);
+    }
+
+    public void RaiseCaptureTestEvents()
+    {
+        DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+        DictationStartRequested?.Invoke(this, EventArgs.Empty);
+        PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+        RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
+        CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+        ReadLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+        PasteLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+        TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+        ProfileDictationStartRequested?.Invoke(this, "profile");
+        ProfileDictationToggleRequested?.Invoke(this, "profile");
+        ProfileTextProcessingRequested?.Invoke(this, "profile");
+        PromptActionRequested?.Invoke(this, "action");
+        DictationStopRequested?.Invoke(this, EventArgs.Empty);
+        DictationDiscardRequested?.Invoke(this, EventArgs.Empty);
+        CancelRequested?.Invoke(this, EventArgs.Empty);
+        ProfileDictationStopRequested?.Invoke(this, EventArgs.Empty);
     }
 
     public void RaiseProfileDictationToggle(string profileId)

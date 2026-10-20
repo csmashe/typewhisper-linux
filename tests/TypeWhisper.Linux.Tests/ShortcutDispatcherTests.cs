@@ -7,6 +7,34 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class ShortcutDispatcherTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CaptureDiscardsQueuedWorkflowAndDrainsHeldKeysOnCancel(bool queuedBeforeCapture)
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle) with
+        {
+            PasteLastTranscriptionKey = KeyCode.VcV,
+            PasteLastTranscriptionModifiers = ModifierMask.LeftCtrl,
+        });
+        var calls = 0;
+        dispatcher.PasteLastTranscriptionRequested += () => calls++;
+        if (!queuedBeforeCapture) dispatcher.SetCaptureSuspended(true);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, true);
+        if (queuedBeforeCapture) dispatcher.SetCaptureSuspended(true);
+        dispatcher.SetCaptureSuspended(false);
+        // Cancellation or collision must not let repeats or release dispatch the workflow.
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, false);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+        Assert.Equal(0, calls);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.None, false);
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public void ReadLastTranscription_RaisesOncePerPress()
     {

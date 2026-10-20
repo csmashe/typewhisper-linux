@@ -74,6 +74,7 @@ public sealed class HotkeyService : IDisposable
     private readonly BackendSelector _selector;
 
     private IGlobalShortcutBackend? _backend;
+    private volatile bool _isSuspended;
 
     // Last registration result observed from the backend. Used so callers can
     // discover that the active backend can't deliver release events (i.e.
@@ -150,6 +151,21 @@ public sealed class HotkeyService : IDisposable
     ///     but downstream UI may surface a hint that only Toggle is effective.
     /// </summary>
     public bool BackendRequiresToggleMode => _backendRequiresToggleMode;
+
+    /// <summary>Suppresses shortcut starts while settings captures a chord. Stops and cancellation still pass.</summary>
+    public bool IsSuspended
+    {
+        get => _isSuspended;
+        set
+        {
+            lock (_lock)
+            {
+                if (_isSuspended == value) return;
+                _isSuspended = value;
+                _backend?.SetCaptureSuspended(value);
+            }
+        }
+    }
 
     /// <summary>
     ///     True when the current native desktop dictation binding has been verified or applied
@@ -336,37 +352,62 @@ public sealed class HotkeyService : IDisposable
             }
 
             var backend = _selector.Resolve();
+            backend.SetCaptureSuspended(_isSuspended);
             _onDictationToggleRequested = (_, _) =>
-                DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onDictationStartRequested = (_, _) =>
-                DictationStartRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) DictationStartRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onDictationStopRequested = (_, _) =>
                 DictationStopRequested?.Invoke(this, EventArgs.Empty);
             _onDictationDiscardRequested = (_, _) =>
                 DictationDiscardRequested?.Invoke(this, EventArgs.Empty);
             _onPromptPaletteRequested = (_, _) =>
-                PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) PromptPaletteRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onRecentTranscriptionsRequested = (_, _) =>
-                RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) RecentTranscriptionsRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onCopyLastTranscriptionRequested = (_, _) =>
-                CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onReadLastTranscriptionRequested = (_, _) =>
-                ReadLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) ReadLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onPasteLastTranscriptionRequested = (_, _) =>
-                PasteLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) PasteLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onTransformSelectionRequested = (_, _) =>
-                TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+            {
+                if (!_isSuspended) TransformSelectionRequested?.Invoke(this, EventArgs.Empty);
+            };
             _onCancelRequested = (_, _) => CancelRequested?.Invoke(this, EventArgs.Empty);
             _onPromptActionRequested = (_, actionId) =>
-                PromptActionHotkeyTriggered?.Invoke(this, actionId);
+            {
+                if (!_isSuspended) PromptActionHotkeyTriggered?.Invoke(this, actionId);
+            };
             _onProfileDictationToggleRequested = (_, profileId) =>
-                ProfileDictationToggleRequested?.Invoke(this, profileId);
+            {
+                if (!_isSuspended) ProfileDictationToggleRequested?.Invoke(this, profileId);
+            };
             _onProfileDictationStartRequested = (_, profileId) =>
-                ProfileDictationStartRequested?.Invoke(this, profileId);
+            {
+                if (!_isSuspended) ProfileDictationStartRequested?.Invoke(this, profileId);
+            };
             _onProfileDictationStopRequested = (_, _) =>
                 ProfileDictationStopRequested?.Invoke(this, EventArgs.Empty);
             _onProfileTextProcessingRequested = (_, profileId) =>
-                ProfileTextProcessingRequested?.Invoke(this, profileId);
+            {
+                if (!_isSuspended) ProfileTextProcessingRequested?.Invoke(this, profileId);
+            };
             _onBackendFailed = (_, message) => HookFailed?.Invoke(this, message);
             backend.DictationToggleRequested += _onDictationToggleRequested;
             backend.DictationStartRequested += _onDictationStartRequested;

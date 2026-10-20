@@ -1218,5 +1218,10 @@
   "About.ErrorCategoryFilter": "Категория ошибок",
   "Dictation.InsertionStrategy": "Стратегия вставки",
   "Profiles.HotkeyBehavior": "Действие горячей клавиши",
-  "Snippets.TriggerModeLabel": "Режим триггера"
+  "Snippets.TriggerModeLabel": "Режим триггера",
+  "Shortcuts.RecordShortcut": "Записать клавиши",
+  "Shortcuts.CancelCapture": "Отмена",
+  "Shortcuts.CaptureCancelled": "Запись отменена.",
+  "Shortcuts.CapturePrompt": "Нажмите клавишу или сочетание клавиш и отпустите все клавиши. Escape отменяет запись.",
+  "Shortcuts.UnsupportedCaptureKey": "Эта клавиша не поддерживается. Используйте букву, цифру, функциональную клавишу, клавишу навигации или один модификатор."
 }

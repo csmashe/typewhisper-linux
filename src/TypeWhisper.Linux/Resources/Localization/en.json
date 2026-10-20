@@ -1218,5 +1218,10 @@
   "About.ErrorCategoryFilter": "Error category",
   "Dictation.InsertionStrategy": "Insertion strategy",
   "Profiles.HotkeyBehavior": "Hotkey behavior",
-  "Snippets.TriggerModeLabel": "Trigger mode"
+  "Snippets.TriggerModeLabel": "Trigger mode",
+  "Shortcuts.RecordShortcut": "Record keys",
+  "Shortcuts.CancelCapture": "Cancel",
+  "Shortcuts.CaptureCancelled": "Recording cancelled.",
+  "Shortcuts.CapturePrompt": "Press a key or key combination, then release all keys to apply it. Press Escape to cancel.",
+  "Shortcuts.UnsupportedCaptureKey": "This key is not supported. Use a letter, digit, function key, navigation key, or a single modifier."
 }

@@ -9,6 +9,42 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class HotkeyServiceTests
 {
     [Fact]
+    public async Task CaptureSuppressesStartsAndWorkflowsButPreservesStopDiscardAndCancel()
+    {
+        var backend = new TestShortcutBackend();
+        using var service = new HotkeyService(new BackendSelector(() => backend));
+        service.Initialize();
+        await backend.WaitUntilSettledAsync();
+        var starts = 0;
+        var stops = 0;
+        service.DictationToggleRequested += (_, _) => starts++;
+        service.DictationStartRequested += (_, _) => starts++;
+        service.PromptPaletteRequested += (_, _) => starts++;
+        service.RecentTranscriptionsRequested += (_, _) => starts++;
+        service.CopyLastTranscriptionRequested += (_, _) => starts++;
+        service.ReadLastTranscriptionRequested += (_, _) => starts++;
+        service.PasteLastTranscriptionRequested += (_, _) => starts++;
+        service.TransformSelectionRequested += (_, _) => starts++;
+        service.ProfileDictationToggleRequested += (_, _) => starts++;
+        service.ProfileDictationStartRequested += (_, _) => starts++;
+        service.ProfileTextProcessingRequested += (_, _) => starts++;
+        service.PromptActionHotkeyTriggered += (_, _) => starts++;
+        service.DictationStopRequested += (_, _) => stops++;
+        service.DictationDiscardRequested += (_, _) => stops++;
+        service.CancelRequested += (_, _) => stops++;
+        service.ProfileDictationStopRequested += (_, _) => stops++;
+        service.IsSuspended = true;
+        Assert.Equal(0, stops);
+        backend.RaiseCaptureTestEvents();
+        Assert.Equal(0, starts);
+        Assert.Equal(4, stops);
+        service.IsSuspended = false;
+        backend.RaiseCaptureTestEvents();
+        Assert.Equal(12, starts);
+        Assert.Equal(8, stops);
+    }
+
+    [Fact]
     public void TrySetReadLastTranscriptionHotkeyFromString_CollidesWithCopyLast_IsRejected()
     {
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
