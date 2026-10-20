@@ -260,6 +260,7 @@
   "Dictation.AudioPlayerUnavailable": "No disponible: en este sistema no hay ningún reproductor de audio (pw-play, paplay o aplay) instalado.",
   "Dictation.AutoCleanup": "Limpieza automática",
   "Dictation.LiveCleanup": "Limpiar borradores durante la grabación",
+  "Dictation.LiveCleanupBlockedByPlugins": "La limpieza en tiempo real no está disponible mientras estos procesadores de texto estén activados: {0}. Desactívalos en Plugins para usarla. Tu preferencia se conserva. La limpieza final se ejecuta después de detener la grabación.",
   "Dictation.LiveCleanupHint": "Requiere transcripción en tiempo real y limpieza media o alta. Envía borradores modificables al proveedor de IA seleccionado mientras hablas. Los proveedores en la nube pueden cobrar por cada borrador. El dictado traducido y las acciones de perfil usan el procesamiento final. El texto se inserta una sola vez, después de detener la grabación.",
   "Dictation.AutoLearnCorrections": "Aprender automáticamente las correcciones aprobadas del historial",
   "Dictation.AutoLearnCorrectionsHint": "Cuando editas un elemento del historial, las sugerencias claras a nivel de frase pueden aprenderse de inmediato.",

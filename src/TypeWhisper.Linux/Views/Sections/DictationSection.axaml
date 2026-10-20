@@ -742,8 +742,12 @@
                                 </ComboBox>
                             </Grid>
                             <CheckBox IsChecked="{Binding LiveCleanupEnabled}"
+                                      IsEnabled="{Binding CanUseLiveCleanup}"
                                       AutomationProperties.Name="{loc:Str Dictation.LiveCleanup}"
                                       Content="{loc:Str Dictation.LiveCleanup}" />
+                            <TextBlock Text="{Binding LiveCleanupUnavailableReason}"
+                                       IsVisible="{Binding ShowLiveCleanupUnavailableReason}"
+                                       FontSize="12" Foreground="#E7D8A6" TextWrapping="Wrap" />
                             <TextBlock Text="{loc:Str Dictation.LiveCleanupHint}"
                                        FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
                         </StackPanel>

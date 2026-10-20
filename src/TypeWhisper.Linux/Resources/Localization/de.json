@@ -260,6 +260,7 @@
   "Dictation.AudioPlayerUnavailable": "Nicht verfügbar: Auf diesem System ist kein Audio-Player (pw-play, paplay oder aplay) installiert.",
   "Dictation.AutoCleanup": "Automatische Bereinigung",
   "Dictation.LiveCleanup": "Entwürfe während der Aufnahme bereinigen",
+  "Dictation.LiveCleanupBlockedByPlugins": "Live-Bereinigung ist nicht verfügbar, solange diese Textprozessoren aktiviert sind: {0}. Deaktiviere sie unter Plugins, um Live-Bereinigung zu nutzen. Deine Einstellung bleibt gespeichert. Die abschließende Bereinigung läuft weiterhin nach dem Stoppen.",
   "Dictation.LiveCleanupHint": "Benötigt Live-Transkription und mittlere oder hohe Bereinigung. Veränderliche Entwürfe werden während des Sprechens an den gewählten KI-Anbieter gesendet. Cloud-Anbieter können pro Entwurf abrechnen. Übersetzungen und Profil-Prompt-Aktionen werden nach dem Stoppen verarbeitet. Text wird einmal nach dem Stoppen eingefügt.",
   "Dictation.AutoLearnCorrections": "Genehmigte Verlaufskorrekturen automatisch lernen",
   "Dictation.AutoLearnCorrectionsHint": "Wenn Sie einen Verlaufseintrag bearbeiten, können eindeutige Phrasen-Vorschläge sofort gelernt werden.",
