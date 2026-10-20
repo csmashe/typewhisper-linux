@@ -10,6 +10,8 @@ namespace TypeWhisper.UiTests;
 [Collection("ui")]
 public sealed class ComputedLocalizationTests(UiSession ui)
 {
+    private static readonly string[] s_promptProperties = ["Summary", "PromptsHint", "ProviderWarningText", "EditorTitle"];
+
     [Fact]
     public async Task LanguageChange_RefreshesPromptPropertiesAndSnippetModesWithoutLosingDraft()
     {
@@ -18,7 +20,6 @@ public sealed class ComputedLocalizationTests(UiSession ui)
             var prompts = ui.Services.GetRequiredService<PromptsSectionViewModel>();
             var snippets = ui.Services.GetRequiredService<SnippetsSectionViewModel>();
             var changed = new HashSet<string?>();
-            void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => changed.Add(e.PropertyName);
             prompts.PropertyChanged += OnChanged;
             var language = Loc.Instance.CurrentLanguage;
             try
@@ -28,7 +29,7 @@ public sealed class ComputedLocalizationTests(UiSession ui)
                 snippets.SelectedTriggerMode = SnippetTriggerMode.ExactPhrase;
                 Loc.Instance.CurrentLanguage = language == "de" ? "en" : "de";
                 Dispatcher.UIThread.RunJobs();
-                foreach (var property in new[] { "Summary", "PromptsHint", "ProviderWarningText", "EditorTitle" })
+                foreach (var property in s_promptProperties)
                     Assert.Contains(property, changed);
                 Assert.Equal(Loc.Instance["Snippets.TriggerModeExactPhrase"],
                     snippets.TriggerModeOptions.Single(o => o.Value == SnippetTriggerMode.ExactPhrase).Label);
@@ -42,6 +43,10 @@ public sealed class ComputedLocalizationTests(UiSession ui)
                 Loc.Instance.CurrentLanguage = language;
                 Dispatcher.UIThread.RunJobs();
             }
+
+            return;
+
+            void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => changed.Add(e.PropertyName);
         }, CancellationToken.None);
     }
 }

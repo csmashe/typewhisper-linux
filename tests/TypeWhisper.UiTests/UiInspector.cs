@@ -21,6 +21,8 @@ internal static partial class UiInspector
     [GeneratedRegex(@"^[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)+$")]
     private static partial Regex KeyShape();
 
+    /// <param name="root">The rendered visual tree to inspect.</param>
+    /// <param name="knownKeys">Localization keys; one shown verbatim is an untranslated leak.</param>
     /// <param name="foreignText">Catalog text from other UI languages that is absent from the rendered
     ///     language and the English fallback; seeing it on screen means stale or leaked text.</param>
     internal static List<UiFinding> Inspect(Visual root, IReadOnlySet<string> knownKeys, IReadOnlySet<string>? foreignText = null)
@@ -28,10 +30,10 @@ internal static partial class UiInspector
         var findings = new List<UiFinding>();
         foreach (var visual in root.GetVisualDescendants())
         {
-            if (visual is not Control control || !control.IsEffectivelyVisible || control.Bounds.Width <= 0)
+            if (visual is not Control { IsEffectivelyVisible: true, Bounds.Width: > 0 } control)
                 continue;
 
-            if (control is TextBlock text && text.Text is { Length: > 0 } value)
+            if (control is TextBlock { Text: { Length: > 0 } value } text)
             {
                 var trimmed = value.Trim();
                 if (knownKeys.Contains(trimmed) || KeyShape().IsMatch(trimmed))
@@ -63,14 +65,14 @@ internal static partial class UiInspector
     private static bool IsInteractive(Control control) =>
         control is Button or ToggleButton or ComboBox or TextBox or Slider or NumericUpDown or AutoCompleteBox;
 
-    internal static string AccessibleName(Control control)
+    private static string AccessibleName(Control control)
     {
         var explicitName = Avalonia.Automation.AutomationProperties.GetName(control);
         if (!string.IsNullOrWhiteSpace(explicitName))
             return explicitName;
         try
         {
-            return ControlAutomationPeer.CreatePeerForElement(control).GetName() ?? "";
+            return ControlAutomationPeer.CreatePeerForElement(control).GetName();
         }
         catch (InvalidOperationException)
         {
@@ -83,7 +85,6 @@ internal static partial class UiInspector
         var hint = control switch
         {
             TextBox box => box.PlaceholderText is { Length: > 0 } placeholder ? $"placeholder \"{placeholder}\"" : null,
-            ToolTip => null,
             _ => null,
         } ?? (ToolTip.GetTip(control) is { } tip ? $"tooltip \"{tip}\"" : null);
         var name = string.IsNullOrEmpty(control.Name) ? "" : $"x:Name={control.Name} ";
@@ -94,7 +95,7 @@ internal static partial class UiInspector
     private static string Locate(Control control)
     {
         var parts = new List<string>();
-        Visual? current = control.GetVisualParent();
+        var current = control.GetVisualParent();
         while (current is not null && parts.Count < 3)
         {
             if (current is Control parent)
@@ -127,10 +128,10 @@ internal static partial class UiInspector
         var clipLeft = 0.0;
         var clipRight = root.Bounds.Width;
 
-        Visual? current = control.GetVisualParent();
+        var current = control.GetVisualParent();
         while (current is not null && current != root)
         {
-            if (current is Control ancestor && (ancestor.ClipToBounds || (ancestor is ScrollViewer sv && sv.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled)))
+            if (current is Control ancestor && (ancestor.ClipToBounds || ancestor is ScrollViewer { HorizontalScrollBarVisibility: ScrollBarVisibility.Disabled }))
             {
                 var ancestorTransform = ancestor.TransformToVisual(root);
                 if (ancestorTransform is not null)

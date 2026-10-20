@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -43,7 +44,7 @@ public sealed class ActionPluginSelectionTests(UiSession ui)
             vm.SelectedAction = missing;
             var combo = new ComboBox { DataContext = vm, Width = 300 };
             combo.Bind(ItemsControl.ItemsSourceProperty, new Binding(nameof(vm.ActionPluginOptions)));
-            combo.Bind(ComboBox.SelectedItemProperty, new Binding(nameof(vm.SelectedActionPlugin)) { Mode = BindingMode.TwoWay });
+            combo.Bind(SelectingItemsControl.SelectedItemProperty, new Binding(nameof(vm.SelectedActionPlugin)) { Mode = BindingMode.TwoWay });
             var window = new Window { Width = 400, Height = 200, Content = combo };
             window.Show();
             var language = Loc.Instance.CurrentLanguage;
@@ -71,14 +72,17 @@ public sealed class ActionPluginSelectionTests(UiSession ui)
                     transitioned = true;
                     Dispatcher.UIThread.Post(() =>
                     {
-                        if (transition == "other prompt" || transition == "reopen prompt")
+                        switch (transition)
                         {
-                            vm.SelectedAction = changedDraft;
-                            if (transition == "reopen prompt")
-                                vm.SelectedAction = missing;
+                            case "other prompt" or "reopen prompt":
+                                vm.SelectedAction = changedDraft;
+                                if (transition == "reopen prompt")
+                                    vm.SelectedAction = missing;
+                                break;
+                            case "language":
+                                Loc.Instance.CurrentLanguage = language == "de" ? "en" : "de";
+                                break;
                         }
-                        else if (transition == "language")
-                            Loc.Instance.CurrentLanguage = language == "de" ? "en" : "de";
                     });
                 };
                 var row = combo.ContainerFromIndex(vm.ActionPluginOptions.IndexOf(target))!;
@@ -89,8 +93,12 @@ public sealed class ActionPluginSelectionTests(UiSession ui)
                 popup.MouseUp(point, MouseButton.Left);
                 Dispatcher.UIThread.RunJobs();
                 Assert.False(combo.IsDropDownOpen);
-                var expected = transition == "other prompt" ? "other.plugin"
-                    : transition == "reopen prompt" ? "missing.plugin" : target.Value;
+                var expected = transition switch
+                {
+                    "other prompt" => "other.plugin",
+                    "reopen prompt" => "missing.plugin",
+                    _ => target.Value,
+                };
                 Assert.Equal(expected, Assert.IsType<ActionPluginOption>(combo.SelectedItem).Value);
                 Assert.Equal(expected, vm.EditTargetActionPluginId);
                 Assert.Equal(transition == "reopen prompt", vm.ActionPluginOptions.Any(o => o.Value == "missing.plugin"));

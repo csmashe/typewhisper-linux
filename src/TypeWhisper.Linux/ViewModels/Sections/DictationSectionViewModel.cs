@@ -1127,8 +1127,7 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(DownloadCudaRuntimeText));
             OnPropertyChanged(nameof(ClearGpuRuntimeText));
             OnPropertyChanged(nameof(AccelerationStatusText));
-            // Engine, model status, and active-model labels are computed text, not bindings
-            // to the catalog, so they are recomputed in the new language.
+            // Engine, model status, and active-model labels are computed text; recompute them in the new language.
             RefreshModelState();
         }
         finally

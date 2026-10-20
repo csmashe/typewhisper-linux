@@ -23,11 +23,11 @@ public sealed class DictationSectionViewModelLocalizationTests
             var commands = new SystemCommandAvailabilityService();
             using var models = new ModelManagerService(pluginManager, settings.Object, commands);
             using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
-            var a11yBus = new Mock<IAccessibilityBusActivation>();
-            a11yBus.Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+            var accessibilityBus = new Mock<IAccessibilityBusActivation>();
+            accessibilityBus.Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
             var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(typeof(DictationOrchestrator));
             var sut = new DictationSectionViewModel(dictation, models, audio, settings.Object, pluginManager, commands,
-                new CudaLibraryPathSetupService(), a11yBus.Object, () => []);
+                new CudaLibraryPathSetupService(), accessibilityBus.Object, () => []);
             Assert.Null(sut.SelectedModel);
             Assert.Equal("No engine selected", sut.EngineName);
 
@@ -82,8 +82,8 @@ public sealed class DictationSectionViewModelLocalizationTests
                 () => { }
             );
             // ReSharper disable once InconsistentNaming -- "a11y" is the standard numeronym for accessibility.
-            var a11yBus = new Mock<IAccessibilityBusActivation>();
-            a11yBus
+            var accessibilityBus = new Mock<IAccessibilityBusActivation>();
+            accessibilityBus
                 .Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(false);
             var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(
@@ -97,7 +97,7 @@ public sealed class DictationSectionViewModelLocalizationTests
                 pluginManager,
                 commands,
                 new CudaLibraryPathSetupService(),
-                a11yBus.Object,
+                accessibilityBus.Object,
                 () => []
             )
             {
@@ -239,8 +239,8 @@ public sealed class DictationSectionViewModelLocalizationTests
             postToUiThread: serviceJobs.Add
         );
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard numeronym for accessibility.
-        var a11yBus = new Mock<IAccessibilityBusActivation>();
-        a11yBus
+        var accessibilityBus = new Mock<IAccessibilityBusActivation>();
+        accessibilityBus
             .Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(
@@ -254,7 +254,7 @@ public sealed class DictationSectionViewModelLocalizationTests
             pluginManager,
             commands,
             new CudaLibraryPathSetupService(),
-            a11yBus.Object,
+            accessibilityBus.Object,
             () => []
         );
 

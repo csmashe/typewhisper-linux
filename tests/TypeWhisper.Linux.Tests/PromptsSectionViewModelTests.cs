@@ -27,8 +27,10 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             prompts.AddAction(other);
             using var plugins = TestPluginManagerFactory.Create();
             var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
-            var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, plugins, settings.Object);
-            sut.SelectedAction = missing;
+            var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, plugins, settings.Object)
+            {
+                SelectedAction = missing,
+            };
             Assert.Contains(sut.ActionPluginOptions, o => o.Value == "missing.plugin");
             // Refresh the labels while the missing ID is selected, then move to another draft.
             Loc.Instance.CurrentLanguage = original == "de" ? "es" : "de";
@@ -42,7 +44,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             sut.SaveActionCommand.Execute(null);
             Assert.Equal("missing.plugin", prompts.Actions.Single(a => a.Id == "missing").TargetActionPluginId);
             sut.StartCreateCommand.Execute(null);
-            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value == "missing.plugin" || o.Value == "other.plugin");
+            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value is "missing.plugin" or "other.plugin");
         }
         finally { Loc.Instance.CurrentLanguage = original; }
     }

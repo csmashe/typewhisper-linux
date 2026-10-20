@@ -34,6 +34,28 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         finally { Loc.Instance.CurrentLanguage = original; }
     }
 
+    [Fact]
+    public async Task LanguageChange_ReResolvesRecordingStatusText()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            using var audio = CreateAudioService();
+            var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
+            await StartRecordingWithFramesAsync(sut, audio);
+            Assert.Equal(Loc.Instance["Recorder.StatusRecording"], sut.StatusText);
+
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(Loc.Instance["Recorder.StatusRecording"], sut.StatusText);
+
+            await sut.PauseResumeCommand.ExecuteAsync(null);
+            Loc.Instance.CurrentLanguage = "es";
+            Assert.Equal(Loc.Instance["Recorder.StatusPaused"], sut.StatusText);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(5);
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.RecorderSectionViewModelTests"

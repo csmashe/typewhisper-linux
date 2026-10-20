@@ -627,7 +627,7 @@
                             <ItemsControl ItemsSource="{Binding AppInsertionStrategies}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:AppInsertionStrategyRow">
-                                        <Grid ColumnDefinitions="*,180,Auto"
+                                        <Grid ColumnDefinitions="*,150,Auto"
                                               ColumnSpacing="10"
                                               Margin="0,2,0,0">
                                             <TextBox Grid.Column="0"

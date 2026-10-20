@@ -22,7 +22,7 @@ public sealed class AboutSectionViewModelTests : IDisposable
         try
         {
             Loc.Instance.CurrentLanguage = "en";
-            var sut = CreateViewModel(new FakeProcessRunner(), entries: [ErrorLogEntry.Create("test", ErrorCategory.General)]);
+            var sut = CreateViewModel(new FakeProcessRunner(), entries: [ErrorLogEntry.Create("test")]);
             if (selectCategory)
                 sut.SelectedCategoryFilter = sut.CategoryFilters.Single(o => o.Key == ErrorCategory.General);
             Loc.Instance.CurrentLanguage = "de";

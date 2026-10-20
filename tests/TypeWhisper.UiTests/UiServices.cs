@@ -2,7 +2,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
-using TypeWhisper.Core.Services;
 using TypeWhisper.Integration.Tests.TestDoubles;
 using TypeWhisper.Linux;
 using TypeWhisper.Linux.Services;
@@ -11,8 +10,6 @@ using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.Evdev;
 using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Plugins;
-using TypeWhisper.PluginSDK;
-using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.UiTests;
 

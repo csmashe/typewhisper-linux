@@ -28,7 +28,7 @@ public sealed class ProfileSummaryConverter : IValueConverter, IMultiValueConver
         return string.Empty;
     }
 
-    public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
+    public object Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
     {
         if (values.Count > 0 && values[0] is Profile profile)
         {

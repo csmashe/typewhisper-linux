@@ -1,5 +1,4 @@
 using System.Globalization;
-using Avalonia.Data.Converters;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Converters;
 using TypeWhisper.Linux.Services.Localization;
@@ -62,7 +61,7 @@ public sealed class ProfileSummaryConverterTests
             UrlPatterns = ["github.com"],
         };
 
-        var result = ((IMultiValueConverter)ProfileSummaryConverter.Instance).Convert(
+        var result = ProfileSummaryConverter.Instance.Convert(
             [profile, "en"],
             typeof(string),
             null,

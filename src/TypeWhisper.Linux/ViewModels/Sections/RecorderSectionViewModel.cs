@@ -79,6 +79,13 @@ public partial class RecorderSectionViewModel : ObservableObject
         if (StatusText == _readyStatus)
             StatusText = ready;
         _readyStatus = ready;
+        // Recording/Paused text follows the recorder state, so re-resolve it too.
+        StatusText = _recorder.State switch
+        {
+            RecorderState.Recording => Loc.Instance["Recorder.StatusRecording"],
+            RecorderState.Paused => Loc.Instance["Recorder.StatusPaused"],
+            _ => StatusText,
+        };
         OnPropertyChanged(nameof(RecordButtonText));
         OnPropertyChanged(nameof(PauseResumeButtonText));
     }

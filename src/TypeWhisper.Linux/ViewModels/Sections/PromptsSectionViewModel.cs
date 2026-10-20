@@ -371,13 +371,12 @@ public partial class PromptsSectionViewModel : ObservableObject
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(value)
-            && ActionPluginOptions.All(option => option.Value != value))
-        {
-            _synthesizedActionPluginOption = new ActionPluginOption(
-                value, Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", value));
-            ActionPluginOptions.Add(_synthesizedActionPluginOption);
-        }
+        if (string.IsNullOrWhiteSpace(value) || ActionPluginOptions.Any(option => option.Value == value))
+            return;
+
+        _synthesizedActionPluginOption = new ActionPluginOption(
+            value, Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", value));
+        ActionPluginOptions.Add(_synthesizedActionPluginOption);
     }
 
     private void RemoveObsoleteActionPluginOption(ActionPluginOption option)
