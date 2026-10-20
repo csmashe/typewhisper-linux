@@ -101,7 +101,15 @@ public partial class PromptsSectionViewModel : ObservableObject
         _pluginManager.PluginStateChanged += (_, _) =>
             Dispatcher.UIThread.Post(RefreshPluginOptions);
         // Provider option labels ("Use default provider", "unavailable") are computed text.
-        Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(RefreshPluginOptions);
+        Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            OnPropertyChanged(nameof(Summary));
+            OnPropertyChanged(nameof(PromptsHint));
+            OnPropertyChanged(nameof(ProviderWarningText));
+            OnPropertyChanged(nameof(EditorTitle));
+            RefreshPluginOptions();
+            RefreshActions();
+        });
         _settings.SettingsChanged += value =>
             Dispatcher.UIThread.Post(() =>
             {
