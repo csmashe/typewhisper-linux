@@ -253,6 +253,8 @@
   "Dictation.AccelerationAuto": "Auto",
   "Dictation.AccelerationCpu": "CPU",
   "Dictation.AccelerationNvidiaCuda": "NVIDIA CUDA",
+  "Dictation.AccelerationVulkan": "Vulkan",
+  "Dictation.AccelVulkanUnavailable": "Vulkan ist auf diesem System nicht verfügbar.",
   "Dictation.ActiveModel": "Aktiv: {0}",
   "Dictation.AddLanguage": "Hinzufügen",
   "Dictation.AddedStrategy": "Einfügestrategie für {0} hinzugefügt.",
@@ -1216,6 +1218,5 @@
   "LanguageSelection.Invalid": "Ungültige Transkriptionssprache „{0}“. Wählen Sie Auto oder geben Sie ein gültiges BCP-47-Tag ein.",
   "LanguageSelection.AutomaticNotSupported": "{0} kann die Sprache nicht automatisch erkennen. Wählen Sie eine Sprache ausdrücklich aus.",
   "LanguageSelection.ExplicitNotSupported": "{0} akzeptiert keine ausdrückliche Sprachauswahl. Wählen Sie Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}.",
-  "Dictation.AccelerationVulkan": "Vulkan (AMD/Intel)"
+  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}."
 }

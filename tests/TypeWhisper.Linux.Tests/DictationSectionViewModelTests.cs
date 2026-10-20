@@ -16,6 +16,20 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class DictationSectionViewModelTests
 {
+    [Fact]
+    public void VulkanPreference_OnUnsupportedPlugin_RevertsToCpu()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        using var context = new ViewModelTestContext(AppSettings.Default,
+            new FakeAudioDeviceEnumerator(), [plugin]);
+        context.Sut.SelectedModel = context.Sut.ModelOptions.Single(m => m.ModelId == plugin.FirstFullModelId);
+        context.Sut.LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan;
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.Equal(AppSettings.LocalModelAccelerationCpu, context.Sut.LocalModelAcceleration);
+        Assert.False(context.Sut.CanUseVulkan);
+        Assert.Equal(Loc.Instance["Dictation.AccelVulkanNotSupported"], context.Sut.StatusText);
+    }
+
     [Theory]
     [InlineData("-1", -1, "-1")]
     [InlineData("0", 1, "1")]

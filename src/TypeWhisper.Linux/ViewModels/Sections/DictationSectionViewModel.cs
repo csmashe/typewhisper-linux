@@ -489,7 +489,7 @@ public partial class DictationSectionViewModel : ObservableObject
                 : _commands.HasCudaRuntimeLibraries
         );
 
-    public bool CanUseVulkan => SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+    public bool CanUseVulkan => _commands.HasVulkanGpu && SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
         TranscriptionAccelerationBackend.Vulkan
     ) == true;
 
@@ -551,6 +551,8 @@ public partial class DictationSectionViewModel : ObservableObject
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
+                    AppSettings.LocalModelAccelerationVulkan when !_commands.HasVulkanGpu =>
+                        Loc.Instance["Dictation.AccelVulkanUnavailable"],
                     AppSettings.LocalModelAccelerationVulkan when !CanUseVulkan =>
                         Loc.Instance["Dictation.AccelVulkanNotSupported"],
                     AppSettings.LocalModelAccelerationVulkan =>
@@ -1516,7 +1518,10 @@ public partial class DictationSectionViewModel : ObservableObject
 
         if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
         {
-            var message = Loc.Instance["Dictation.AccelVulkanNotSupported"];
+            var supportsVulkan = SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+                TranscriptionAccelerationBackend.Vulkan) == true;
+            var message = Loc.Instance[supportsVulkan
+                ? "Dictation.AccelVulkanUnavailable" : "Dictation.AccelVulkanNotSupported"];
             Dispatcher.UIThread.Post(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;

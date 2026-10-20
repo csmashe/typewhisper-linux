@@ -606,15 +606,11 @@ public sealed class WhisperCppPlugin
         var downgradedToCpu = false;
 
         if (desiredBackend == "vulkan" && !alreadyPinned
-            && (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64))
+            && CheckVulkanAvailability(
+                Path.GetDirectoryName(typeof(WhisperCppPlugin).Assembly.Location) ?? AppContext.BaseDirectory,
+                VulkanAvailability.GetUnavailableReason) is { } vulkanUnavailableDetail)
         {
-            cudaUnavailableDetail = "Vulkan acceleration is supported by this plugin on Linux x64.";
-            desiredBackend = "cpu";
-            downgradedToCpu = true;
-        }
-        else if (desiredBackend == "vulkan" && !alreadyPinned && !HasVulkanLoader())
-        {
-            cudaUnavailableDetail = "The system Vulkan loader (libvulkan.so.1) is not installed.";
+            cudaUnavailableDetail = vulkanUnavailableDetail;
             desiredBackend = "cpu";
             downgradedToCpu = true;
         }
@@ -1277,13 +1273,16 @@ public sealed class WhisperCppPlugin
         };
     }
 
-    private static bool HasVulkanLoader()
+    internal static string? CheckVulkanAvailability(string pluginDirectory, Func<string?> probe)
     {
-        if (!NativeLibrary.TryLoad("libvulkan.so.1", out var handle))
-            return false;
-
-        NativeLibrary.Free(handle);
-        return true;
+        if (probe() is { } reason) return reason;
+        foreach (var name in new[] { "libwhisper.so", "libggml-vulkan-whisper.so" })
+        {
+            var path = Path.Join(pluginDirectory, "runtimes", "vulkan", "linux-x64", name);
+            if (!File.Exists(path))
+                return $"The Vulkan runtime file is missing: {path}. Reinstall the whisper.cpp plugin.";
+        }
+        return null;
     }
 
     // Test seam: simulate the native runtime having loaded and pinned itself to a
@@ -1397,7 +1396,7 @@ public sealed class WhisperCppPlugin
     // without a restart. A [Cuda]-pinned runtime currently running CPU compute therefore
     // reports ActiveBackend=Cpu with no restart flag — a CUDA preference just triggers a
     // reload, which the caller can do.
-    private TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
+    internal TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
         string effectiveBackend,
         TranscriptionAccelerationPreference preference
     )
@@ -1432,7 +1431,7 @@ public sealed class WhisperCppPlugin
             return new TranscriptionAccelerationStatus(
                 active,
                 displayText,
-                $"Process is pinned to {_pinnedRuntimeBackend}. Restart to switch to {requestedRuntime.ToUpperInvariant()}.",
+                $"Process is pinned to {BackendDisplayName(_pinnedRuntimeBackend)}. Restart to switch to {BackendDisplayName(requestedRuntime)}.",
                 true
             );
 
@@ -1454,9 +1453,16 @@ public sealed class WhisperCppPlugin
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
-            $"{backend.ToUpperInvariant()} unavailable: {detail}",
+            $"{BackendDisplayName(backend)} unavailable: {detail}",
             RequiresRestart: requiresRestart
         );
+
+    private static string BackendDisplayName(string? backend) => backend switch
+    {
+        "cuda" => "NVIDIA CUDA",
+        "vulkan" => "Vulkan",
+        _ => "CPU",
+    };
 
     private static void TryDeleteFile(string path)
     {

@@ -150,6 +150,8 @@ public class AppSettingsTests
     [InlineData("NVIDIA-CUDA", "nvidia-cuda")]
     [InlineData("NVIDIA CUDA", "nvidia-cuda")]
     [InlineData("cuda", "nvidia-cuda")]
+    [InlineData("vulkan", "vulkan")]
+    [InlineData("Vulkan", "vulkan")]
     [InlineData("directml", "auto")]
     [InlineData("anything-else", "auto")]
     public void NormalizeLocalModelAcceleration_NormalizesKnownValuesAndFallsBackToAuto(

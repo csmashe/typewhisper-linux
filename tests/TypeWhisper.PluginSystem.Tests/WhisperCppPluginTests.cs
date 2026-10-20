@@ -108,7 +108,7 @@ public partial class WhisperCppPluginTests
     }
 
     [Fact]
-    public void SupportedAccelerationBackends_IsCpuAndNvidiaCuda()
+    public void SupportedAccelerationBackends_IncludesCpuCudaAndVulkan()
     {
         var plugin = new WhisperCppPlugin();
 
@@ -128,6 +128,63 @@ public partial class WhisperCppPluginTests
 
         Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
         Assert.False(plugin.AccelerationStatus.RequiresRestart);
+    }
+
+    [Fact]
+    public void SetAccelerationPreference_Vulkan_PreparesUntilLoaded()
+    {
+        using var plugin = new WhisperCppPlugin();
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.Vulkan);
+        Assert.Equal("Preparing Vulkan", plugin.AccelerationStatus.DisplayText);
+        plugin.MarkNativeRuntimeLoadedForTests("vulkan");
+        var loaded = plugin.CreateLoadedAccelerationStatus("vulkan", TranscriptionAccelerationPreference.Vulkan);
+        Assert.Equal(TranscriptionAccelerationBackend.Vulkan, loaded.ActiveBackend);
+        Assert.Equal("Using Vulkan", loaded.DisplayText);
+    }
+
+    [Theory]
+    [InlineData("cpu", TranscriptionAccelerationPreference.Vulkan, true, "CPU", "Vulkan")]
+    [InlineData("vulkan", TranscriptionAccelerationPreference.Cpu, false, "Vulkan", "CPU")]
+    [InlineData("vulkan", TranscriptionAccelerationPreference.NvidiaCuda, true, "Vulkan", "NVIDIA CUDA")]
+    [InlineData("cuda", TranscriptionAccelerationPreference.Vulkan, true, "NVIDIA CUDA", "Vulkan")]
+    [InlineData("cpu", TranscriptionAccelerationPreference.NvidiaCuda, true, "CPU", "NVIDIA CUDA")]
+    public void SetAccelerationPreference_RespectsNativePin(
+        string pin, TranscriptionAccelerationPreference preference, bool restart,
+        string pinnedName, string requestedName)
+    {
+        using var plugin = new WhisperCppPlugin();
+        plugin.MarkNativeRuntimeLoadedForTests(pin);
+        plugin.SetAccelerationPreference(preference);
+        Assert.Equal(restart, plugin.AccelerationStatus.RequiresRestart);
+        if (restart)
+            Assert.Equal($"Process is pinned to {pinnedName}. Restart to switch to {requestedName}.",
+                plugin.AccelerationStatus.Detail);
+        else
+            Assert.Equal(TranscriptionAccelerationBackend.Cpu, plugin.AccelerationStatus.ActiveBackend);
+    }
+
+    [Theory]
+    [InlineData("libwhisper.so")]
+    [InlineData("libggml-vulkan-whisper.so")]
+    public void VulkanPreflight_MissingRuntimeFile_RejectsBeforeNativeLoad(string missing)
+    {
+        using var temp = new TempAssetDir();
+        var runtime = Path.Join(temp.Path, "runtimes", "vulkan", "linux-x64");
+        Directory.CreateDirectory(runtime);
+        foreach (var name in new[] { "libwhisper.so", "libggml-vulkan-whisper.so" })
+            if (name != missing) File.WriteAllText(Path.Join(runtime, name), "fixture");
+        var detail = WhisperCppPlugin.CheckVulkanAvailability(temp.Path, () => null);
+        Assert.Contains(missing, detail);
+    }
+
+    [Theory]
+    [InlineData("The system Vulkan loader (libvulkan.so.1) is not installed.")]
+    [InlineData("No Vulkan GPU found.")]
+    public void VulkanPreflight_UnavailableHost_PreservesReason(string reason)
+    {
+        using var temp = new TempAssetDir();
+        var detail = WhisperCppPlugin.CheckVulkanAvailability(temp.Path, () => reason);
+        Assert.Equal(reason, detail);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.PluginSDK.Processes;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -179,6 +180,8 @@ public sealed partial class SystemCommandAvailabilityService
             return s.HasCudaGpu;
         }
     }
+
+    public bool HasVulkanGpu => _snapshot.HasVulkanGpu;
 
     public bool HasCudaRuntimeLibraries
     {
@@ -579,7 +582,8 @@ public sealed partial class SystemCommandAvailabilityService
             DesktopDetector.DetectId(),
             hasYdotool,
             ydotoolSocket is not null,
-            ydotoolSocket
+            ydotoolSocket,
+            VulkanAvailability.GetUnavailableReason() is null
         );
     }
 
@@ -746,7 +750,8 @@ public sealed record LinuxCapabilitySnapshot(
     string Compositor = "unknown",
     bool HasYdotool = false,
     bool HasYdotoolSocket = false,
-    string? YdotoolSocketPath = null
+    string? YdotoolSocketPath = null,
+    bool HasVulkanGpu = false
 )
 {
     // The only two values ClipboardToolName ever takes; identity checks reference
