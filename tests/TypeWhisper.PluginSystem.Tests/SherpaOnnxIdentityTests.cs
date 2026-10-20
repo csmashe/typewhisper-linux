@@ -1,5 +1,4 @@
 extern alias SherpaOnnx;
-using Xunit;
 using SherpaOnnxPlugin = SherpaOnnx::TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin;
 
 namespace TypeWhisper.PluginSystem.Tests;
