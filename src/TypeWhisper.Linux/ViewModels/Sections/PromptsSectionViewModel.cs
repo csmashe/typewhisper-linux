@@ -69,7 +69,6 @@ public partial class PromptsSectionViewModel : ObservableObject
     // Provider ComboBoxes can write a transient null selection while their lists rebuild.
     // Ignore those writes so a refresh cannot clear a saved selection.
     private bool _isRefreshingProviders;
-    private string? _lastDefaultLlmProvider;
 
     // Placeholder added for the editor's current unresolvable override, so it can be dropped again
     // when the editor moves on.
@@ -96,7 +95,7 @@ public partial class PromptsSectionViewModel : ObservableObject
         _pluginManager = pluginManager;
         _settings = settings;
         _errorLog = errorLog;
-        _lastDefaultLlmProvider = settings.Current.DefaultLlmProvider;
+        var lastDefaultLlmProvider = settings.Current.DefaultLlmProvider;
 
         _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) =>
@@ -105,10 +104,10 @@ public partial class PromptsSectionViewModel : ObservableObject
             Dispatcher.UIThread.Post(() =>
             {
                 HydrateCommandSettings(value);
-                if (!string.Equals(_lastDefaultLlmProvider, value.DefaultLlmProvider, StringComparison.Ordinal))
+                if (!string.Equals(lastDefaultLlmProvider, value.DefaultLlmProvider, StringComparison.Ordinal))
                 {
-                    _lastDefaultLlmProvider = value.DefaultLlmProvider;
-                    RefreshPluginOptions();
+                    lastDefaultLlmProvider = value.DefaultLlmProvider;
+                    RefreshProviderOptions();
                 }
                 OnPropertyChanged(nameof(DefaultLlmProvider));
                 OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
@@ -670,8 +669,34 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     private void RefreshPluginOptions()
     {
-        var selectedProvider = EditProviderOverride;
         var selectedActionPlugin = EditTargetActionPluginId;
+        RefreshProviderOptions();
+
+        ActionPluginOptions.Clear();
+        ActionPluginOptions.Add(
+            new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
+        );
+        foreach (
+            var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
+        )
+        {
+            ActionPluginOptions.Add(
+                new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
+            );
+        }
+
+        EditTargetActionPluginId = ActionPluginOptions.Any(option =>
+            option.Value == selectedActionPlugin
+        )
+            ? selectedActionPlugin
+            : null;
+    }
+
+    // Rebuilds only the provider pickers, so a provider-setting change never touches the
+    // editor's action-plugin selection.
+    private void RefreshProviderOptions()
+    {
+        var selectedProvider = EditProviderOverride;
 
         _isRefreshingProviders = true;
         try
@@ -734,24 +759,6 @@ public partial class PromptsSectionViewModel : ObservableObject
             _isRefreshingProviders = false;
         }
 
-        ActionPluginOptions.Clear();
-        ActionPluginOptions.Add(
-            new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
-        );
-        foreach (
-            var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
-        )
-        {
-            ActionPluginOptions.Add(
-                new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
-            );
-        }
-
-        EditTargetActionPluginId = ActionPluginOptions.Any(option =>
-            option.Value == selectedActionPlugin
-        )
-            ? selectedActionPlugin
-            : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
         OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
         OnPropertyChanged(nameof(SelectedSpokenCommandProvider));

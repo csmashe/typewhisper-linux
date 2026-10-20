@@ -814,14 +814,34 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
-    private static void InvokeRefreshPluginOptions(PromptsSectionViewModel viewModel)
+    private static void InvokeRefreshPluginOptions(PromptsSectionViewModel viewModel,
+        string methodName = "RefreshPluginOptions")
     {
         var method =
             typeof(PromptsSectionViewModel).GetMethod(
-                "RefreshPluginOptions",
+                methodName,
                 BindingFlags.Instance | BindingFlags.NonPublic
-            ) ?? throw new MissingMethodException(nameof(PromptsSectionViewModel), "RefreshPluginOptions");
+            ) ?? throw new MissingMethodException(nameof(PromptsSectionViewModel), methodName);
         method.Invoke(viewModel, null);
+    }
+
+    [Fact]
+    public void ProviderRefresh_KeepsUnavailableTargetActionPluginThroughSave()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Rewrite";
+        sut.EditSystemPrompt = "Rewrite this";
+        sut.EditTargetActionPluginId = "com.typewhisper.linear";
+
+        // A default-provider change refreshes only the provider pickers.
+        InvokeRefreshPluginOptions(sut, "RefreshProviderOptions");
+        sut.SaveActionCommand.Execute(null);
+
+        Assert.Equal("com.typewhisper.linear", Assert.Single(prompts.Actions).TargetActionPluginId);
     }
 
     private static void SetPrivateField(object target, string fieldName, object value)
