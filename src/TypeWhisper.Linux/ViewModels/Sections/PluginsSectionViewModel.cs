@@ -132,7 +132,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             if (
                 refreshKind == PluginListRefreshKind.Ambient
                 && existingRows.TryGetValue(plugin.Manifest.Id, out var existingRow)
-                && existingRow.HasUnsavedSettings
+                && (existingRow.HasUnsavedSettings || _refreshingModelPlugins.Contains(plugin.Manifest.Id))
                 && ReferenceEquals(existingRow.LoadedPlugin, plugin)
             )
             {
@@ -238,6 +238,10 @@ public partial class PluginsSectionViewModel : ObservableObject
         // in that order within each partition.
         BuildGroups(EnabledGroups, plugins.Where(p => p.IsEnabled));
         BuildGroups(DisabledGroups, plugins.Where(p => !p.IsEnabled));
+        foreach (var row in plugins)
+        {
+            ApplyRunningState(row.Id, row.LoadedPlugin!);
+        }
 
         LoadFailures.Clear();
         foreach (var failure in _pluginManager.LoadFailures)
@@ -290,6 +294,10 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         expandedPlugin.IsExpanded = true;
+        // The explicit refresh reloads once on completion. Ambient notifications must
+        // not start overlapping loads or replace controls while the user edits them.
+        if (_refreshingModelPlugins.Contains(expandedPlugin.Id))
+            return;
         BeginObservedSettingsLoad(
             expandedPlugin,
             refreshKind == PluginListRefreshKind.Ambient
@@ -373,11 +381,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         row.IsExpanded = true;
-        await LoadPluginSettingsAsync(row, SettingsReloadKind.ResetBaseline);
-        if (row.IsEnabled && row.HasModelCatalogProvider)
-        {
-            await RefreshModelCatalogAsync(row);
-        }
+        await LoadPluginSettingsAsync(row, SettingsReloadKind.PreserveDraft);
     }
 
     [RelayCommand]
@@ -512,19 +516,22 @@ public partial class PluginsSectionViewModel : ObservableObject
             return;
         }
 
-        if (loaded.Instance is IPluginSettingsProvider settingsProvider
-            && !await TrySaveFlatSettingsAsync(row, loaded, settingsProvider))
+        if (row.HasUnsavedSettings)
         {
-            return;
-        }
+            if (loaded.Instance is IPluginSettingsProvider settingsProvider
+                && !await TrySaveFlatSettingsAsync(row, loaded, settingsProvider))
+            {
+                return;
+            }
 
-        if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider
-            && !await TrySaveCollectionSettingsAsync(row, loaded, collectionProvider))
-        {
-            return;
-        }
+            if (loaded.Instance is IPluginCollectionSettingsProvider collectionProvider
+                && !await TrySaveCollectionSettingsAsync(row, loaded, collectionProvider))
+            {
+                return;
+            }
 
-        row.CaptureSettingsBaseline();
+            row.CaptureSettingsBaseline();
+        }
 
         _refreshingModelPlugins.Add(row.Id);
         row.IsRefreshingModels = true;
@@ -541,9 +548,10 @@ public partial class PluginsSectionViewModel : ObservableObject
                 },
                 TimeSpan.FromSeconds(30)
             );
-            row.Status = result.IsSuccess
+            var status = result.IsSuccess
                 ? Loc.Instance["Plugins.ModelsRefreshed"]
                 : Loc.Instance["Plugins.ModelRefreshFailed"];
+            row.Status = status;
 
             var currentRow = AllRows.FirstOrDefault(candidate => ReferenceEquals(candidate.LoadedPlugin, loaded));
             if (currentRow is { HasUnsavedSettings: true })
@@ -553,6 +561,9 @@ public partial class PluginsSectionViewModel : ObservableObject
             }
 
             await ReloadCurrentVisibleRowAsync(row, loaded, true);
+            var refreshedRow = AllRows.FirstOrDefault(candidate => ReferenceEquals(candidate.LoadedPlugin, loaded));
+            if (refreshedRow is not null)
+                refreshedRow.Status = status;
         }
         finally
         {

@@ -1,0 +1,27 @@
+{
+  "userSelectedLlmModel": true,
+  "selectedTranscriptionModel": "fixture/audio",
+  "fetchedTranscriptionModels": [
+    {
+      "Id": "fixture/audio",
+      "Name": "Fixture model",
+      "PromptPrice": "0",
+      "CompletionPrice": "0"
+    }
+  ],
+  "selectedLlmModel": "google/gemini-2.5-flash",
+  "fetchedModels": [
+    {
+      "Id": "openrouter/free",
+      "Name": "OpenRouter: Free Models Router (free)",
+      "PromptPrice": "0",
+      "CompletionPrice": "0"
+    },
+    {
+      "Id": "google/gemini-2.5-flash",
+      "Name": "Fixture model",
+      "PromptPrice": "0",
+      "CompletionPrice": "0"
+    }
+  ]
+}

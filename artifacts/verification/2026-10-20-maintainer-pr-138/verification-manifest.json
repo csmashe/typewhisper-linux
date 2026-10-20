@@ -1,0 +1,47 @@
+{
+  "original_lease": "78ae0b6dc19a0342baf6739a3caddad242606482",
+  "upstream_base": "e6be760bce3399e3541f897fe0c27ef09731eeb5",
+  "source_parent": "d5bb5ba10343a294d81257ee2e07cee051b7a2f6",
+  "source_sha256": {
+    "plugins/TypeWhisper.Plugin.OpenRouter/OpenRouterPlugin.cs": "9406086d91236db5d53044342943f3d7960f49d698e0d94d6362c8c60aecf290",
+    "src/TypeWhisper.Linux/Resources/Localization/de.json": "704c924da79bf75683bf6817be8b9cefe300954e622e6e610993a5a909b63c46",
+    "src/TypeWhisper.Linux/Resources/Localization/en.json": "974c278c84ea9499944a2f2e43e838226431fbfd38c30cff100905c9fa81bc15",
+    "src/TypeWhisper.Linux/Resources/Localization/es.json": "dcb255086c4729691dca5c3da0e2e0170d2fd3a43d0c295a96a6b58bce270594",
+    "src/TypeWhisper.Linux/Resources/Localization/ru.json": "816ab7ebf0852dc18261c4e73928bd178aa41bf508b75775afd59d6dc9ac6701",
+    "src/TypeWhisper.Linux/ViewModels/Sections/PluginsSectionViewModel.cs": "2c714dd1b4a3fdca46bae6609219eccf7fcc9a683cbdeee2a4b58d15396dd01b",
+    "tests/TypeWhisper.Linux.Tests/PluginSettingsActionsViewModelTests.cs": "60e870bfbb4487844982a9ecf3d5d7d2b493bd6079f0826c9fb0cd41719cae62",
+    "tests/TypeWhisper.PluginSystem.Tests/OpenRouterPluginTests.cs": "7a5d89e68dafb98ed46257cd5d47ba9d6bba0e1205dd33ad6010e3765b106187"
+  },
+  "release_binary_sha256": {
+    "src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper.dll": "bfd4722920d82b8e8f7e12f2f1eacf5c81d0b3697c8d407315a331daa125ced0",
+    "plugins/TypeWhisper.Plugin.OpenRouter/bin/Release/net10.0/TypeWhisper.Plugin.OpenRouter.dll": "d0e6e9d3253db88f04e114a34ecf6e01703d0b5b770d41c19759af61b8d7d407",
+    "tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll": "9bea31ea59f3d611ecc3de9e7decd057d10521d95d4ce12ddc9429f72652affa",
+    "tests/TypeWhisper.PluginSystem.Tests/bin/Release/net10.0/TypeWhisper.PluginSystem.Tests.dll": "52dd6a21ac58ac65fa90cf5c326a5f782e25cc023d19525bd8b5c9ea5146c781"
+  },
+  "tests": {
+    "Core": {
+      "passed": 1213,
+      "skipped": 0
+    },
+    "Cli": {
+      "passed": 197,
+      "skipped": 0
+    },
+    "Integration": {
+      "passed": 80,
+      "skipped": 0
+    },
+    "PluginSystem": {
+      "passed": 3467,
+      "skipped": 10
+    },
+    "Linux": {
+      "passed": 3236,
+      "skipped": 2
+    }
+  },
+  "user_app_pid": 1628450,
+  "user_app_preserved": true,
+  "public_openrouter_service_tested": false,
+  "controlled_real_provider_boundary_tested": true
+}

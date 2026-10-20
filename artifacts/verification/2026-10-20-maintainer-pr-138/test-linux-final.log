@@ -1,0 +1,12 @@
+mkdir -p "artifacts/test-results"
+"/tmp/typewhisper-dotnet/dotnet" test "tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj" -c Release --no-build --logger "trx" --results-directory "artifacts/test-results" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+Test run for /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:36.11]     TypeWhisper.Linux.Tests.TranscriptionWorkerLiveTests.AWorkerTranscribesLikeTheEngineInProcessAndSurvivesNativeFaults [SKIP]
+  Skipped TypeWhisper.Linux.Tests.TranscriptionWorkerLiveTests.AWorkerTranscribesLikeTheEngineInProcessAndSurvivesNativeFaults [1 ms]
+[xUnit.net 00:01:12.86]     TypeWhisper.Linux.Tests.Telemetry.SupportReportLiveTests.Real_data_folder_produces_a_content_free_report [SKIP]
+  Skipped TypeWhisper.Linux.Tests.Telemetry.SupportReportLiveTests.Real_data_folder_produces_a_content_free_report [1 ms]
+Data collector 'Blame' message: All tests finished running, Sequence file will not be generated.
+Results File: /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/artifacts/test-results/_beelink_2026-10-20_10_43_34_net10.0.trx
+
+Passed!  - Failed:     0, Passed:  3236, Skipped:     2, Total:  3238, Duration: 2 m 1 s - TypeWhisper.Linux.Tests.dll (net10.0)

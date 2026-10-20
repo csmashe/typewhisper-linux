@@ -1,0 +1,97 @@
+  TypeWhisper.Core -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Core/bin/Release/net10.0/TypeWhisper.Core.dll
+  TypeWhisper.ProcessTestChild -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/tests/TypeWhisper.ProcessTestChild/bin/Release/net10.0/TypeWhisper.ProcessTestChild.dll
+  TypeWhisper.PluginSDK -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.PluginSDK/bin/Release/net10.0/TypeWhisper.PluginSDK.dll
+  TypeWhisper.TranscriptionWorkerProbe -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/tests/TypeWhisper.TranscriptionWorkerProbe/bin/Release/net10.0/TypeWhisper.TranscriptionWorkerProbe.dll
+  TypeWhisper.Plugin.Webhook -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/plugins/TypeWhisper.Plugin.Webhook/bin/Release/net10.0/TypeWhisper.Plugin.Webhook.dll
+  TypeWhisper.Linux -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper.dll
+  ==> com.typewhisper.assemblyai (TypeWhisper.Plugin.AssemblyAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.assemblyai
+  ==> com.typewhisper.authenticated-cli (TypeWhisper.Plugin.AuthenticatedCli)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.authenticated-cli
+  ==> com.typewhisper.cerebras (TypeWhisper.Plugin.Cerebras)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.cerebras
+  ==> com.typewhisper.claude (TypeWhisper.Plugin.Claude)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.claude
+  ==> com.typewhisper.cloudflare-asr (TypeWhisper.Plugin.CloudflareAsr)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.cloudflare-asr
+  ==> com.typewhisper.cohere (TypeWhisper.Plugin.Cohere)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.cohere
+  ==> com.typewhisper.deepgram (TypeWhisper.Plugin.Deepgram)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.deepgram
+  ==> com.typewhisper.elevenlabs (TypeWhisper.Plugin.ElevenLabs)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.elevenlabs
+  ==> com.typewhisper.file-memory (TypeWhisper.Plugin.FileMemory)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.file-memory
+  ==> com.typewhisper.filler-words (TypeWhisper.Plugin.FillerWords)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.filler-words
+  ==> com.typewhisper.fireworks (TypeWhisper.Plugin.Fireworks)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.fireworks
+  ==> com.typewhisper.gemini (TypeWhisper.Plugin.Gemini)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.gemini
+  ==> com.typewhisper.gemma-local (TypeWhisper.Plugin.GemmaLocal)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.gemma-local
+  ==> com.typewhisper.gladia (TypeWhisper.Plugin.Gladia)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.gladia
+  ==> com.typewhisper.google-cloud-stt (TypeWhisper.Plugin.GoogleCloudStt)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.google-cloud-stt
+  ==> com.typewhisper.groq (TypeWhisper.Plugin.Groq)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.groq
+  ==> com.typewhisper.linear (TypeWhisper.Plugin.Linear)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.linear
+  ==> com.typewhisper.meta (TypeWhisper.Plugin.Meta)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.meta
+  ==> com.typewhisper.microsoft-ai (TypeWhisper.Plugin.MicrosoftAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.microsoft-ai
+  ==> com.typewhisper.obsidian (TypeWhisper.Plugin.Obsidian)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.obsidian
+  ==> com.typewhisper.openai (TypeWhisper.Plugin.OpenAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai
+  ==> com.typewhisper.openai-compatible (TypeWhisper.Plugin.OpenAiCompatible)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai-compatible
+  ==> com.typewhisper.openai-vector-memory (TypeWhisper.Plugin.OpenAiVectorMemory)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai-vector-memory
+  ==> com.typewhisper.openrouter (TypeWhisper.Plugin.OpenRouter)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openrouter
+  ==> com.typewhisper.parakeet-ctc (TypeWhisper.Plugin.ParakeetCtc)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.parakeet-ctc
+  ==> com.typewhisper.qwen3-stt (TypeWhisper.Plugin.Qwen3Stt)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.qwen3-stt
+  ==> com.typewhisper.reson8 (TypeWhisper.Plugin.Reson8)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.reson8
+  ==> com.typewhisper.script (TypeWhisper.Plugin.Script)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.script
+  ==> com.typewhisper.sherpa-onnx (TypeWhisper.Plugin.SherpaOnnx)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.sherpa-onnx
+  ==> com.typewhisper.smallest-ai (TypeWhisper.Plugin.SmallestAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.smallest-ai
+  ==> com.typewhisper.soniox (TypeWhisper.Plugin.Soniox)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.soniox
+  ==> com.typewhisper.speechmatics (TypeWhisper.Plugin.Speechmatics)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.speechmatics
+  ==> com.typewhisper.supertonic-tts (TypeWhisper.Plugin.SupertonicTts)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.supertonic-tts
+  ==> com.typewhisper.voxtral (TypeWhisper.Plugin.Voxtral)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.voxtral
+  ==> com.typewhisper.webhook (TypeWhisper.Plugin.Webhook)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.webhook
+  ==> com.typewhisper.whisper-cpp (TypeWhisper.Plugin.WhisperCpp)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.whisper-cpp
+  ==> com.typewhisper.xai (TypeWhisper.Plugin.Xai)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.xai
+
+  Done. Bundled plugins are in: /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins
+  On first run, BundledPluginDeployer will copy them into ~/.local/share/TypeWhisper/Plugins/
+  TypeWhisper.Linux.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll
+Test run for /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.51]     TypeWhisper.Linux.Tests.PluginSettingsActionsViewModelTests.RefreshCatalog_PreservesEditsAndRunningStateAcrossAmbientRebuild [FAIL]
+  Failed TypeWhisper.Linux.Tests.PluginSettingsActionsViewModelTests.RefreshCatalog_PreservesEditsAndRunningStateAcrossAmbientRebuild [119 ms]
+  Error Message:
+   Assert.Same() Failure: Values are not the same instance
+Expected: PluginRow { Actions = [], ActivityMessage = null, ActivityPercent = 0, ActivityProgress = null, CanEditSettings = True, ··· }
+Actual:   PluginRow { Actions = [], ActivityMessage = null, ActivityPercent = 0, ActivityProgress = null, CanEditSettings = True, ··· }
+  Stack Trace:
+     at TypeWhisper.Linux.Tests.PluginSettingsActionsViewModelTests.RefreshCatalog_PreservesEditsAndRunningStateAcrossAmbientRebuild() in /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/tests/TypeWhisper.Linux.Tests/PluginSettingsActionsViewModelTests.cs:line 334
+--- End of stack trace from previous location ---
+
+Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration: 119 ms - TypeWhisper.Linux.Tests.dll (net10.0)

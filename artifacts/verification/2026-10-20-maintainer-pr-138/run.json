@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-10-20T17:45:50+00:00",
+  "commit": "d5bb5ba10343a294d81257ee2e07cee051b7a2f6",
+  "branch": "maintainer/pr138",
+  "dirty_files": [
+    "plugins/TypeWhisper.Plugin.OpenRouter/OpenRouterPlugin.cs",
+    "src/TypeWhisper.Linux/Resources/Localization/de.json",
+    "src/TypeWhisper.Linux/Resources/Localization/en.json",
+    "src/TypeWhisper.Linux/Resources/Localization/es.json",
+    "src/TypeWhisper.Linux/Resources/Localization/ru.json",
+    "src/TypeWhisper.Linux/ViewModels/Sections/PluginsSectionViewModel.cs",
+    "tests/TypeWhisper.Linux.Tests/PluginSettingsActionsViewModelTests.cs",
+    "tests/TypeWhisper.PluginSystem.Tests/OpenRouterPluginTests.cs"
+  ],
+  "app_version": "0.18.0",
+  "host": {
+    "system": "Linux",
+    "release": "7.2.9-1-cachyos",
+    "machine": "x86_64",
+    "node": "beelink"
+  },
+  "run": {
+    "kind": "pr138-settings",
+    "audio": false
+  }
+}

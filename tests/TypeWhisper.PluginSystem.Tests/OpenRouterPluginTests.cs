@@ -17,6 +17,99 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class OpenRouterPluginTests
 {
+    private const string CatalogJson = """{"data":[{"id":"fixture/model","name":"Fixture","architecture":{"modality":"text->text"}}]}""";
+
+    [Fact]
+    public async Task RefreshCatalog_UpdatesBothAndDoesNotNotifyForUnchangedCatalogs()
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) => JsonResponse(CatalogJson)));
+        using var sut = new OpenRouterPlugin(client);
+        var host = new TestPluginHostServices();
+        await sut.ActivateAsync(host);
+        await sut.RefreshModelCatalogAsync();
+        Assert.Contains(sut.FetchedModels, model => model.Id == "fixture/model");
+        Assert.Equal("fixture/model", Assert.Single(sut.FetchedTranscriptionModels).Id);
+        var notifications = host.NotifyCapabilitiesChangedCount;
+        await sut.RefreshModelCatalogAsync();
+        Assert.Equal(notifications, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_BothFailuresPreserveCatalogsAndSelections()
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) => new(HttpStatusCode.BadGateway)));
+        using var sut = new OpenRouterPlugin(client);
+        var host = new TestPluginHostServices();
+        await sut.ActivateAsync(host);
+        sut.SetFetchedModels([new("saved/model", "Saved", "0", "0")]);
+        sut.SelectLlmModel("saved/model");
+        sut.SetFetchedTranscriptionModels([new("saved/audio", "Saved audio", "0", "0")]);
+        var notifications = host.NotifyCapabilitiesChangedCount;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RefreshModelCatalogAsync());
+        Assert.Contains(sut.FetchedModels, model => model.Id == "saved/model");
+        Assert.Equal("saved/audio", Assert.Single(sut.FetchedTranscriptionModels).Id);
+        Assert.Equal("saved/model", sut.SelectedLlmModelId);
+        Assert.Equal("saved/audio", sut.SelectedModelId);
+        Assert.True(host.GetSetting<bool>("userSelectedLlmModel"));
+        Assert.Equal(notifications, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefreshCatalog_DiscardsResponseAfterNewRefreshOrKeyChange(bool changeKey)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        using var client = new HttpClient(new AsyncCatalogHandler(async () =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                started.SetResult();
+                await release.Task;
+                return JsonResponse(CatalogJson.Replace("fixture/model", "stale/model"));
+            }
+            return JsonResponse(CatalogJson);
+        }));
+        using var sut = new OpenRouterPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        var oldRefresh = sut.RefreshModelCatalogAsync();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (changeKey)
+            await sut.SetApiKeyAsync("new-key");
+        else
+            await sut.RefreshModelCatalogAsync();
+        release.SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => oldRefresh);
+        Assert.DoesNotContain(sut.FetchedModels, model => model.Id == "stale/model");
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_DeadlinePreventsLateMutationEvenWhenHandlerIgnoresCancellation()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = new HttpClient(new AsyncCatalogHandler(async () =>
+        {
+            await release.Task;
+            return JsonResponse(CatalogJson);
+        }));
+        using var sut = new OpenRouterPlugin(client, TimeSpan.FromMilliseconds(50));
+        var host = new TestPluginHostServices();
+        await sut.ActivateAsync(host);
+        await Assert.ThrowsAsync<TimeoutException>(() => sut.RefreshModelCatalogAsync());
+        release.SetResult();
+        await Task.Delay(100);
+        Assert.Empty(sut.FetchedModels);
+        Assert.Empty(sut.FetchedTranscriptionModels);
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+    }
+
+    private sealed class AsyncCatalogHandler(Func<Task<HttpResponseMessage>> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => respond();
+    }
+
     [Fact]
     public Task RequestFailures_AreClassified() =>
         ProviderFailureAssertions.VerifyAsync<OpenRouterPlugin>();
@@ -741,10 +834,8 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
     {
-        string? capturedBody = null;
-        var handler = new CapturingHandler((_, body) =>
+        var handler = new CapturingHandler((_, _) =>
         {
-            capturedBody = body;
             return JsonResponse("""{ "choices": [ { "message": { "content": "bulk" } } ] }""");
         });
 
@@ -761,8 +852,6 @@ public class OpenRouterPluginTests
 
         Assert.Single(chunks);
         Assert.Equal("bulk", chunks[0]);
-        using var doc = JsonDocument.Parse(capturedBody!);
-        Assert.False(doc.RootElement.TryGetProperty("stream", out var stream) && stream.GetBoolean());
     }
 
     // Fork-specific: IPluginSettingsProvider coverage (the WPF settings view

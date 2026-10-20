@@ -43,6 +43,9 @@ public sealed class OpenRouterPlugin
     };
 
     private readonly HttpClient _httpClient;
+    private readonly TimeSpan _catalogDeadline;
+    private readonly object _catalogLock = new();
+    private long _catalogGeneration;
     private IPluginHostServices? _host;
     private bool _hasUserSelectedLlmModel;
     private List<OpenRouterFetchedModel> _fetchedTranscriptionModels = [];
@@ -99,9 +102,10 @@ public sealed class OpenRouterPlugin
     {
     }
 
-    internal OpenRouterPlugin(HttpClient httpClient)
+    internal OpenRouterPlugin(HttpClient httpClient, TimeSpan? catalogDeadline = null)
     {
         _httpClient = httpClient;
+        _catalogDeadline = catalogDeadline ?? TimeSpan.FromSeconds(20);
     }
 
     // ITypeWhisperPlugin
@@ -131,7 +135,11 @@ public sealed class OpenRouterPlugin
 
     public Task DeactivateAsync()
     {
-        _host = null;
+        lock (_catalogLock)
+        {
+            _catalogGeneration++;
+            _host = null;
+        }
         return Task.CompletedTask;
     }
 
@@ -251,16 +259,34 @@ public sealed class OpenRouterPlugin
 
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
-        var llmModels = await FetchModelsAsync(ct);
-        if (llmModels.Count > 0)
-            SetFetchedModels(llmModels);
-
-        var transcriptionModels = await FetchTranscriptionModelsAsync(ct);
-        if (transcriptionModels.Count > 0)
-            SetFetchedTranscriptionModels(transcriptionModels);
-
-        if (llmModels.Count == 0 && transcriptionModels.Count == 0)
-            throw new InvalidOperationException("Failed to fetch models from OpenRouter.");
+        long generation;
+        lock (_catalogLock)
+            generation = ++_catalogGeneration;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_catalogDeadline);
+        try
+        {
+            // Fetches do not mutate state. WaitAsync also bounds handlers that ignore cancellation.
+            var catalogs = await Task.WhenAll(
+                FetchModelsAsync(deadline.Token), FetchTranscriptionModelsAsync(deadline.Token))
+                .WaitAsync(deadline.Token);
+            lock (_catalogLock)
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                if (generation != _catalogGeneration || _host is null)
+                    throw new OperationCanceledException("OpenRouter catalog refresh was superseded.");
+                if (catalogs.All(models => models.Count == 0))
+                    throw new InvalidOperationException("Failed to fetch models from OpenRouter.");
+                if (catalogs[0].Count > 0)
+                    SetFetchedModels(catalogs[0]);
+                if (catalogs[1].Count > 0)
+                    SetFetchedTranscriptionModels(catalogs[1]);
+            }
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException("OpenRouter model discovery timed out.", ex);
+        }
     }
 
     internal string? ApiKey { get; private set; }
@@ -288,7 +314,12 @@ public sealed class OpenRouterPlugin
         var wasAvailable = IsAvailable;
         var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-        ApiKey = normalized;
+        lock (_catalogLock)
+        {
+            if (changed)
+                _catalogGeneration++;
+            ApiKey = normalized;
+        }
         if (_host is not null)
         {
             if (normalized is null)
@@ -334,7 +365,10 @@ public sealed class OpenRouterPlugin
 
     internal void SetFetchedModels(List<OpenRouterFetchedModel> models)
     {
-        _fetchedModels = NormalizeFetchedModels(models);
+        var normalized = NormalizeFetchedModels(models);
+        if (_fetchedModels.SequenceEqual(normalized))
+            return;
+        _fetchedModels = normalized;
         _host?.SetSetting(FetchedModelsSettingName, _fetchedModels);
         NormalizeSelectedLlmModel(persist: true);
         _host?.NotifyCapabilitiesChanged();
@@ -342,7 +376,10 @@ public sealed class OpenRouterPlugin
 
     internal void SetFetchedTranscriptionModels(List<OpenRouterFetchedModel> models)
     {
-        _fetchedTranscriptionModels = NormalizeFetchedTranscriptionModels(models);
+        var normalized = NormalizeFetchedTranscriptionModels(models);
+        if (_fetchedTranscriptionModels.SequenceEqual(normalized))
+            return;
+        _fetchedTranscriptionModels = normalized;
         _host?.SetSetting(FetchedTranscriptionModelsSettingName, _fetchedTranscriptionModels);
         NormalizeSelectedTranscriptionModel(persist: true);
         _host?.NotifyCapabilitiesChanged();

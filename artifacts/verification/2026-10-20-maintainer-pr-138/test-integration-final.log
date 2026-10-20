@@ -1,0 +1,8 @@
+mkdir -p "artifacts/test-results"
+"/tmp/typewhisper-dotnet/dotnet" test "tests/TypeWhisper.Integration.Tests/TypeWhisper.Integration.Tests.csproj" -c Release --no-build --logger "trx" --results-directory "artifacts/test-results" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+Test run for /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/tests/TypeWhisper.Integration.Tests/bin/Release/net10.0/TypeWhisper.Integration.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+Data collector 'Blame' message: All tests finished running, Sequence file will not be generated.
+Results File: /home/jshah/.t3/worktrees/typewhisper-linux/t3-ce20b95f/artifacts/test-results/_beelink_2026-10-20_10_43_35_net10.0.trx
+
+Passed!  - Failed:     0, Passed:    80, Skipped:     0, Total:    80, Duration: 30 s - TypeWhisper.Integration.Tests.dll (net10.0)
