@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services.AppImport;
 
 namespace TypeWhisper.Core.Services;
 
@@ -36,7 +37,13 @@ public sealed partial class DictionaryService : IDictionaryService
     private readonly ConcurrentDictionary<(string Original, bool CaseSensitive, bool IsRegex, bool SwallowCommandPunctuation), Regex>
         _correctionPatterns = new();
 
-    public DictionaryService(string filePath)
+    public DictionaryService(string filePath) : this(filePath, AtomicFileWrite.WriteAllText)
+    {
+    }
+
+    /// <param name="filePath">The dictionary JSON file.</param>
+    /// <param name="atomicWrite">Test seam replacing the atomic file write.</param>
+    internal DictionaryService(string filePath, Action<string, string> atomicWrite)
     {
         _store = new AtomicJsonStore<ImmutableArray<DictionaryEntry>>(
             filePath,
@@ -60,7 +67,8 @@ public sealed partial class DictionaryService : IDictionaryService
                         $"[DictionaryService] {diagnostic.Kind} at '{diagnostic.Path}': "
                         + (diagnostic.Exception?.Message ?? "invalid JSON")
                     ),
-            }
+            },
+            atomicWrite
         );
     }
 
@@ -130,6 +138,38 @@ public sealed partial class DictionaryService : IDictionaryService
             current.AddRange(additions);
             return true;
         });
+    }
+
+    public DictionaryImportCommitResult CommitReviewedImport(DictionaryImportReview review)
+    {
+        if (review.Additions.Count == 0)
+        {
+            return DictionaryImportCommitResult.NothingToImport;
+        }
+
+        var stale = false;
+        try
+        {
+            Commit(current =>
+            {
+                if (!DictionaryImportReview.MatchesBaseline(current, review.Baseline))
+                {
+                    stale = true;
+                    return false;
+                }
+
+                current.AddRange(review.Additions.Select(SanitizeEntry));
+                return true;
+            });
+        }
+        catch (AtomicFileWriteIndeterminateCommitException)
+        {
+            // The entries are in the published file the store now reloads; only crash durability is unknown.
+            EntriesChanged?.Invoke();
+            return DictionaryImportCommitResult.ImportedNotDurable;
+        }
+
+        return stale ? DictionaryImportCommitResult.Stale : DictionaryImportCommitResult.Imported;
     }
 
     public void UpdateEntry(DictionaryEntry entry)

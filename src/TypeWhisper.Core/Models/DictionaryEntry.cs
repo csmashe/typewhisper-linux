@@ -47,7 +47,7 @@ public sealed record DictionaryEntry
     /// <summary>Optional acoustic similarity threshold for the CTC stage, 0.4–0.95; null uses the engine default.</summary>
     public float? CtcMinSimilarity { get; init; }
 
-    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global -- read by System.Text.Json when the dictionary is saved.
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? LastUsedAt { get; init; }
     public DateTime? LastCorrectedAt { get; init; }

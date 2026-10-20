@@ -54,8 +54,18 @@
                            VerticalAlignment="Center" />
                 <Button Grid.Column="1"
                         Content="{loc:Str Common.Import}"
-                        Click="OnImport"
-                        Padding="12,7" />
+                        Padding="12,7">
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <MenuItem Header="{loc:Str Dictionary.ImportFromCsv}"
+                                      Click="OnImport" />
+                            <MenuItem Header="{loc:Str Dictionary.ImportFromHandy}"
+                                      Click="OnImportFromHandy" />
+                            <MenuItem Header="{loc:Str Dictionary.ImportFromWispr}"
+                                      Click="OnImportFromWispr" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
                 <Button Grid.Column="2"
                         Content="{loc:Str Common.Export}"
                         Click="OnExport"

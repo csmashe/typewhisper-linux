@@ -367,6 +367,7 @@ install_ubuntu_runtime() {
     libjack-jackd2-0 \
     libasound2t64 \
     libsm6 \
+    libsqlite3-0 \
     libssl3t64 \
     libstdc++6 \
     libx11-6 \
@@ -686,6 +687,7 @@ DEB_EXPECTED_DEPENDENCY_GROUPS=(
   "zlib1g"
   "libgomp1"
   "libgssapi-krb5-2"
+  "libsqlite3-0"
   "ca-certificates"
   "tzdata"
   "libasound2t64 | libasound2"
@@ -714,6 +716,7 @@ RPM_EXPECTED_REQUIREMENTS=(
   "libz.so.1()(64bit)"
   "libgomp.so.1()(64bit)"
   "libgssapi_krb5.so.2()(64bit)"
+  "libsqlite3.so.0()(64bit)"
   "ca-certificates"
   "tzdata"
   "libjack.so.0()(64bit)"
@@ -1099,6 +1102,9 @@ soname_is_declared_hard_dependency() {
       ;;
     libgssapi_krb5.so.2)
       deb_prefix="libgssapi-krb5-2"
+      ;;
+    libsqlite3.so.0)
+      deb_prefix="libsqlite3-0"
       ;;
     libasound.so.2)
       deb_prefix="libasound2"

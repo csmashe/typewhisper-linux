@@ -1,0 +1,70 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        x:Class="TypeWhisper.Linux.Views.AppImportWindow"
+        x:DataType="vm:AppImportViewModel"
+        RequestedThemeVariant="Dark"
+        Width="560"
+        Height="520"
+        MinWidth="420"
+        MinHeight="360"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Title="{Binding Title}">
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20">
+        <StackPanel Spacing="6">
+            <TextBlock Text="{Binding Title}"
+                       FontSize="20"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="{Binding SourceText}"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Margin="0,12,0,8" Spacing="6">
+            <TextBlock Text="{Binding LoadingText}"
+                       IsVisible="{Binding IsLoading}" />
+            <TextBlock Text="{Binding Message}"
+                       IsVisible="{Binding HasMessage}"
+                       TextWrapping="Wrap" />
+            <TextBlock Text="{Binding Summary}"
+                       TextWrapping="Wrap"
+                       FontWeight="SemiBold" />
+        </StackPanel>
+
+        <ListBox Grid.Row="2"
+                 ItemsSource="{Binding Lines}">
+            <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:AppImportLineItem">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <TextBlock Text="{Binding Entry}"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding OutcomeLabel}"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <StackPanel Grid.Row="3"
+                    Margin="0,16,0,0"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Right">
+            <Button Content="{loc:Str Common.Cancel}"
+                    Click="CancelButton_OnClick" />
+            <!-- ReSharper disable once Xaml.StyleClassNotFound — 'accent' is a built-in Avalonia FluentTheme Button style class defined in the theme assembly, not visible to the analyzer -->
+            <Button Content="{Binding AddButtonText}"
+                    IsEnabled="{Binding CanAdd}"
+                    Classes="accent"
+                    Click="AddButton_OnClick" />
+        </StackPanel>
+    </Grid>
+</Window>
