@@ -1155,6 +1155,12 @@ public partial class DictationSectionViewModel : ObservableObject
             new("sv", "Svenska"),
             new("da", "Dansk"),
             new("fi", "Suomi"),
+            new("el", "Ελληνικά"),
+            new("ar", "العربية"),
+            new("ja", "日本語"),
+            new("ko", "한국어"),
+            new("zh", "中文"),
+            new("vi", "Tiếng Việt"),
         ];
     }
 

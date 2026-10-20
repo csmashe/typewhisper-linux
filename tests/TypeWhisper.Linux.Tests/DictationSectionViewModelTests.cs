@@ -481,6 +481,32 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public async Task ExplicitOnlyEngine_OffersEverySupportedLanguageWithoutAuto()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { Language = "ja", SelectedModelId = null },
+            devices,
+            [plugin]
+        );
+
+        context.Sut.SelectedModel = Assert.Single(
+            context.Sut.ModelOptions,
+            option => option.ModelId == plugin.FourthFullModelId
+        );
+        await WaitUntilAsync(() =>
+            context.Sut.LanguageChoices.Select(option => option.Code).Order()
+                .SequenceEqual(ModelDependentLanguagePlugin.ExplicitOnlyLanguages)
+        );
+
+        Assert.Equal("ja", context.Sut.SelectedLanguageOption?.Code);
+        Assert.False(context.Sut.LanguageSelectionRequired);
+    }
+
+    [Fact]
     public async Task AutoOnlyEngine_InvalidSavedChoice_ShowsSwitchToAutoWarning()
     {
         var plugin = new ModelDependentLanguagePlugin();
@@ -852,6 +878,11 @@ public sealed class DictationSectionViewModelTests
         private const string FirstModelId = "multilingual";
         private const string SecondModelId = "english-only";
         private const string ThirdModelId = "auto-only";
+        private const string FourthModelId = "explicit-only";
+
+        // Cohere Transcribe's languages.
+        internal static string[] ExplicitOnlyLanguages { get; } =
+            ["ar", "de", "el", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "vi", "zh"];
 
         public string FirstFullModelId =>
             ModelManagerService.GetPluginModelId(PluginId, FirstModelId);
@@ -859,6 +890,8 @@ public sealed class DictationSectionViewModelTests
             ModelManagerService.GetPluginModelId(PluginId, SecondModelId);
         public string ThirdFullModelId =>
             ModelManagerService.GetPluginModelId(PluginId, ThirdModelId);
+        public string FourthFullModelId =>
+            ModelManagerService.GetPluginModelId(PluginId, FourthModelId);
         public string PluginId => "com.test.language-picker";
         public string PluginName => "Language picker fake";
         public string PluginVersion => "1.0.0";
@@ -870,11 +903,12 @@ public sealed class DictationSectionViewModelTests
             new(FirstModelId, "Multilingual"),
             new(SecondModelId, "English only"),
             new(ThirdModelId, "Auto only"),
+            new(FourthModelId, "Explicit only"),
         ];
         public string? SelectedModelId { get; private set; }
         public bool SupportsTranslation { get; init; }
         public LanguageSelectionSupport AutomaticDetectionSupport =>
-            SelectedModelId == SecondModelId
+            SelectedModelId is SecondModelId or FourthModelId
                 ? LanguageSelectionSupport.Unsupported
                 : LanguageSelectionSupport.Supported;
         public LanguageSelectionSupport ExplicitSelectionSupport =>
@@ -882,7 +916,12 @@ public sealed class DictationSectionViewModelTests
                 ? LanguageSelectionSupport.Unsupported
                 : LanguageSelectionSupport.Supported;
         public IReadOnlyList<string> SupportedLanguages =>
-            SelectedModelId == SecondModelId ? ["en"] : ["de", "fr"];
+            SelectedModelId switch
+            {
+                SecondModelId => ["en"],
+                FourthModelId => ExplicitOnlyLanguages,
+                _ => ["de", "fr"],
+            };
 
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
         public Task DeactivateAsync() => Task.CompletedTask;
