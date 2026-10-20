@@ -1,8 +1,0 @@
-{
-  "expand_no_requests_or_writes": true,
-  "both_catalogs_persisted": true,
-  "selection_and_marker_preserved": true,
-  "unchanged_refresh_no_writes": true,
-  "failure_visible_and_cache_preserved": true,
-  "inflight_edit_survived_refresh_and_save": true
-}

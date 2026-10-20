@@ -37,13 +37,13 @@ public class OpenRouterPluginTests
     [Fact]
     public async Task RefreshCatalog_BothFailuresPreserveCatalogsAndSelections()
     {
-        using var client = new HttpClient(new CapturingHandler((_, _) => new(HttpStatusCode.BadGateway)));
+        using var client = new HttpClient(new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.BadGateway)));
         using var sut = new OpenRouterPlugin(client);
         var host = new TestPluginHostServices();
         await sut.ActivateAsync(host);
-        sut.SetFetchedModels([new("saved/model", "Saved", "0", "0")]);
+        sut.SetFetchedModels([new OpenRouterFetchedModel("saved/model", "Saved", "0", "0")]);
         sut.SelectLlmModel("saved/model");
-        sut.SetFetchedTranscriptionModels([new("saved/audio", "Saved audio", "0", "0")]);
+        sut.SetFetchedTranscriptionModels([new OpenRouterFetchedModel("saved/audio", "Saved audio", "0", "0")]);
         var notifications = host.NotifyCapabilitiesChangedCount;
         await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RefreshModelCatalogAsync());
         Assert.Contains(sut.FetchedModels, model => model.Id == "saved/model");
@@ -64,13 +64,14 @@ public class OpenRouterPluginTests
         var calls = 0;
         using var client = new HttpClient(new AsyncCatalogHandler(async () =>
         {
-            if (Interlocked.Increment(ref calls) == 1)
+            if (Interlocked.Increment(ref calls) != 1)
             {
-                started.SetResult();
-                await release.Task;
-                return JsonResponse(CatalogJson.Replace("fixture/model", "stale/model"));
+                return JsonResponse(CatalogJson);
             }
-            return JsonResponse(CatalogJson);
+
+            started.SetResult();
+            await release.Task;
+            return JsonResponse(CatalogJson.Replace("fixture/model", "stale/model"));
         }));
         using var sut = new OpenRouterPlugin(client);
         await sut.ActivateAsync(new TestPluginHostServices());
@@ -81,7 +82,7 @@ public class OpenRouterPluginTests
         else
             await sut.RefreshModelCatalogAsync();
         release.SetResult();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => oldRefresh);
+        await oldRefresh;
         Assert.DoesNotContain(sut.FetchedModels, model => model.Id == "stale/model");
     }
 
@@ -835,9 +836,7 @@ public class OpenRouterPluginTests
     public async Task ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk()
     {
         var handler = new CapturingHandler((_, _) =>
-        {
-            return JsonResponse("""{ "choices": [ { "message": { "content": "bulk" } } ] }""");
-        });
+            JsonResponse("""{ "choices": [ { "message": { "content": "bulk" } } ] }"""));
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("streamResponses", false);

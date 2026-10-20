@@ -44,7 +44,7 @@ public sealed class OpenRouterPlugin
 
     private readonly HttpClient _httpClient;
     private readonly TimeSpan _catalogDeadline;
-    private readonly object _catalogLock = new();
+    private readonly Lock _catalogLock = new();
     private long _catalogGeneration;
     private IPluginHostServices? _host;
     private bool _hasUserSelectedLlmModel;
@@ -273,8 +273,10 @@ public sealed class OpenRouterPlugin
             lock (_catalogLock)
             {
                 deadline.Token.ThrowIfCancellationRequested();
+                // A newer refresh, key change or deactivation owns the outcome; the caller's
+                // token is still live, so this is not a fault to report.
                 if (generation != _catalogGeneration || _host is null)
-                    throw new OperationCanceledException("OpenRouter catalog refresh was superseded.");
+                    return;
                 if (catalogs.All(models => models.Count == 0))
                     throw new InvalidOperationException("Failed to fetch models from OpenRouter.");
                 if (catalogs[0].Count > 0)

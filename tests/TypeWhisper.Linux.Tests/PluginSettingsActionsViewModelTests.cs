@@ -346,6 +346,44 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         Assert.False(CurrentRow(vm).IsRefreshingModels);
     }
 
+    [Fact]
+    public async Task RefreshCatalog_ReplacedPluginRowDoesNotInheritTheRefresh()
+    {
+        var plugin = new FakeCatalogPlugin { HoldRefresh = true };
+        var (vm, row) = await CreateExpandedAsync(plugin);
+        var refresh = vm.RefreshModelCatalogCommand.ExecuteAsync(row);
+        await plugin.Started.Task.WaitAsync(s_hangGuard);
+        ReplaceLoadedPlugins(vm, new FakeCatalogPlugin());
+        InvokeRefresh(vm);
+        var replaced = CurrentRow(vm);
+        Assert.NotSame(row, replaced);
+        Assert.False(replaced.IsRefreshingModels);
+        await WaitUntilAsync(() => replaced.CanEditSettings);
+        Assert.True(replaced.CanRefreshModels);
+        plugin.Release.SetResult();
+        await refresh.WaitAsync(s_hangGuard);
+        Assert.Same(replaced, CurrentRow(vm));
+        Assert.False(replaced.IsRefreshingModels);
+        Assert.True(replaced.CanRefreshModels);
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_EditsMadeDuringTheSaveStayUnsaved()
+    {
+        var plugin = new FakeCatalogPlugin { HoldSave = true };
+        var (vm, row) = await CreateExpandedAsync(plugin);
+        row.Collections.Single().Items.Single().Fields.Single(field => field.Key == "name").Value = "submitted";
+        var refresh = vm.RefreshModelCatalogCommand.ExecuteAsync(row);
+        await plugin.SaveStarted.Task.WaitAsync(s_hangGuard);
+        row.SettingFields.Single().Value = "typed-during-save";
+        plugin.SaveRelease.SetResult();
+        await refresh.WaitAsync(s_hangGuard);
+        Assert.Equal("submitted", plugin.CollectionValue);
+        Assert.Equal(1, plugin.RefreshCount);
+        Assert.Equal("typed-during-save", CurrentRow(vm).SettingFields.Single().Value);
+        Assert.True(CurrentRow(vm).HasUnsavedSettings);
+    }
+
     private async Task<(PluginsSectionViewModel Vm, PluginRow Row)> CreateExpandedAsync(
         ITypeWhisperPlugin plugin,
         TimeSpan? validationTimeout = null,
@@ -536,9 +574,12 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         public int RefreshCount { get; private set; }
         public int SaveCount { get; private set; }
         public bool FailRefresh { get; set; }
-        public bool HoldRefresh { get; set; }
+        public bool HoldRefresh { get; init; }
+        public bool HoldSave { get; init; }
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SaveStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SaveRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public string SelectedModel { get; private set; } = "old-model";
         public IReadOnlyList<string> CachedModels => _cachedModels;
         public string CollectionValue { get; private set; } = "saved";
@@ -550,10 +591,13 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
             Task.FromResult<IReadOnlyList<PluginCollectionItem>>(
                 [new PluginCollectionItem(new Dictionary<string, string?> { ["name"] = CollectionValue })]);
 
-        public Task<PluginSettingsValidationResult> SetItemsAsync(string collectionKey, IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default)
+        public async Task<PluginSettingsValidationResult> SetItemsAsync(string collectionKey, IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default)
         {
+            SaveStarted.TrySetResult();
+            if (HoldSave)
+                await SaveRelease.Task.WaitAsync(ct);
             CollectionValue = items.Single().Values["name"] ?? "";
-            return Task.FromResult(new PluginSettingsValidationResult(true, "saved"));
+            return new PluginSettingsValidationResult(true, "saved");
         }
 
         public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
