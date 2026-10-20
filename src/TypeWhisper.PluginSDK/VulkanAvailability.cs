@@ -9,6 +9,7 @@ namespace TypeWhisper.PluginSDK;
 /// </remarks>
 public static class VulkanAvailability
 {
+    /// <summary>Probes the Vulkan loader for an integrated, discrete or virtual GPU.</summary>
     /// <returns>Null when a GPU is available, otherwise a reason for CPU fallback.</returns>
     public static string? GetUnavailableReason()
     {
