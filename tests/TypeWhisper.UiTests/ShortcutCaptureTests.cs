@@ -15,6 +15,28 @@ namespace TypeWhisper.UiTests;
 [Collection("ui")]
 public sealed class ShortcutCaptureTests(UiSession ui)
 {
+    [Fact]
+    public async Task ReusedSectionReleasesSingletonClipboardSubscriptionOnDetach()
+    {
+        await ui.Session.Dispatch(() =>
+        {
+            var vm = ui.Services.GetRequiredService<ShortcutsSectionViewModel>();
+            var field = typeof(ShortcutsSectionViewModel).GetField("CopyCustomShortcutRequested", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            int ViewSubscribers() => ((Delegate?)field.GetValue(vm))?.GetInvocationList().Count(d => d.Target is ShortcutsSection) ?? 0;
+            var before = ViewSubscribers();
+            var section = new ShortcutsSection { DataContext = vm };
+            var window = new Window { Content = section };
+            window.Show();
+            Assert.Equal(before + 1, ViewSubscribers());
+            window.Content = null;
+            Assert.Equal(before, ViewSubscribers());
+            window.Content = section;
+            Assert.Equal(before + 1, ViewSubscribers());
+            window.Close();
+            Assert.Equal(before, ViewSubscribers());
+        }, CancellationToken.None);
+    }
+
     [Theory]
     [InlineData("detach")]
     [InlineData("focus")]

@@ -14,7 +14,7 @@ public sealed class DesktopWriterFormattingTests
     {
         var (mods, key) = HyprlandShortcutWriter.ToHyprlandBind("Ctrl+Shift+Space");
         Assert.Equal("CTRL SHIFT", mods);
-        Assert.Equal("SPACE", key);
+        Assert.Equal("space", key);
     }
 
     [Fact]
@@ -22,7 +22,7 @@ public sealed class DesktopWriterFormattingTests
     {
         var (mods, key) = HyprlandShortcutWriter.ToHyprlandBind("Super+K");
         Assert.Equal("SUPER", mods);
-        Assert.Equal("K", key);
+        Assert.Equal("k", key);
     }
 
     [Fact]
@@ -30,7 +30,7 @@ public sealed class DesktopWriterFormattingTests
     {
         var (mods, key) = HyprlandShortcutWriter.ToHyprlandBind("Meta+K");
         Assert.Equal("SUPER", mods);
-        Assert.Equal("K", key);
+        Assert.Equal("k", key);
     }
 
     [Fact]

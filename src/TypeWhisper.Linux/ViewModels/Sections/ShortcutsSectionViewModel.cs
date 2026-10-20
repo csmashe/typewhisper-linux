@@ -582,7 +582,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             }
 
             var spec = BuildSpec(w);
-            return spec is null ? GetUnsupportedModeMessage(w) : w.PreviewLines(spec);
+            return spec is null ? GetUnsupportedIntegrationMessage(w) : w.PreviewLines(spec);
         }
     }
 
@@ -800,8 +800,11 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
     }
 
-    private string GetUnsupportedModeMessage(IDeShortcutWriter writer)
+    private string GetUnsupportedIntegrationMessage(IDeShortcutWriter writer)
     {
+        if (DesktopShortcutKey.IsSideSpecificModifier(_settings.Current.ToggleHotkey)
+            && writer.DesktopId is "gnome" or "kde")
+            return Loc.Instance.GetString("Shortcuts.NativeModifierUnsupported", writer.DisplayName);
         return Loc.Instance.GetString(
             "Shortcuts.AutoSetupModeUnsupported",
             writer.DisplayName,
@@ -974,7 +977,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         var spec = BuildSpec(writer);
         if (spec is null)
         {
-            IntegrationStatusMessage = GetUnsupportedModeMessage(writer);
+            IntegrationStatusMessage = GetUnsupportedIntegrationMessage(writer);
             return;
         }
 
@@ -1169,6 +1172,8 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
                     );
                     HotkeyText = _hotkey.CurrentHotkeyString;
                     OnPropertyChanged(nameof(IntegrationPreview));
+                    OnPropertyChanged(nameof(CanWriteDesktopIntegration));
+                    OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
                 }
             );
         }

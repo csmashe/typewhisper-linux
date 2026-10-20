@@ -252,8 +252,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     }
 
     /// <summary>
-    ///     Converts "Ctrl+Shift+Space" into Hyprland's ("CTRL SHIFT", "SPACE")
-    ///     form. Modifiers are space-separated; key is uppercased for readability.
+    ///     Converts "Ctrl+Shift+Space" into Hyprland's ("CTRL SHIFT", "space")
+    ///     form. Modifiers are space-separated; keys use canonical XKB names.
     /// </summary>
     public static (string mods, string key) ToHyprlandBind(string trigger)
     {
@@ -287,7 +287,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             );
         }
 
-        var key = parts[^1].ToUpperInvariant();
+        var key = DesktopShortcutKey.ToKeysym(parts[^1]);
         return (string.Join(' ', mods), key);
     }
 

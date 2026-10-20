@@ -24,6 +24,10 @@ public static class DictationShortcutSpecFactory
         var trigger = string.IsNullOrWhiteSpace(settings.Current.ToggleHotkey)
             ? DefaultTrigger
             : settings.Current.ToggleHotkey;
+        // GNOME rejects modifier-only accelerators. Qt cannot preserve their left/right side.
+        // Keep these bindings in the app backend instead of writing a different native shortcut.
+        if (DesktopShortcutKey.IsSideSpecificModifier(trigger) && writer.DesktopId is "gnome" or "kde")
+            return null;
         var gui = ResolveGuiCommand();
         var cancelTrigger = SwapKeyForCancel(trigger);
 

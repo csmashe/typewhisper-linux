@@ -290,9 +290,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             sb.Append('+');
         }
 
-        // Multi-char keys are lower-cased (xkbcommon convention) except
-        // function keys, whose keysyms are mixed-case ("F1".."F35").
-        sb.Append(NormalizeSwayKey(tail));
+        sb.Append(DesktopShortcutKey.ToKeysym(tail));
         return sb.ToString();
     }
 
@@ -313,39 +311,6 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         {
             yield return $"bindsym {ToSwayBind(spec.OnCancelTrigger!)} exec {spec.OnCancelCommand}";
         }
-    }
-
-    private static string NormalizeSwayKey(string key)
-    {
-        if (key.Length <= 1)
-        {
-            return key;
-        }
-
-        if (IsFunctionKey(key))
-        {
-            return "F" + key[1..];
-        }
-
-        return key.ToLowerInvariant();
-    }
-
-    private static bool IsFunctionKey(string k)
-    {
-        if (k.Length < 2 || (k[0] != 'F' && k[0] != 'f'))
-        {
-            return false;
-        }
-
-        for (var i = 1; i < k.Length; i++)
-        {
-            if (!char.IsDigit(k[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static async Task<IReadOnlyList<string>?> ReadManagedBlockLinesAsync(

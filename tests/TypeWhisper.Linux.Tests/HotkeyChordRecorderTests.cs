@@ -62,7 +62,7 @@ public sealed class HotkeyChordRecorderTests
         foreach (var key in Enum.GetValues<Key>().Distinct())
         {
             var recorder = new HotkeyChordRecorder();
-            var down = recorder.Handle(key, KeyModifiers.None, true);
+            var down = recorder.Handle(key, KeyModifiers.Control, true);
             var up = recorder.Handle(key, KeyModifiers.None, false);
             if (up.Chord is not { } chord) continue;
             using var hotkey = TestShortcutBackend.CreateHotkeyService();

@@ -1220,6 +1220,7 @@
   "Profiles.HotkeyBehavior": "Hotkey-Verhalten",
   "Snippets.TriggerModeLabel": "Auslösermodus",
   "Shortcuts.RecordShortcut": "Tasten aufnehmen",
+  "Shortcuts.NativeModifierUnsupported": "{0} kann keine Tastenkombination für eine einzelne linke oder rechte Modifikatortaste installieren. Verwenden Sie TypeWhispers integrierten Hotkey oder nehmen Sie eine Tastenkombination auf.",
   "Shortcuts.CancelCapture": "Abbrechen",
   "Shortcuts.CaptureCancelled": "Aufnahme abgebrochen.",
   "Shortcuts.CapturePrompt": "Drücken Sie eine Taste oder Tastenkombination und lassen Sie alle Tasten los. Escape bricht ab.",

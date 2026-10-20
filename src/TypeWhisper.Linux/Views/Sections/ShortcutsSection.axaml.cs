@@ -28,11 +28,13 @@ public partial class ShortcutsSection : UserControl
             CancelCapture();
             if (_window is not null) _window.Deactivated -= OnWindowDeactivated;
             _window = null;
+            UnwireViewModel();
         };
         // Re-probe keyboard access and managed desktop-integration state whenever this
         // section is shown. Both checks are read-only; writes remain explicit actions.
         AttachedToVisualTree += (_, _) =>
         {
+            WireViewModel();
             _window = TopLevel.GetTopLevel(this) as Window;
             if (_window is not null) _window.Deactivated += OnWindowDeactivated;
             (DataContext as ShortcutsSectionViewModel)?.RefreshSectionState();
@@ -78,6 +80,12 @@ public partial class ShortcutsSection : UserControl
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
+        UnwireViewModel();
+        if (TopLevel.GetTopLevel(this) is not null) WireViewModel();
+    }
+
+    private void UnwireViewModel()
+    {
         // Clipboard access requires a TopLevel reference that only the view has,
         // so the ViewModel raises an event and the view performs the actual copy.
         if (_wired is not null)
@@ -86,9 +94,11 @@ public partial class ShortcutsSection : UserControl
             _wired.CopyCustomShortcutRequested -= OnCopyCustomShortcutRequested;
             _wired = null;
         }
+    }
 
-        // ReSharper disable once InvertIf — pattern variable `vm` is used in the block;
-        // inverting would orphan the binding.
+    private void WireViewModel()
+    {
+        if (_wired is not null) return;
         if (DataContext is ShortcutsSectionViewModel vm)
         {
             vm.CopyCustomShortcutRequested += OnCopyCustomShortcutRequested;
