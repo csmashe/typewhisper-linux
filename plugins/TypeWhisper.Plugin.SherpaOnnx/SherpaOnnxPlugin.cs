@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using SherpaOnnx;
 using TypeWhisper.Plugins.Shared.Cuda;
 using TypeWhisper.Plugins.Shared.Net;
@@ -11,7 +13,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
-public sealed class SherpaOnnxPlugin
+public sealed partial class SherpaOnnxPlugin
     : ITranscriptionEnginePlugin,
         ITranscriptionLanguageSelectionCapabilities
 {
@@ -27,12 +29,73 @@ public sealed class SherpaOnnxPlugin
     private const string ParakeetUltraRepo =
         "https://github.com/csmashe/typewhisper-linux/releases/download/model-parakeet-ultra-int8-v1";
 
+    // The sherpa-onnx author's per-file upload of the official 0.6B release archive, pinned to a
+    // commit; each file's size and SHA-256 match that archive's contents.
+    private const string Qwen06BRepo =
+        "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/68818b2313fe77bd06f6a7c5068ff3ef59d02b8a";
+
+    // No official 1.7B build exists. This community export uses the 0.6B archive's converter;
+    // upstream TypeWhisper ships the same revision and file hashes.
+    private const string Qwen17BRepo =
+        "https://huggingface.co/thieunv-asilla/sherpa-onnx-qwen3-asr-1.7B-int8/resolve/69eb686fd94a4a865bb5340a3d6ac0d7f1fec0d5";
+
+    internal const string Qwen06BModelId = "qwen3-asr-0.6b";
+    internal const string Qwen17BModelId = "qwen3-asr-1.7b";
+
     private static readonly IReadOnlyList<string> s_canarySupportedLanguages =
     [
         "en",
         "de",
         "fr",
         "es",
+    ];
+
+    // Qwen3-ASR takes the language as its English name.
+    private static readonly Dictionary<string, string> s_qwenLanguageNames = new(StringComparer.Ordinal)
+    {
+        ["zh"] = "Chinese",
+        ["en"] = "English",
+        ["yue"] = "Cantonese",
+        ["ar"] = "Arabic",
+        ["de"] = "German",
+        ["fr"] = "French",
+        ["es"] = "Spanish",
+        ["pt"] = "Portuguese",
+        ["id"] = "Indonesian",
+        ["it"] = "Italian",
+        ["ko"] = "Korean",
+        ["ru"] = "Russian",
+        ["th"] = "Thai",
+        ["vi"] = "Vietnamese",
+        ["ja"] = "Japanese",
+        ["tr"] = "Turkish",
+        ["hi"] = "Hindi",
+        ["ms"] = "Malay",
+        ["nl"] = "Dutch",
+        ["sv"] = "Swedish",
+        ["da"] = "Danish",
+        ["fi"] = "Finnish",
+        ["pl"] = "Polish",
+        ["cs"] = "Czech",
+        ["fil"] = "Filipino",
+        ["fa"] = "Persian",
+        ["el"] = "Greek",
+        ["hu"] = "Hungarian",
+        ["mk"] = "Macedonian",
+        ["ro"] = "Romanian",
+    };
+
+    private static readonly IReadOnlyList<string> s_qwenSupportedLanguages = [.. s_qwenLanguageNames.Keys];
+
+    // Both Qwen exports share one file layout and tokenizer.
+    private static readonly string[] s_qwenFileNames =
+    [
+        "conv_frontend.onnx",
+        "encoder.int8.onnx",
+        "decoder.int8.onnx",
+        "tokenizer/merges.txt",
+        "tokenizer/vocab.json",
+        "tokenizer/tokenizer_config.json",
     ];
 
     // Native-library parse diagnostics from org.k2fsa.sherpa.onnx 1.12.23. Match only
@@ -157,9 +220,56 @@ public sealed class SherpaOnnxPlugin
                     53_555,
                     "2dae6fc7815f9640645e0c765522b278ee0cef49b482d91f6913e334628d3e77"
                 ),
-            ]
+            ],
+            SherpaModelFamily.Canary
+        ),
+        new(
+            Qwen06BModelId,
+            "Qwen3-ASR 0.6B",
+            "~990 MB",
+            987,
+            s_qwenLanguageNames.Count,
+            false,
+            false,
+            false,
+            QwenFiles(
+                Qwen06BRepo,
+                (44_148_281, "d22dc4423e0940e49884e903d2ea2f7e5567c14fc1aed97e4e26d6b8f208ef9e"),
+                (182_491_662, "60748d3e6744a57c9c91e1b17424a6c2990567e8adceb0783940c03ed98fa9d9"),
+                (755_914_231, "4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771"),
+                (1_671_853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+                (2_776_833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+                (12_487, "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c")
+            ),
+            SherpaModelFamily.Qwen3Asr
+        ),
+        new(
+            Qwen17BModelId,
+            "Qwen3-ASR 1.7B",
+            "~2.4 GB",
+            2404,
+            s_qwenLanguageNames.Count,
+            false,
+            false,
+            false,
+            QwenFiles(
+                Qwen17BRepo,
+                (48_080_441, "3cb27a9fe94d95c938e476f2012b21aba2ec0bfceef33b0e58acd208946bafdd"),
+                (314_222_162, "a5deedae034ece715de8ed204378d8c77f889af3a60c2566581135e84cced7cd"),
+                (2_037_458_645, "c43c853fa6e97d08365cb8a5502b360b595cd43c00dc60e4d8ca7cc18cad460b"),
+                (1_671_853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+                (2_776_833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+                (12_487, "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c")
+            ),
+            SherpaModelFamily.Qwen3Asr,
+            // Detecting the language itself, it transcribed some windows of English speech
+            // as a single unrelated word ("instrument", "大量"); with the language given, none.
+            RequiresExplicitLanguage: true
         ),
     ];
+
+    private static ModelFileDefinition[] QwenFiles(string repo, params (long Size, string Sha256)[] pins) =>
+        [.. s_qwenFileNames.Zip(pins, (name, pin) => new ModelFileDefinition(name, $"{repo}/{name}", pin.Size, pin.Sha256))];
 
     private readonly Lock _sync = new();
 
@@ -179,6 +289,7 @@ public sealed class SherpaOnnxPlugin
     private OfflineRecognizer? _recognizer;
     private Func<string, string, OfflineRecognizer> _parakeetRecognizerFactory =
         CreateParakeetRecognizer;
+    private Func<string, string, OfflineRecognizer> _qwenRecognizerFactory = CreateQwenRecognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _loadedModelId;
@@ -213,13 +324,17 @@ public sealed class SherpaOnnxPlugin
     public bool SupportsTranslation => SelectedModelId == "canary-180m-flash";
     public bool SupportsModelDownload => true;
     public LanguageSelectionSupport AutomaticDetectionSupport =>
-        SelectedModelId == "canary-180m-flash"
+        SelectedModelId == "canary-180m-flash" || SelectedModel?.RequiresExplicitLanguage == true
             ? LanguageSelectionSupport.Unsupported
             : LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport =>
-        SelectedModelId == "canary-180m-flash"
+        SelectedModelId == "canary-180m-flash" || IsQwenSelected
             ? LanguageSelectionSupport.Supported
             : LanguageSelectionSupport.Unsupported;
+
+    private ModelDefinition? SelectedModel => _models.FirstOrDefault(m => m.Id == SelectedModelId);
+
+    private bool IsQwenSelected => SelectedModel?.Family == SherpaModelFamily.Qwen3Asr;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
@@ -248,11 +363,15 @@ public sealed class SherpaOnnxPlugin
                 EstimatedSizeMB = m.EstimatedSizeMB,
                 IsRecommended = m.IsRecommended,
                 LanguageCount = m.LanguageCount,
+                // The host then refuses a translate task before loading the model.
+                SupportsTranslation = m.Family == SherpaModelFamily.Qwen3Asr ? false : null,
             })
             .ToList();
 
     public IReadOnlyList<string> SupportedLanguages =>
-        SelectedModelId == "canary-180m-flash" ? s_canarySupportedLanguages : [];
+        SelectedModelId == "canary-180m-flash" ? s_canarySupportedLanguages
+        : IsQwenSelected ? s_qwenSupportedLanguages
+        : [];
 
     public Task ActivateAsync(IPluginHostServices host)
     {
@@ -426,6 +545,8 @@ public sealed class SherpaOnnxPlugin
                 }
 
                 missingBytes -= RemainingBytes(file, filePath);
+                // Qwen keeps its tokenizer in a subdirectory.
+                Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
 
                 long fileOnDisk = 0;
                 await ResilientDownloader.DownloadToFileAsync(
@@ -484,11 +605,17 @@ public sealed class SherpaOnnxPlugin
     private static void RemoveAbandonedUniquePartials(ModelDefinition model, string dir)
     {
         foreach (var file in model.Files)
-        foreach (var path in Directory.EnumerateFiles(dir, file.FileName + ".*.partial"))
         {
-            var guid = Path.GetFileName(path)[(file.FileName.Length + 1)..^".partial".Length];
-            if (Guid.TryParseExact(guid, "N", out _))
-                TryDeleteFile(path);
+            var fileDir = Path.GetDirectoryName(Path.Join(dir, file.FileName))!;
+            if (!Directory.Exists(fileDir))
+                continue;
+            var name = Path.GetFileName(file.FileName);
+            foreach (var path in Directory.EnumerateFiles(fileDir, name + ".*.partial"))
+            {
+                var guid = Path.GetFileName(path)[(name.Length + 1)..^".partial".Length];
+                if (Guid.TryParseExact(guid, "N", out _))
+                    TryDeleteFile(path);
+            }
         }
     }
 
@@ -587,12 +714,12 @@ public sealed class SherpaOnnxPlugin
                         UnloadRecognizerUnsafe();
                         VerifyModelArtifacts(model, dir);
 
-                        var activeProvider = desiredProvider;
+                        // Qwen stays on the CPU even when CUDA is wired: on an RTX 3090 it ran no
+                        // faster there, and cuDNN has no kernel for its convolution on older cards.
+                        var activeProvider = model.Family == SherpaModelFamily.Qwen3Asr ? "cpu" : desiredProvider;
                         try
                         {
-                            _recognizer = model.SupportsTranslation
-                                ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
-                                : _parakeetRecognizerFactory(dir, activeProvider);
+                            _recognizer = CreateRecognizer(model, dir, activeProvider);
                         }
                         catch (Exception ex)
                             when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
@@ -608,9 +735,7 @@ public sealed class SherpaOnnxPlugin
                             cudaUnavailableDetail = ex.Message;
                             activeProvider = "cpu";
                             _computeBackend = "cpu";
-                            _recognizer = model.SupportsTranslation
-                                ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
-                                : _parakeetRecognizerFactory(dir, activeProvider);
+                            _recognizer = CreateRecognizer(model, dir, activeProvider);
                         }
 
                         // First successful load pins the native runtime for the process.
@@ -630,7 +755,14 @@ public sealed class SherpaOnnxPlugin
                         // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
                         // restart (matches CreateLoadedAccelerationStatus / the swap logic).
                         AccelerationStatus = cudaUnavailableDetail is null
-                            ? CreateLoadedAccelerationStatus(activeProvider, AccelerationPreference)
+                            ? model.Family == SherpaModelFamily.Qwen3Asr
+                              && string.Equals(desiredProvider, "cuda", StringComparison.Ordinal)
+                                ? new TranscriptionAccelerationStatus(
+                                    TranscriptionAccelerationBackend.Cpu,
+                                    "Using CPU",
+                                    "Qwen3-ASR always runs on the CPU; a graphics card does not make it faster."
+                                )
+                                : CreateLoadedAccelerationStatus(activeProvider, AccelerationPreference)
                             : CreateCudaUnavailableStatus(
                                 cudaUnavailableDetail,
                                 requiresRestart: string.Equals(
@@ -834,6 +966,11 @@ public sealed class SherpaOnnxPlugin
 
                     var model = GetModelDefinition(_loadedModelId);
 
+                    if (model.Family == SherpaModelFamily.Qwen3Asr)
+                        return translate
+                            ? throw new NotSupportedException("Qwen3-ASR transcribes speech; it cannot translate it.")
+                            : TranscribeQwen(model, _recognizer, audioSamples, language, ct);
+
                     if (model.SupportsTranslation)
                         EnsureCanaryLanguage(language, translate);
 
@@ -877,6 +1014,59 @@ public sealed class SherpaOnnxPlugin
             ct
         );
     }
+
+    // Called under _sync with the loaded Qwen recognizer.
+    private PluginTranscriptionResult TranscribeQwen(
+        ModelDefinition model,
+        OfflineRecognizer recognizer,
+        float[] audioSamples,
+        string? language,
+        CancellationToken ct
+    )
+    {
+        var languageName = QwenLanguageName(language);
+        if (languageName is null && model.RequiresExplicitLanguage)
+            throw new NotSupportedException($"{model.DisplayName} needs the spoken language to be set.");
+        var decoded = new SherpaDecodeCoordinator(
+            chunk =>
+            {
+                using var stream = recognizer.CreateStream();
+                if (languageName is not null)
+                    stream.SetOption("language", languageName);
+                stream.AcceptWaveform(SherpaDecodeCoordinator.SampleRate, chunk);
+                ct.ThrowIfCancellationRequested();
+                recognizer.Decode(stream);
+                ct.ThrowIfCancellationRequested();
+                return new SherpaDecodeChunk(StripQwenLanguageMarkers(stream.Result.Text));
+            },
+            message => _host?.Log(PluginLogLevel.Warning, message)
+        ).DecodeQwen(audioSamples, ct);
+
+        return new PluginTranscriptionResult(
+            decoded.Text,
+            null,
+            audioSamples.Length / (double)SherpaDecodeCoordinator.SampleRate,
+            NoSpeechProbability: null
+        );
+    }
+
+    // The host passes one of SupportedLanguages, or null for automatic detection.
+    internal static string? QwenLanguageName(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+            return null;
+        return s_qwenLanguageNames.TryGetValue(language.Trim().ToLowerInvariant(), out var name)
+            ? name
+            : throw new NotSupportedException($"Qwen3-ASR does not support the language '{language}'.");
+    }
+
+    // sherpa-onnx removes the "language X<asr_text>" prefix the 0.6B model writes, but the 1.7B
+    // export leaves it in some windows, sometimes mid-window.
+    internal static string StripQwenLanguageMarkers(string text) =>
+        QwenLanguageMarker().Replace(text, "").Trim();
+
+    [GeneratedRegex(@"(?:language\s+[A-Za-z]+(?:\s[A-Za-z]+)?\s*)?<asr_text>", RegexOptions.CultureInvariant)]
+    private static partial Regex QwenLanguageMarker();
 
     public void Dispose()
     {
@@ -962,6 +1152,13 @@ public sealed class SherpaOnnxPlugin
     {
         ArgumentNullException.ThrowIfNull(factory);
         _parakeetRecognizerFactory = factory;
+    }
+
+    // Test seam: observe the provider a Qwen recognizer is created with, without a native runtime.
+    internal void SetQwenRecognizerFactoryForTests(Func<string, string, OfflineRecognizer> factory)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        _qwenRecognizerFactory = factory;
     }
 
     // Avoid ActivateAsync's one-shot migration probe in filesystem-isolated load tests.
@@ -1063,10 +1260,22 @@ public sealed class SherpaOnnxPlugin
             return;
         }
 
-        // ReSharper disable once InvertIf -- matches the shape of the preceding per-artifact dispatch block.
         if (string.Equals(fileName, "tokens.txt", StringComparison.OrdinalIgnoreCase))
         {
             VerifyTokensFile(path, fileName, requireBlankToken);
+            return;
+        }
+
+        if (string.Equals(fileName, "tokenizer/merges.txt", StringComparison.Ordinal))
+        {
+            VerifyMergesFile(path, fileName);
+            return;
+        }
+
+        // ReSharper disable once InvertIf -- matches the shape of the preceding per-artifact dispatch block.
+        if (fileName is "tokenizer/vocab.json" or "tokenizer/tokenizer_config.json")
+        {
+            VerifyJsonObjectFile(path, fileName);
             return;
         }
 
@@ -1235,6 +1444,51 @@ public sealed class SherpaOnnxPlugin
             );
     }
 
+    // BPE merges: an optional "#version" header, then one "left right" pair per row.
+    private static void VerifyMergesFile(string path, string fileName)
+    {
+        var rows = 0;
+        try
+        {
+            using var reader = new StreamReader(
+                path,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+            );
+            while (reader.ReadLine() is { } line)
+            {
+                if (line.Length == 0 || (rows == 0 && line.StartsWith("#version", StringComparison.Ordinal)))
+                    continue;
+                if (line.Contains('\0') || line.Split(' ').Length != 2)
+                    throw new InvalidDataException($"Model artifact '{fileName}' has an invalid merge row.");
+                rows++;
+            }
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException($"Model artifact '{fileName}' is not valid UTF-8.", ex);
+        }
+
+        if (rows == 0)
+            throw new InvalidDataException($"Model artifact '{fileName}' contains no merge rows.");
+    }
+
+    // A truncated or damaged file no longer parses.
+    private static void VerifyJsonObjectFile(string path, string fileName)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var document = JsonDocument.Parse(stream);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.EnumerateObject().Any())
+                throw new InvalidDataException($"Model artifact '{fileName}' is not a non-empty JSON object.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"Model artifact '{fileName}' is not valid JSON.", ex);
+        }
+    }
+
     private static bool IsArtifactInvalidLoadFailure(Exception exception)
     {
         // ReSharper disable once SuggestVarOrType_SimpleTypes -- var would infer non-nullable Exception, so assigning InnerException in the iterator would warn.
@@ -1279,6 +1533,20 @@ public sealed class SherpaOnnxPlugin
             }
         }
 
+        // Qwen's tokenizer subdirectory is left empty otherwise.
+        foreach (var subdirectory in model.Files.Select(f => Path.GetDirectoryName(f.FileName)).Distinct())
+        {
+            if (string.IsNullOrEmpty(subdirectory))
+                continue;
+            var path = Path.Join(modelDir, subdirectory);
+            try
+            {
+                if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+                    Directory.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+
         _host?.Log(
             PluginLogLevel.Warning,
             $"sherpa-onnx rejected model '{model.Id}' as invalid ({failure.Message}); "
@@ -1290,6 +1558,31 @@ public sealed class SherpaOnnxPlugin
                 "Some invalid model artifacts could not be deleted: "
                     + string.Join("; ", deleteFailures)
             );
+    }
+
+    private OfflineRecognizer CreateRecognizer(ModelDefinition model, string modelDir, string provider) =>
+        model.Family switch
+        {
+            SherpaModelFamily.Canary => CreateCanaryRecognizer(modelDir, "en", "en", provider),
+            SherpaModelFamily.Qwen3Asr => _qwenRecognizerFactory(modelDir, provider),
+            _ => _parakeetRecognizerFactory(modelDir, provider),
+        };
+
+    private static OfflineRecognizer CreateQwenRecognizer(string modelDir, string provider)
+    {
+        var config = new OfflineRecognizerConfig();
+        config.ModelConfig.Qwen3Asr.ConvFrontend = Path.Join(modelDir, "conv_frontend.onnx");
+        config.ModelConfig.Qwen3Asr.Encoder = Path.Join(modelDir, "encoder.int8.onnx");
+        config.ModelConfig.Qwen3Asr.Decoder = Path.Join(modelDir, "decoder.int8.onnx");
+        config.ModelConfig.Qwen3Asr.Tokenizer = Path.Join(modelDir, "tokenizer");
+        // Room for a full decode window's audio plus its text.
+        config.ModelConfig.Qwen3Asr.MaxTotalLen = 512;
+        config.ModelConfig.Qwen3Asr.MaxNewTokens = 256;
+        config.ModelConfig.Tokens = "";
+        config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
+        config.ModelConfig.Provider = provider;
+        config.ModelConfig.Debug = 0;
+        return new OfflineRecognizer(config);
     }
 
     private static OfflineRecognizer CreateParakeetRecognizer(string modelDir, string provider)
@@ -1572,8 +1865,18 @@ public sealed class SherpaOnnxPlugin
         // native reader requires it; attention encoder-decoder models (Canary) do not, so
         // the token verifier must only demand a blank symbol when this is set.
         bool RequiresBlankToken,
-        IReadOnlyList<ModelFileDefinition> Files
+        IReadOnlyList<ModelFileDefinition> Files,
+        SherpaModelFamily Family = SherpaModelFamily.Transducer,
+        // Automatic detection is unreliable for this model, so the host asks for a language.
+        bool RequiresExplicitLanguage = false
     );
+
+    internal enum SherpaModelFamily
+    {
+        Transducer,
+        Canary,
+        Qwen3Asr,
+    }
 
     // A file is published only when it has exactly this size and SHA-256 (lowercase hex).
     internal sealed record ModelFileDefinition(

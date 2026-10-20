@@ -36,7 +36,7 @@ public sealed class ParakeetCtcNativeCoexistenceTests
             var getVersion = Marshal.GetDelegateForFunctionPointer<GetPointer>(
                 Marshal.ReadIntPtr(getApiBase(), IntPtr.Size)
             );
-            Assert.StartsWith("1.23", Marshal.PtrToStringUTF8(getVersion()));
+            Assert.StartsWith("1.28", Marshal.PtrToStringUTF8(getVersion()));
 
             var sherpa = NativeLibrary.Load(Path.Join(nativeDirectory, "libsherpa-onnx-c-api.so"));
             try
