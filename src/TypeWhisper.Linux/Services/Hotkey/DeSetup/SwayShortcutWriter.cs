@@ -74,9 +74,27 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         var inner = await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false);
-        // Must match exactly — a stale trigger or manual edit reads as not-installed.
+        // A stale trigger or manual edit reads as not-installed.
         var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
-        return inner is not null && inner.SequenceEqual(expected);
+        return inner is not null
+               && inner.Count == expected.Count
+               && inner.Zip(expected).All(p => ManagedLineMatches(p.First, p.Second));
+    }
+
+    // Sway resolves bindsym names case-insensitively, and blocks written before the keysym
+    // mapping kept single letters upper-case ("Ctrl+K"); only the exec command must match verbatim.
+    private static bool ManagedLineMatches(string actual, string expected)
+    {
+        const string marker = " exec ";
+        var a = actual.IndexOf(marker, StringComparison.Ordinal);
+        var e = expected.IndexOf(marker, StringComparison.Ordinal);
+        if (a < 0 || e < 0)
+        {
+            return string.Equals(actual, expected, StringComparison.Ordinal);
+        }
+
+        return string.Equals(actual[..a], expected[..e], StringComparison.OrdinalIgnoreCase)
+               && string.Equals(actual[a..], expected[e..], StringComparison.Ordinal);
     }
 
     // The sway config holds one managed sentinel block carrying no shortcut id, so this answers

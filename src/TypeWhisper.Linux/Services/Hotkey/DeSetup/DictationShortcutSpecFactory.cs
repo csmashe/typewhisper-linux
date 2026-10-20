@@ -24,9 +24,9 @@ public static class DictationShortcutSpecFactory
         var trigger = string.IsNullOrWhiteSpace(settings.Current.ToggleHotkey)
             ? DefaultTrigger
             : settings.Current.ToggleHotkey;
-        // GNOME rejects modifier-only accelerators. Qt cannot preserve their left/right side.
-        // Keep these bindings in the app backend instead of writing a different native shortcut.
-        if (DesktopShortcutKey.IsSideSpecificModifier(trigger) && writer.DesktopId is "gnome" or "kde")
+        // GNOME rejects modifier-only accelerators, Qt cannot preserve their left/right side, and
+        // Hyprland release binds need the modifier in the mask. Keep these in the app backend.
+        if (DesktopShortcutKey.IsSideSpecificModifier(trigger) && !NativeSupportsModifierOnly(writer))
             return null;
         var gui = ResolveGuiCommand();
         var cancelTrigger = SwapKeyForCancel(trigger);
@@ -72,11 +72,15 @@ public static class DictationShortcutSpecFactory
         return "typewhisper";
     }
 
+    public static bool NativeSupportsModifierOnly(IDeShortcutWriter writer) =>
+        writer.DesktopId is not ("gnome" or "kde" or "hyprland");
+
     /// <summary>
     ///     Derives the cancel accelerator by swapping the trigger's final key for Escape, or returns
     ///     null when that yields the recording trigger itself (a trigger already ending in Escape,
-    ///     e.g. Ctrl+Shift+Escape). Binding start and cancel to one accelerator would fire both
-    ///     commands, so the cancel bind is dropped instead — writers skip it for a null trigger.
+    ///     e.g. Ctrl+Shift+Escape) or a bare Escape (a trigger without modifiers, e.g. F9 or
+    ///     Right Ctrl), which would take Escape away from every application. Writers skip the
+    ///     cancel bind for a null trigger.
     /// </summary>
     private static string? SwapKeyForCancel(string trigger)
     {
@@ -84,9 +88,12 @@ public static class DictationShortcutSpecFactory
             '+',
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
         );
-        if (parts.Length == 0)
+        switch (parts.Length)
         {
-            return "Ctrl+Shift+Escape";
+            case 0:
+                return "Ctrl+Shift+Escape";
+            case 1:
+                return null;
         }
 
         // Compare against the trigger rebuilt from the same parts so spacing, casing, and the

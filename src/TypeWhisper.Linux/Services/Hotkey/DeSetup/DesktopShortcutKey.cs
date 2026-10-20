@@ -30,7 +30,7 @@ internal static class DesktopShortcutKey
         "right alt" => "Alt_R",
         "left meta" => "Super_L",
         "right meta" => "Super_R",
-        var name when name.Length >= 2 && name[0] == 'f' && int.TryParse(name[1..], out var f) && f is >= 1 and <= 24 => $"F{f}",
+        ['f', _, ..] and var name when int.TryParse(name[1..], out var f) && f is >= 1 and <= 24 => $"F{f}",
         var name => name,
     };
 

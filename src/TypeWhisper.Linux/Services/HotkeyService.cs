@@ -1415,8 +1415,9 @@ public sealed class HotkeyService : IDisposable
         var nativeDictationBindingActive = _nativeDictationBindingActive;
         // A native PushToTalk binding owns cancel only when the desktop spec could derive a
         // distinct accelerator. DictationShortcutSpecFactory drops that bind when the trigger
-        // already ends in Escape, so keep the app's own cancel key — else there is no cancel.
-        var nativeOwnsCancel = _key != CancelKey;
+        // already ends in Escape or has no modifiers (a bare Escape bind would grab Escape from
+        // every application), so keep the app's own cancel key — else there is no cancel.
+        var nativeOwnsCancel = _key != CancelKey && _modifiers != ModifierMask.None;
         // ...unless the trigger IS the app's bare cancel chord. Nothing distinguishes the two
         // routes then, so one press would start a native recording and cancel it at once.
         var nativeTriggerIsCancelChord =

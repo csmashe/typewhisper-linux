@@ -14,22 +14,22 @@ public sealed class RecordedDesktopKeyTests : IDisposable
     {
         if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, true);
     }
-    public static IEnumerable<object[]> NamedKeys => new[]
+    public static TheoryData<Key, string, string, string> NamedKeys => new()
     {
-        new object[] { Key.Enter, "Enter", "Return", "Return" },
-        new object[] { Key.Tab, "Tab", "Tab", "Tab" },
-        new object[] { Key.Escape, "Escape", "Escape", "Esc" },
-        new object[] { Key.Back, "Backspace", "BackSpace", "Backspace" },
-        new object[] { Key.Delete, "Delete", "Delete", "Del" },
-        new object[] { Key.Home, "Home", "Home", "Home" },
-        new object[] { Key.End, "End", "End", "End" },
-        new object[] { Key.PageUp, "PageUp", "Page_Up", "PgUp" },
-        new object[] { Key.PageDown, "PageDown", "Page_Down", "PgDown" },
-        new object[] { Key.Left, "Left", "Left", "Left" },
-        new object[] { Key.Right, "Right", "Right", "Right" },
-        new object[] { Key.Up, "Up", "Up", "Up" },
-        new object[] { Key.Down, "Down", "Down", "Down" },
-        new object[] { Key.Space, "Space", "space", "Space" },
+        { Key.Enter, "Enter", "Return", "Return" },
+        { Key.Tab, "Tab", "Tab", "Tab" },
+        { Key.Escape, "Escape", "Escape", "Esc" },
+        { Key.Back, "Backspace", "BackSpace", "Backspace" },
+        { Key.Delete, "Delete", "Delete", "Del" },
+        { Key.Home, "Home", "Home", "Home" },
+        { Key.End, "End", "End", "End" },
+        { Key.PageUp, "PageUp", "Page_Up", "PgUp" },
+        { Key.PageDown, "PageDown", "Page_Down", "PgDown" },
+        { Key.Left, "Left", "Left", "Left" },
+        { Key.Right, "Right", "Right", "Right" },
+        { Key.Up, "Up", "Up", "Up" },
+        { Key.Down, "Down", "Down", "Down" },
+        { Key.Space, "Space", "space", "Space" },
     };
 
     [Theory]
@@ -43,7 +43,7 @@ public sealed class RecordedDesktopKeyTests : IDisposable
         Assert.Equal($"<Control>{keysym}", GnomeShortcutWriter.FormatGnomeAccel(chord!));
         Assert.Equal($"Ctrl+{keysym}", SwayShortcutWriter.ToSwayBind(chord!));
         Assert.Equal(("CTRL", keysym), HyprlandShortcutWriter.ToHyprlandBind(chord!));
-        var preview = new KdeShortcutWriter().PreviewLines(new("test", "Test", chord!, "typewhisper", null, null, null));
+        var preview = new KdeShortcutWriter().PreviewLines(new DeShortcutSpec("test", "Test", chord!, "typewhisper", null, null, null));
         Assert.Contains($"X-KDE-Shortcuts=Ctrl+{qtName}\n", preview);
     }
 
@@ -73,6 +73,8 @@ public sealed class RecordedDesktopKeyTests : IDisposable
                 settings.Save(settings.Current with { ToggleHotkey = chord, Mode = RecordingMode.Toggle });
                 Assert.Null(DictationShortcutSpecFactory.Build(settings, new GnomeShortcutWriter()));
                 Assert.Null(DictationShortcutSpecFactory.Build(settings, new KdeShortcutWriter()));
+                Assert.Null(DictationShortcutSpecFactory.Build(settings, new HyprlandShortcutWriter()));
+                Assert.NotNull(DictationShortcutSpecFactory.Build(settings, new SwayShortcutWriter()));
                 continue;
             }
             var terminal = chord[5..];

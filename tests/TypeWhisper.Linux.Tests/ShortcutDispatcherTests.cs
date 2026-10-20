@@ -36,6 +36,73 @@ public sealed class ShortcutDispatcherTests
     }
 
     [Fact]
+    public void CaptureDraining_PrunesModifierWhoseReleaseWasLost()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggles = 0;
+        dispatcher.DictationToggleRequested += () => toggles++;
+        dispatcher.SetCaptureSuspended(true);
+        // Backends strip a modifier's own bit from the mask on its press.
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.SetCaptureSuspended(false);
+        // The Ctrl release never arrives (focus moved away); ordinary typing resumes.
+        dispatcher.Handle(KeyCode.VcA, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcA, ModifierMask.None, false);
+
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal(1, toggles);
+    }
+
+    [Fact]
+    public void CaptureDraining_OrdinaryKeyWhoseReleaseWasLostOnlyBlocksItsOwnRepeats()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggles = 0;
+        dispatcher.DictationToggleRequested += () => toggles++;
+        dispatcher.SetCaptureSuspended(true);
+        dispatcher.Handle(KeyCode.VcA, ModifierMask.None, true);
+        dispatcher.SetCaptureSuspended(false);
+        // The A release never arrives (focus moved away); the next chord must still work.
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal(1, toggles);
+    }
+
+    [Fact]
+    public void CaptureDraining_SuppressesRepeatsOfTheHeldChordUntilReleased()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggles = 0;
+        dispatcher.DictationToggleRequested += () => toggles++;
+        dispatcher.SetCaptureSuspended(true);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        // Capture ends (window deactivated) while the chord is still held: auto-repeat must not start dictation.
+        dispatcher.SetCaptureSuspended(false);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, false);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        Assert.Equal(0, toggles);
+
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, false);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, false);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        Assert.Equal(1, toggles);
+    }
+
+    [Fact]
     public void ReadLastTranscription_RaisesOncePerPress()
     {
         var dispatcher = new ShortcutDispatcher();

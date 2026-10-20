@@ -46,21 +46,22 @@ public partial class ShortcutsSection : UserControl
     private void CancelCapture()
     {
         _wired?.CancelHotkeyCaptureCommand.Execute(null);
-        _recorder = new();
+        _recorder = new HotkeyChordRecorder();
     }
 
     private void OnStartHotkeyCaptureClick(object? sender, RoutedEventArgs e)
     {
         if (_wired?.CanStartHotkeyCapture != true) return;
-        _recorder = new();
+        _recorder = new HotkeyChordRecorder();
         Focus();
         _wired.StartHotkeyCaptureCommand.Execute(null);
     }
 
-    private void OnCaptureKeyDown(object? sender, KeyEventArgs e) => CaptureKey(e, true);
-    private void OnCaptureKeyUp(object? sender, KeyEventArgs e) => CaptureKey(e, false);
+    private void OnCaptureKeyDown(object? sender, KeyEventArgs e) => _ = CaptureKeyAsync(e, true);
+    private void OnCaptureKeyUp(object? sender, KeyEventArgs e) => _ = CaptureKeyAsync(e, false);
 
-    private async void CaptureKey(KeyEventArgs e, bool pressed)
+    // Handled is set before the first await; the only awaited call catches its own failures.
+    private async Task CaptureKeyAsync(KeyEventArgs e, bool pressed)
     {
         if (_wired is not { IsCapturingHotkey: true } vm) return;
         e.Handled = true;
@@ -88,22 +89,17 @@ public partial class ShortcutsSection : UserControl
     {
         // Clipboard access requires a TopLevel reference that only the view has,
         // so the ViewModel raises an event and the view performs the actual copy.
-        if (_wired is not null)
-        {
-            CancelCapture();
-            _wired.CopyCustomShortcutRequested -= OnCopyCustomShortcutRequested;
-            _wired = null;
-        }
+        if (_wired is null) return;
+        CancelCapture();
+        _wired.CopyCustomShortcutRequested -= OnCopyCustomShortcutRequested;
+        _wired = null;
     }
 
     private void WireViewModel()
     {
-        if (_wired is not null) return;
-        if (DataContext is ShortcutsSectionViewModel vm)
-        {
-            vm.CopyCustomShortcutRequested += OnCopyCustomShortcutRequested;
-            _wired = vm;
-        }
+        if (_wired is not null || DataContext is not ShortcutsSectionViewModel vm) return;
+        vm.CopyCustomShortcutRequested += OnCopyCustomShortcutRequested;
+        _wired = vm;
     }
 
     // ReSharper disable once AsyncVoidMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.

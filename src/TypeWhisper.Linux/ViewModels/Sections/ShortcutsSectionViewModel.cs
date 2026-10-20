@@ -544,13 +544,15 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
                 return string.Empty;
             }
 
-            return BuildSpec(writer) is null
-                ? Loc.Instance.GetString(
-                    "Shortcuts.DesktopIntegrationStaleUnsupported",
-                    writer.DisplayName,
-                    GetModeDisplayName()
-                )
-                : Loc.Instance["Shortcuts.DesktopIntegrationStaleHint"];
+            if (BuildSpec(writer) is not null)
+                return Loc.Instance["Shortcuts.DesktopIntegrationStaleHint"];
+            if (IsNativeModifierUnsupported(writer))
+                return Loc.Instance.GetString("Shortcuts.NativeModifierUnsupported", writer.DisplayName);
+            return Loc.Instance.GetString(
+                "Shortcuts.DesktopIntegrationStaleUnsupported",
+                writer.DisplayName,
+                GetModeDisplayName()
+            );
         }
     }
 
@@ -800,10 +802,13 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
     }
 
+    private bool IsNativeModifierUnsupported(IDeShortcutWriter writer) =>
+        DesktopShortcutKey.IsSideSpecificModifier(_settings.Current.ToggleHotkey)
+        && !DictationShortcutSpecFactory.NativeSupportsModifierOnly(writer);
+
     private string GetUnsupportedIntegrationMessage(IDeShortcutWriter writer)
     {
-        if (DesktopShortcutKey.IsSideSpecificModifier(_settings.Current.ToggleHotkey)
-            && writer.DesktopId is "gnome" or "kde")
+        if (IsNativeModifierUnsupported(writer))
             return Loc.Instance.GetString("Shortcuts.NativeModifierUnsupported", writer.DisplayName);
         return Loc.Instance.GetString(
             "Shortcuts.AutoSetupModeUnsupported",

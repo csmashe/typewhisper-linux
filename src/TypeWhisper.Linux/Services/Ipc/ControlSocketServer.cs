@@ -599,8 +599,9 @@ internal sealed class ControlSocketServer : IDisposable
 
     private Task<string> HandleStartAsync()
     {
-        if (_hotkey?.IsSuspended == true) return CaptureRefusal();
-        return _startCoordinator.DispatchStart(() => _orchestrator.StartAsync());
+        return _hotkey?.IsSuspended == true
+            ? CaptureRefusal()
+            : _startCoordinator.DispatchStart(() => _orchestrator.StartAsync());
     }
 
     private async Task<string> HandleStopAsync()

@@ -15,7 +15,7 @@ internal sealed class HotkeyChordRecorder
         if (pressed)
         {
             if (key == Key.Escape && modifiers == KeyModifiers.None)
-                return new(Cancelled: true);
+                return new CaptureResult(Cancelled: true);
             if (!_held.Add(key)) return default;
             if (ModifierName(key) is not null)
             {
@@ -24,7 +24,7 @@ internal sealed class HotkeyChordRecorder
             }
             _hadNonModifier = true;
             var name = KeyName(key);
-            if (name is null) return new(Unsupported: true);
+            if (name is null) return new CaptureResult(Unsupported: true);
             if (_chord is not null) return default;
             var parts = new List<string>();
             if (modifiers.HasFlag(KeyModifiers.Control)) parts.Add("Ctrl");
@@ -43,7 +43,7 @@ internal sealed class HotkeyChordRecorder
         _chord = null;
         _modifiers.Clear();
         _hadNonModifier = false;
-        return new(Chord: chord);
+        return new CaptureResult(Chord: chord);
     }
 
     private static string? ModifierName(Key key) => key switch
@@ -64,8 +64,11 @@ internal sealed class HotkeyChordRecorder
     private static string? KeyName(Key key)
     {
         var name = key.ToString();
-        if (name.Length == 1 && name[0] is >= 'A' and <= 'Z') return name;
-        if (name.Length == 2 && name[0] == 'D' && name[1] is >= '0' and <= '9') return name[1..];
+        switch (name)
+        {
+            case [>= 'A' and <= 'Z']: return name;
+            case ['D', >= '0' and <= '9']: return name[1..];
+        }
         if (name.StartsWith('F') && int.TryParse(name[1..], out var f) && f is >= 1 and <= 24) return name;
         return key switch
         {

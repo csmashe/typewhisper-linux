@@ -22,7 +22,6 @@ public sealed class ShortcutCaptureTests(UiSession ui)
         {
             var vm = ui.Services.GetRequiredService<ShortcutsSectionViewModel>();
             var field = typeof(ShortcutsSectionViewModel).GetField("CopyCustomShortcutRequested", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            int ViewSubscribers() => ((Delegate?)field.GetValue(vm))?.GetInvocationList().Count(d => d.Target is ShortcutsSection) ?? 0;
             var before = ViewSubscribers();
             var section = new ShortcutsSection { DataContext = vm };
             var window = new Window { Content = section };
@@ -34,6 +33,9 @@ public sealed class ShortcutCaptureTests(UiSession ui)
             Assert.Equal(before + 1, ViewSubscribers());
             window.Close();
             Assert.Equal(before, ViewSubscribers());
+            return;
+
+            int ViewSubscribers() => ((Delegate?)field.GetValue(vm))?.GetInvocationList().Count(d => d.Target is ShortcutsSection) ?? 0;
         }, CancellationToken.None);
     }
 
@@ -56,9 +58,18 @@ public sealed class ShortcutCaptureTests(UiSession ui)
             vm.StartHotkeyCaptureCommand.Execute(null);
             Assert.True(vm.IsCapturingHotkey);
             Assert.True(hotkey.IsSuspended);
-            if (exit == "detach") panel.Children.Remove(section);
-            if (exit == "focus") other.Focus();
-            if (exit == "hide") window.Hide();
+            switch (exit)
+            {
+                case "detach":
+                    panel.Children.Remove(section);
+                    break;
+                case "focus":
+                    other.Focus();
+                    break;
+                case "hide":
+                    window.Hide();
+                    break;
+            }
             Dispatcher.UIThread.RunJobs();
             Assert.False(vm.IsCapturingHotkey);
             Assert.False(hotkey.IsSuspended);
@@ -81,7 +92,7 @@ public sealed class ShortcutCaptureTests(UiSession ui)
             {
                 using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
                 await client.ConnectAsync(new UnixDomainSocketEndPoint(path));
-                using var stream = new NetworkStream(client);
+                await using var stream = new NetworkStream(client);
                 await stream.WriteAsync(Encoding.UTF8.GetBytes($"{{\"v\":1,\"cmd\":\"{command}\"}}\n"));
                 using var reader = new StreamReader(stream);
                 var response = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(3));

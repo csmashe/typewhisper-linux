@@ -35,7 +35,6 @@
             <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
         <Style Selector="TextBlock.row-title">
-            <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="FontSize" Value="12.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="TextWrapping" Value="Wrap" />

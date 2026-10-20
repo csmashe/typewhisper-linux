@@ -1650,6 +1650,31 @@ public sealed class HotkeyServiceTests
         Assert.True(snapshot.IsCancelEnabled);
     }
 
+    [Theory]
+    [InlineData("F9")]
+    [InlineData("Right Ctrl")]
+    public async Task NativeDictationActive_KeepsAppCancelWhenToggleHotkeyHasNoModifiers(string trigger)
+    {
+        // DictationShortcutSpecFactory drops the native cancel bind for a modifier-less trigger
+        // (it would be a bare Escape grab), so the app's own cancel key must stay registered.
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Mode = RecordingMode.PushToTalk;
+        hotkey.IsCancelShortcutEnabled = true;
+        Assert.True(hotkey.TrySetHotkeyFromString(trigger));
+        hotkey.Initialize();
+
+        hotkey.SetNativeDictationBindingActive(true);
+        await backend.WaitUntilSettledAsync();
+
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal(KeyCode.VcUndefined, snapshot.DictationKey);
+        Assert.Equal(KeyCode.VcEscape, snapshot.CancelKey);
+        Assert.Equal(ModifierMask.None, snapshot.CancelModifiers);
+        Assert.True(snapshot.IsCancelEnabled);
+    }
+
     [Fact]
     public async Task NativeDictationActive_SuppressesAppCancelWhenToggleHotkeyIsBareEscape()
     {
