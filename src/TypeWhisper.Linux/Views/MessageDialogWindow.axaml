@@ -5,7 +5,6 @@
         mc:Ignorable="d"
         xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         x:Class="TypeWhisper.Linux.Views.MessageDialogWindow"
-        RequestedThemeVariant="Dark"
         Width="420"
         MinWidth="360"
         SizeToContent="Height"

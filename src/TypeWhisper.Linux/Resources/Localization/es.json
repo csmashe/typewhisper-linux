@@ -1214,5 +1214,10 @@
   "LanguageSelection.Invalid": "El idioma de transcripción «{0}» no es válido. Elige Auto o introduce una etiqueta BCP-47 válida.",
   "LanguageSelection.AutomaticNotSupported": "{0} no puede detectar el idioma automáticamente. Elige un idioma explícito.",
   "LanguageSelection.ExplicitNotSupported": "{0} no acepta un idioma explícito. Elige Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}.",
+  "Appearance.Theme": "Tema",
+  "Appearance.ThemeHint": "Sistema sigue el ajuste claro u oscuro de tu escritorio. La superposición de grabación siempre es oscura.",
+  "Appearance.ThemeSystem": "Sistema",
+  "Appearance.ThemeLight": "Claro",
+  "Appearance.ThemeDark": "Oscuro"
 }

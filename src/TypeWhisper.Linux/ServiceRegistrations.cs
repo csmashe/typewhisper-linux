@@ -275,6 +275,7 @@ internal static class ServiceRegistrations
 
         // Tiling WM recording indicator (desktop notification instead of overlay; no-op on DEs).
         services.AddSingleton<RecordingNotificationService>();
+        services.AddSingleton<InterfaceThemeService>();
         // Tiling WM learned-corrections feedback: same suppressed-overlay situation as above,
         // so the "Learned X → Y" toast + Undo is delivered as a desktop notification instead.
         services.AddSingleton<LearnedCorrectionsNotificationService>();

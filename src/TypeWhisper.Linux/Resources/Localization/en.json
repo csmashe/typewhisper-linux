@@ -1214,5 +1214,10 @@
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
   "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}.",
+  "Appearance.Theme": "Theme",
+  "Appearance.ThemeHint": "System follows your desktop's light or dark setting. The recording overlay always stays dark.",
+  "Appearance.ThemeSystem": "System",
+  "Appearance.ThemeLight": "Light",
+  "Appearance.ThemeDark": "Dark"
 }

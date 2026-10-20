@@ -91,6 +91,18 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void InterfaceTheme_DefaultsDarkForExistingFiles_AndRoundTrips()
+    {
+        Assert.Equal(InterfaceTheme.Dark, new SettingsService(_filePath).Current.InterfaceTheme);
+        File.WriteAllText(_filePath, "{\"uiLanguage\":\"de\"}");
+        Assert.Equal(InterfaceTheme.Dark, new SettingsService(_filePath).Current.InterfaceTheme);
+
+        new SettingsService(_filePath).Save(AppSettings.Default with { InterfaceTheme = InterfaceTheme.Light });
+
+        Assert.Equal(InterfaceTheme.Light, new SettingsService(_filePath).Current.InterfaceTheme);
+    }
+
+    [Fact]
     public void DiagnosticLog_DefaultsOff_AndUnofferedRetentionFallsBackToSevenDays()
     {
         Assert.False(new SettingsService(_filePath).Current.DiagnosticLogEnabled);

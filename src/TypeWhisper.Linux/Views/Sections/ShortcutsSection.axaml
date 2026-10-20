@@ -8,8 +8,8 @@
              x:DataType="vm:ShortcutsSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.section-panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Margin" Value="0,0,0,18" />
@@ -24,13 +24,13 @@
         </Style>
         <Style Selector="TextBlock.page-subtitle">
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="TextBlock.section-label">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextTertiaryBrush}" />
             <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
         <Style Selector="TextBlock.row-title">
@@ -39,7 +39,7 @@
         </Style>
         <Style Selector="TextBlock.row-hint">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="0,4,0,0" />
         </Style>
@@ -58,7 +58,7 @@
                 <TextBlock
                     Text="{loc:Str Shortcuts.ComboHint}"
                     FontSize="11"
-                    Foreground="#AFC0D3"
+                    Foreground="{DynamicResource TwTextBodyBrush}"
                     TextWrapping="Wrap"
                     Margin="0,8,0,0" />
             </StackPanel>
@@ -81,18 +81,18 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="#16FFFFFF" Margin="18,0"
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
                             IsVisible="{Binding ShowStaleIntegrationBanner}" />
 
                     <Border Classes="section-row"
-                            Background="#2A2112"
-                            BorderBrush="#66FFD27A"
+                            Background="{DynamicResource TwWarningSubtleBrush}"
+                            BorderBrush="{DynamicResource TwWarningBorderBrush}"
                             BorderThickness="0,1"
                             IsVisible="{Binding ShowStaleIntegrationBanner}">
                         <StackPanel>
                             <TextBlock Text="{loc:Str Shortcuts.DesktopIntegrationStale}"
                                        Classes="row-title"
-                                       Foreground="#FFD27A" />
+                                       Foreground="{DynamicResource TwWarningTextBrush}" />
                             <TextBlock Text="{Binding StaleIntegrationMessage}"
                                        Classes="row-hint"
                                        TextWrapping="Wrap" />
@@ -109,7 +109,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="#16FFFFFF" Margin="18,0"
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
                             IsVisible="{Binding ShowKeyboardAccessBanner}" />
 
                     <Border Classes="section-row"
@@ -117,12 +117,12 @@
                         <StackPanel>
                             <TextBlock Text="{loc:Str Shortcuts.KeyboardAccessBanner}"
                                        Classes="row-title"
-                                       Foreground="#FFD27A" />
+                                       Foreground="{DynamicResource TwWarningTextBrush}" />
                             <TextBlock TextWrapping="Wrap"
                                        Classes="row-hint"
                                        Text="{loc:Str Shortcuts.KeyboardAccessBannerHint}" />
-                            <Border Background="#0E1620"
-                                    BorderBrush="#1AFFFFFF"
+                            <Border Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                     BorderThickness="1"
                                     CornerRadius="6"
                                     Padding="10,6"
@@ -134,7 +134,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="#16FFFFFF" Margin="18,0"
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0"
                             IsVisible="{Binding ShowCapabilityMismatch}" />
 
                     <Border Classes="section-row"
@@ -142,14 +142,14 @@
                         <StackPanel>
                             <TextBlock Text="{loc:Str Shortcuts.CapabilityMismatch}"
                                        Classes="row-title"
-                                       Foreground="#FFD27A" />
+                                       Foreground="{DynamicResource TwWarningTextBrush}" />
                             <TextBlock TextWrapping="Wrap"
                                        Classes="row-hint"
                                        Text="{loc:Str Shortcuts.CapabilityMismatchHint}" />
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0" />
 
                     <Border Classes="section-row">
                         <Grid ColumnDefinitions="*,Auto"
@@ -236,7 +236,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -264,7 +264,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -292,7 +292,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -320,7 +320,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -348,7 +348,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -376,7 +376,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -408,7 +408,7 @@
             <TextBlock Text="{loc:Str Shortcuts.BindCustom}"
                        Classes="section-label" />
             <TextBlock FontSize="12"
-                       Foreground="#8A9AAE"
+                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                        TextWrapping="Wrap"
                        Margin="0,0,0,8"
                        Text="{loc:Str Shortcuts.CompositorBindsNote}" />
@@ -429,8 +429,8 @@
                                        TextWrapping="Wrap"
                                        Text="{loc:Str Shortcuts.AutoSetupHint}" />
 
-                            <Border Background="#0E1620"
-                                    BorderBrush="#1AFFFFFF"
+                            <Border Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                     BorderThickness="1"
                                     CornerRadius="6"
                                     Padding="10,6"
@@ -451,8 +451,8 @@
                                         Command="{Binding RemoveIntegrationCommand}" />
                             </StackPanel>
 
-                            <Border Background="#111822"
-                                    BorderBrush="#1AFFFFFF"
+                            <Border Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="10,6"
@@ -460,12 +460,12 @@
                                     IsVisible="{Binding IntegrationStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                                 <TextBlock Text="{Binding IntegrationStatusMessage}"
                                            FontSize="12"
-                                           Foreground="#AFC0D3"
+                                           Foreground="{DynamicResource TwTextBodyBrush}"
                                            TextWrapping="Wrap" />
                             </Border>
 
                             <Border Height="1"
-                                    Background="#16FFFFFF"
+                                    Background="{DynamicResource TwFillSubtleBrush}"
                                     Margin="0,16,0,0" />
                         </StackPanel>
 
@@ -481,8 +481,8 @@
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="8">
                             <Border Grid.Column="0"
-                                    Background="#0E1620"
-                                    BorderBrush="#1AFFFFFF"
+                                    Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                     BorderThickness="1"
                                     CornerRadius="6"
                                     Padding="10,6">
@@ -505,8 +505,8 @@
                                   ColumnSpacing="8"
                                   Margin="0,8,0,0">
                                 <Border Grid.Column="0"
-                                        Background="#0E1620"
-                                        BorderBrush="#1AFFFFFF"
+                                        Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Padding="10,6">
@@ -523,8 +523,8 @@
                                   ColumnSpacing="8"
                                   Margin="0,6,0,0">
                                 <Border Grid.Column="0"
-                                        Background="#0E1620"
-                                        BorderBrush="#1AFFFFFF"
+                                        Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Padding="10,6">
@@ -552,22 +552,22 @@
                                    Text="{Binding DesktopInstructions}" />
                         <TextBlock Margin="0,8,0,0"
                                    FontSize="11"
-                                   Foreground="#7D8796"
+                                   Foreground="{DynamicResource TwTextTertiaryBrush}"
                                    TextWrapping="Wrap"
                                    Text="{loc:Str Shortcuts.AlreadyRunningHint}" />
                     </StackPanel>
                 </Border>
             </Border>
 
-            <Border Background="#111822"
-                    BorderBrush="#1AFFFFFF"
+            <Border Background="{DynamicResource TwSurfaceAltBrush}"
+                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
                     Padding="16,12"
                     IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                 <TextBlock Text="{Binding StatusMessage}"
                            FontSize="12"
-                           Foreground="#AFC0D3"
+                           Foreground="{DynamicResource TwTextBodyBrush}"
                            TextWrapping="Wrap" />
             </Border>
         </StackPanel>

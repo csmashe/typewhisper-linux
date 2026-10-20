@@ -1214,5 +1214,10 @@
   "LanguageSelection.Invalid": "Недопустимый язык транскрипции «{0}». Выберите «Авто» или укажите допустимый тег BCP-47.",
   "LanguageSelection.AutomaticNotSupported": "{0} не может определить язык автоматически. Выберите язык явно.",
   "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто».",
-  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}.",
+  "Appearance.Theme": "Тема",
+  "Appearance.ThemeHint": "«Системная» следует светлой или тёмной настройке рабочего стола. Оверлей записи всегда остаётся тёмным.",
+  "Appearance.ThemeSystem": "Системная",
+  "Appearance.ThemeLight": "Светлая",
+  "Appearance.ThemeDark": "Тёмная"
 }

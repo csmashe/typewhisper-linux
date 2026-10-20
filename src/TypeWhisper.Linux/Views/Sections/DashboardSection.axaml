@@ -25,8 +25,8 @@
             <Border Grid.Row="1"
                     MaxWidth="860"
                     Margin="28,0,28,18"
-                    Background="#18212C"
-                    BorderBrush="#283644"
+                    Background="{DynamicResource TwSurfaceRaisedBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="8"
                     Padding="18">
@@ -72,8 +72,8 @@
                          Margin="28,0,28,24"
                          Rows="1"
                          Columns="4">
-                <Border Background="#1A2430"
-                        BorderBrush="#2A3950"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                        BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}"
                         BorderThickness="1"
                         CornerRadius="8"
                         Padding="16,20"
@@ -81,7 +81,7 @@
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="✍"
                                    FontSize="18"
-                                   Foreground="#1593F5"
+                                   Foreground="{DynamicResource TwAccentForegroundBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8" />
                         <TextBlock Text="{Binding WordCount}"
@@ -97,8 +97,8 @@
                     </StackPanel>
                 </Border>
 
-                <Border Background="#1A2430"
-                        BorderBrush="#2A3950"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                        BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}"
                         BorderThickness="1"
                         CornerRadius="8"
                         Padding="16,20"
@@ -106,7 +106,7 @@
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="⚡"
                                    FontSize="18"
-                                   Foreground="#1593F5"
+                                   Foreground="{DynamicResource TwAccentForegroundBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8" />
                         <TextBlock Text="{Binding AverageWpm}"
@@ -122,8 +122,8 @@
                     </StackPanel>
                 </Border>
 
-                <Border Background="#1A2430"
-                        BorderBrush="#2A3950"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                        BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}"
                         BorderThickness="1"
                         CornerRadius="8"
                         Padding="16,20"
@@ -131,7 +131,7 @@
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="⊞"
                                    FontSize="18"
-                                   Foreground="#1593F5"
+                                   Foreground="{DynamicResource TwAccentForegroundBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8" />
                         <TextBlock Text="{Binding AppCount}"
@@ -146,15 +146,15 @@
                     </StackPanel>
                 </Border>
 
-                <Border Background="#1C2038"
-                        BorderBrush="#2A3950"
+                <Border Background="{DynamicResource TwAccentSubtleBrush}"
+                        BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}"
                         BorderThickness="1"
                         CornerRadius="8"
                         Padding="16,20">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="⏱"
                                    FontSize="18"
-                                   Foreground="#1593F5"
+                                   Foreground="{DynamicResource TwAccentForegroundBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8" />
                         <TextBlock Text="{Binding TimeSavedLabel}"
@@ -171,28 +171,28 @@
             </UniformGrid>
 
             <UniformGrid Grid.Row="3" MaxWidth="860" Margin="28,0,28,24" Rows="1" Columns="4">
-                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}" BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding DaysActive}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
                         <TextBlock Text="{loc:Str Dashboard.DaysActive}" FontSize="12" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Border>
-                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}" BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding CurrentStreakLabel}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
                         <TextBlock Text="{loc:Str Dashboard.CurrentStreak}" FontSize="12" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Border>
-                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}" BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding LongestStreakLabel}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
                         <TextBlock Text="{loc:Str Dashboard.LongestStreak}" FontSize="12" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Border>
-                <Border Background="#1A2430" BorderBrush="#2A3950" BorderThickness="1"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}" BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="16,20" Margin="0,0,8,0">
                     <StackPanel HorizontalAlignment="Center">
                         <TextBlock Text="{Binding TranscriptionCount}" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
@@ -204,8 +204,8 @@
             <Border Grid.Row="4"
                     MaxWidth="860"
                     Margin="28,0,28,24"
-                    Background="#141B24"
-                    BorderBrush="#283644"
+                    Background="{DynamicResource TwSurfaceBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="8"
                     Padding="16">
@@ -217,8 +217,8 @@
                                    FontWeight="SemiBold" />
                         <Grid ColumnDefinitions="*,*"
                               ColumnSpacing="10">
-                            <Border Background="#111822"
-                                    BorderBrush="#243241"
+                            <Border Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -232,8 +232,8 @@
                                 </StackPanel>
                             </Border>
                             <Border Grid.Column="1"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -255,8 +255,8 @@
                               RowDefinitions="Auto,Auto"
                               ColumnSpacing="10"
                               RowSpacing="10">
-                            <Border Background="#111822"
-                                    BorderBrush="#243241"
+                            <Border Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -271,8 +271,8 @@
                             </Border>
                             <Border Grid.Row="0"
                                     Grid.Column="1"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -287,8 +287,8 @@
                             </Border>
                             <Border Grid.Row="1"
                                     Grid.Column="0"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -303,8 +303,8 @@
                             </Border>
                             <Border Grid.Row="1"
                                     Grid.Column="1"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -342,7 +342,7 @@
                                         <TextBlock Grid.Column="1"
                                                    Text="{Binding Summary}"
                                                    FontSize="11"
-                                                   Foreground="#9AA5B3"
+                                                   Foreground="{DynamicResource TwTextMutedBrush}"
                                                    Margin="12,0,0,0" />
                                     </Grid>
                                 </DataTemplate>
@@ -356,8 +356,8 @@
                               RowDefinitions="Auto,Auto,Auto"
                               ColumnSpacing="10"
                               RowSpacing="10">
-                            <Border Background="#111822"
-                                    BorderBrush="#243241"
+                            <Border Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -372,8 +372,8 @@
                             </Border>
                             <Border Grid.Row="0"
                                     Grid.Column="1"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -388,8 +388,8 @@
                             </Border>
                             <Border Grid.Row="1"
                                     Grid.Column="0"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -404,8 +404,8 @@
                             </Border>
                             <Border Grid.Row="1"
                                     Grid.Column="1"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -420,8 +420,8 @@
                             </Border>
                             <Border Grid.Row="2"
                                     Grid.Column="0"
-                                    Background="#111822"
-                                    BorderBrush="#243241"
+                                    Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="12">
@@ -439,8 +439,8 @@
                 </Grid>
             </Border>
 
-            <Border Grid.Row="5" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
-                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+            <Border Grid.Row="5" MaxWidth="860" Margin="28,0,28,24" Background="{DynamicResource TwSurfaceBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="16">
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.Activity}" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock Text="{loc:Str Dashboard.NoActivity}" IsVisible="{Binding !HasActivity}"
@@ -450,8 +450,8 @@
                             <DataTemplate x:DataType="vm:DashboardActivityDayRow">
                                 <Grid ColumnDefinitions="*,240,Auto" ColumnSpacing="12" Margin="0,0,0,6">
                                     <TextBlock Text="{Binding DateLabel}" />
-                                    <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
-                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
+                                    <Border Grid.Column="1" Width="240" Height="8" Background="{DynamicResource TwSurfaceStrongBrush}">
+                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="{DynamicResource TwAccentBrush}" />
                                     </Border>
                                     <TextBlock Grid.Column="2" Text="{Binding Label}" FontSize="11" />
                                 </Grid>
@@ -461,8 +461,8 @@
                 </StackPanel>
             </Border>
 
-            <Border Grid.Row="6" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
-                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+            <Border Grid.Row="6" MaxWidth="860" Margin="28,0,28,24" Background="{DynamicResource TwSurfaceBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="16">
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.Languages}" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock Text="{loc:Str Dashboard.NoLanguageData}" IsVisible="{Binding !HasLanguages}"
@@ -472,8 +472,8 @@
                             <DataTemplate x:DataType="vm:DashboardBreakdownRow">
                                 <Grid ColumnDefinitions="*,240,Auto" ColumnSpacing="12" Margin="0,0,0,6">
                                     <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                                    <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
-                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
+                                    <Border Grid.Column="1" Width="240" Height="8" Background="{DynamicResource TwSurfaceStrongBrush}">
+                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="{DynamicResource TwAccentBrush}" />
                                     </Border>
                                     <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" />
                                 </Grid>
@@ -483,8 +483,8 @@
                 </StackPanel>
             </Border>
 
-            <Border Grid.Row="7" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
-                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+            <Border Grid.Row="7" MaxWidth="860" Margin="28,0,28,24" Background="{DynamicResource TwSurfaceBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="16">
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.Models}" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock Text="{loc:Str Dashboard.NoModelData}" IsVisible="{Binding !HasModels}"
@@ -494,8 +494,8 @@
                             <DataTemplate x:DataType="vm:DashboardBreakdownRow">
                                 <Grid ColumnDefinitions="*,240,Auto" ColumnSpacing="12" Margin="0,0,0,6">
                                     <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
-                                    <Border Grid.Column="1" Width="240" Height="8" Background="#283644">
-                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="#1593F5" />
+                                    <Border Grid.Column="1" Width="240" Height="8" Background="{DynamicResource TwSurfaceStrongBrush}">
+                                        <Border Width="{Binding BarWidth}" HorizontalAlignment="Left" Background="{DynamicResource TwAccentBrush}" />
                                     </Border>
                                     <TextBlock Grid.Column="2" Text="{Binding Count}" FontSize="11" />
                                 </Grid>
@@ -505,8 +505,8 @@
                 </StackPanel>
             </Border>
 
-            <Border Grid.Row="8" MaxWidth="860" Margin="28,0,28,24" Background="#141B24"
-                    BorderBrush="#283644" BorderThickness="1" CornerRadius="8" Padding="16">
+            <Border Grid.Row="8" MaxWidth="860" Margin="28,0,28,24" Background="{DynamicResource TwSurfaceBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="16">
                 <StackPanel Spacing="10">
                     <TextBlock Text="{loc:Str Dashboard.UsageByTime}" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock Text="{loc:Str Dashboard.NoActivity}" IsVisible="{Binding !HasActivity}" FontSize="12" />
@@ -517,7 +517,7 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DashboardHourRow">
                                 <StackPanel Spacing="4" Margin="1,0">
-                                    <Border Height="24" Background="#1593F5" Opacity="{Binding Intensity}"
+                                    <Border Height="24" Background="{DynamicResource TwAccentBrush}" Opacity="{Binding Intensity}"
                                             ToolTip.Tip="{Binding Count}" />
                                     <TextBlock Text="{Binding Label}" FontSize="10" />
                                 </StackPanel>
@@ -537,8 +537,8 @@
             <Border Grid.Row="10"
                     MaxWidth="860"
                     Margin="28,0,28,24"
-                    Background="#141B24"
-                    BorderBrush="#283644"
+                    Background="{DynamicResource TwSurfaceBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="8"
                     Padding="16"
@@ -557,7 +557,7 @@
                             <DataTemplate x:DataType="vm:DashboardRecentActivityRow">
                                 <Border Padding="8,10"
                                         BorderThickness="0,0,0,1"
-                                        BorderBrush="#283644">
+                                        BorderBrush="{DynamicResource TwBorderBrush}">
                                     <StackPanel Spacing="4">
                                         <TextBlock Text="{Binding Preview}"
                                                    FontSize="13"
@@ -566,10 +566,10 @@
                                                     Spacing="10">
                                             <TextBlock Text="{Binding LocalTimestamp, StringFormat='{}{0:HH:mm}'}"
                                                        FontSize="11"
-                                                       Foreground="#9BB0C4" />
+                                                       Foreground="{DynamicResource TwTextMutedBrush}" />
                                             <TextBlock Text="{Binding AppName}"
                                                        FontSize="11"
-                                                       Foreground="#9BB0C4" />
+                                                       Foreground="{DynamicResource TwTextMutedBrush}" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>
@@ -582,8 +582,8 @@
             <Border Grid.Row="11"
                     MaxWidth="860"
                     Margin="28,0,28,28"
-                    Background="#111822"
-                    BorderBrush="#283644"
+                    Background="{DynamicResource TwSurfaceAltBrush}"
+                    BorderBrush="{DynamicResource TwBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="8"
                     Padding="18">

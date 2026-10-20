@@ -85,6 +85,9 @@ public class App : Application
             Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
             BootTrace.Stage("Loc.Initialize");
 
+            // Before any window exists, so the first render already uses the saved theme.
+            services.GetRequiredService<InterfaceThemeService>().Start(this);
+
             var secretMigration = services.GetRequiredService<SecretProtectionMigrationService>();
             var secretMigrationResult = secretMigration.MigrateAllAtStartup();
             if (secretMigrationResult.RootSettingsChanged)

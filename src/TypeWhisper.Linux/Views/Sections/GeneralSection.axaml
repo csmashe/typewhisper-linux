@@ -6,8 +6,8 @@
              x:DataType="vm:GeneralSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
@@ -48,12 +48,12 @@
                         </Grid>
                     </Border>
                     <Border Grid.Row="1"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <TextBlock Text="{loc:Str General.UiLanguageHint}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
                     </Border>
                 </Grid>
             </Border>
@@ -75,13 +75,13 @@
                         </Grid>
                     </Border>
                     <Border Grid.Row="1"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <TextBlock Text="{Binding AutostartStatusText}"
                                    FontSize="12"
                                    TextWrapping="Wrap"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
                     </Border>
                 </Grid>
             </Border>
@@ -101,7 +101,7 @@
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{loc:Str General.CudaPathRemovalHint}"
                                            FontSize="12"
-                                           Foreground="#8A9AAE"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <Button Grid.Column="1"
@@ -112,13 +112,13 @@
                         </Grid>
                     </Border>
                     <Border Grid.Row="1"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12"
                             IsVisible="{Binding CudaPathRemovalStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                         <TextBlock Text="{Binding CudaPathRemovalStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </Border>
                 </Grid>
@@ -142,19 +142,19 @@
                         </Grid>
                     </Border>
                     <Border Grid.Row="1"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <StackPanel Spacing="6">
                             <TextBlock
                                 Text="{loc:Str General.CloseToTrayHint}"
                                 FontSize="12"
-                                Foreground="#8A9AAE"
+                                Foreground="{DynamicResource TwTextSecondaryBrush}"
                                 TextWrapping="Wrap" />
                             <TextBlock IsVisible="{Binding IsTrayUnavailable}"
                                        Text="{loc:Str General.CloseToTrayUnavailableHint}"
                                        FontSize="12"
-                                       Foreground="#E0A845"
+                                       Foreground="{DynamicResource TwWarningTextBrush}"
                                        TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
@@ -179,7 +179,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#1AFFFFFF" />
+                            Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="2"
                             Padding="18,14">
@@ -197,7 +197,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#1AFFFFFF" />
+                            Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="4"
                             Padding="18,14">
@@ -213,12 +213,12 @@
                     </Border>
 
                     <Border Grid.Row="5"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <TextBlock Text="{Binding ApiStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
                     </Border>
                 </Grid>
             </Border>
@@ -234,7 +234,7 @@
                             <TextBlock Text="{Binding Command}"
                                        FontFamily="monospace"
                                        FontSize="12"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,0,0,8" />
                         </DataTemplate>
@@ -257,7 +257,7 @@
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{Binding CliBundledPathText}"
                                            FontSize="12"
-                                           Foreground="#8A9AAE"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                            TextWrapping="Wrap"
                                            Margin="0,4,0,0" />
                             </StackPanel>
@@ -274,7 +274,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#1AFFFFFF"
+                            Background="{DynamicResource TwFillStrongBrush}"
                             IsVisible="{Binding CliBundledAvailable}" />
 
                     <Border Grid.Row="2"
@@ -283,12 +283,12 @@
                         <TextBlock
                             Text="{loc:Str General.CliInstallHint}"
                             FontSize="12"
-                            Foreground="#8A9AAE"
+                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                             TextWrapping="Wrap" />
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#1AFFFFFF" />
+                            Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="4"
                             Padding="18,14">
@@ -298,7 +298,7 @@
                                     <TextBlock Text="{Binding Command}"
                                                FontFamily="monospace"
                                                FontSize="12"
-                                               Foreground="#8A9AAE"
+                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                TextWrapping="Wrap"
                                                Margin="0,0,0,8" />
                                 </DataTemplate>

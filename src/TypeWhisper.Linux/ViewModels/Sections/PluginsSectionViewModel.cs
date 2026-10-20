@@ -1205,30 +1205,6 @@ public partial class PluginRow : ObservableObject
     };
     public string StatusBadge =>
         IsEnabled ? Loc.Instance["Plugins.BadgeEnabled"] : Loc.Instance["Plugins.BadgeDisabled"];
-    public string LocationBadgeBackground => NetworkAccess switch
-    {
-        PluginNetworkAccess.Local => "#1B2F24",
-        PluginNetworkAccess.Mixed => "#30264A",
-        PluginNetworkAccess.UserControlled => "#3A2C16",
-        _ => "#1A3453",
-    };
-    public string LocationBadgeBorder => NetworkAccess switch
-    {
-        PluginNetworkAccess.Local => "#2F5E45",
-        PluginNetworkAccess.Mixed => "#66518F",
-        PluginNetworkAccess.UserControlled => "#80622C",
-        _ => "#2E5B89",
-    };
-    public string LocationBadgeForeground => NetworkAccess switch
-    {
-        PluginNetworkAccess.Local => "#D8F3E5",
-        PluginNetworkAccess.Mixed => "#E4D9FF",
-        PluginNetworkAccess.UserControlled => "#FFE7B3",
-        _ => "#D6E7FF",
-    };
-    public string StatusBadgeBackground => IsEnabled ? "#173222" : "#3A1F1F";
-    public string StatusBadgeBorder => IsEnabled ? "#2F7D4E" : "#8A3A3A";
-    public string StatusBadgeForeground => IsEnabled ? "#D9FBE7" : "#FFD9D9";
 
     public string Monogram =>
         string.Concat(
@@ -1371,9 +1347,6 @@ public partial class PluginRow : ObservableObject
         }
 
         OnPropertyChanged(nameof(StatusBadge));
-        OnPropertyChanged(nameof(StatusBadgeBackground));
-        OnPropertyChanged(nameof(StatusBadgeBorder));
-        OnPropertyChanged(nameof(StatusBadgeForeground));
     }
 
     private enum PluginSettingsDraftEntryKind

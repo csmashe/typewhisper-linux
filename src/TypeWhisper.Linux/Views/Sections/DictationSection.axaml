@@ -3,14 +3,13 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:svc="using:TypeWhisper.Linux.Services"
              xmlns:models="using:TypeWhisper.Core.Models"
-             xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DictationSection"
              x:DataType="vm:DictationSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.settings-panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Margin" Value="0,0,0,18" />
@@ -23,6 +22,21 @@
         <Style Selector="Border.row">
             <Setter Property="Padding" Value="18,12" />
         </Style>
+        <Style Selector="Border.model-status.ready">
+            <Setter Property="Background" Value="{DynamicResource TwSuccessFaintBrush}" />
+        </Style>
+        <Style Selector="Border.model-status-badge">
+            <Setter Property="Background" Value="{DynamicResource TwFillSubtleBrush}" />
+        </Style>
+        <Style Selector="Border.model-status-badge.ready">
+            <Setter Property="Background" Value="{DynamicResource TwSuccessSubtleBrush}" />
+        </Style>
+        <Style Selector="TextBlock.model-status-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwTextStrongBrush}" />
+        </Style>
+        <Style Selector="TextBlock.model-status-text.ready">
+            <Setter Property="Foreground" Value="{DynamicResource TwSuccessTextBrush}" />
+        </Style>
         <Style Selector="TextBlock.row-label">
             <Setter Property="FontSize" Value="12.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -34,8 +48,8 @@
             <Setter Property="HorizontalAlignment" Value="Right" />
         </Style>
         <Style Selector="Border.chip">
-            <Setter Property="Background" Value="#1B2430" />
-            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Padding" Value="8,4" />
@@ -50,7 +64,7 @@
             <Setter Property="Height" Value="18" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
         </Style>
     </UserControl.Styles>
 
@@ -87,7 +101,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row">
@@ -101,14 +115,11 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
-                    <!-- BoolBrushConverter accepts "True=<color>|False=<color>" as
-                         its ConverterParameter to pick one of two brushes based on
-                         a boolean binding. -->
                     <Border Grid.Row="4"
-                            Classes="row"
-                            Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1439B980|False=Transparent'}">
+                            Classes="row model-status"
+                            Classes.ready="{Binding ModelReady}">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
                             <TextBlock Text="{loc:Str Dictation.ModelStatus}"
                                        Classes="row-label" />
@@ -135,17 +146,18 @@
                                     CornerRadius="999"
                                     Padding="12,6"
                                     IsVisible="{Binding !IsModelDownloading}"
-                                    Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1E39B980|False=#1A2B3A4B'}">
+                                    Classes="model-status-badge"
+                                    Classes.ready="{Binding ModelReady}">
                                 <TextBlock Text="{Binding ModelStatusText}"
-                                           Classes="row-value"
-                                           TextWrapping="Wrap"
-                                           Foreground="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#39B980|False=#F5F8FC'}" />
+                                           Classes="row-value model-status-text"
+                                           Classes.ready="{Binding ModelReady}"
+                                           TextWrapping="Wrap" />
                             </Border>
                         </Grid>
                     </Border>
 
                     <Border Grid.Row="5"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="6"
                             Classes="row">
@@ -179,17 +191,17 @@
                     </Border>
 
                     <Border Grid.Row="7"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <StackPanel Spacing="6">
                             <TextBlock Text="{Binding AccelerationStatusText}"
                                        FontSize="12"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        TextWrapping="Wrap" />
                             <TextBlock Text="{Binding CudaSetupStatus}"
                                        FontSize="12"
-                                       Foreground="#D6B45F"
+                                       Foreground="{DynamicResource TwWarningTextBrush}"
                                        TextWrapping="Wrap"
                                        IsVisible="{Binding CudaSetupStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
@@ -210,7 +222,7 @@
                                            Classes="row-label" />
                                 <TextBlock Text="{Binding ModelStoragePath}"
                                            FontSize="12"
-                                           Foreground="#8A9AAE"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <Button Grid.Column="1"
@@ -226,14 +238,14 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row"
                             IsVisible="{Binding ModelStorageStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                         <TextBlock Text="{Binding ModelStorageStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </Border>
                 </Grid>
@@ -262,7 +274,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row">
@@ -281,7 +293,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">
@@ -344,13 +356,13 @@
                                        Text="{Binding LanguageSelectionWarning}"
                                        IsVisible="{Binding LanguageSelectionRequired}"
                                        FontSize="12"
-                                       Foreground="#D6B45F"
+                                       Foreground="{DynamicResource TwWarningTextBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,8,0,0" />
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="1" Background="#18FFFFFF"
+                    <Border Grid.Row="1" Background="{DynamicResource TwFillBrush}"
                             IsVisible="{Binding IsAdditionalLanguagesVisible}" />
                     <Border Grid.Row="2" Classes="row"
                             IsVisible="{Binding IsAdditionalLanguagesVisible}">
@@ -419,7 +431,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">
@@ -439,7 +451,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5" Background="#18FFFFFF"
+                    <Border Grid.Row="5" Background="{DynamicResource TwFillBrush}"
                             IsVisible="{Binding IsEnglishOutputVariantVisible}" />
                     <Border Grid.Row="6" Classes="row"
                             IsVisible="{Binding IsEnglishOutputVariantVisible}">
@@ -465,7 +477,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7" Background="#18FFFFFF"
+                    <Border Grid.Row="7" Background="{DynamicResource TwFillBrush}"
                             IsVisible="{Binding IsGermanOutputVariantVisible}" />
                     <Border Grid.Row="8" Classes="row"
                             IsVisible="{Binding IsGermanOutputVariantVisible}">
@@ -491,7 +503,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="9" Background="#18FFFFFF" />
+                    <Border Grid.Row="9" Background="{DynamicResource TwFillBrush}" />
                     <Border Grid.Row="10" Classes="row">
                         <Grid ColumnDefinitions="*,240">
                             <StackPanel Spacing="4">
@@ -509,7 +521,7 @@
                             </ComboBox>
                         </Grid>
                     </Border>
-                    <Border Grid.Row="11" Background="#18FFFFFF" IsVisible="{Binding IsSpokenFormattingVerificationVisible}" />
+                    <Border Grid.Row="11" Background="{DynamicResource TwFillBrush}" IsVisible="{Binding IsSpokenFormattingVerificationVisible}" />
                     <Border Grid.Row="12" Classes="row" IsVisible="{Binding IsSpokenFormattingVerificationVisible}">
                         <StackPanel Spacing="8">
                             <TextBlock Text="{loc:Str Dictation.SpokenFormattingVerify}" Classes="row-label" />
@@ -556,7 +568,7 @@
 
                     <Border Grid.Row="1"
                             IsVisible="{Binding IsLockPasteToFocusedFieldAvailable}"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
                     <Border Grid.Row="2"
                             IsVisible="{Binding IsLockPasteToFocusedFieldAvailable}"
                             Classes="row">
@@ -577,7 +589,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">
@@ -634,7 +646,7 @@
                     </Border>
 
                     <Border Grid.Row="5"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="6"
                             Classes="row">
@@ -654,7 +666,7 @@
                     </Border>
 
                     <Border Grid.Row="7"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="8"
                             Classes="row">
@@ -678,15 +690,15 @@
                                  and Qt apps won't expose text to correction learning until
                                  the user enables it. -->
                             <Border IsVisible="{Binding ShowAccessibilityBridgeSetup}"
-                                    Background="#14D6B45F"
-                                    BorderBrush="#33D6B45F"
+                                    Background="{DynamicResource TwWarningSubtleBrush}"
+                                    BorderBrush="{DynamicResource TwWarningBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="10"
                                     Padding="14,12">
                                 <StackPanel Spacing="10">
                                     <TextBlock Text="{loc:Str Dictation.A11yBridgeSetupExplanation}"
                                                FontSize="12"
-                                               Foreground="#E4C475"
+                                               Foreground="{DynamicResource TwWarningTextBrush}"
                                                TextWrapping="Wrap" />
                                     <Button Content="{loc:Str Dictation.A11yBridgeEnableButton}"
                                             Command="{Binding EnableAccessibilityBridgeCommand}"
@@ -697,15 +709,15 @@
                             <!-- The bridge is on and this app turned it on; offer to remove
                                  it. -->
                             <Border IsVisible="{Binding ShowAccessibilityBridgeRemove}"
-                                    Background="#0FFFFFFF"
-                                    BorderBrush="#1AFFFFFF"
+                                    Background="{DynamicResource TwFillFaintBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                     BorderThickness="1"
                                     CornerRadius="10"
                                     Padding="14,12">
                                 <StackPanel Spacing="10">
                                     <TextBlock Text="{loc:Str Dictation.A11yBridgeRemoveExplanation}"
                                                FontSize="12"
-                                               Foreground="#8A9AAE"
+                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                TextWrapping="Wrap" />
                                     <Button Content="{loc:Str Dictation.A11yBridgeRemoveButton}"
                                             Command="{Binding RemoveAccessibilityBridgeCommand}"
@@ -715,14 +727,14 @@
 
                             <TextBlock Text="{Binding AccessibilityBridgeStatus}"
                                        FontSize="12"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        TextWrapping="Wrap"
                                        IsVisible="{Binding AccessibilityBridgeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
                     </Border>
 
                     <Border Grid.Row="9"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="10"
                             Classes="row">
@@ -743,7 +755,7 @@
                     </Border>
 
                     <Border Grid.Row="11"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="12"
                             Classes="row">
@@ -757,7 +769,7 @@
                     </Border>
 
                     <Border Grid.Row="13"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="14"
                             Classes="row">
@@ -779,7 +791,7 @@
                     </Border>
 
                     <Border Grid.Row="15"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="16"
                             Classes="row">
@@ -793,7 +805,7 @@
                     </Border>
 
                     <Border Grid.Row="17"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="18"
                             Classes="row">
@@ -807,7 +819,7 @@
                     </Border>
 
                     <Border Grid.Row="19"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="20"
                             Classes="row">
@@ -822,7 +834,7 @@
                     </Border>
 
                     <Border Grid.Row="21"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="22"
                             Classes="row">
@@ -842,7 +854,7 @@
                     </Border>
 
                     <Border Grid.Row="23"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="24"
                             Classes="row">
@@ -863,7 +875,7 @@
                     </Border>
 
                     <Border Grid.Row="25"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="26"
                             Classes="row">
@@ -885,7 +897,7 @@
                     </Border>
 
                     <Border Grid.Row="27"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="28"
                             Classes="row">
@@ -904,7 +916,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="29" Background="#18FFFFFF" />
+                    <Border Grid.Row="29" Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="30"
                             Classes="row">
@@ -950,7 +962,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row"
@@ -972,7 +984,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">

@@ -14,22 +14,47 @@
         <Style Selector="TextBlock.label">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextTertiaryBrush}" />
         </Style>
         <Style Selector="Border.timeline-card">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Padding" Value="13,11" />
         </Style>
         <Style Selector="Border.badge">
-            <Setter Property="Background" Value="#1B2430" />
-            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Padding" Value="7,2" />
             <Setter Property="Margin" Value="6,0,0,0" />
+        </Style>
+        <!-- LLM-call locality badge: network by default, green when the call ran locally. -->
+        <Style Selector="Border.locality-badge">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeNetworkBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeNetworkBorderBrush}" />
+        </Style>
+        <Style Selector="Border.locality-badge > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwBadgeNetworkTextBrush}" />
+        </Style>
+        <Style Selector="Border.locality-badge.local">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeRanLocallyBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeRanLocallyBorderBrush}" />
+        </Style>
+        <Style Selector="Border.locality-badge.local > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwDiffAddedBrush}" />
+        </Style>
+        <!-- Raw-vs-final word diff runs. -->
+        <Style Selector="TextBlock.diff">
+            <Setter Property="Foreground" Value="{DynamicResource TwTextBodyBrush}" />
+        </Style>
+        <Style Selector="TextBlock.diff.added">
+            <Setter Property="Foreground" Value="{DynamicResource TwDiffAddedBrush}" />
+        </Style>
+        <Style Selector="TextBlock.diff.removed">
+            <Setter Property="Foreground" Value="{DynamicResource TwDiffRemovedBrush}" />
         </Style>
         <Style Selector="Button.link-button">
             <Setter Property="Background" Value="Transparent" />
@@ -38,7 +63,7 @@
             <Setter Property="Padding" Value="0" />
             <Setter Property="MinHeight" Value="0" />
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="#8FC0FF" />
+            <Setter Property="Foreground" Value="{DynamicResource TwAccentTextBrush}" />
         </Style>
         <Style Selector="Button.card-toggle">
             <Setter Property="Background" Value="Transparent" />
@@ -48,8 +73,8 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
         <Style Selector="Border.suggestion-panel">
-            <Setter Property="Background" Value="#101820" />
-            <Setter Property="BorderBrush" Value="#26384A" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceSunkenBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="10" />
@@ -113,16 +138,16 @@
                 <Button Content="{loc:Str History.ExportSelected}" Click="OnExport"
                         IsVisible="{Binding IsSelecting}" IsEnabled="{Binding HasSelection}" />
                 <Button Content="{loc:Str History.DeleteSelected}" Click="OnDeleteSelected"
-                        IsVisible="{Binding IsSelecting}" IsEnabled="{Binding HasSelection}" Foreground="#F06A6A" />
+                        IsVisible="{Binding IsSelecting}" IsEnabled="{Binding HasSelection}" Foreground="{DynamicResource TwErrorTextBrush}" />
                 <TextBlock Text="{Binding SelectionSummary}" IsVisible="{Binding IsSelecting}"
-                           Foreground="#8A9AAE" VerticalAlignment="Center" />
+                           Foreground="{DynamicResource TwTextSecondaryBrush}" VerticalAlignment="Center" />
             </WrapPanel>
 
             <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,10">
                 <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}"
-                           Foreground="#8A9AAE" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,8,0" />
+                           Foreground="{DynamicResource TwTextSecondaryBrush}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,8,0" />
                 <TextBlock Grid.Column="1" HorizontalAlignment="Right"
-                           Foreground="#8A9AAE" FontSize="11.5" Text="{Binding Summary}" />
+                           Foreground="{DynamicResource TwTextSecondaryBrush}" FontSize="11.5" Text="{Binding Summary}" />
             </Grid>
             </StackPanel>
 
@@ -135,7 +160,7 @@
                              Width="160"
                              Height="4" />
                 <TextBlock Text="{loc:Str History.Loading}"
-                           Foreground="#8A9AAE"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                            FontSize="13"
                            HorizontalAlignment="Center"
                            Margin="0,12,0,0" />
@@ -143,7 +168,7 @@
 
             <TextBlock Grid.Row="1"
                        Text="{loc:Str History.EmptyState}"
-                       Foreground="#8A9AAE"
+                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                        FontSize="14"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Top"
@@ -165,11 +190,11 @@
                                     <TextBlock Text="{Binding Name}"
                                                FontSize="12"
                                                FontWeight="SemiBold"
-                                               Foreground="#8A9AAE"
+                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                Margin="0,0,10,0" />
                                     <Border Grid.Column="1"
                                             Height="1"
-                                            Background="#1AFFFFFF"
+                                            Background="{DynamicResource TwFillStrongBrush}"
                                             VerticalAlignment="Center" />
                                 </Grid>
 
@@ -180,12 +205,12 @@
                                                   ColumnDefinitions="42,*">
                                                 <Grid Grid.Column="0">
                                                     <Border Width="2"
-                                                            Background="#1AFFFFFF"
+                                                            Background="{DynamicResource TwFillStrongBrush}"
                                                             HorizontalAlignment="Center" />
                                                     <Ellipse Width="10"
                                                              Height="10"
-                                                             Fill="#2E8FFF"
-                                                             Stroke="#0E1620"
+                                                             Fill="{DynamicResource TwAccentBrush}"
+                                                             Stroke="{DynamicResource TwSurfaceSunkenBrush}"
                                                              StrokeThickness="2"
                                                              VerticalAlignment="Top"
                                                              HorizontalAlignment="Center"
@@ -204,7 +229,7 @@
                                                                 <Grid ColumnDefinitions="Auto,*,Auto">
                                                                     <TextBlock Grid.Column="0"
                                                                                Text="{Binding TimeLabel}"
-                                                                               Foreground="#8A9AAE"
+                                                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                                FontSize="12"
                                                                                VerticalAlignment="Top"
                                                                                Margin="0,1,10,0" />
@@ -222,30 +247,30 @@
                                                                                VerticalAlignment="Top"
                                                                                Margin="8,0,0,0">
                                                                         <Border Classes="badge" IsVisible="{Binding HasFailure}">
-                                                                            <TextBlock Text="{Binding StatusBadge}" Foreground="#FF9C9C" FontSize="11" />
+                                                                            <TextBlock Text="{Binding StatusBadge}" Foreground="{DynamicResource TwErrorTextBrush}" FontSize="11" />
                                                                         </Border>
                                                                         <Border Classes="badge"
                                                                                 IsVisible="{Binding IsSpokenCommand}">
                                                                             <TextBlock Text="{loc:Str History.CommandBadge}"
-                                                                                    Foreground="#C9A8FF"
+                                                                                    Foreground="{DynamicResource TwAccentAltTextBrush}"
                                                                                     FontSize="11" />
                                                                         </Border>
                                                                         <Border Classes="badge"
                                                                                 IsVisible="{Binding HasProfileName}">
                                                                             <TextBlock Text="{Binding Record.ProfileName}"
-                                                                                    Foreground="#8FC0FF"
+                                                                                    Foreground="{DynamicResource TwAccentTextBrush}"
                                                                                     FontSize="11" />
                                                                         </Border>
                                                                         <Border Classes="badge"
                                                                                 IsVisible="{Binding HasAppProcessName}">
                                                                             <TextBlock
                                                                                 Text="{Binding Record.AppProcessName}"
-                                                                                Foreground="#8A9AAE"
+                                                                                Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                                 FontSize="11" />
                                                                         </Border>
                                                                         <Border Classes="badge">
                                                                             <TextBlock Text="{Binding DurationLabel}"
-                                                                                    Foreground="#8A9AAE"
+                                                                                    Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                                     FontSize="11" />
                                                                         </Border>
                                                                     </WrapPanel>
@@ -263,7 +288,7 @@
 
                                                         <StackPanel IsVisible="{Binding IsExpanded}">
                                                             <Border Height="1"
-                                                                    Background="#1AFFFFFF"
+                                                                    Background="{DynamicResource TwFillStrongBrush}"
                                                                     Margin="0,8,0,7" />
 
                                                             <TextBlock Text="{Binding Record.FinalText}"
@@ -294,7 +319,7 @@
                                                             <StackPanel Orientation="Horizontal"
                                                                         Margin="0,2,0,4"
                                                                         IsVisible="{Binding ShowExpandedMeta}">
-                                                                <TextBlock Foreground="#8A9AAE"
+                                                                <TextBlock Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                            FontSize="11">
                                                                     <Run
                                                                         Text="{Binding LocalTimestamp, StringFormat='{}{0:d} {0:HH:mm}'}" />
@@ -302,7 +327,7 @@
                                                                     <Run
                                                                         Text="{Binding Record.WordCount, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=History.WordsCount}" />
                                                                 </TextBlock>
-                                                                <TextBlock Foreground="#8A9AAE"
+                                                                <TextBlock Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                            FontSize="11"
                                                                            Margin="8,0,0,0"
                                                                            IsVisible="{Binding HasLanguage}">
@@ -317,7 +342,7 @@
                                                                     <TextBlock Text="{loc:Str History.SuggestedCorrections}"
                                                                                FontSize="12"
                                                                                FontWeight="SemiBold"
-                                                                               Foreground="#D8E6F7" />
+                                                                               Foreground="{DynamicResource TwAccentSubtleTextBrush}" />
 
                                                                     <ItemsControl
                                                                         ItemsSource="{Binding CorrectionSuggestions}">
@@ -341,7 +366,7 @@
                                                                                     <TextBlock Grid.Row="0"
                                                                                         Grid.Column="2"
                                                                                         Text="->"
-                                                                                        Foreground="#8A9AAE"
+                                                                                        Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                                         VerticalAlignment="Bottom" />
                                                                                     <TextBlock Grid.Row="0"
                                                                                         Grid.Column="3"
@@ -355,7 +380,7 @@
                                                                                     <TextBlock Grid.Row="1"
                                                                                         Grid.Column="2"
                                                                                         Text="{Binding ConfidenceLabel}"
-                                                                                        Foreground="#8A9AAE"
+                                                                                        Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                                         FontSize="11"
                                                                                         VerticalAlignment="Center" />
                                                                                     <TextBox Grid.Row="1"
@@ -409,7 +434,7 @@
                                                                         Content="{loc:Str Common.Delete}"
                                                                         Click="OnDeleteRecord"
                                                                         Tag="{Binding}"
-                                                                        Foreground="#F06A6A" />
+                                                                        Foreground="{DynamicResource TwErrorTextBrush}" />
                                                             </StackPanel>
 
                                                             <Border Classes="suggestion-panel"
@@ -418,7 +443,7 @@
                                                                     <TextBlock Text="{loc:Str History.Inspect.Title}"
                                                                                FontSize="12"
                                                                                FontWeight="SemiBold"
-                                                                               Foreground="#D8E6F7" />
+                                                                               Foreground="{DynamicResource TwAccentSubtleTextBrush}" />
 
                                                                     <StackPanel Spacing="4"
                                                                                 IsVisible="{Binding ShowRawVsFinal}">
@@ -438,7 +463,9 @@
                                                                                     <TextBlock Text="{Binding Text}"
                                                                                                FontSize="13"
                                                                                                Margin="0,0,5,2"
-                                                                                               Foreground="{Binding Kind, Converter={x:Static local:DiffKindBrushConverter.Instance}}"
+                                                                                               Classes="diff"
+                                                                                               Classes.added="{Binding Kind, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static models:DiffKind.Added}}"
+                                                                                               Classes.removed="{Binding Kind, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static models:DiffKind.Removed}}"
                                                                                                TextDecorations="{Binding Kind, Converter={x:Static local:DiffKindDecorationsConverter.Instance}}" />
                                                                                 </DataTemplate>
                                                                             </ItemsControl.ItemTemplate>
@@ -449,8 +476,8 @@
                                                                                   IsVisible="{Binding HasLlmCalls}">
                                                                         <ItemsControl.ItemTemplate>
                                                                             <DataTemplate x:DataType="vm:LlmCallDisplay">
-                                                                                <Border Background="#0C141C"
-                                                                                        BorderBrush="#1F2E3D"
+                                                                                <Border Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                                                                        BorderBrush="{DynamicResource TwBorderBrush}"
                                                                                         BorderThickness="1"
                                                                                         CornerRadius="6"
                                                                                         Padding="10"
@@ -460,21 +487,20 @@
                                                                                             <TextBlock Text="{Binding StageLabel}"
                                                                                                        FontSize="12"
                                                                                                        FontWeight="SemiBold"
-                                                                                                       Foreground="#D8E6F7"
+                                                                                                       Foreground="{DynamicResource TwAccentSubtleTextBrush}"
                                                                                                        VerticalAlignment="Center" />
                                                                                             <Border Grid.Column="1"
-                                                                                                    Classes="badge"
-                                                                                                    Background="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Background}"
-                                                                                                    BorderBrush="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Border}">
+                                                                                                    Classes="badge locality-badge"
+                                                                                                    Classes.local="{Binding RanLocally}">
                                                                                                 <TextBlock Text="{Binding NetworkBadgeText}"
                                                                                                            FontSize="11"
-                                                                                                           Foreground="{Binding RanLocally, Converter={x:Static local:LocalityBadgeBrushConverter.Instance}, ConverterParameter=Foreground}" />
+                                                                                                           Classes="badge-text" />
                                                                                             </Border>
                                                                                         </Grid>
 
                                                                                         <TextBlock Text="{Binding ProviderModelLabel}"
                                                                                                    FontSize="11"
-                                                                                                   Foreground="#8A9AAE" />
+                                                                                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
 
                                                                                         <StackPanel Spacing="2"
                                                                                                     IsVisible="{Binding HasSystemPrompt}">
@@ -483,7 +509,7 @@
                                                                                             <SelectableTextBlock Text="{Binding SystemPromptSent}"
                                                                                                                  FontSize="12"
                                                                                                                  TextWrapping="Wrap"
-                                                                                                                 Foreground="#C6D2E0" />
+                                                                                                                 Foreground="{DynamicResource TwTextBodyBrush}" />
                                                                                         </StackPanel>
 
                                                                                         <StackPanel Spacing="2"
@@ -493,7 +519,7 @@
                                                                                             <SelectableTextBlock Text="{Binding UserPromptSent}"
                                                                                                                  FontSize="12"
                                                                                                                  TextWrapping="Wrap"
-                                                                                                                 Foreground="#C6D2E0" />
+                                                                                                                 Foreground="{DynamicResource TwTextBodyBrush}" />
                                                                                         </StackPanel>
 
                                                                                         <StackPanel Spacing="2"
@@ -503,7 +529,7 @@
                                                                                             <SelectableTextBlock Text="{Binding InjectedMemoryContext}"
                                                                                                                  FontSize="12"
                                                                                                                  TextWrapping="Wrap"
-                                                                                                                 Foreground="#C6D2E0" />
+                                                                                                                 Foreground="{DynamicResource TwTextBodyBrush}" />
                                                                                         </StackPanel>
 
                                                                                         <StackPanel Spacing="2"
@@ -513,7 +539,7 @@
                                                                                             <SelectableTextBlock Text="{Binding ResponseReceived}"
                                                                                                                  FontSize="12"
                                                                                                                  TextWrapping="Wrap"
-                                                                                                                 Foreground="#9FD8B4" />
+                                                                                                                 Foreground="{DynamicResource TwSuccessTextBrush}" />
                                                                                         </StackPanel>
                                                                                     </StackPanel>
                                                                                 </Border>
@@ -523,7 +549,7 @@
 
                                                                     <TextBlock Text="{Binding NoLlmCallsMessage}"
                                                                                FontSize="12"
-                                                                               Foreground="#8A9AAE"
+                                                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                                                TextWrapping="Wrap"
                                                                                IsVisible="{Binding !HasLlmCalls}" />
                                                                 </StackPanel>

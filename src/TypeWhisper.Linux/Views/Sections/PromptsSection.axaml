@@ -8,8 +8,8 @@
              x:DataType="vm:PromptsSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
@@ -34,14 +34,14 @@
                                    FontWeight="SemiBold" />
                         <TextBlock Text="{Binding Summary}"
                                    FontSize="12.5"
-                                   Foreground="#9BAABC" />
+                                   Foreground="{DynamicResource TwTextMutedBrush}" />
                         <TextBlock Text="{Binding PromptsHint}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
 
-                        <Border Background="#3A1D1D"
-                                BorderBrush="#7A2E2E"
+                        <Border Background="{DynamicResource TwErrorSubtleBrush}"
+                                BorderBrush="{DynamicResource TwErrorBorderBrush}"
                                 BorderThickness="1"
                                 CornerRadius="8"
                                 Padding="10"
@@ -50,7 +50,7 @@
                             <TextBlock Text="{Binding ErrorText}"
                                        FontSize="12"
                                        TextWrapping="Wrap"
-                                       Foreground="#F4A9A9" />
+                                       Foreground="{DynamicResource TwErrorTextBrush}" />
                         </Border>
                     </StackPanel>
 
@@ -58,9 +58,9 @@
                             Content="{loc:Str Common.New}"
                             Command="{Binding StartCreateCommand}"
                             Padding="18,8"
-                            Background="#2196F3"
-                            BorderBrush="#2196F3"
-                            Foreground="White"
+                            Background="{DynamicResource TwAccentBrush}"
+                            BorderBrush="{DynamicResource TwAccentBrush}"
+                            Foreground="{DynamicResource TwOnAccentBrush}"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Center" />
                 </Grid>
@@ -82,7 +82,7 @@
                                        FontWeight="SemiBold" />
                             <TextBlock Text="{loc:Str Prompts.CommandModeHint}"
                                        FontSize="12"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        TextWrapping="Wrap" />
                         </StackPanel>
                         <ToggleSwitch Grid.Column="1"
@@ -97,7 +97,7 @@
                                  PlaceholderText="{loc:Str Prompts.CommandKeyphrasePlaceholder}" />
                         <TextBlock Text="{loc:Str Prompts.CommandKeyphraseHelp}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
 
                         <TextBlock Text="{loc:Str Prompts.CommandModel}"
@@ -114,14 +114,14 @@
                         </ComboBox>
                         <TextBlock Text="{loc:Str Prompts.CommandModelHelp}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </StackPanel>
             </Border>
 
-            <Border Background="#4D3B17"
-                    BorderBrush="#6E5625"
+            <Border Background="{DynamicResource TwWarningSubtleBrush}"
+                    BorderBrush="{DynamicResource TwWarningBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
                     Padding="14,10"
@@ -130,12 +130,12 @@
                             Spacing="12">
                     <TextBlock Text="!"
                                FontWeight="Bold"
-                               Foreground="#FFD400" />
+                               Foreground="{DynamicResource TwWarningTextBrush}" />
                     <TextBlock Text="{loc:Str Prompts.NoProvider}"
                                FontWeight="SemiBold"
-                               Foreground="White" />
+                               Foreground="{DynamicResource TwTextStrongBrush}" />
                     <TextBlock Text="{Binding ProviderWarningText}"
-                               Foreground="#F3E1AF" />
+                               Foreground="{DynamicResource TwWarningTextBrush}" />
                 </StackPanel>
             </Border>
 
@@ -151,9 +151,9 @@
                                 Command="{Binding StartCreateCommand}"
                                 HorizontalAlignment="Center"
                                 Margin="0,0,0,70"
-                                Background="#2196F3"
-                                BorderBrush="#2196F3"
-                                Foreground="White" />
+                                Background="{DynamicResource TwAccentBrush}"
+                                BorderBrush="{DynamicResource TwAccentBrush}"
+                                Foreground="{DynamicResource TwOnAccentBrush}" />
                     </StackPanel>
 
                     <ItemsControl ItemsSource="{Binding Actions}"
@@ -161,14 +161,14 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="models:PromptAction">
                                 <Border Padding="16,14"
-                                        BorderBrush="#1AFFFFFF"
+                                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                         BorderThickness="0,0,0,1">
                                     <Grid ColumnDefinitions="Auto,*,Auto,Auto"
                                           ColumnSpacing="14">
                                         <Border Width="36"
                                                 Height="36"
                                                 CornerRadius="10"
-                                                Background="#1B2B4B"
+                                                Background="{DynamicResource TwAccentSubtleBrush}"
                                                 VerticalAlignment="Top">
                                             <TextBlock Text="{Binding Icon}"
                                                        HorizontalAlignment="Center"
@@ -184,18 +184,18 @@
                                                            FontSize="13.5"
                                                            FontWeight="SemiBold" />
                                                 <Border Classes="badge"
-                                                        Background="#1A3453"
-                                                        BorderBrush="#2E5B89"
+                                                        Background="{DynamicResource TwAccentSubtleBrush}"
+                                                        BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}"
                                                         BorderThickness="1">
                                                     <TextBlock
                                                         Text="{Binding IsEnabled, Converter={x:Static loc:LocBoolConverter.Instance}, ConverterParameter='Common.Enabled|Common.Disabled'}"
                                                         FontSize="10.5"
-                                                        Foreground="#D6E7FF" />
+                                                        Foreground="{DynamicResource TwAccentSubtleTextBrush}" />
                                                 </Border>
                                             </StackPanel>
                                             <TextBlock Text="{Binding SystemPrompt}"
                                                        FontSize="12.5"
-                                                       Foreground="#9BAABC"
+                                                       Foreground="{DynamicResource TwTextMutedBrush}"
                                                        MaxLines="2"
                                                        TextTrimming="CharacterEllipsis"
                                                        TextWrapping="Wrap" />
@@ -295,7 +295,7 @@
                                  PlaceholderText="{loc:Str Prompts.HotkeyPlaceholder}" />
                         <TextBlock Text="{Binding HotkeyValidationMessage}"
                                    IsVisible="{Binding HotkeyValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                                   Foreground="#F3E1AF"
+                                   Foreground="{DynamicResource TwWarningTextBrush}"
                                    FontSize="12"
                                    TextWrapping="Wrap"
                                    Margin="0,6,0,0" />
@@ -333,9 +333,9 @@
                                 Command="{Binding CancelEditCommand}" />
                         <Button Content="{loc:Str Common.Save}"
                                 Command="{Binding SaveActionCommand}"
-                                Background="#2196F3"
-                                BorderBrush="#2196F3"
-                                Foreground="White" />
+                                Background="{DynamicResource TwAccentBrush}"
+                                BorderBrush="{DynamicResource TwAccentBrush}"
+                                Foreground="{DynamicResource TwOnAccentBrush}" />
                     </StackPanel>
                 </Grid>
             </Border>

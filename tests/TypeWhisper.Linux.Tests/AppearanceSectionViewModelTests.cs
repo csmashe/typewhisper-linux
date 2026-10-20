@@ -139,6 +139,57 @@ public sealed class AppearanceSectionViewModelTests
         settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData(InterfaceTheme.System)]
+    [InlineData(InterfaceTheme.Light)]
+    [InlineData(InterfaceTheme.Dark)]
+    public void SelectedTheme_LoadsSavedTheme(InterfaceTheme theme)
+    {
+        var settings = CreateSettingsMock(AppSettings.Default with { InterfaceTheme = theme });
+
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
+
+        Assert.Equal(theme, sut.SelectedTheme?.Value);
+        settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public void SelectedTheme_UnknownSavedValue_ShowsDarkWithoutRewriting()
+    {
+        var settings = CreateSettingsMock(AppSettings.Default with { InterfaceTheme = (InterfaceTheme)42 });
+
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
+
+        Assert.Equal(InterfaceTheme.Dark, sut.SelectedTheme?.Value);
+        settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public void SelectingTheme_PersistsIt()
+    {
+        var settings = CreateSettingsMock(AppSettings.Default);
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
+
+        sut.SelectedTheme = sut.Themes.Single(option => option.Value == InterfaceTheme.Light);
+
+        settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Once);
+        Assert.Equal(InterfaceTheme.Light, settings.Object.Current.InterfaceTheme);
+    }
+
+    [Fact]
+    public void ThemeChangedElsewhere_RefreshesSelection()
+    {
+        var settings = CreateSettingsMock(AppSettings.Default);
+        var sut = new AppearanceSectionViewModel(settings.Object, post: action => action());
+
+        var updated = AppSettings.Default with { InterfaceTheme = InterfaceTheme.System };
+        settings.SetupGet(s => s.Current).Returns(updated);
+        settings.Raise(s => s.SettingsChanged += null, updated);
+
+        Assert.Equal(InterfaceTheme.System, sut.SelectedTheme?.Value);
+        settings.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
     private static Mock<ISettingsService> CreateSettingsMock(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
