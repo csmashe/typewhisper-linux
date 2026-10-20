@@ -1,6 +1,4 @@
 {
-  "userSelectedLlmModel": true,
-  "selectedTranscriptionModel": "fixture/audio",
   "fetchedTranscriptionModels": [
     {
       "Id": "fixture/audio",
@@ -10,6 +8,8 @@
     }
   ],
   "selectedLlmModel": "google/gemini-2.5-flash",
+  "selectedTranscriptionModel": "fixture/audio",
+  "userSelectedLlmModel": true,
   "fetchedModels": [
     {
       "Id": "openrouter/free",

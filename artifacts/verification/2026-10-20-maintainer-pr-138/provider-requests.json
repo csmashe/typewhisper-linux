@@ -14,12 +14,6 @@
   {
     "method": "GET",
     "host": "openrouter.ai:443",
-    "path": "/api/v1/models?output_modalities=transcription",
-    "mode": "success"
-  },
-  {
-    "method": "GET",
-    "host": "openrouter.ai:443",
     "path": "/api/v1/models",
     "mode": "success"
   },
@@ -27,12 +21,18 @@
     "method": "GET",
     "host": "openrouter.ai:443",
     "path": "/api/v1/models?output_modalities=transcription",
+    "mode": "success"
+  },
+  {
+    "method": "GET",
+    "host": "openrouter.ai:443",
+    "path": "/api/v1/models",
     "mode": "failure"
   },
   {
     "method": "GET",
     "host": "openrouter.ai:443",
-    "path": "/api/v1/models",
+    "path": "/api/v1/models?output_modalities=transcription",
     "mode": "failure"
   },
   {

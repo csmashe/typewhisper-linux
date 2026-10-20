@@ -87,3 +87,9 @@ just --justfile /tmp/pr138-verification-tools/justfile --working-directory "$PWD
 
 No push, PR creation, or GitHub comment was performed. The parent owns review
 and publication.
+
+The parent independently reran the Settings script at commit `2cf37edb`.
+All six assertions passed. The parent also checked all twelve source and Release
+binary hashes against `verification-manifest.json`; every hash matched.
+The updated `run.json` records this rerun. Its dirty entries are generated
+evidence files only. The source code was unchanged.
