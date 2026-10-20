@@ -838,6 +838,61 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         field.SetValue(target, value);
     }
 
+    [Fact]
+    public void SelectedDefaultLlmProvider_UpdatesSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin("com.typewhisper.openai", "OpenAI", "gpt-4.1-mini");
+        using var pluginManager = TestPluginManagerFactory.Create([provider]);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        var option = Assert.Single(sut.DefaultProviderOptions, candidate =>
+            candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini");
+        var rows = sut.DefaultProviderOptions.ToArray();
+
+        sut.SelectedDefaultLlmProvider = option;
+
+        Assert.Equal(option.Value, settings.Object.Current.DefaultLlmProvider);
+        Assert.Same(option, sut.SelectedDefaultLlmProvider);
+        Assert.Equal(rows, sut.DefaultProviderOptions); // No synchronous rebuild inside SelectedItem.
+
+        sut.SelectedDefaultLlmProvider = Assert.Single(sut.DefaultProviderOptions, candidate => candidate.Value is null);
+
+        Assert.Null(settings.Object.Current.DefaultLlmProvider);
+        Assert.Null(sut.SelectedDefaultLlmProvider!.Value);
+    }
+
+    [Fact]
+    public void AutomaticProvider_NamesAvailableAlternativeAndKeepsMissingDefaultSeparate()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var unavailable = new FakeLlmProviderPlugin("missing", "Unavailable", "model") { IsAvailable = false };
+        var available = new FakeLlmProviderPlugin("available", "Available", "model", "Actual model");
+        using var pluginManager = TestPluginManagerFactory.Create([unavailable, available]);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings
+        {
+            DefaultLlmProvider = "plugin:missing:model",
+            SpokenCommandLlmProvider = "plugin:command-only:model",
+        });
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        Assert.Equal("Automatic (first available: Available / Actual model)",
+            Assert.Single(sut.DefaultProviderOptions, option => option.Value is null).Label);
+        Assert.Equal("plugin:missing:model", sut.SelectedDefaultLlmProvider!.Value);
+        Assert.True(sut.SelectedDefaultLlmProvider.IsUnavailable);
+
+        sut.EditProviderOverride = "plugin:editor-only:model";
+        InvokeRefreshPluginOptions(sut);
+        Assert.DoesNotContain(sut.DefaultProviderOptions, option => option.Value is "plugin:editor-only:model" or "plugin:command-only:model");
+        Assert.DoesNotContain(sut.SpokenCommandProviderOptions, option => option.Value == "plugin:editor-only:model");
+        Assert.DoesNotContain(sut.AvailableProviders, option => option.Value == "plugin:command-only:model");
+
+        sut.EditProviderOverride = "plugin:next-editor:model";
+        Assert.DoesNotContain(sut.AvailableProviders, option => option.Value == "plugin:editor-only:model");
+        Assert.StartsWith("Use default provider", sut.SpokenCommandProviderOptions[0].Label);
+        Assert.StartsWith("Use default provider", sut.AvailableProviders[0].Label);
+    }
+
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
     {
         public FakeLlmProviderPlugin(
@@ -880,25 +935,5 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         }
 
         public void Dispose() { }
-    }
-    [Fact]
-    public void SelectedDefaultLlmProvider_UpdatesSettings()
-    {
-        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
-        using var pluginManager = TestPluginManagerFactory.Create();
-        var currentSettings = new AppSettings { DefaultLlmProvider = "initial-provider" };
-        var settingsMock = new Mock<ISettingsService>();
-        settingsMock.SetupGet(s => s.Current).Returns(currentSettings);
-        settingsMock.Setup(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
-            .Callback<Func<AppSettings, AppSettings>>(update => currentSettings = update(currentSettings));
-
-        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settingsMock.Object);
-        var targetOption = new ProviderOption("plugin:com.typewhisper.openai:gpt-4.1-mini", "OpenAI - GPT-4.1 mini");
-        sut.AvailableProviders.Add(targetOption);
-
-        sut.SelectedDefaultLlmProvider = targetOption;
-
-        settingsMock.Verify(s => s.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Once);
-        Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", currentSettings.DefaultLlmProvider);
     }
 }

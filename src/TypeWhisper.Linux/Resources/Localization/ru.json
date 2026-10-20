@@ -838,6 +838,10 @@
   "Prompts.Summary": "Промптов: {0}, включено: {1}",
   "Prompts.SystemPrompt": "Системный промпт",
   "Prompts.Title": "Промпты",
+  "Prompts.CleanupProvider": "LLM по умолчанию (очистка и промпты)",
+  "Prompts.CleanupProviderHelp": "Средняя и высокая очистка отправляют распознанный текст этому провайдеру и модели. Действия с промптами и голосовые команды используют его, если для них не выбран другой провайдер. Без очистки и лёгкая очистка выполняются локально.",
+  "Prompts.AutomaticProvider": "Автоматически",
+  "Prompts.AutomaticProviderFormat": "Автоматически (первый доступный: {0})",
   "Prompts.UseDefaultProvider": "Использовать провайдера по умолчанию",
   "Prompts.UseDefaultProviderFallback": "{0} ({1})",
   "RecentTranscriptions.CopiedToClipboard": "Недавняя транскрипция скопирована в буфер обмена.",
@@ -1214,7 +1218,5 @@
   "LanguageSelection.Invalid": "Недопустимый язык транскрипции «{0}». Выберите «Авто» или укажите допустимый тег BCP-47.",
   "LanguageSelection.AutomaticNotSupported": "{0} не может определить язык автоматически. Выберите язык явно.",
   "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто».",
-  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}.",
-  "Prompts.CleanupProvider": "LLM для очистки",
-  "Prompts.CleanupProviderHelp": "Средняя и высокая очистка отправляют локально распознанный текст этому провайдеру и модели. Без очистки и лёгкая очистка выполняются локально. Выберите конкретную модель, чтобы очистка была единообразной."
+  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}."
 }

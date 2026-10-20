@@ -838,6 +838,10 @@
   "Prompts.Summary": "{0} Prompts, {1} aktiv",
   "Prompts.SystemPrompt": "System-Prompt",
   "Prompts.Title": "Prompts",
+  "Prompts.CleanupProvider": "Standard-LLM (Bereinigung und Prompts)",
+  "Prompts.CleanupProviderHelp": "Mittlere und hohe Bereinigung senden den transkribierten Text an diesen Anbieter und dieses Modell. Prompt-Aktionen und Sprachbefehle verwenden es, sofern sie keinen anderen Anbieter festlegen. Keine und leichte Bereinigung bleiben lokal.",
+  "Prompts.AutomaticProvider": "Automatisch",
+  "Prompts.AutomaticProviderFormat": "Automatisch (erster verfügbarer Anbieter: {0})",
   "Prompts.UseDefaultProvider": "Standardanbieter verwenden",
   "Prompts.UseDefaultProviderFallback": "{0} ({1})",
   "RecentTranscriptions.CopiedToClipboard": "Letzte Transkription in die Zwischenablage kopiert.",
@@ -1214,7 +1218,5 @@
   "LanguageSelection.Invalid": "Ungültige Transkriptionssprache „{0}“. Wählen Sie Auto oder geben Sie ein gültiges BCP-47-Tag ein.",
   "LanguageSelection.AutomaticNotSupported": "{0} kann die Sprache nicht automatisch erkennen. Wählen Sie eine Sprache ausdrücklich aus.",
   "LanguageSelection.ExplicitNotSupported": "{0} akzeptiert keine ausdrückliche Sprachauswahl. Wählen Sie Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}.",
-  "Prompts.CleanupProvider": "LLM für die Bereinigung",
-  "Prompts.CleanupProviderHelp": "Mittlere und hohe Bereinigung senden den lokal transkribierten Text an diesen Anbieter und dieses Modell. Keine und leichte Bereinigung bleiben lokal. Wählen Sie ein bestimmtes Modell, damit die Bereinigung einheitlich bleibt."
+  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}."
 }

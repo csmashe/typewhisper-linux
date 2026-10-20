@@ -838,6 +838,10 @@
   "Prompts.Summary": "{0} prompts, {1} enabled",
   "Prompts.SystemPrompt": "System Prompt",
   "Prompts.Title": "Prompts",
+  "Prompts.CleanupProvider": "Default LLM (cleanup and prompts)",
+  "Prompts.CleanupProviderHelp": "Medium and High cleanup send transcribed text to this provider and model. Prompt actions and spoken commands use it unless they specify another provider. None and Light cleanup stay local.",
+  "Prompts.AutomaticProvider": "Automatic",
+  "Prompts.AutomaticProviderFormat": "Automatic (first available: {0})",
   "Prompts.UseDefaultProvider": "Use default provider",
   "Prompts.UseDefaultProviderFallback": "{0} ({1})",
   "RecentTranscriptions.CopiedToClipboard": "Copied recent transcription to clipboard.",
@@ -1214,7 +1218,5 @@
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
   "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}.",
-  "Prompts.CleanupProvider": "LLM for cleanup",
-  "Prompts.CleanupProviderHelp": "Medium and High cleanup send the locally transcribed text to this provider and model. None and Light cleanup stay local. Choose a specific model to keep cleanup consistent."
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
 }

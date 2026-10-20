@@ -72,7 +72,7 @@
                     <TextBlock Text="{loc:Str Prompts.CleanupProvider}"
                                FontSize="16"
                                FontWeight="SemiBold" />
-                    <ComboBox ItemsSource="{Binding AvailableProviders}"
+                    <ComboBox ItemsSource="{Binding DefaultProviderOptions}"
                               SelectedItem="{Binding SelectedDefaultLlmProvider}"
                               DropDownOpened="OnProviderDropDownOpened">
                         <ComboBox.ItemTemplate>
@@ -124,7 +124,7 @@
 
                         <TextBlock Text="{loc:Str Prompts.CommandModel}"
                                    Margin="0,8,0,0" />
-                        <ComboBox ItemsSource="{Binding AvailableProviders}"
+                        <ComboBox ItemsSource="{Binding SpokenCommandProviderOptions}"
                                   SelectedItem="{Binding SelectedSpokenCommandProvider}"
                                   HorizontalAlignment="Stretch"
                                   DropDownOpened="OnProviderDropDownOpened">
