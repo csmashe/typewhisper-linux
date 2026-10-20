@@ -1105,10 +1105,7 @@ public sealed class OpenAiPlugin
             isNewRegistration,
             existing.IdToken,
             requestConsent: !isNewRegistration && _planConsentDeclined);
-        var launch = (
-            _host
-            ?? throw new InvalidOperationException("OpenAI plugin is not activated.")
-        ).Processes.LaunchUri(authUri);
+        var launch = host.Processes.LaunchUri(authUri);
         if (!launch.Started)
         {
             // LaunchUri reports failure instead of throwing; re-raise as Win32Exception
@@ -1226,7 +1223,7 @@ public sealed class OpenAiPlugin
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         try
         {
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
