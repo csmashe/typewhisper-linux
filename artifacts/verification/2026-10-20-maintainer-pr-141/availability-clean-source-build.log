@@ -1,0 +1,13 @@
+  TypeWhisper.ProcessTestChild -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.ProcessTestChild/bin/Release/net10.0/TypeWhisper.ProcessTestChild.dll
+  TypeWhisper.PluginSDK -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.PluginSDK/bin/Release/net10.0/TypeWhisper.PluginSDK.dll
+  TypeWhisper.TranscriptionWorkerProbe -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.TranscriptionWorkerProbe/bin/Release/net10.0/TypeWhisper.TranscriptionWorkerProbe.dll
+  TypeWhisper.Plugin.Webhook -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Webhook/bin/Release/net10.0/TypeWhisper.Plugin.Webhook.dll
+  TypeWhisper.Core -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Core/bin/Release/net10.0/TypeWhisper.Core.dll
+  TypeWhisper.Linux -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper.dll
+  TypeWhisper.Linux.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:12.18
