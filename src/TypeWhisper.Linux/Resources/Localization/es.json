@@ -259,6 +259,8 @@
   "Dictation.AppInsertionStrategies": "Estrategias de inserción por app",
   "Dictation.AudioPlayerUnavailable": "No disponible: en este sistema no hay ningún reproductor de audio (pw-play, paplay o aplay) instalado.",
   "Dictation.AutoCleanup": "Limpieza automática",
+  "Dictation.LiveCleanup": "Limpiar borradores durante la grabación",
+  "Dictation.LiveCleanupHint": "Requiere transcripción en tiempo real y limpieza media o alta. Envía borradores modificables al proveedor de IA seleccionado mientras hablas. Los proveedores en la nube pueden cobrar por cada borrador. El dictado traducido y las acciones de perfil usan el procesamiento final. El texto se inserta una sola vez, después de detener la grabación.",
   "Dictation.AutoLearnCorrections": "Aprender automáticamente las correcciones aprobadas del historial",
   "Dictation.AutoLearnCorrectionsHint": "Cuando editas un elemento del historial, las sugerencias claras a nivel de frase pueden aprenderse de inmediato.",
   "Dictation.Recovery": "Recuperación",
@@ -1214,10 +1216,5 @@
   "LanguageSelection.Invalid": "El idioma de transcripción «{0}» no es válido. Elige Auto o introduce una etiqueta BCP-47 válida.",
   "LanguageSelection.AutomaticNotSupported": "{0} no puede detectar el idioma automáticamente. Elige un idioma explícito.",
   "LanguageSelection.ExplicitNotSupported": "{0} no acepta un idioma explícito. Elige Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}.",
-  "Dictation.CleanupWaitLimit": "Límite de espera de limpieza con IA (segundos)",
-  "Dictation.LiveCleanup": "Limpiar borradores durante la grabación",
-  "Dictation.LiveCleanupHint": "Requiere transcripción en tiempo real y limpieza media o alta. Envía borradores modificables al proveedor de IA seleccionado mientras hablas. Los proveedores en la nube pueden cobrar por cada borrador. El dictado traducido y las acciones de perfil usan el procesamiento final. El texto se inserta una sola vez, después de detener la grabación.",
-  "Dictation.CleanupWaitLimitHint": "La limpieza media y alta usan limpieza ligera al alcanzar este límite. También se aplica a los perfiles. 0 desactiva el límite. No afecta a reescrituras ni traducciones.",
-  "Dictation.CleanupTimedOut": "La limpieza con IA alcanzó el límite de espera. Se usa limpieza ligera."
+  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}."
 }

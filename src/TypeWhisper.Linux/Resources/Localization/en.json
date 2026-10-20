@@ -259,6 +259,8 @@
   "Dictation.AppInsertionStrategies": "App insertion strategies",
   "Dictation.AudioPlayerUnavailable": "Unavailable: no audio player (pw-play, paplay, or aplay) is installed on this system.",
   "Dictation.AutoCleanup": "Auto cleanup",
+  "Dictation.LiveCleanup": "Clean drafts while recording",
+  "Dictation.LiveCleanupHint": "Requires live transcription and Medium or High cleanup. Sends revisable drafts to your selected AI provider while you speak. Cloud providers can charge per draft. Translated dictation and profile prompt actions use final processing. Text is inserted once, after you stop.",
   "Dictation.AutoLearnCorrections": "Auto-learn approved history corrections",
   "Dictation.AutoLearnCorrectionsHint": "When you edit a history item, clear phrase-level suggestions can be learned immediately.",
   "Dictation.Recovery": "Recovery",
@@ -1214,10 +1216,5 @@
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
   "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}.",
-  "Dictation.CleanupWaitLimit": "AI cleanup wait limit (seconds)",
-  "Dictation.LiveCleanup": "Clean drafts while recording",
-  "Dictation.LiveCleanupHint": "Requires live transcription and Medium or High cleanup. Sends revisable drafts to your selected AI provider while you speak. Cloud providers can charge per draft. Translated dictation and profile prompt actions use final processing. Text is inserted once, after you stop.",
-  "Dictation.CleanupWaitLimitHint": "Medium and High cleanup use Light cleanup if this limit is reached. Applies to profiles too. Set 0 to wait without a limit. Rewrites and translation are unaffected.",
-  "Dictation.CleanupTimedOut": "AI cleanup reached its wait limit. Using Light cleanup."
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
 }

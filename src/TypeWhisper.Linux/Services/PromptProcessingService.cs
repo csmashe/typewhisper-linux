@@ -48,7 +48,7 @@ public sealed class PromptProcessingService
 
     public string? GetCleanupProviderSelection()
     {
-        var (provider, model) = ResolveProvider((string?)null);
+        var (provider, model) = ResolveProvider(null, reportProviderProblems: false);
         return provider is null ? null : $"plugin:{provider.GetLlmSelectionId()}:{model}";
     }
 
@@ -201,10 +201,11 @@ public sealed class PromptProcessingService
         string inputText,
         LlmCallCapture? capture = null,
         CancellationToken ct = default,
-        string? providerOverride = null
+        string? providerOverride = null,
+        bool reportProviderProblems = true
     )
     {
-        var (provider, modelId) = ResolveProvider(providerOverride);
+        var (provider, modelId) = ResolveProvider(providerOverride, reportProviderProblems);
         if (provider is null)
         {
             throw new InvalidOperationException(Localization.Loc.Instance["Prompts.NoProvider"]);
@@ -322,17 +323,17 @@ public sealed class PromptProcessingService
         return ResolveProvider(action.ProviderOverride);
     }
 
-    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(string? providerOverride)
+    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(string? providerOverride, bool reportProviderProblems = true)
     {
         if (!string.IsNullOrWhiteSpace(providerOverride))
         {
-            return RequireConfiguredProvider(ResolvePluginModelId(providerOverride), providerOverride);
+            return RequireConfiguredProvider(ResolvePluginModelId(providerOverride), providerOverride, reportProviderProblems);
         }
 
         var defaultProvider = _settings.Current.DefaultLlmProvider;
         if (!string.IsNullOrWhiteSpace(defaultProvider))
         {
-            return RequireConfiguredProvider(ResolvePluginModelId(defaultProvider), defaultProvider);
+            return RequireConfiguredProvider(ResolvePluginModelId(defaultProvider), defaultProvider, reportProviderProblems);
         }
 
         foreach (var provider in _pluginManager.LlmProviders)
@@ -408,10 +409,11 @@ public sealed class PromptProcessingService
     // bill — a provider they did not pick.
     private (ILlmProviderRole Provider, string ModelId) RequireConfiguredProvider(
         (ILlmProviderRole? Provider, string ModelId) resolved,
-        string selection
+        string selection,
+        bool reportProviderProblems = true
     )
     {
-        var problem = DescribeProviderProblem(resolved, selection);
+        var problem = DescribeProviderProblem(resolved, selection, reportProviderProblems);
         if (problem is not null)
         {
             throw new PluginRequestException(
@@ -430,7 +432,8 @@ public sealed class PromptProcessingService
     // spoken-command configuration failure.
     private string? DescribeProviderProblem(
         (ILlmProviderRole? Provider, string ModelId) resolved,
-        string selection
+        string selection,
+        bool reportProviderProblems = true
     )
     {
         var problem = resolved.Provider switch
@@ -458,6 +461,8 @@ public sealed class PromptProcessingService
             ),
             _ => null,
         };
+
+        if (!reportProviderProblems) return problem;
 
         string? newProblem = null;
         lock (_loggedProviderProblems)

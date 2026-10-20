@@ -17,7 +17,8 @@ internal sealed class LiveCleanupDraft : IDisposable
     public string Provider { get; }
 
     public LiveCleanupDraft(LlmCleanupService cleanup, CleanupLevel level, string? language,
-        string provider, int timeoutSeconds, Action<string, string> publish)
+        string provider, Func<string, CancellationToken, Task<string>> prepare,
+        Action<string, string> publish, TimeSpan? debounce = null)
     {
         Level = level;
         _cleanup = cleanup;
@@ -28,15 +29,22 @@ internal sealed class LiveCleanupDraft : IDisposable
             Interlocked.Increment(ref _requests);
             var capture = new LlmCallCapture();
             var output = await cleanup.CleanAsync(input, level, capture: capture,
-                timeout: TimeSpan.FromSeconds(Math.Max(0, timeoutSeconds)), ct: token,
-                sourceLanguage: language, providerOverride: provider, preparedLightText: true).ConfigureAwait(false);
-            if (!capture.Calls.Any(call => !string.IsNullOrWhiteSpace(call.ResponseReceived))) return null;
+                ct: token, providerOverride: provider, preparedLightText: true,
+                isDraft: true).ConfigureAwait(false);
+            if (!capture.Calls.Any(call => !string.IsNullOrWhiteSpace(call.ResponseReceived)))
+            {
+                // A timed-out provider may still be running. Do not start another draft
+                // in this recording after failure, even if it ignores cancellation.
+                StopScheduling();
+                return null;
+            }
             lock (_gate) { _capturedInput = input; _capture = capture; }
             return output;
-        }, publish);
+        }, publish, debounce, prepare: async (input, token) =>
+            _cleanup.PrepareLiveInput(await prepare(input, token).ConfigureAwait(false)));
     }
 
-    public void Submit(string input) => _session.Submit(_cleanup.PrepareLiveInput(input, Language));
+    public void Submit(string input) => _session.Submit(input);
     public void StopScheduling() => _session.StopScheduling();
     public bool Matches(CleanupLevel level, string? language, string? provider) =>
         Level == level && string.Equals(Language, language, StringComparison.OrdinalIgnoreCase) && Provider == provider;
@@ -44,9 +52,8 @@ internal sealed class LiveCleanupDraft : IDisposable
 
     public async Task<string?> ReuseAsync(string input, string? finalLanguage, LlmCallCapture? capture, CancellationToken token)
     {
-        // Language affects only the local pass. Reuse requires the exact text that
-        // would reach the LLM after that pass, including any newly detected language.
-        input = _cleanup.PrepareLiveInput(input, finalLanguage);
+        // Reuse requires the exact text that reaches the LLM after all local passes.
+        input = _cleanup.PrepareLiveInput(input);
         var output = await _session.ReuseAsync(input, token).ConfigureAwait(false);
         if (output is null) return null;
         lock (_gate)

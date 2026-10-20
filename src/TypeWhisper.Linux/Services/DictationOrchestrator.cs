@@ -52,7 +52,6 @@ internal sealed record RecordingContext(
     ///     pipeline records nothing and pays no cost.
     /// </summary>
     public LlmCallCapture? Capture { get; init; }
-    public int CleanupTimeoutSeconds { get; init; } = 5;
     public LiveCleanupDraft? LiveCleanup { get; init; }
 }
 
@@ -158,7 +157,6 @@ public sealed partial class DictationOrchestrator : IDisposable
     private string? _recordingAppTitle;
     private string? _recordingAppUrl;
     private Profile? _recordingProfile;
-    private int _recordingCleanupTimeoutSeconds = 5;
 
     // Monotonically incremented when a start reserves ownership, when a stop
     // relinquishes it, and when session-loss rollback invalidates startup. The
@@ -894,7 +892,6 @@ public sealed partial class DictationOrchestrator : IDisposable
 
             _audioCaptureSession = captureSession;
             _recordingStart = DateTime.UtcNow;
-            _recordingCleanupTimeoutSeconds = Math.Clamp(startupSettings.CleanupTimeoutSeconds, 0, 120);
             telemetryStartedSessionId = sessionId;
             _telemetry.Begin(sessionId);
             _telemetry.Tag(sessionId, "mode", startupSettings.Mode.ToString());
@@ -1620,7 +1617,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // feedback gate takes (a real deadlock). The toggle gate's fences
                     // already order this read against the acquire.
                     OverlayToken = _overlayToken,
-                    CleanupTimeoutSeconds = _recordingCleanupTimeoutSeconds,
                     LiveCleanup = stoppedLiveCleanup,
                     // Consent withdrawn mid-recording means the captured element must not be touched again.
                     // TextInsertionService re-checks consent right before it touches the element.
@@ -5328,7 +5324,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             return;
         }
 
-        ScheduleLiveCleanup(sessionVersion, captureSession, text ?? "");
+        ScheduleLiveCleanup(sessionVersion, captureSession, partialText);
         if (string.Equals(_lastPublishedPartialText, partialText, StringComparison.Ordinal))
         {
             return;
@@ -5352,14 +5348,19 @@ public sealed partial class DictationOrchestrator : IDisposable
     private void ScheduleLiveCleanup(int sessionVersion,
         AudioRecordingService.AudioCaptureSession captureSession, string rawText)
     {
-        if (!_audio.IsRecordingOwnedBy(captureSession)) return;
         var settings = _settings.Current;
+        if (!settings.LiveCleanupEnabled) return;
+        // The initial application match and deferred URL match can select None,
+        // Light or a prompt action. Never send provisional global-policy fragments.
+        if (_recordingSnapshotTask?.IsCompletedSuccessfully != true) return;
+        if (!_audio.IsRecordingOwnedBy(captureSession)) return;
         var profile = _recordingProfile;
         var action = ResolveAutoPromptAction(profile?.PromptActionId, _promptActions.EnabledActions);
         var level = profile is null ? settings.CleanupLevel
             : profile.CleanupLevelOverride ?? ProfileStylePresetService.Resolve(profile.StylePreset).CleanupLevel;
         var language = LanguageSelectionResolver.ResolveOrAutomatic(profile?.InputLanguage, settings.Language).LanguageTag;
-        if (rawText.Length > 8192 || !settings.LiveCleanupEnabled || level < CleanupLevel.Medium || action is not null
+        if (rawText.Length > 8192 || level < CleanupLevel.Medium || action is not null
+            || _models.PluginManager.PostProcessors.Any(processor => processor.Priority <= 250)
             || string.Equals(profile?.SelectedTask ?? settings.TranscriptionTask, "translate", StringComparison.OrdinalIgnoreCase)
             || !string.IsNullOrWhiteSpace(profile?.TranslationTarget ?? settings.TranslationTargetLanguage))
         {
@@ -5380,9 +5381,25 @@ public sealed partial class DictationOrchestrator : IDisposable
                 if (_liveCleanupDraft is null || !_liveCleanupDraft.Matches(level, language, provider))
                 {
                     _liveCleanupDraft?.Dispose();
+                    var engine = _models.GetTranscriptionPlugin(profile?.TranscriptionModelOverride ?? settings.SelectedModelId);
+                    if (engine is null) return;
+                    var hints = LanguageSelectionResolver.ResolveHints(profile, settings);
+                    var (selection, effectiveHints) = engine.ResolveEffectiveLanguage(
+                        LanguageSelectionResolver.ResolvePrimary(hints), hints);
+                    var context = new RecordingContext(sessionVersion, default, _recordingAppProcess,
+                        _recordingAppTitle, _recordingAppUrl, null, profile, "", null, false,
+                        null, null, selection, effectiveHints, default);
+                    var options = BuildPreCleanupOptions(context, language, selection.LanguageTag,
+                        effectiveHints, false, engine.SupportsTranslation, engine.ProviderId, engine.SelectedModelId);
                     LiveCleanupDraft? newDraft = null;
                     newDraft = new LiveCleanupDraft(_cleanup, level, language, provider,
-                        _recordingCleanupTimeoutSeconds, (_, output) =>
+                        async (input, token) =>
+                        {
+                            if (!_settings.Current.LiveCleanupEnabled || !_audio.IsRecordingOwnedBy(captureSession))
+                                throw new OperationCanceledException(token);
+                            return (await _pipeline.ProcessAsync(input, options, token)).Text;
+                        },
+                        (_, output) =>
                         {
                             if (ReferenceEquals(_liveCleanupDraft, newDraft) && _settings.Current.LiveCleanupEnabled
                                 && _liveCleanupSessionVersion == sessionVersion && _audio.IsRecordingOwnedBy(captureSession))

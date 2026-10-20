@@ -6,6 +6,33 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class LiveCleanupSessionTests
 {
     [Fact]
+    public async Task Mismatch_DoesNotWaitForBlockingCancellationCallbackOrProvider()
+    {
+        using var releaseCallback = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var session = new LiveCleanupSession(async (_, token) =>
+        {
+            using var registration = token.Register(() =>
+            {
+                callbackEntered.SetResult();
+                releaseCallback.Wait();
+            });
+            entered.SetResult();
+            return await release.Task;
+        }, (_, _) => { }, TimeSpan.Zero);
+        try
+        {
+            session.Submit("draft");
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            session.StopScheduling();
+            Assert.Null(await session.ReuseAsync("different final", default).WaitAsync(TimeSpan.FromSeconds(1)));
+            await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally { releaseCallback.Set(); release.TrySetResult(null); }
+    }
+    [Fact]
     public async Task RevisedDraft_UsesTimeSpentWaitingForPreviousRequestAsDebounce()
     {
         var clock = new OffsetTimeProvider();

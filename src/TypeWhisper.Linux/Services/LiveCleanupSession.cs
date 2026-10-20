@@ -12,6 +12,7 @@ internal sealed class LiveCleanupSession : IDisposable
     private readonly Action<string, string> _publish;
     private readonly TimeSpan _debounce;
     private readonly TimeProvider _timeProvider;
+    private readonly Func<string, CancellationToken, Task<string>>? _prepare;
     private long _latestChangedAt;
     private string? _latest, _cachedInput, _cachedOutput, _activeInput;
     private TaskCompletionSource<string?>? _active;
@@ -19,12 +20,14 @@ internal sealed class LiveCleanupSession : IDisposable
     private bool _stopped, _disposed;
 
     public LiveCleanupSession(Func<string, CancellationToken, Task<string?>> process,
-        Action<string, string> publish, TimeSpan? debounce = null, TimeProvider? timeProvider = null)
+        Action<string, string> publish, TimeSpan? debounce = null, TimeProvider? timeProvider = null,
+        Func<string, CancellationToken, Task<string>>? prepare = null)
     {
         _process = process;
         _publish = publish;
         _debounce = debounce ?? TimeSpan.FromSeconds(2);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _prepare = prepare;
     }
 
     public void Submit(string text)
@@ -68,14 +71,21 @@ internal sealed class LiveCleanupSession : IDisposable
                     await Task.Delay(remaining, _timeProvider, _cts.Token).ConfigureAwait(false);
                 }
                 string? output = null;
-                try { output = await _process(input, _cts.Token).ConfigureAwait(false); }
+                var prepared = input;
+                try
+                {
+                    if (_prepare is not null)
+                        prepared = await _prepare(input, _cts.Token).ConfigureAwait(false);
+                    lock (_gate) _activeInput = prepared;
+                    output = await _process(prepared, _cts.Token).ConfigureAwait(false);
+                }
                 finally
                 {
                     lock (_gate)
                     {
                         if (!_disposed && !string.IsNullOrWhiteSpace(output))
                         {
-                            _cachedInput = input;
+                            _cachedInput = prepared;
                             _cachedOutput = output;
                             if (!_stopped && _latest == input) _publish(input, output);
                         }
@@ -114,7 +124,9 @@ internal sealed class LiveCleanupSession : IDisposable
             // rather than letting an obsolete request compete with the final request.
             if (pending is null && _stopped) cancellation = _cts.CancelAsync();
         }
-        if (cancellation is not null) await cancellation.ConfigureAwait(false);
+        if (cancellation is not null)
+            _ = cancellation.ContinueWith(task => { _ = task.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return pending is null ? null : await pending.WaitAsync(token).ConfigureAwait(false);
     }
 

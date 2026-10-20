@@ -8,23 +8,6 @@ public sealed class CleanupServiceTests
 {
     private readonly CleanupService _sut = new();
 
-    [Theory]
-    [InlineData("um uh send it tomorrow", "en-US", "Send it tomorrow")]
-    [InlineData("um momento", "pt", "Um momento")]
-    [InlineData("er ist hier", "de", "Er ist hier")]
-    [InlineData("do you know the address", "en", "Do you know the address")]
-    [InlineData("uh-huh that works", "en", "Uh-huh that works")]
-    [InlineData("uh huh that works", "en", "Uh huh that works")]
-    [InlineData("uh uh do not send", "en", "Uh uh do not send")]
-    [InlineData("uh oh that failed", "en", "Uh oh that failed")]
-    [InlineData("the ER and UM teams", "en", "The ER and UM teams")]
-    [InlineData("write `um` and \"uh\" literally", "en", "Write `um` and \"uh\" literally")]
-    [InlineData("well I like it actually", "en", "Well I like it actually")]
-    public void Clean_Light_UsesLanguageAndPreservesMeaning(string input, string language, string expected)
-    {
-        Assert.Equal(expected, _sut.Clean(input, CleanupLevel.Light, language));
-    }
-
     [Fact]
     public void Clean_None_ReturnsOriginalText()
     {

@@ -11,14 +11,13 @@ namespace TypeWhisper.Linux.Services;
 ///     Applies rule-based and optional LLM cleanup to transcribed text.
 ///     Light cleanup is always local (no LLM). Medium / High first run the
 ///     local pass, then send the lightened text to the configured LLM
-///     provider, falling back to Light when unavailable, failed or over the wait limit.
+///     provider, falling back to Light when unavailable or failed. Only drafts have a deadline.
 /// </summary>
 public sealed class LlmCleanupService
 {
     private readonly CleanupService _cleanup;
     private readonly PromptProcessingService _promptProcessing;
     private readonly IErrorLogService? _errorLog;
-    private readonly SemaphoreSlim _requestGate = new(1, 1);
 
     // Last cleanup failure written to the error log. A broken provider fails on every dictation,
     // so only a change of message is worth a new entry.
@@ -40,11 +39,11 @@ public sealed class LlmCleanupService
         CleanupLevel level,
         Func<string, Task>? statusCallback = null,
         LlmCallCapture? capture = null,
-        TimeSpan? timeout = null,
         CancellationToken ct = default,
-        string? sourceLanguage = null,
         string? providerOverride = null,
-        bool preparedLightText = false
+        bool preparedLightText = false,
+        bool isDraft = false,
+        TimeSpan? draftTimeout = null
     )
     {
         ct.ThrowIfCancellationRequested();
@@ -55,10 +54,10 @@ public sealed class LlmCleanupService
             case CleanupLevel.None:
                 return text;
             case CleanupLevel.Light:
-                return _cleanup.Clean(text, CleanupLevel.Light, sourceLanguage);
+                return _cleanup.Clean(text, CleanupLevel.Light);
         }
 
-        var lightText = preparedLightText ? text : PrepareLiveInput(text, sourceLanguage);
+        var lightText = preparedLightText ? text : PrepareLiveInput(text);
         if (_promptProcessing.HasNoProviderForRequest(providerOverride))
         {
             await NotifyStatusAsync(
@@ -80,13 +79,14 @@ public sealed class LlmCleanupService
                 prompt,
                 lightText,
                 capture,
-                timeout ?? TimeSpan.FromSeconds(5),
+                isDraft ? draftTimeout ?? TimeSpan.FromSeconds(5) : Timeout.InfiniteTimeSpan,
                 ct,
-                providerOverride
+                providerOverride,
+                isDraft
             );
             ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
-            _lastLoggedFailure = null;
+            if (!isDraft) _lastLoggedFailure = null;
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -97,20 +97,9 @@ public sealed class LlmCleanupService
         {
             throw new OperationCanceledException(ct);
         }
-        catch (CleanupDeadlineExceededException)
-        {
-            const string failure = "AI cleanup exceeded its wait limit and fell back to Light cleanup.";
-            if (!string.Equals(failure, _lastLoggedFailure, StringComparison.Ordinal))
-            {
-                _lastLoggedFailure = failure;
-                _errorLog?.AddEntry(failure, ErrorCategory.Prompt);
-            }
-            await NotifyStatusAsync(statusCallback, Loc.Instance["Dictation.CleanupTimedOut"]);
-            ct.ThrowIfCancellationRequested();
-            return lightText;
-        }
         catch (Exception ex)
         {
+            if (isDraft) return lightText;
             var safeMessage =
                 FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level))
                 ?? Loc.Instance["Common.UnknownError"];
@@ -134,31 +123,23 @@ public sealed class LlmCleanupService
         }
     }
 
-    internal string PrepareLiveInput(string text, string? language) =>
-        _cleanup.Clean(text, CleanupLevel.Light, language);
+    internal string PrepareLiveInput(string text) =>
+        _cleanup.Clean(text, CleanupLevel.Light);
 
-    // Bound the caller's wait even if a plugin ignores cancellation. The gate stays held
-    // until the provider settles, so later dictations cannot accumulate abandoned requests.
+    // Only drafts pass a deadline. Final cleanup waits for its provider or caller cancellation.
     private async Task<string> ProcessWithinBudgetAsync(
         string prompt, string text, LlmCallCapture? capture, TimeSpan timeout, CancellationToken ct,
-        string? providerOverride)
+        string? providerOverride, bool isDraft)
     {
         var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var timerCts = new CancellationTokenSource();
         var completed = false;
         var request = Task.Run(async () =>
         {
-            await _requestGate.WaitAsync(requestCts.Token).ConfigureAwait(false);
-            try
-            {
-                requestCts.Token.ThrowIfCancellationRequested();
-                return await _promptProcessing.ProcessSystemPromptAsync(
-                    prompt, text, capture, requestCts.Token, providerOverride).ConfigureAwait(false);
-            }
-            finally
-            {
-                _requestGate.Release();
-            }
+            requestCts.Token.ThrowIfCancellationRequested();
+            return await _promptProcessing.ProcessSystemPromptAsync(
+                prompt, text, capture, requestCts.Token, providerOverride,
+                reportProviderProblems: !isDraft).ConfigureAwait(false);
         });
         try
         {

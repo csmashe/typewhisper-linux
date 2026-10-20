@@ -115,9 +115,6 @@ public partial class DictationSectionViewModel : ObservableObject
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
 
     [ObservableProperty]
-    private string _cleanupTimeoutSeconds = "5";
-
-    [ObservableProperty]
     private bool _liveCleanupEnabled;
 
     [ObservableProperty]
@@ -1005,8 +1002,6 @@ public partial class DictationSectionViewModel : ObservableObject
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
         CleanupLevel = settings.CleanupLevel;
         LiveCleanupEnabled = settings.LiveCleanupEnabled;
-        CleanupTimeoutSeconds = Math.Clamp(settings.CleanupTimeoutSeconds, 0, 120)
-            .ToString(System.Globalization.CultureInfo.InvariantCulture);
         EnglishOutputVariant = settings.EnglishOutputVariant;
         GermanOutputVariant = settings.GermanOutputVariant;
         SpokenFormattingStrategy = settings.SpokenFormattingStrategy;
@@ -2039,17 +2034,6 @@ public partial class DictationSectionViewModel : ObservableObject
 
         _settings.Update(current => current with { CleanupLevel = value });
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
-    }
-
-    partial void OnCleanupTimeoutSecondsChanged(string value)
-    {
-        if (!int.TryParse(value, out var seconds))
-            return;
-        seconds = Math.Clamp(seconds, 0, 120);
-        _settings.Update(current => current with { CleanupTimeoutSeconds = seconds });
-        var normalized = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (!string.Equals(value, normalized, StringComparison.Ordinal))
-            CleanupTimeoutSeconds = normalized;
     }
 
     partial void OnLiveCleanupEnabledChanged(bool value) =>

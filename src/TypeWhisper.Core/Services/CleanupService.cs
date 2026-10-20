@@ -12,10 +12,10 @@ namespace TypeWhisper.Core.Services;
 public sealed partial class CleanupService
 {
     public const string MediumSystemPrompt =
-        "Improve readability while preserving meaning, facts, tone, and terminology. Remove filled pauses and accidental repetitions. Resolve explicit self-corrections using the speaker's latest intent. Preserve names, numbers, negation, code, and quoted text. Preserve meaningful uses of words such as like, well, and you know. Do not invent endings for unfinished thoughts. Do not add new information. Return only the cleaned text.";
+        "Improve readability while preserving meaning, facts, tone, and terminology. Do not add new information. Return only the cleaned text.";
 
     public const string HighSystemPrompt =
-        "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Remove filled pauses and accidental repetitions. Resolve explicit self-corrections using the speaker's latest intent. Preserve names, numbers, negation, code, and quoted text. Preserve meaningful uses of words such as like, well, and you know. Do not invent endings for unfinished thoughts. Do not add new information. Return only the rewritten text.";
+        "Rewrite as concise polished prose while preserving meaning, facts, tone, and terminology. Do not add new information. Return only the rewritten text.";
 
     // Common filler/connective words that shouldn't seed a single-word bullet list. Cached once
     // (OrdinalIgnoreCase) because IsConservativeSingleWordBulletList probes it per candidate word.
@@ -38,7 +38,7 @@ public sealed partial class CleanupService
     // kept instance: injected as a DI/test seam by callers
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
-    public string Clean(string text, CleanupLevel level, string? sourceLanguage = null)
+    public string Clean(string text, CleanupLevel level)
     {
         if (level == CleanupLevel.None || string.IsNullOrWhiteSpace(text))
         {
@@ -47,9 +47,10 @@ public sealed partial class CleanupService
 
         return level switch
         {
-            CleanupLevel.Light => CleanLight(text, sourceLanguage),
-            // The Linux service adds the provider-backed pass after these local rules.
-            CleanupLevel.Medium or CleanupLevel.High => CleanLight(text, sourceLanguage),
+            CleanupLevel.Light => CleanLight(text),
+            // Medium/High LLM cleanup is intentionally not wired yet. Until a
+            // provider-backed pass exists, degrade to deterministic cleanup.
+            CleanupLevel.Medium or CleanupLevel.High => CleanLight(text),
             _ => text,
         };
     }
@@ -69,24 +70,12 @@ public sealed partial class CleanupService
         };
     }
 
-    private static string CleanLight(string text, string? sourceLanguage)
+    private static string CleanLight(string text)
     {
         var cleaned = text.Trim();
         cleaned = LeadingNoiseRegex().Replace(cleaned, "");
         cleaned = TrailingNoiseRegex().Replace(cleaned, "");
-        var literals = LiteralRegex().Matches(cleaned).Concat(AnswerPhraseRegex().Matches(cleaned)).ToArray();
-        var english = sourceLanguage?.Split('-')[0].Equals("en", StringComparison.OrdinalIgnoreCase) == true;
-        cleaned = StandaloneFillerRegex().Replace(cleaned, match =>
-        {
-            var word = match.Groups["word"].Value;
-            if (literals.Any(literal => match.Index < literal.Index + literal.Length
-                                        && match.Index + match.Length > literal.Index)
-                || word == word.ToUpperInvariant()
-                || (!english && (word.Equals("um", StringComparison.OrdinalIgnoreCase)
-                                  || word.Equals("er", StringComparison.OrdinalIgnoreCase))))
-                return match.Value;
-            return match.Groups["prefix"].Value;
-        });
+        cleaned = StandaloneFillerRegex().Replace(cleaned, " ");
         cleaned = ApplyBacktrack(cleaned);
         cleaned = ApplySpokenPunctuation(cleaned);
         cleaned = ApplySmartFormatting(cleaned);
@@ -327,16 +316,10 @@ public sealed partial class CleanupService
         return text;
     }
 
-    // Bare er/um are removed only with an English language hint. Elsewhere they
-    // can be real words. The evaluator also protects literals and abbreviations.
-    [GeneratedRegex(@"(?i)(?<prefix>^|[\s,.;:!?])(?<word>um+|uh+|er+|erm+|ah+|(?<=,\s*)you know(?=\s*,))(?=$|[\s,.;:!?])")]
+    // Doubled-letter minimums (umm/err, not um/er) — bare "er"/"um" are real words in
+    // German/Dutch/Swedish/Danish/Portuguese and must survive this language-agnostic pass.
+    [GeneratedRegex(@"(?i)(^|[\s,.;:!?-])(?:umm+|uh+|err+|erm+|ah+|you know)(?=$|[\s,.;:!?-])")]
     private static partial Regex StandaloneFillerRegex();
-
-    [GeneratedRegex("`[^`]*`|\"[^\"]*\"|'[^'\\r\\n]*'")]
-    private static partial Regex LiteralRegex();
-
-    [GeneratedRegex(@"(?i)(?<![\p{L}\p{N}_])uh[ \t]+(?:huh|oh|uh)(?![\p{L}\p{N}_])")]
-    private static partial Regex AnswerPhraseRegex();
 
     [GeneratedRegex(@"[ \t]{2,}")]
     private static partial Regex RepeatedInlineWhitespaceRegex();
