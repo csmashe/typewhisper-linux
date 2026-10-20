@@ -129,6 +129,25 @@ public sealed class SecretProtectionMigrationServiceTests : IDisposable
     }
 
     [Fact]
+    public void MigrateAll_RotatesNonHexUndecryptableCbcBearerToken()
+    {
+        var legacyToken = Convert.ToBase64String(Enumerable.Repeat((byte)0xff, 48).ToArray());
+        WriteJson(
+            Path.Join(_basePath, "settings.json"),
+            new Dictionary<string, object?> { ["apiServerBearerToken"] = legacyToken }
+        );
+
+        var result = CreateService().MigrateAll();
+
+        Assert.Equal(0, result.UnresolvedSecretCount);
+        var stored = ReadString(Path.Join(_basePath, "settings.json"), "apiServerBearerToken");
+        var decrypted = ApiKeyProtection.Decrypt(stored, _keyFilePath);
+        Assert.Equal(SecretProtectionFormat.Current, decrypted.Format);
+        Assert.NotEqual(legacyToken, decrypted.PlainText);
+        Assert.Equal(32, Convert.FromHexString(decrypted.PlainText!).Length);
+    }
+
+    [Fact]
     public void MigrateAll_OneUndecryptableSecretLeavesWholeFileUnchanged()
     {
         var valid = ApiKeyProtectionTests.EncryptLegacyGcm("valid-secret");
