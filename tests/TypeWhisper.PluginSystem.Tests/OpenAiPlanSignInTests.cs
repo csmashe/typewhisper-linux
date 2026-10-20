@@ -1,3 +1,4 @@
+// ReSharper disable AccessToDisposedClosure -- the RSA key outlives every handler call; all requests finish before the test returns.
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -5,16 +6,16 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Moq;
-using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
-using TypeWhisper.PluginSDK;
-using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
 public partial class OpenAiPluginTests
 {
+    private static readonly JsonSerializerOptions s_omitNulls =
+        new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+
     [Theory]
     [InlineData(null)]
     [InlineData("kid")]
@@ -26,6 +27,7 @@ public partial class OpenAiPluginTests
     public async Task IdentityValidation_UsesInjectedJwksAndRejectsInvalidTokens(string? fault)
     {
         using var rsa = RSA.Create(2048);
+        // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- asserting the JWKS URL is the point of this handler.
         using var client = new HttpClient(new CapturingHandler((request, _) =>
         {
             Assert.Equal("https://auth.openai.com/.well-known/jwks.json", request.RequestUri!.ToString());
@@ -98,7 +100,7 @@ public partial class OpenAiPluginTests
                     {
                         access_token = "fixture-access", refresh_token = "fixture-refresh", expires_in = 3600,
                         id_token = SignedIdentity(rsa, ParseQuery(authorization!)["nonce"]), scope,
-                    }, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull })));
+                    }, s_omitNulls)));
                 case "/.well-known/jwks.json":
                     return Task.FromResult(JsonResponse(Jwks(rsa)));
                 case "/v1/models":
@@ -155,6 +157,49 @@ public partial class OpenAiPluginTests
         Assert.Equal(ChatGptIssuedClientId, ParseQuery(authorizations[1])["client_id"]);
         Assert.Equal(hostId, ParseQuery(authorizations[1])["ext_agent_host_id"]);
         Assert.False(ParseQuery(authorizations[1]).ContainsKey("agent_name_hint"));
+        Assert.False(ParseQuery(authorizations[0]).ContainsKey("prompt"));
+        Assert.False(ParseQuery(authorizations[1]).ContainsKey("prompt"));
+    }
+
+    [Theory]
+    [InlineData(ChatGptGrantedScopes, false)]
+    [InlineData("openid", true)]
+    [InlineData("", true)]
+    public async Task BrowserSignIn_RepeatsConsentOnlyWhenPlanUsageWasNotGranted(string scope, bool expectConsent)
+    {
+        using var rsa = RSA.Create(2048);
+        var authorizations = new List<Uri>();
+        var server = new FakeOAuthCallbackServer(() => Task.FromResult(OpenAiLoopbackOAuthServer.ParseAuthorizationCallback(
+            $"GET /auth/callback?code=fixture-code&client_id={ChatGptIssuedClientId}&state={ParseQuery(authorizations[^1])["state"]} HTTP/1.1",
+            ParseQuery(authorizations[^1])["state"])));
+        var processes = new Mock<IPluginProcessSupervisor>();
+        processes.Setup(p => p.LaunchUri(It.IsAny<Uri>())).Callback<Uri>(authorizations.Add)
+            .Returns(new DetachedLaunchOutcome(true, null));
+        using var client = new HttpClient(new CapturingHandler((request, _) => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/accounts/oauth/token" => Task.FromResult(JsonResponse(JsonSerializer.Serialize(new
+            {
+                access_token = "fixture-access", refresh_token = "fixture-refresh", expires_in = 3600,
+                id_token = SignedIdentity(rsa, ParseQuery(authorizations[^1])["nonce"]), scope,
+            }))),
+            "/.well-known/jwks.json" => Task.FromResult(JsonResponse(Jwks(rsa))),
+            "/v1/models" => Task.FromResult(JsonResponse("""{"data":[{"id":"gpt-fixture"}]}""")),
+            _ => throw new InvalidOperationException("Unexpected path " + request.RequestUri),
+        }));
+        var host = new TestPluginHostServices { Processes = processes.Object };
+        host.SetSetting("authMode", "chatgpt");
+        using var sut = new OpenAiPlugin(client, oauthServerFactory: _ => server);
+        await sut.ActivateAsync(host);
+        Assert.Equal(!expectConsent, (await sut.ValidateAsync())!.IsSuccess);
+        await sut.ClearChatGptLoginAsync();
+        Assert.Equal(!expectConsent, (await sut.ValidateAsync())!.IsSuccess);
+        Assert.Equal(2, authorizations.Count);
+        Assert.False(ParseQuery(authorizations[0]).ContainsKey("prompt"));
+        Assert.Equal(expectConsent, ParseQuery(authorizations[1]).ContainsKey("prompt"));
+        if (expectConsent)
+            Assert.Equal("consent", ParseQuery(authorizations[1])["prompt"]);
+        Assert.Equal(ChatGptIssuedClientId, ParseQuery(authorizations[1])["client_id"]);
+        Assert.Equal(expectConsent, host.GetSetting<bool>("oauthPlanConsentDeclined"));
     }
 
     [Theory]

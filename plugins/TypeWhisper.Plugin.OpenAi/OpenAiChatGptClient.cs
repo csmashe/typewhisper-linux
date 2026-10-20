@@ -40,13 +40,26 @@ internal sealed class OpenAiChatGptClient
         request.Content = OpenAiJson.CreateJsonContent(
             CreateRequestBody(model, systemPrompt, userText, reasoningEffort));
 
-        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
-            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
-            (errorResponse, errorBody) => ParseErrorMessage(errorBody, (int)errorResponse.StatusCode, _localization));
-        var body = await response.Content.ReadAsStringAsync(ct);
-
-        return await ParseResponseTextAsync(body, ct, _localization)
-            ?? throw new InvalidOperationException("The ChatGPT response could not be parsed.");
+        // Mapped here, not thrown from the formatter, so the helper still redacts the message and keeps Retry-After.
+        PluginRequestFailureKind? planFailureKind = null;
+        HttpResponseMessage response;
+        try
+        {
+            response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+                _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+                (errorResponse, errorBody) =>
+                    ParseErrorMessage(errorBody, (int)errorResponse.StatusCode, _localization, out planFailureKind));
+        }
+        catch (PluginRequestException ex) when (planFailureKind is { } kind)
+        {
+            throw new PluginRequestException(ex.Message, kind, ex.HttpStatusCode, ex.RetryAfter, innerException: ex);
+        }
+        using (response)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return await ParseResponseTextAsync(body, _localization, ct)
+                ?? throw new InvalidOperationException("The ChatGPT response could not be parsed.");
+        }
     }
 
     internal static Dictionary<string, JsonElement> CreateRequestBody(
@@ -86,20 +99,20 @@ internal sealed class OpenAiChatGptClient
 
     internal static async Task<string?> ParseResponseTextAsync(
         string body,
-        CancellationToken cancellationToken = default,
-        IPluginLocalization? localization = null)
+        IPluginLocalization? localization = null,
+        CancellationToken cancellationToken = default)
     {
         if (TryParseJsonResponseText(body, out var responseText))
             return responseText;
 
         using var reader = new StringReader(body);
-        return await ParseEventStreamResponseTextAsync(reader, cancellationToken, localization);
+        return await ParseEventStreamResponseTextAsync(reader, localization, cancellationToken);
     }
 
     private static async Task<string?> ParseEventStreamResponseTextAsync(
         TextReader reader,
-        CancellationToken cancellationToken,
-        IPluginLocalization? localization)
+        IPluginLocalization? localization,
+        CancellationToken cancellationToken)
     {
         var deltaBuffer = new StringBuilder();
         var completedParts = new List<string>();
@@ -307,7 +320,12 @@ internal sealed class OpenAiChatGptClient
     {
         if (root.TryGetProperty("response", out var response) && response.ValueKind == JsonValueKind.Object)
             root = response;
-        if (!root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object)
+        JsonElement error;
+        if (root.TryGetProperty("error", out var nested) && nested.ValueKind == JsonValueKind.Object)
+            error = nested;
+        else if (GetString(root, "type") == "error") // SSE `error` events carry code/param at the top level
+            error = root;
+        else
             return null;
         var mapping = GetString(error, "code") switch
         {
@@ -317,7 +335,7 @@ internal sealed class OpenAiChatGptClient
             "subscription_sharing_user_unavailable" => ("Settings.ChatGptUserUnavailable", PluginRequestFailureKind.ServerError),
             "subscription_sharing_unsupported_capability" => ("Settings.ChatGptUnsupportedCapability", PluginRequestFailureKind.InvalidRequest),
             "chatpass_v2_scope_not_authorized" => ("Settings.ChatGptPlanNotAuthorized", PluginRequestFailureKind.Authentication),
-            _ => ((string?)null, PluginRequestFailureKind.Unknown),
+            _ => (null, PluginRequestFailureKind.Unknown),
         };
         if (mapping.Item1 is not { } key) return null;
         var message = key == "Settings.ChatGptUnsupportedCapability"
@@ -325,14 +343,19 @@ internal sealed class OpenAiChatGptClient
         return new PluginRequestException(message, mapping.Item2, statusCode);
     }
 
-    private static string ParseErrorMessage(string body, int statusCode, IPluginLocalization? localization)
+    private static string ParseErrorMessage(
+        string body, int statusCode, IPluginLocalization? localization, out PluginRequestFailureKind? planFailureKind)
     {
+        planFailureKind = null;
         try
         {
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
             if (PlanError(root, statusCode, localization) is { } planError)
-                throw planError;
+            {
+                planFailureKind = planError.FailureKind;
+                return planError.Message;
+            }
             if (GetString(root, "detail") is { Length: > 0 } detail)
                 return detail;
             if (GetString(root, "message") is { Length: > 0 } message)

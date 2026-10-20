@@ -2788,12 +2788,59 @@ public partial class OpenAiPluginTests
         }
     }
 
-    // Replaces ImportExistingLogin_LoadsTokensFromCodexAuthFile. Validation no
-    // longer imports ~/.codex/auth.json: tokens from that file, or from the
-    // older private Codex OAuth registration, carry no issued app registration
-    // and cannot authorize ChatGPT plan usage. Validation must discard such a
-    // login without sending its tokens anywhere and ask the user to sign in
-    // again through the plan flow.
+    [Fact]
+    public async Task ValidateAsync_ChatGptMode_DiscardsGrantWithoutPlanScopeAndAsksForConsent()
+    {
+        var requests = new List<Uri>();
+        using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            requests.Add(request.RequestUri!);
+            return Task.FromResult(JsonResponse("""{"access_token":"must-not-be-issued","expires_in":3600}"""));
+        }));
+        var launchedUris = new List<Uri>();
+        var processes = new Mock<IPluginProcessSupervisor>(MockBehavior.Strict);
+        processes.Setup(supervisor => supervisor.LaunchUri(It.IsAny<Uri>()))
+            .Callback<Uri>(launchedUris.Add)
+            .Returns(new DetachedLaunchOutcome(false, "no browser available"));
+        var host = new TestPluginHostServices { Processes = processes.Object };
+        host.SetSetting("authMode", "chatgpt");
+        host.SetSetting("oauthClientId", ChatGptIssuedClientId);
+        host.SetSetting("oauthGrantedScopes", "openid profile email offline_access");
+        host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
+        host.Secrets["oauth-access-token"] = "no-plan-access-token";
+        host.Secrets["oauth-refresh-token"] = "no-plan-refresh-token";
+        var callbackServer = new FakeOAuthCallbackServer(() => throw new InvalidOperationException("Browser launch should fail first."));
+        using var sut = new OpenAiPlugin(httpClient, oauthServerFactory: _ => callbackServer);
+        await sut.ActivateAsync(host);
+        Assert.True(sut.HasChatGptCredentials);
+        Assert.False(sut.IsAvailable);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(
+            host.Localization.GetString("Settings.ChatGptLoginNoBrowser", "no browser available"),
+            result.Message);
+
+        // The tokens are gone without a refresh attempt; the registration stays.
+        Assert.False(sut.HasChatGptCredentials);
+        Assert.False(host.Secrets.ContainsKey("oauth-access-token"));
+        Assert.False(host.Secrets.ContainsKey("oauth-refresh-token"));
+        Assert.Equal(ChatGptIssuedClientId, host.GetSetting<string>("oauthClientId"));
+        Assert.True(host.GetSetting<bool>("oauthPlanConsentDeclined"));
+        Assert.Empty(requests);
+
+        // Re-auth reuses the registration and forces the consent screen.
+        var query = ParseQuery(Assert.Single(launchedUris));
+        Assert.Equal(ChatGptIssuedClientId, query["client_id"]);
+        Assert.Equal("consent", query["prompt"]);
+        Assert.False(query.ContainsKey("agent_name_hint"));
+    }
+
+    // Replaces ImportExistingLogin_LoadsTokensFromCodexAuthFile. Tokens from ~/.codex/auth.json
+    // or the old private Codex registration carry no issued app registration, so validation
+    // discards them unsent and starts the plan sign-in.
     [Fact]
     public async Task ValidateAsync_ChatGptMode_DiscardsLegacyCodexLoginAndStartsPlanSignIn()
     {
@@ -2808,7 +2855,7 @@ public partial class OpenAiPluginTests
         // Report a missing browser so sign-in stops after the launch instead of
         // waiting for a loopback callback that never arrives.
         processes.Setup(supervisor => supervisor.LaunchUri(It.IsAny<Uri>()))
-            .Callback<Uri>(uri => launchedUris.Add(uri))
+            .Callback<Uri>(launchedUris.Add)
             .Returns(new DetachedLaunchOutcome(false, "no browser available"));
         var host = new TestPluginHostServices { Processes = processes.Object };
         host.SetSetting("authMode", "chatgpt");
@@ -3000,9 +3047,8 @@ public partial class OpenAiPluginTests
         host.Secrets["oauth-refresh-token"] = "refresh-token";
         host.SetSetting("oauthPlanType", "plus");
         host.SetSetting("oauthExpiresAt", DateTimeOffset.UtcNow.AddHours(1));
-        // A login made through the plan sign-in. Without an issued registration
-        // the credentials would be treated as a legacy Codex login, discarded,
-        // and browser sign-in would start (which needs host.Processes).
+        // Without an issued registration the login counts as legacy, is discarded,
+        // and browser sign-in starts (which needs host.Processes).
         SetChatGptPlanRegistration(host);
 
         var sut = new OpenAiPlugin(new HttpClient(new CapturingHandler((_, _) => Task.FromResult(JsonResponse("{}")))));
@@ -4067,12 +4113,11 @@ public partial class OpenAiPluginTests
 
         // Unset by default so a test that unexpectedly reaches browser sign-in
         // fails the same way an old host would, instead of launching anything.
-        private readonly IPluginProcessSupervisor? _processes;
         public IPluginProcessSupervisor Processes
         {
-            get => _processes
+            get => field
                 ?? throw new NotSupportedException("This plugin host does not provide process supervision.");
-            init => _processes = value;
+            init;
         }
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
@@ -4169,5 +4214,6 @@ public partial class OpenAiPluginTests
         var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.ProcessAsync("test", "test", "gpt-5.5", CancellationToken.None));
         Assert.Equal(PluginRequestFailureKind.Authentication, ex.FailureKind);
+        Assert.True(host.GetSetting<bool>("oauthPlanConsentDeclined"));
     }
 }

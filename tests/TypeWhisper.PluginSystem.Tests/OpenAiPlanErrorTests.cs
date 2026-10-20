@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.OpenAi;
@@ -24,22 +25,33 @@ public partial class OpenAiPluginTests
         string code, int status, string key, PluginRequestFailureKind kind, bool transient)
     {
         foreach (var language in new[] { "en", "de", "es", "ru" })
-        foreach (var sse in new[] { false, true })
+        foreach (var shape in new[] { "http", "response.failed", "error" })
         {
+            var sse = shape != "http";
             var localization = new PluginLocalization(Path.GetFullPath(Path.Join(
                 "..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.OpenAi"), AppContext.BaseDirectory), language);
             var error = new { code, param = "tools", message = "untrusted-provider-message" };
-            var body = sse
-                ? "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
-                  + "data: " + JsonSerializer.Serialize(new { type = "response.failed", response = new { status = "failed", error } }) + "\n\n"
-                : JsonSerializer.Serialize(new { error });
-            using var client = new HttpClient(new CapturingHandler((_, _) => Task.FromResult(
-                new HttpResponseMessage(sse ? HttpStatusCode.OK : (HttpStatusCode)status) { Content = new StringContent(body) })));
+            var body = shape switch
+            {
+                "response.failed" => "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+                    + "data: " + JsonSerializer.Serialize(new { type = "response.failed", response = new { status = "failed", error } }) + "\n\n",
+                "error" => "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+                    + "data: " + JsonSerializer.Serialize(new { type = "error", code, param = "tools", message = "untrusted-provider-message" }) + "\n\n",
+                _ => JsonSerializer.Serialize(new { error }),
+            };
+            using var client = new HttpClient(new CapturingHandler((_, _) =>
+            {
+                var response = new HttpResponseMessage(sse ? HttpStatusCode.OK : (HttpStatusCode)status) { Content = new StringContent(body) };
+                if (!sse)
+                    response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(7));
+                return Task.FromResult(response);
+            }));
             var sut = new OpenAiChatGptClient(client, "fixture", localization);
             var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessAsync("system", "input", "gpt-fixture", null, CancellationToken.None));
             Assert.Equal(kind, ex.FailureKind);
             Assert.Equal(transient, ex.IsTransient);
-            Assert.Equal(sse ? null : (int?)status, ex.HttpStatusCode);
+            Assert.Equal(sse ? null : status, ex.HttpStatusCode);
+            Assert.Equal(sse ? null : TimeSpan.FromSeconds(7), ex.RetryAfter);
             var expected = code == "subscription_sharing_unsupported_capability"
                 ? localization.GetString(key, "tools") : localization.GetString(key);
             Assert.NotEqual(key, expected);

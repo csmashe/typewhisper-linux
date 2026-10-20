@@ -1,5 +1,4 @@
 using TypeWhisper.Plugin.OpenAi;
-using Xunit;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

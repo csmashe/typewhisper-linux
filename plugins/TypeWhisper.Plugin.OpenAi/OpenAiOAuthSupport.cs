@@ -77,7 +77,8 @@ internal static class OpenAiOAuthClient
         string clientId,
         string hostId,
         bool isNewRegistration,
-        string? idTokenHint)
+        string? idTokenHint,
+        bool requestConsent = false)
     {
         var query = new Dictionary<string, string>
         {
@@ -94,6 +95,9 @@ internal static class OpenAiOAuthClient
         };
         if (isNewRegistration)
             query["agent_name_hint"] = "TypeWhisper";
+        // Documented recovery after a grant without plan usage: force the consent screen.
+        if (requestConsent)
+            query["prompt"] = "consent";
         if (!string.IsNullOrWhiteSpace(idTokenHint))
             query["id_token_hint"] = idTokenHint;
 
@@ -195,7 +199,7 @@ internal static class OpenAiOAuthClient
         if (GetString(headerRoot, "alg") != "RS256" || GetString(headerRoot, "kid") is not { } keyId)
             throw new InvalidOperationException("ChatGPT returned an unsupported identity token.");
 
-        using var jwksStream = await httpClient.GetStreamAsync(
+        await using var jwksStream = await httpClient.GetStreamAsync(
             $"{Issuer}/.well-known/jwks.json", ct);
         using var jwks = await JsonDocument.ParseAsync(jwksStream, cancellationToken: ct);
         var key = jwks.RootElement.GetProperty("keys").EnumerateArray()
@@ -395,9 +399,6 @@ internal sealed class OpenAiLoopbackOAuthServer : IOpenAiOAuthCallbackServer
             return null;
         }
     }
-
-    public async Task<string> WaitForCodeAsync(CancellationToken ct)
-        => (await WaitForAuthorizationCallbackAsync(ct)).Code;
 
     public async Task<OpenAiOAuthCallback> WaitForAuthorizationCallbackAsync(CancellationToken ct)
     {
