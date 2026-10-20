@@ -45,7 +45,8 @@ public partial class PluginsSection : UserControl
                 this.GetVisualDescendants()
                     .OfType<Border>()
                     .FirstOrDefault(border =>
-                        ReferenceEquals(border.DataContext, row) && border.IsEffectivelyVisible
+                        border is { DataContext: PluginRow candidate, IsEffectivelyVisible: true }
+                        && candidate.Id == row.Id
                     )
                     ?.BringIntoView();
             },

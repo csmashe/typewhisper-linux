@@ -32,8 +32,9 @@ public partial class PluginsSectionViewModel : ObservableObject
     // does not act after a newer one. UI thread only.
     private int _revealVersion;
 
-    // The row a reveal should scroll to; the view may not exist yet, so it takes this on load.
-    private PluginRow? _revealedPlugin;
+    // The plugin a reveal should scroll to; the view may not exist yet, so it takes this on load.
+    // An ID, because a queued refresh can replace the row before the view scrolls.
+    private string? _revealedPluginId;
 
     [ObservableProperty]
     private string _headerSummary = "";
@@ -375,7 +376,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         var expand = row is { HasExpandableSettings: true, IsExpanded: false }
             ? ToggleExpandedAsync(row)
             : Task.CompletedTask;
-        _revealedPlugin = row;
+        _revealedPluginId = row.Id;
         PluginRevealed?.Invoke();
         await expand;
         return PluginRevealResult.Revealed;
@@ -385,15 +386,15 @@ public partial class PluginsSectionViewModel : ObservableObject
     internal void CancelPendingReveal()
     {
         _revealVersion++;
-        _revealedPlugin = null;
+        _revealedPluginId = null;
     }
 
     /// <summary>Returns the row to scroll into view once, then forgets it.</summary>
     public PluginRow? TakeRevealedPlugin()
     {
-        var row = _revealedPlugin;
-        _revealedPlugin = null;
-        return row;
+        var pluginId = _revealedPluginId;
+        _revealedPluginId = null;
+        return pluginId is null ? null : FindRow(pluginId);
     }
 
     private PluginRow? FindRow(string pluginId) =>

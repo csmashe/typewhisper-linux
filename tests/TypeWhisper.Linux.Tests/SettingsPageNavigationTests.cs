@@ -88,6 +88,8 @@ public sealed class SettingsPageNavigationTests : IDisposable
     [InlineData("--page", "general")]
     [InlineData("--PAGE", "General")]
     [InlineData("--page=general")]
+    [InlineData("--page", "general", "--future-flag")]
+    [InlineData("--future-flag", "--page", "general")]
     public void Page_option_launches_the_gui_on_that_page(params string[] args)
     {
         var action = CommandLineParser.Parse(args);
@@ -164,6 +166,22 @@ public sealed class SettingsPageNavigationTests : IDisposable
         Assert.True(row.IsExpanded);
         Assert.Same(row, vm.TakeRevealedPlugin());
         Assert.Null(vm.TakeRevealedPlugin());
+    }
+
+    [Fact]
+    public async Task Revealed_plugin_resolves_to_the_row_a_later_refresh_built()
+    {
+        var vm = CreateVm(("com.test.a", true, false));
+        await vm.RevealPluginAsync("com.test.a", Task.CompletedTask, Task.CompletedTask);
+        var revealedRow = FindRow(vm, "com.test.a");
+
+        typeof(PluginsSectionViewModel)
+            .GetMethod("Refresh", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(vm, null);
+
+        var currentRow = FindRow(vm, "com.test.a");
+        Assert.NotSame(revealedRow, currentRow);
+        Assert.Same(currentRow, vm.TakeRevealedPlugin());
     }
 
     [Fact]
