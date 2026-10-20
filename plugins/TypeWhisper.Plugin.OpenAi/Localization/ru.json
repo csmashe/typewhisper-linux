@@ -1,4 +1,10 @@
 {
+  "Settings.ChatGptPlanNotAuthorized": "Использование плана ChatGPT не разрешено. Подключите ChatGPT заново и разрешите использование плана.",
+  "Settings.ChatGptUsageLimit": "Достигнут лимит использования плана ChatGPT. Приостановите запросы плана и проверьте Настройки > Использование в ChatGPT: https://chatgpt.com/settings/usage.",
+  "Settings.ChatGptNotEligible": "Использование плана ChatGPT недоступно для этого пользователя, рабочего пространства или политики. Проверьте настройки учётной записи и рабочего пространства.",
+  "Settings.ChatGptUsageUnavailable": "Не удалось проверить доступность использования ChatGPT. Повторите попытку позже.",
+  "Settings.ChatGptUserUnavailable": "Информация о пользователе или рабочем пространстве ChatGPT временно недоступна. Повторите попытку позже.",
+  "Settings.ChatGptUnsupportedCapability": "Использование плана ChatGPT не поддерживает этот параметр запроса: {0}. Измените запрос перед повторной попыткой.",
   "Settings.ConnectionMethod": "Способ подключения",
   "Settings.ConnectionMethodDescription": "Выберите способ подключения обработки запросов к OpenAI. При входе в ChatGPT можно разрешить использовать лимит вашего тарифа для поддерживаемых запросов.",
   "Settings.ApiKey": "API-ключ",

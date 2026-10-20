@@ -51,17 +51,14 @@ internal sealed record OpenAiVerifiedIdentity(string Subject);
 internal static class OpenAiOAuthClient
 {
     public const string DynamicClientId = "dynamic_agent_client";
-    // Compatibility alias for existing plugin consumers. First-time SIWC
-    // registration uses this value; returning accounts use their issued ID.
-    public const string ClientId = DynamicClientId;
     public const string Issuer = "https://auth.openai.com";
     public const string RedirectUri = "http://127.0.0.1:1455/auth/callback";
     public const int CallbackPort = 1455;
     public const string Resource = "https://api.openai.com/v1";
+    public const string RequestedScopes = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
 
     private static readonly JsonSerializerOptions s_jsonReadOptions =
         new() { PropertyNameCaseInsensitive = true };
-    private static readonly HttpClient s_identityHttpClient = new();
 
     public static OpenAiPkceCodes GeneratePkceCodes()
     {
@@ -87,7 +84,7 @@ internal static class OpenAiOAuthClient
             ["response_type"] = "code",
             ["client_id"] = clientId,
             ["redirect_uri"] = RedirectUri,
-            ["scope"] = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
+            ["scope"] = RequestedScopes,
             ["resource"] = Resource,
             ["code_challenge"] = pkce.Challenge,
             ["code_challenge_method"] = "S256",
@@ -102,12 +99,6 @@ internal static class OpenAiOAuthClient
 
         return new Uri($"{Issuer}/api/accounts/authorize?{BuildQuery(query)}");
     }
-
-    // Kept for existing plugin tests and callers that only need to inspect a
-    // basic authorization request. Production sign-in uses the full overload.
-    public static Uri BuildAuthorizeUri(string state, OpenAiPkceCodes pkce) =>
-        BuildAuthorizeUri(state, RandomState(), pkce, DynamicClientId,
-            "urn:uuid:00000000-0000-0000-0000-000000000000", true, null);
 
     public static async Task<OpenAiOAuthTokenResponse> ExchangeAuthorizationCodeAsync(
         HttpClient httpClient,
@@ -175,6 +166,23 @@ internal static class OpenAiOAuthClient
     }
 
     public static async Task<OpenAiVerifiedIdentity> ValidateIdTokenAsync(
+        HttpClient httpClient,
+        string? token, string clientId, string expectedNonce, CancellationToken ct)
+    {
+        try
+        {
+            return await ValidateIdTokenCoreAsync(httpClient, token, clientId, expectedNonce, ct);
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException or KeyNotFoundException
+            or CryptographicException or ArgumentException
+            || ex is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException("ChatGPT identity token validation failed.", ex);
+        }
+    }
+
+    private static async Task<OpenAiVerifiedIdentity> ValidateIdTokenCoreAsync(
+        HttpClient httpClient,
         string? token, string clientId, string expectedNonce, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(token))
@@ -187,7 +195,7 @@ internal static class OpenAiOAuthClient
         if (GetString(headerRoot, "alg") != "RS256" || GetString(headerRoot, "kid") is not { } keyId)
             throw new InvalidOperationException("ChatGPT returned an unsupported identity token.");
 
-        using var jwksStream = await s_identityHttpClient.GetStreamAsync(
+        using var jwksStream = await httpClient.GetStreamAsync(
             $"{Issuer}/.well-known/jwks.json", ct);
         using var jwks = await JsonDocument.ParseAsync(jwksStream, cancellationToken: ct);
         var key = jwks.RootElement.GetProperty("keys").EnumerateArray()
@@ -346,32 +354,32 @@ internal static class OpenAiOAuthClient
     }
 }
 
-internal sealed class OpenAiLoopbackOAuthServer : IAsyncDisposable
+internal interface IOpenAiOAuthCallbackServer : IAsyncDisposable
+{
+    void Start();
+    Task<OpenAiOAuthCallback> WaitForAuthorizationCallbackAsync(CancellationToken ct);
+}
+
+internal sealed class OpenAiLoopbackOAuthServer : IOpenAiOAuthCallbackServer
 {
     private readonly string _expectedState;
+    private readonly int _port;
     private TcpListener? _v4Listener;
     private TcpListener? _v6Listener;
 
-    public OpenAiLoopbackOAuthServer(string expectedState)
+    public OpenAiLoopbackOAuthServer(string expectedState, int port = OpenAiOAuthClient.CallbackPort)
     {
         _expectedState = expectedState;
+        _port = port;
     }
 
     public void Start()
     {
-        // Bind only to v4 and v6 loopback. The OAuth redirect_uri is fixed at
-        // http://localhost:1455/auth/callback; depending on the system's
-        // /etc/hosts, "localhost" may resolve to 127.0.0.1, ::1, or both.
-        // Listening on loopback only keeps a one-shot OAuth callback off the
-        // LAN trust boundary — upstream's IPv6Any+DualMode listened on every
-        // interface and a single malformed LAN probe stopped the listener
-        // before the real browser callback could arrive.
-        _v4Listener = TryStartListener(new IPEndPoint(IPAddress.Loopback, OpenAiOAuthClient.CallbackPort));
-        _v6Listener = TryStartListener(new IPEndPoint(IPAddress.IPv6Loopback, OpenAiOAuthClient.CallbackPort));
-
-        if (_v4Listener is null)
-            throw new InvalidOperationException(
-                $"Could not bind the OAuth callback listener on port {OpenAiOAuthClient.CallbackPort}.");
+        // The advertised redirect uses 127.0.0.1, so IPv4 must bind successfully.
+        // Propagate SocketException to the localized port-conflict handler.
+        _v4Listener = new TcpListener(IPAddress.Loopback, _port);
+        _v4Listener.Start();
+        _v6Listener = TryStartListener(new IPEndPoint(IPAddress.IPv6Loopback, _port));
     }
 
     private static TcpListener? TryStartListener(IPEndPoint endpoint)

@@ -1,4 +1,10 @@
 {
+  "Settings.ChatGptPlanNotAuthorized": "Die Nutzung des ChatGPT-Abos wurde nicht autorisiert. Verbinden Sie ChatGPT erneut und erlauben Sie die Abo-Nutzung.",
+  "Settings.ChatGptUsageLimit": "Das Nutzungslimit für das ChatGPT-Abo ist erreicht. Pausieren Sie Abo-Anfragen und prüfen Sie ChatGPT Einstellungen > Nutzung unter https://chatgpt.com/settings/usage.",
+  "Settings.ChatGptNotEligible": "Die ChatGPT-Abo-Nutzung ist für diesen Benutzer, Arbeitsbereich oder diese Richtlinie nicht verfügbar. Prüfen Sie Ihre Konto- und Arbeitsbereichseinstellungen.",
+  "Settings.ChatGptUsageUnavailable": "Die verfügbare ChatGPT-Nutzung konnte nicht geprüft werden. Versuchen Sie es später erneut.",
+  "Settings.ChatGptUserUnavailable": "ChatGPT-Benutzer- oder Arbeitsbereichsinformationen sind vorübergehend nicht verfügbar. Versuchen Sie es später erneut.",
+  "Settings.ChatGptUnsupportedCapability": "Die ChatGPT-Abo-Nutzung unterstützt diesen Anfrageparameter nicht: {0}. Ändern Sie die Anfrage vor einem erneuten Versuch.",
   "Settings.ConnectionMethod": "Verbindungsmethode",
   "Settings.ConnectionMethodDescription": "Wählen Sie, wie die Prompt-Verarbeitung mit OpenAI verbunden wird. Bei der ChatGPT-Anmeldung autorisieren Sie unterstützte Anfragen über Ihren ChatGPT-Tarif.",
   "Settings.ApiKey": "API-Schlüssel",

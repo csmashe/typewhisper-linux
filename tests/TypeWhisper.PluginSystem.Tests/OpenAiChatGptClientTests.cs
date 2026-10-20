@@ -117,7 +117,7 @@ public sealed class OpenAiChatGptClientTests
     }
 
     [Fact]
-    public async Task ParseResponseText_SseDoneTerminatedStream_ReturnsText()
+    public async Task ParseResponseText_SseDoneWithoutCompleted_Throws()
     {
         var stream = string.Join(
             "\n",
@@ -129,9 +129,8 @@ public sealed class OpenAiChatGptClientTests
             "",
             "");
 
-        var result = await OpenAiChatGptClient.ParseResponseTextAsync(stream);
-
-        Assert.Equal("Hello world", result);
+        await Assert.ThrowsAsync<IncompleteSseStreamException>(() =>
+            OpenAiChatGptClient.ParseResponseTextAsync(stream));
     }
 
     [Fact]

@@ -1281,7 +1281,7 @@ public partial class OpenAiPluginTests
         await sut.ActivateAsync(host);
 
         Assert.Equal(
-            ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.2-codex", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini"],
+            ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.2"],
             sut.SupportedModels.Select(model => model.Id).ToArray());
         Assert.Equal(sut.SupportedModels[0].Id, sut.SelectedLlmModelId);
     }
@@ -2190,6 +2190,7 @@ public partial class OpenAiPluginTests
     public async Task ChatGptAuthMode_IsAvailableWithBrowserLoginTokensWithoutApiKey()
     {
         var host = new TestPluginHostServices();
+        SetChatGptPlanRegistration(host);
         host.SetSetting("authMode", "chatgpt");
         host.Secrets["oauth-access-token"] = "access-token";
         host.Secrets["oauth-refresh-token"] = "refresh-token";
@@ -2217,15 +2218,19 @@ public partial class OpenAiPluginTests
     {
         var uri = OpenAiOAuthClient.BuildAuthorizeUri(
             state: "state_123",
-            pkce: new OpenAiPkceCodes("verifier", "challenge"));
+            nonce: "nonce_456",
+            pkce: new OpenAiPkceCodes("verifier", "challenge"),
+            clientId: OpenAiOAuthClient.DynamicClientId,
+            hostId: "urn:uuid:00000000-0000-0000-0000-000000000000",
+            isNewRegistration: true,
+            idTokenHint: null);
         var query = ParseQuery(uri);
 
         Assert.Equal("https", uri.Scheme);
         Assert.Equal("auth.openai.com", uri.Host);
         Assert.Equal("/api/accounts/authorize", uri.AbsolutePath);
         Assert.Equal("code", query["response_type"]);
-        // The basic overload describes a first-time sign-in: the dynamic
-        // registration placeholder, a new-registration name hint, no ID hint.
+        // First-time sign-in uses the dynamic registration placeholder.
         Assert.Equal(OpenAiOAuthClient.DynamicClientId, query["client_id"]);
         Assert.Equal("http://127.0.0.1:1455/auth/callback", OpenAiOAuthClient.RedirectUri);
         Assert.Equal(OpenAiOAuthClient.RedirectUri, query["redirect_uri"]);
@@ -2430,7 +2435,7 @@ public partial class OpenAiPluginTests
             "event: response.output_text.delta",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}",
             "",
-            "data: [DONE]",
+            "data: {\"type\":\"response.completed\"}",
             "",
             "");
 
@@ -2813,9 +2818,11 @@ public partial class OpenAiPluginTests
         host.Secrets["oauth-access-token"] = "codex-access-token";
         host.Secrets["oauth-refresh-token"] = "codex-refresh-token";
         host.Secrets["oauth-id-token"] = "codex-id-token";
-        using var sut = new OpenAiPlugin(httpClient);
+        var callbackServer = new FakeOAuthCallbackServer(() => throw new InvalidOperationException("Browser launch should fail first."));
+        using var sut = new OpenAiPlugin(httpClient, oauthServerFactory: _ => callbackServer);
         await sut.ActivateAsync(host);
         Assert.True(sut.HasChatGptCredentials);
+        Assert.False(sut.IsAvailable);
 
         var result = await sut.ValidateAsync();
 
