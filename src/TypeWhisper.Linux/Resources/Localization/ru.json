@@ -692,6 +692,8 @@
   "Plugins.NoEnabledPlugins": "Нет включённых плагинов. Включите плагин на вкладке «Отключённые», чтобы начать им пользоваться.",
   "Plugins.NoHostNeutralSettings": "Этот плагин пока не предоставляет хост-независимых настроек.",
   "Plugins.NoValidationAvailable": "Проверка недоступна.",
+  "Plugins.PageNotFound": "Плагин с идентификатором «{0}» не установлен. Проверьте идентификатор в манифесте плагина.",
+  "Plugins.PageNotFoundTitle": "Плагин не найден",
   "Plugins.SettingsSaved": "Настройки сохранены.",
   "Plugins.SettingsSaveFailed": "Не удалось сохранить настройки. Подробности см. в журнале ошибок.",
   "Plugins.SummaryFailed": " · не удалось загрузить: {0}",

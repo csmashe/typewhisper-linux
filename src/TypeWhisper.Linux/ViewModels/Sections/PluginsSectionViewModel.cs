@@ -28,6 +28,13 @@ public partial class PluginsSectionViewModel : ObservableObject
     private readonly Action<Action> _postToUi;
     private readonly Dictionary<string, RunningSettingsAction> _runningActions = new(StringComparer.Ordinal);
 
+    // Bumped by every page navigation so an older reveal still waiting for plugins to load
+    // does not act after a newer one. UI thread only.
+    private int _revealVersion;
+
+    // The row a reveal should scroll to; the view may not exist yet, so it takes this on load.
+    private PluginRow? _revealedPlugin;
+
     [ObservableProperty]
     private string _headerSummary = "";
 
@@ -75,6 +82,9 @@ public partial class PluginsSectionViewModel : ObservableObject
         _pluginManager.PluginStateChanged += (_, _) => _postToUi(Refresh);
         RebuildPluginRows(PluginListRefreshKind.Initial);
     }
+
+    /// <summary>A row was revealed by <c>--page plugin:&lt;id&gt;</c>; see <see cref="TakeRevealedPlugin" />.</summary>
+    public event Action? PluginRevealed;
 
     public ObservableCollection<PluginCategoryGroup> EnabledGroups { get; } = [];
     public ObservableCollection<PluginCategoryGroup> DisabledGroups { get; } = [];
@@ -323,6 +333,83 @@ public partial class PluginsSectionViewModel : ObservableObject
             var categoryLabel = group.First().Category.DisplayName;
             target.Add(new PluginCategoryGroup(categoryLabel, categoryPlugins));
         }
+    }
+
+    /// <summary>
+    ///     Waits for <paramref name="pluginsReady" />, then switches to the tab holding
+    ///     <paramref name="pluginId" /> and opens its settings. A plugin not found by then gets
+    ///     one more look once <paramref name="pluginsSettled" /> completes, since first-run
+    ///     installs land after the installed plugins have loaded.
+    /// </summary>
+    internal async Task<PluginRevealResult> RevealPluginAsync(
+        string pluginId,
+        Task pluginsReady,
+        Task pluginsSettled
+    )
+    {
+        var version = ++_revealVersion;
+        await pluginsReady;
+        if (version != _revealVersion)
+        {
+            return PluginRevealResult.Superseded;
+        }
+
+        var row = FindRowAfterRefresh(pluginId);
+        if (row is null && !pluginsSettled.IsCompleted)
+        {
+            await pluginsSettled;
+            if (version != _revealVersion)
+            {
+                return PluginRevealResult.Superseded;
+            }
+
+            row = FindRowAfterRefresh(pluginId);
+        }
+
+        if (row is null)
+        {
+            return PluginRevealResult.NotInstalled;
+        }
+
+        SelectedTab = row.IsEnabled ? 0 : 1;
+        var expand = row is { HasExpandableSettings: true, IsExpanded: false }
+            ? ToggleExpandedAsync(row)
+            : Task.CompletedTask;
+        _revealedPlugin = row;
+        PluginRevealed?.Invoke();
+        await expand;
+        return PluginRevealResult.Revealed;
+    }
+
+    /// <summary>Drops a pending reveal because the user was sent to another page.</summary>
+    internal void CancelPendingReveal()
+    {
+        _revealVersion++;
+        _revealedPlugin = null;
+    }
+
+    /// <summary>Returns the row to scroll into view once, then forgets it.</summary>
+    public PluginRow? TakeRevealedPlugin()
+    {
+        var row = _revealedPlugin;
+        _revealedPlugin = null;
+        return row;
+    }
+
+    private PluginRow? FindRow(string pluginId) =>
+        AllRows.FirstOrDefault(row => string.Equals(row.Id, pluginId, StringComparison.Ordinal));
+
+    private PluginRow? FindRowAfterRefresh(string pluginId)
+    {
+        var row = FindRow(pluginId);
+        if (row is not null)
+        {
+            return row;
+        }
+
+        // A plugin-state refresh may still be queued behind this continuation.
+        RebuildPluginRows(PluginListRefreshKind.Ambient);
+        return FindRow(pluginId);
     }
 
     [RelayCommand]
@@ -1718,4 +1805,11 @@ internal static class PluginCategories
             ),
         };
     }
+}
+
+internal enum PluginRevealResult
+{
+    Revealed,
+    NotInstalled,
+    Superseded,
 }

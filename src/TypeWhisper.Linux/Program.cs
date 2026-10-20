@@ -20,6 +20,9 @@ public static class Program
     public static ServiceProvider Services { get; private set; } = null!;
     public static bool StartMinimized { get; private set; }
 
+    /// <summary>The <c>--page</c> destination for this launch, when it starts the GUI itself.</summary>
+    internal static SettingsPage? StartPage { get; private set; }
+
     public static int Main(string[] args)
     {
         // A worker runs one local engine for the app that started it: no profile setup, no UI,
@@ -56,6 +59,7 @@ public static class Program
 
         var action = CommandLineParser.Parse(args);
         StartMinimized = action.StartMinimized;
+        StartPage = action.Page;
 
         // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault
         switch (action.Kind)
@@ -81,8 +85,9 @@ public static class Program
         }
 
         // Single-instance handling. Bare `typewhisper` sends `toggle` to a running instance
-        // and exits. Argument-bearing GUI launches (--minimized etc.) use a side-effect-free
-        // probe and bail if an instance is found — they must NOT trigger a toggle just to check.
+        // and exits. `--page` hands its page to a running instance. Other argument-bearing GUI
+        // launches (--minimized etc.) use a side-effect-free probe and bail if an instance is
+        // found — they must NOT trigger a toggle just to check.
         // The bind in App startup is the authoritative guard for the probe-then-bind race window.
         BootTrace.Stage($"CommandLineParser.Parse (kind={action.Kind})");
         try
@@ -106,6 +111,19 @@ public static class Program
                 }
 
                 BootTrace.Stage("ControlSocketClient.TrySendToggle (no live peer)");
+            }
+            else if (action.Page is { } page)
+            {
+                if (SettingsPageCommand.TryHandOff(socketPath, page, out var handOffExitCode))
+                {
+                    // The running instance raises its own window; clear the launcher's busy cursor.
+                    LinuxStartupNotification.NotifyComplete();
+                    return handOffExitCode;
+                }
+
+                // No peer answered. One that binds from here on is handed the page by App when
+                // this launch loses the bind, so skip the probe below that would exit without it.
+                BootTrace.Stage("SettingsPageCommand.TryHandOff (no live peer)");
             }
             else if (ControlSocketClient.IsLivePeer(socketPath))
             {
