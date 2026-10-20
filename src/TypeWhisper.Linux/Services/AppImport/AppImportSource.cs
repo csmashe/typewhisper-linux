@@ -13,6 +13,7 @@ public sealed record AppImportSource(
     string TooLargeKey
 )
 {
+    /// <summary>Reads Handy's <c>settings_store.json</c>, discovered or picked by the user.</summary>
     /// <param name="read">Test seam that replaces the bounded settings-file read.</param>
     public static AppImportSource Handy(Func<string, CancellationToken, byte[]>? read = null) =>
         new("Handy", (path, token) => HandySettingsReader.Load(path, token, read), "HandyImport.Malformed", "HandyImport.TooLarge");

@@ -236,11 +236,12 @@ public sealed class AppImportTests : IDisposable
 
             return Encoding.UTF8.GetBytes($"{{\"settings\":{{\"custom_words\":[\"{reads}\"]}}}}");
         });
-        var import = Import(source);
+        using var import = Import(source);
 
         var load = import.LoadAsync();
         reading.Wait();
         import.Cancel();
+        // ReSharper disable once DisposeOnUsingVariable -- disposing mid-load is the scenario; the using covers an early throw.
         import.Dispose();
         closed.Set();
         await load;
