@@ -63,13 +63,17 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         _entriesChangedHandler = () => Dispatcher.UIThread.Post(NotifyConflictWarningChanged);
         _snippets.SnippetsChanged += _snippetsChangedHandler;
         _dictionary.EntriesChanged += _entriesChangedHandler;
-        // "All tags" is computed text that the tag filter also compares against.
+        // "All tags", the mode labels, and the editor texts are computed from the catalog;
+        // the tag filter also compares against "All tags".
         _languageChangedHandler = (_, _) => Dispatcher.UIThread.Post(() =>
         {
             var currentMode = SelectedTriggerMode;
             TriggerModeOptions = CreateTriggerModeOptions();
             OnPropertyChanged(nameof(TriggerModeOptions));
             SelectedTriggerMode = currentMode;
+            OnPropertyChanged(nameof(EditorTitle));
+            OnPropertyChanged(nameof(EditorSaveText));
+            NotifyConflictWarningChanged();
             Refresh();
         });
         Loc.Instance.LanguageChanged += _languageChangedHandler;
