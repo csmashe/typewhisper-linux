@@ -37,6 +37,7 @@ public sealed class ComputedLocalizationTests(UiSession ui)
             }
             finally
             {
+                snippets.CancelEditCommand.Execute(null);
                 prompts.PropertyChanged -= OnChanged;
                 Loc.Instance.CurrentLanguage = language;
                 Dispatcher.UIThread.RunJobs();
