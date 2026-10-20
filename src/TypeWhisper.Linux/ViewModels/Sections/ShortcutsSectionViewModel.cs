@@ -216,6 +216,13 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         {
             HotkeyText = hotkey;
             await ApplyHotkeyAsync();
+            // Success normalizes HotkeyText to the binding; a captured chord always parses, so a
+            // mismatch means it collided. Show the live binding instead of the rejected chord.
+            if (HotkeyText != _hotkey.CurrentHotkeyString)
+            {
+                HotkeyText = _hotkey.CurrentHotkeyString;
+                StatusMessage = Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", hotkey);
+            }
         }
         finally
         {

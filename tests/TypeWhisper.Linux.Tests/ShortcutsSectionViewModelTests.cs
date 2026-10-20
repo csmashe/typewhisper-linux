@@ -114,6 +114,24 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyCapturedHotkey_CollisionRestoresCurrentBinding()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
+        var original = hotkey.CurrentHotkeyString;
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+
+        sut.StartHotkeyCaptureCommand.Execute(null);
+        await sut.ApplyCapturedHotkeyAsync("Ctrl+Shift+P");
+
+        Assert.Equal(original, sut.HotkeyText);
+        Assert.Contains("collides", sut.StatusMessage);
+        Assert.False(sut.IsCapturingHotkey);
+    }
+
+    [Fact]
     public void WaylandEvdevHotkeysEnabled_PersistsToSettings()
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
