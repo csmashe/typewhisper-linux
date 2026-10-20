@@ -68,6 +68,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     // Suppress picker setters while option lists rebuild and the ComboBoxes reselect.
     private bool _isRefreshingProviders;
+    private bool _isSelectingActionPlugin;
 
     // Placeholder added for the editor's current unresolvable override, so it can be dropped again
     // when the editor moves on. Null while the list is whatever RefreshPluginOptions last built.
@@ -127,7 +128,15 @@ public partial class PromptsSectionViewModel : ObservableObject
             // normally" option has a null Value and intentionally clears the saved ID.
             if (_isRefreshingProviders || value is null)
                 return;
-            EditTargetActionPluginId = value.Value;
+            _isSelectingActionPlugin = true;
+            try
+            {
+                EditTargetActionPluginId = value.Value;
+            }
+            finally
+            {
+                _isSelectingActionPlugin = false;
+            }
         }
     }
 
@@ -340,8 +349,18 @@ public partial class PromptsSectionViewModel : ObservableObject
         if (_synthesizedActionPluginOption is not null
             && !string.Equals(_synthesizedActionPluginOption.Value, value, StringComparison.Ordinal))
         {
-            ActionPluginOptions.Remove(_synthesizedActionPluginOption);
-            _synthesizedActionPluginOption = null;
+            var obsoleteOption = _synthesizedActionPluginOption;
+            if (_isSelectingActionPlugin)
+            {
+                // Avalonia is still committing SelectedItem. Removing a row now invalidates
+                // its selection indices. Only this removal must wait until the commit ends.
+                Dispatcher.UIThread.Post(() => RemoveObsoleteActionPluginOption(obsoleteOption),
+                    DispatcherPriority.Background);
+            }
+            else
+            {
+                RemoveObsoleteActionPluginOption(obsoleteOption);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(value)
@@ -351,6 +370,17 @@ public partial class PromptsSectionViewModel : ObservableObject
                 value, Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", value));
             ActionPluginOptions.Add(_synthesizedActionPluginOption);
         }
+    }
+
+    private void RemoveObsoleteActionPluginOption(ActionPluginOption option)
+    {
+        // A queued removal must not affect a reopened draft or a relocalized option list.
+        if (!ReferenceEquals(_synthesizedActionPluginOption, option)
+            || string.Equals(option.Value, EditTargetActionPluginId, StringComparison.Ordinal))
+            return;
+
+        ActionPluginOptions.Remove(option);
+        _synthesizedActionPluginOption = null;
     }
 
     // Hydrating an action whose override no longer resolves (uninstalled plugin, signed-out CLI)
