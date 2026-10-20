@@ -165,16 +165,50 @@ public partial class WhisperCppPluginTests
 
     [Theory]
     [InlineData("libwhisper.so")]
+    [InlineData("libggml-whisper.so")]
     [InlineData("libggml-vulkan-whisper.so")]
+    [InlineData("libggml-cpu-whisper.so")]
+    [InlineData("libggml-base-whisper.so")]
     public void VulkanPreflight_MissingRuntimeFile_RejectsBeforeNativeLoad(string missing)
     {
         using var temp = new TempAssetDir();
         var runtime = Path.Join(temp.Path, "runtimes", "vulkan", "linux-x64");
         Directory.CreateDirectory(runtime);
-        foreach (var name in new[] { "libwhisper.so", "libggml-vulkan-whisper.so" })
+        foreach (var name in new[]
+        {
+            "libwhisper.so",
+            "libggml-whisper.so",
+            "libggml-vulkan-whisper.so",
+            "libggml-cpu-whisper.so",
+            "libggml-base-whisper.so",
+        })
+        {
             if (name != missing) File.WriteAllText(Path.Join(runtime, name), "fixture");
+        }
         var detail = WhisperCppPlugin.CheckVulkanAvailability(temp.Path, () => null);
+        Assert.NotNull(detail);
         Assert.Contains(missing, detail);
+    }
+
+    [Fact]
+    public void VulkanPreflight_CompleteSet_Accepted()
+    {
+        using var temp = new TempAssetDir();
+        var runtime = Path.Join(temp.Path, "runtimes", "vulkan", "linux-x64");
+        Directory.CreateDirectory(runtime);
+        foreach (var name in new[]
+        {
+            "libwhisper.so",
+            "libggml-whisper.so",
+            "libggml-vulkan-whisper.so",
+            "libggml-cpu-whisper.so",
+            "libggml-base-whisper.so",
+        })
+        {
+            File.WriteAllText(Path.Join(runtime, name), "fixture");
+        }
+        var detail = WhisperCppPlugin.CheckVulkanAvailability(temp.Path, () => null);
+        Assert.Null(detail);
     }
 
     [Theory]

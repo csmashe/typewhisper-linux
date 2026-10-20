@@ -1276,7 +1276,14 @@ public sealed class WhisperCppPlugin
     internal static string? CheckVulkanAvailability(string pluginDirectory, Func<string?> probe)
     {
         if (probe() is { } reason) return reason;
-        foreach (var name in new[] { "libwhisper.so", "libggml-vulkan-whisper.so" })
+        foreach (var name in new[]
+        {
+            "libwhisper.so",
+            "libggml-whisper.so",
+            "libggml-vulkan-whisper.so",
+            "libggml-cpu-whisper.so",
+            "libggml-base-whisper.so",
+        })
         {
             var path = Path.Join(pluginDirectory, "runtimes", "vulkan", "linux-x64", name);
             if (!File.Exists(path))

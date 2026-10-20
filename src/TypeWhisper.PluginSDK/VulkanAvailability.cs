@@ -48,6 +48,7 @@ public static class VulkanAvailability
                             if (device.DeviceType is 1 or 2 or 3)
                                 return null;
                         }
+                        return "No Vulkan GPU found.";
                     }
                     finally { Marshal.FreeHGlobal(devices); }
                 }
