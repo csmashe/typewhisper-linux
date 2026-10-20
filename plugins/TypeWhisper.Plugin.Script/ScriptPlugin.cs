@@ -101,6 +101,12 @@ internal sealed class ScriptStore
 
 public sealed class ScriptService
 {
+    /// <summary>How long one script may run, during dictation and in a test.</summary>
+    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+
+    // A test shows its output, so it is bounded; dictation keeps the unbounded original.
+    internal const int TestOutputLimitBytes = 1024 * 1024;
+
     private readonly IPluginHostServices _host;
     private readonly ScriptStore _store;
     private bool _loadSucceeded;
@@ -203,7 +209,7 @@ public sealed class ScriptService
         return current;
     }
 
-    private static (string FileName, IReadOnlyList<string> Arguments) ResolveShell(
+    internal static (string FileName, IReadOnlyList<string> Arguments) ResolveShell(
         ScriptEntry script
     )
     {
@@ -223,10 +229,11 @@ public sealed class ScriptService
         };
     }
 
-    private async Task<string> RunSingleAsync(
+    private Task<ProcessRunOutcome> StartAsync(
         ScriptEntry script,
         string text,
         PostProcessingContext context,
+        int? maximumOutputBytes,
         CancellationToken ct
     )
     {
@@ -239,17 +246,49 @@ public sealed class ScriptService
             ["TYPEWHISPER_PROFILE"] = context.ProfileName ?? "",
         };
 
+        return _host.Processes.RunOneShotAsync(
+            new ProcessCommand(fileName, arguments, environment),
+            new ProcessOneShotOptions(Timeout: Timeout, StandardInput: new Utf8ProcessInput(text))
+            {
+                MaximumStandardOutputBytes = maximumOutputBytes,
+                MaximumStandardErrorBytes = maximumOutputBytes,
+            },
+            ct
+        );
+    }
+
+    /// <summary>
+    ///     Runs a draft once with the dictation timeout, empty TYPEWHISPER_* variables and bounded
+    ///     output, without touching the saved scripts.
+    /// </summary>
+    internal async Task<ProcessRunOutcome> RunTestAsync(
+        ScriptEntry script,
+        string input,
+        CancellationToken ct
+    )
+    {
+        try
+        {
+            return await StartAsync(script, input, new PostProcessingContext(), TestOutputLimitBytes, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _host.Log(PluginLogLevel.Info, $"Script test '{script.Name}' cancelled by caller.");
+            throw;
+        }
+    }
+
+    private async Task<string> RunSingleAsync(
+        ScriptEntry script,
+        string text,
+        PostProcessingContext context,
+        CancellationToken ct
+    )
+    {
         ProcessRunOutcome result;
         try
         {
-            result = await _host.Processes.RunOneShotAsync(
-                new ProcessCommand(fileName, arguments, environment),
-                new ProcessOneShotOptions(
-                    Timeout: TimeSpan.FromSeconds(5),
-                    StandardInput: new Utf8ProcessInput(text)
-                ),
-                ct
-            );
+            result = await StartAsync(script, text, context, maximumOutputBytes: null, ct);
         }
         catch (OperationCanceledException)
         {
@@ -261,14 +300,17 @@ public sealed class ScriptService
         // ReSharper disable once ConvertIfStatementToSwitchStatement -- part of a guard chain; a switch would only cover this branch.
         if (result.Status == ProcessRunStatus.TimedOut)
         {
-            _host.Log(PluginLogLevel.Warning, $"Script '{script.Name}' timed out after 5 seconds");
+            _host.Log(
+                PluginLogLevel.Warning,
+                $"Script '{script.Name}' timed out after {Timeout.TotalSeconds:0} seconds"
+            );
             return text;
         }
 
         if (result.Status == ProcessRunStatus.StartFailed)
         {
             throw new InvalidOperationException(
-                result.StartError ?? $"Could not start {fileName}."
+                result.StartError ?? $"Could not start {ResolveShell(script).FileName}."
             );
         }
 
@@ -387,12 +429,16 @@ public sealed class ScriptService
 public sealed class ScriptPlugin
     : IPostProcessorPlugin,
         IPluginCollectionSettingsProvider,
+        IPluginCollectionItemTester,
         IPluginDataLocationAware,
         IPluginLocalizationAware
 {
     private const string ScriptsCollectionKey = "scripts";
 
     private static readonly string[] s_allowedShells = ["", "bash", "sh", "pwsh"];
+
+    // Long enough to read a result, short enough that a runaway script cannot flood the view.
+    private const int TestPreviewCharacters = 4000;
 
     private IPluginHostServices? _host;
     private string? _dataDirectory;
@@ -404,6 +450,9 @@ public sealed class ScriptPlugin
     public int Priority => 400;
 
     public ScriptService? Service { get; private set; }
+
+    /// <summary>Whether an executable is installed; replaced in tests.</summary>
+    internal Func<string, bool> IsExecutableInstalled { get; init; } = ScriptShells.IsInstalled;
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -475,9 +524,40 @@ public sealed class ScriptPlugin
                 itemFields,
                 ItemLabelFieldKey: "name",
                 AddButtonLabel: Loc.L("Settings.AddScript")
-            ),
+            )
+            {
+                Templates = GetTemplates(),
+                ItemTest = new PluginCollectionItemTest(
+                    Loc.L("Settings.TestScript"),
+                    Loc.L("Settings.TestSampleInput")
+                ),
+            },
         ];
     }
+
+    // Every template is bash, so none is offered on a system without it.
+    private PluginCollectionTemplate[] GetTemplates() =>
+        IsExecutableInstalled(ScriptTemplates.Shell)
+            ? ScriptTemplates
+                .All.Select(template =>
+                {
+                    var name = Loc.L($"Templates.{template.Id}.Name");
+                    return new PluginCollectionTemplate(
+                        template.Id,
+                        name,
+                        Loc.L($"Templates.{template.Id}.Description"),
+                        new Dictionary<string, string?>
+                        {
+                            ["name"] = name,
+                            ["command"] = template.Command,
+                            ["shell"] = ScriptTemplates.Shell,
+                            // Disabled until the user reviews the command and enables it.
+                            ["enabled"] = "false",
+                        }
+                    );
+                })
+                .ToArray()
+            : [];
 
     public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(
         string collectionKey,
@@ -541,61 +621,11 @@ public sealed class ScriptPlugin
 
         foreach (var item in items)
         {
-            item.Values.TryGetValue("name", out var rawName);
-            item.Values.TryGetValue("command", out var rawCommand);
-            item.Values.TryGetValue("shell", out var rawShell);
+            var (entry, error) = ParseItem(item, requireName: true);
+            if (entry is null)
+                return Task.FromResult(new PluginSettingsValidationResult(false, error!));
 
-            var name = (rawName ?? "").Trim();
-            var command = (rawCommand ?? "").Trim();
-            var displayName = name.Length == 0 ? Loc.L("Settings.Unnamed") : name;
-
-            if (name.Length == 0)
-                return Task.FromResult(
-                    new PluginSettingsValidationResult(
-                        false,
-                        Loc.L("Settings.ScriptNameRequired", displayName)
-                    )
-                );
-
-            if (command.Length == 0)
-                return Task.FromResult(
-                    new PluginSettingsValidationResult(
-                        false,
-                        Loc.L("Settings.ScriptCommandRequired", displayName)
-                    )
-                );
-
-            var shell = ScriptService.NormalizeShellValue(rawShell);
-            if (Array.IndexOf(s_allowedShells, shell) < 0)
-                return Task.FromResult(
-                    new PluginSettingsValidationResult(
-                        false,
-                        Loc.L("Settings.ScriptUnknownShell", displayName, rawShell ?? "")
-                    )
-                );
-
-            var id =
-                item.Values.TryGetValue("__id", out var rawId)
-                && Guid.TryParse(rawId, out var parsedId)
-                    ? parsedId
-                    : Guid.NewGuid();
-
-            var isEnabled =
-                !item.Values.TryGetValue("enabled", out var rawEnabled)
-                || rawEnabled is null
-                || !bool.TryParse(rawEnabled, out var parsedEnabled)
-                || parsedEnabled;
-
-            entries.Add(
-                new ScriptEntry
-                {
-                    Id = id,
-                    Name = name,
-                    Command = command,
-                    Shell = shell,
-                    IsEnabled = isEnabled,
-                }
-            );
+            entries.Add(entry);
         }
 
         try
@@ -638,6 +668,108 @@ public sealed class ScriptPlugin
         }
 
         return Task.FromResult(new PluginSettingsValidationResult(true, Loc.L("Settings.Saved")));
+    }
+
+    public async Task<PluginCollectionItemTestResult> TestItemAsync(
+        string collectionKey,
+        PluginCollectionItem draft,
+        string input,
+        CancellationToken ct
+    )
+    {
+        if (!string.Equals(collectionKey, ScriptsCollectionKey, StringComparison.Ordinal))
+            return new PluginCollectionItemTestResult(false, Loc.L("Settings.UnknownCollection"));
+
+        // Scripts only run while the plugin is enabled.
+        if (Service is not { } service)
+            return new PluginCollectionItemTestResult(false, Loc.L("Settings.TestRequiresEnabled"));
+
+        // A test may run an unnamed draft.
+        var (script, error) = ParseItem(draft, requireName: false);
+        if (script is null)
+            return new PluginCollectionItemTestResult(false, error!);
+
+        var outcome = await service.RunTestAsync(script, input, ct);
+        var stderr = Preview(outcome.StandardErrorText.Trim());
+        return outcome.Status switch
+        {
+            ProcessRunStatus.StartFailed => new PluginCollectionItemTestResult(
+                false,
+                Loc.L(
+                    "Settings.TestStartFailed",
+                    ScriptService.ResolveShell(script).FileName,
+                    outcome.StartError ?? ""
+                )
+            ),
+            ProcessRunStatus.TimedOut => new PluginCollectionItemTestResult(
+                false,
+                Loc.L("Settings.TestTimedOut", ScriptService.Timeout.TotalSeconds),
+                NullIfEmpty(stderr)
+            ),
+            ProcessRunStatus.OutputLimitExceeded => new PluginCollectionItemTestResult(
+                false,
+                Loc.L("Settings.TestOutputLimit", ScriptService.TestOutputLimitBytes / 1024)
+            ),
+            _ when outcome.ExitCode != 0 => new PluginCollectionItemTestResult(
+                false,
+                Loc.L("Settings.TestExitCode", outcome.ExitCode ?? -1),
+                NullIfEmpty(stderr)
+            ),
+            _ => new PluginCollectionItemTestResult(
+                true,
+                Loc.L("Settings.TestSucceeded"),
+                Preview(outcome.StandardOutputText)
+            ),
+        };
+    }
+
+    private static string Preview(string text) =>
+        text.Length > TestPreviewCharacters ? text[..TestPreviewCharacters] + "…" : text;
+
+    private static string? NullIfEmpty(string text) => text.Length == 0 ? null : text;
+
+    private (ScriptEntry? Entry, string? Error) ParseItem(PluginCollectionItem item, bool requireName)
+    {
+        item.Values.TryGetValue("name", out var rawName);
+        item.Values.TryGetValue("command", out var rawCommand);
+        item.Values.TryGetValue("shell", out var rawShell);
+
+        var name = (rawName ?? "").Trim();
+        var command = (rawCommand ?? "").Trim();
+        var displayName = name.Length == 0 ? Loc.L("Settings.Unnamed") : name;
+
+        if (requireName && name.Length == 0)
+            return (null, Loc.L("Settings.ScriptNameRequired", displayName));
+
+        if (command.Length == 0)
+            return (null, Loc.L("Settings.ScriptCommandRequired", displayName));
+
+        var shell = ScriptService.NormalizeShellValue(rawShell);
+        if (Array.IndexOf(s_allowedShells, shell) < 0)
+            return (null, Loc.L("Settings.ScriptUnknownShell", displayName, rawShell ?? ""));
+
+        var id =
+            item.Values.TryGetValue("__id", out var rawId) && Guid.TryParse(rawId, out var parsedId)
+                ? parsedId
+                : Guid.NewGuid();
+
+        var isEnabled =
+            !item.Values.TryGetValue("enabled", out var rawEnabled)
+            || rawEnabled is null
+            || !bool.TryParse(rawEnabled, out var parsedEnabled)
+            || parsedEnabled;
+
+        return (
+            new ScriptEntry
+            {
+                Id = id,
+                Name = name,
+                Command = command,
+                Shell = shell,
+                IsEnabled = isEnabled,
+            },
+            null
+        );
     }
 
     private string ResolveDataDir() =>
