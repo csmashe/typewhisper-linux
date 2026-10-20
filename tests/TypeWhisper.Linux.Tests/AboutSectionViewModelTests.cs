@@ -13,6 +13,60 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class AboutSectionViewModelTests : IDisposable
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LanguageChange_RebuildsCategoryLabelsAndPreservesSelectedKey(bool selectCategory)
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = CreateViewModel(new FakeProcessRunner(), entries: [ErrorLogEntry.Create("test", ErrorCategory.General)]);
+            if (selectCategory)
+                sut.SelectedCategoryFilter = sut.CategoryFilters.Single(o => o.Key == ErrorCategory.General);
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(Loc.Instance["About.ErrorFilterAll"], sut.CategoryFilters[0].Display);
+            Assert.Equal(selectCategory ? ErrorCategory.General : null, sut.SelectedCategoryFilter?.Key);
+            Assert.Contains(sut.SelectedCategoryFilter!, sut.CategoryFilters);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
+    [Fact]
+    public void LanguageChange_RefreshesOnlyDefaultSupportStatus()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = CreateViewModel(new FakeProcessRunner());
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(Loc.Instance["About.SupportReportDescription"], sut.SupportReportStatusText);
+            sut.SupportReportStatusText = "saved report.zip";
+            Loc.Instance.CurrentLanguage = "es";
+            Assert.Equal("saved report.zip", sut.SupportReportStatusText);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
+    [Fact]
+    public void LanguageChange_KeepsCheckingState()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = CreateViewModel(new FakeProcessRunner());
+            sut.IsCheckingForUpdates = true;
+            sut.UpdateStatusText = Loc.Instance["About.CheckingForUpdates"];
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(Loc.Instance["About.CheckingForUpdates"], sut.UpdateStatusText);
+            Assert.False(sut.CanCheckForUpdates);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.AboutSectionViewModelTests"
     );
@@ -194,11 +248,12 @@ public sealed class AboutSectionViewModelTests : IDisposable
     private AboutSectionViewModel CreateViewModel(
         FakeProcessRunner runner,
         LocalDataExportService? dataExport = null,
-        SupportReportService? supportReport = null
+        SupportReportService? supportReport = null,
+        IReadOnlyList<ErrorLogEntry>? entries = null
     )
     {
         var errorLog = new Mock<IErrorLogService>();
-        errorLog.SetupGet(service => service.Entries).Returns([]);
+        errorLog.SetupGet(service => service.Entries).Returns(entries ?? []);
         var preferences = new LinuxPreferencesService(
             Path.Join(_tempDir, "linux-preferences.json")
         );

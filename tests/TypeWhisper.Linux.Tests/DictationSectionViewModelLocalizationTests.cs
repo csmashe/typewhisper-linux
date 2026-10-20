@@ -33,6 +33,10 @@ public sealed class DictationSectionViewModelLocalizationTests
 
             Loc.Instance.CurrentLanguage = "de";
 
+            Assert.Equal(Loc.Instance["Dictation.MicTestIdle"], sut.MicrophoneTestStatus);
+            sut.MicrophoneTestStatus = "microphone error";
+            Loc.Instance.CurrentLanguage = "es";
+            Assert.Equal("microphone error", sut.MicrophoneTestStatus);
             Assert.Equal(Loc.Instance["Dictation.NoEngineSelected"], sut.EngineName);
             Assert.Equal(Loc.Instance["Dictation.StatusNotSelected"], sut.ModelStatusText);
             Assert.NotEqual("No engine selected", sut.EngineName);

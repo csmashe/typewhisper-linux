@@ -36,7 +36,6 @@
         <Style Selector="TextBlock.row-title">
             <Setter Property="FontSize" Value="12.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="TextBlock.row-hint">
             <Setter Property="FontSize" Value="12" />
@@ -403,6 +402,7 @@
                                         Spacing="8"
                                         VerticalAlignment="Center">
                                 <TextBox Width="240"
+                                         AutomationProperties.Name="{loc:Str Shortcuts.PasteLastTranscription}"
                                          Text="{Binding PasteLastTranscriptionHotkeyText}"
                                          PlaceholderText="Ctrl+Alt+V" />
                                 <Button Content="{loc:Str Common.Apply}"

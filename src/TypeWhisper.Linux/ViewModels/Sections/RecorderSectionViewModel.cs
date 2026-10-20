@@ -79,6 +79,7 @@ public partial class RecorderSectionViewModel : ObservableObject
         if (StatusText == _readyStatus)
             StatusText = ready;
         _readyStatus = ready;
+        OnPropertyChanged(nameof(RecordButtonText));
         OnPropertyChanged(nameof(PauseResumeButtonText));
     }
 

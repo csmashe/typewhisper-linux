@@ -292,8 +292,7 @@
                                    Margin="0,0,0,6" />
                         <ComboBox ItemsSource="{Binding ActionPluginOptions}"
                                   AutomationProperties.Name="{loc:Str Prompts.ActionPlugin}"
-                                  SelectedValue="{Binding EditTargetActionPluginId}"
-                                  SelectedValueBinding="{Binding Value}">
+                                  SelectedItem="{Binding SelectedActionPlugin}">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ActionPluginOption">
                                     <TextBlock Text="{Binding Label}" />

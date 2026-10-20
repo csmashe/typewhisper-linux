@@ -84,7 +84,7 @@
                          AutomationProperties.Name="{loc:Str History.Search}"
                          Text="{Binding SearchQuery}"
                          PlaceholderText="{loc:Str History.SearchPlaceholder}"
-                         Margin="0,0,8,0" />
+                         Margin="0,0,4,0" />
 
                 <ComboBox Grid.Row="1"
                           Grid.Column="1"

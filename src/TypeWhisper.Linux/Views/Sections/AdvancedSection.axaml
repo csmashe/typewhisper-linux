@@ -228,6 +228,7 @@
                                                FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiagnosticLogEnabled}"
+                                              AutomationProperties.Name="{loc:Str Advanced.DiagnosticLog}"
                                               VerticalAlignment="Center" />
                             </Grid>
                             <Grid ColumnDefinitions="*,320" ColumnSpacing="16"

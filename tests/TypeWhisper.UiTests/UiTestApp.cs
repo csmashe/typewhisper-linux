@@ -14,6 +14,7 @@ public sealed class UiTestApp : App
         AppBuilder.Configure<UiTestApp>()
             .UseSkia()
             .UseHarfBuzz()
+            .WithInterFont()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
 
     public override void OnFrameworkInitializationCompleted()

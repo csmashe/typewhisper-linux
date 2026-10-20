@@ -13,6 +13,27 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class RecorderSectionViewModelTests : IDisposable
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LanguageChange_NotifiesRecordButtonWithoutRecordingStateChange(bool recording)
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            using var audio = CreateAudioService();
+            var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
+            sut.IsRecording = recording;
+            var changes = new List<string?>();
+            sut.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Contains(nameof(sut.RecordButtonText), changes);
+            Assert.Equal(Loc.Instance[recording ? "Recorder.Stop" : "Recorder.Record"], sut.RecordButtonText);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(5);
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.RecorderSectionViewModelTests"

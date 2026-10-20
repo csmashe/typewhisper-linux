@@ -66,14 +66,13 @@ public partial class PromptsSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isCreatingNew;
 
-    // Prevents SelectedEditProvider's setter from persisting the provider
-    // override while RefreshPluginOptions is rebuilding the provider list —
-    // the setter fires when the ComboBox re-selects the current value.
+    // Suppress picker setters while option lists rebuild and the ComboBoxes reselect.
     private bool _isRefreshingProviders;
 
     // Placeholder added for the editor's current unresolvable override, so it can be dropped again
     // when the editor moves on. Null while the list is whatever RefreshPluginOptions last built.
     private ProviderOption? _synthesizedProviderOption;
+    private ActionPluginOption? _synthesizedActionPluginOption;
 
     [ObservableProperty]
     private PromptAction? _selectedAction;
@@ -118,6 +117,19 @@ public partial class PromptsSectionViewModel : ObservableObject
     public ObservableCollection<PromptAction> Actions { get; } = [];
     public ObservableCollection<ProviderOption> AvailableProviders { get; } = [];
     public ObservableCollection<ActionPluginOption> ActionPluginOptions { get; } = [];
+
+    public ActionPluginOption? SelectedActionPlugin
+    {
+        get => ActionPluginOptions.FirstOrDefault(option => option.Value == EditTargetActionPluginId);
+        set
+        {
+            // No selected item is a transient picker state, while the explicit "insert
+            // normally" option has a null Value and intentionally clears the saved ID.
+            if (_isRefreshingProviders || value is null)
+                return;
+            EditTargetActionPluginId = value.Value;
+        }
+    }
 
     public bool HasSelectedAction => SelectedAction is not null || IsCreatingNew;
     public int ActionCount => Actions.Count;
@@ -302,6 +314,43 @@ public partial class PromptsSectionViewModel : ObservableObject
     partial void OnEditHotkeyKeyChanged(string? value)
     {
         HotkeyValidationMessage = null;
+    }
+
+    // A missing plugin belongs to the current draft only. Keep its ID selectable without
+    // offering that unavailable plugin when the user opens another prompt.
+    partial void OnEditTargetActionPluginIdChanged(string? value)
+    {
+        if (_isRefreshingProviders)
+            return;
+
+        _isRefreshingProviders = true;
+        try
+        {
+            RefreshActionPluginOption(value);
+        }
+        finally
+        {
+            _isRefreshingProviders = false;
+        }
+        OnPropertyChanged(nameof(SelectedActionPlugin));
+    }
+
+    private void RefreshActionPluginOption(string? value)
+    {
+        if (_synthesizedActionPluginOption is not null
+            && !string.Equals(_synthesizedActionPluginOption.Value, value, StringComparison.Ordinal))
+        {
+            ActionPluginOptions.Remove(_synthesizedActionPluginOption);
+            _synthesizedActionPluginOption = null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(value)
+            && ActionPluginOptions.All(option => option.Value != value))
+        {
+            _synthesizedActionPluginOption = new ActionPluginOption(
+                value, Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", value));
+            ActionPluginOptions.Add(_synthesizedActionPluginOption);
+        }
     }
 
     // Hydrating an action whose override no longer resolves (uninstalled plugin, signed-out CLI)
@@ -704,39 +753,29 @@ public partial class PromptsSectionViewModel : ObservableObject
             {
                 AvailableProviders.Add(option);
             }
+            _synthesizedActionPluginOption = null;
+            ActionPluginOptions.Clear();
+            ActionPluginOptions.Add(
+                new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
+            );
+            foreach (
+                var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
+            )
+            {
+                ActionPluginOptions.Add(
+                    new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
+                );
+            }
+
+            RefreshActionPluginOption(selectedActionPlugin);
         }
         finally
         {
             _isRefreshingProviders = false;
         }
-
-        ActionPluginOptions.Clear();
-        ActionPluginOptions.Add(
-            new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
-        );
-        foreach (
-            var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
-        )
-        {
-            ActionPluginOptions.Add(
-                new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
-            );
-        }
-
-        if (!string.IsNullOrWhiteSpace(selectedActionPlugin)
-            && ActionPluginOptions.All(option => option.Value != selectedActionPlugin))
-        {
-            ActionPluginOptions.Add(
-                new ActionPluginOption(
-                    selectedActionPlugin,
-                    Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", selectedActionPlugin)
-                )
-            );
-        }
-
-        EditTargetActionPluginId = selectedActionPlugin;
         OnPropertyChanged(nameof(SelectedEditProvider));
         OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
+        OnPropertyChanged(nameof(SelectedActionPlugin));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 

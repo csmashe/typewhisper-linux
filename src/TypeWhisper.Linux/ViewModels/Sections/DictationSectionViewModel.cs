@@ -1064,6 +1064,12 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
     {
+        var microphoneIdle = Loc.Instance["Dictation.MicTestIdle"];
+        if (MicrophoneTestStatus == _microphoneTestIdleStatus)
+            MicrophoneTestStatus = microphoneIdle;
+        _microphoneTestIdleStatus = microphoneIdle;
+        OnPropertyChanged(nameof(MicrophoneTestButtonText));
+
         var acceleration = LocalModelAcceleration;
         var language = Language;
         var additionalLanguageCodes = AdditionalLanguages.Select(option => option.Code).ToArray();
