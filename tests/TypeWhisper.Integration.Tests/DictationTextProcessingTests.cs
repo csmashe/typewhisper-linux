@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Models;
@@ -18,6 +19,10 @@ public sealed class DictationTextProcessingTests
     [InlineData("see the hyperlink links, then link. alpha")]
     [InlineData("Hello new line. Next item")]
     [InlineData("um so the meeting is at 3 pm")]
+    [InlineData("Pause… then continue.")]
+    [InlineData("  Pause... then continue.  ")]
+    [InlineData("I think I think we should")]
+    [InlineData("I think we should I think we should continue.")]
     [Trait("Category", "Integration")]
     public Task ProcessText_MatchesDictationOfTheSameTranscript(string transcript)
     {
@@ -101,6 +106,65 @@ public sealed class DictationTextProcessingTests
                 fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("hello", ProfileId: "missing")));
             await Assert.ThrowsAsync<ArgumentException>(() =>
                 fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("   ")));
+        });
+    }
+
+    [Theory]
+    [InlineData("…")]
+    [InlineData(" ... … ")]
+    [Trait("Category", "Integration")]
+    public Task ProcessText_RejectsTextThatNormalizesToEmpty(string transcript)
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest(transcript)));
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ProcessText_ExpandsSnippetsAndCorrectionsWithoutRecordingUsageOrWritingFiles()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            UseEnglish(fixture);
+            var snippets = fixture.Provider.GetRequiredService<ISnippetService>();
+            var dictionary = fixture.Provider.GetRequiredService<IDictionaryService>();
+            var lastUsed = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+            snippets.AddSnippet(new Snippet
+            {
+                Id = "sig", Trigger = "sig", Replacement = "kubernets",
+                UsageCount = 7, LastUsedAt = lastUsed,
+            });
+            dictionary.AddEntry(new DictionaryEntry
+            {
+                Id = "correction", EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets", Replacement = "Kubernetes", UsageCount = 4,
+                TimesApplied = 3, TimesCorrected = 2, LastUsedAt = lastUsed, LastCorrectedAt = lastUsed,
+            });
+            var originalSnippets = snippets.Snippets.ToArray();
+            var originalEntries = dictionary.Entries.ToArray();
+            var files = new[] { "snippets.json", "dictionary.json" }
+                .Select(name => Path.Join(TypeWhisperEnvironment.DataPath, name)).ToArray();
+            var before = files.Select(path => (Bytes: File.ReadAllBytes(path), Written: File.GetLastWriteTimeUtc(path))).ToArray();
+
+            for (var i = 0; i < 2; i++)
+            {
+                var result = await fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("sig"));
+                Assert.Equal("Kubernetes", result.Text);
+            }
+
+            Assert.Equal(originalSnippets, snippets.Snippets);
+            Assert.Equal(originalEntries, dictionary.Entries);
+            for (var i = 0; i < files.Length; i++)
+            {
+                Assert.Equal(before[i].Bytes, File.ReadAllBytes(files[i]));
+                Assert.Equal(before[i].Written, File.GetLastWriteTimeUtc(files[i]));
+            }
+            Assert.Empty(fixture.Statistics.Records);
         });
     }
 

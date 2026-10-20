@@ -3,6 +3,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -49,6 +50,9 @@ public sealed partial class DictationOrchestrator
     {
         if (string.IsNullOrWhiteSpace(request.Text))
             throw new ArgumentException("Text is required.", nameof(request));
+        var rawText = LinuxDictationFinalTextPolicy.SelectRawText(request.Text);
+        if (string.IsNullOrWhiteSpace(rawText))
+            throw new InvalidOperationException(Loc.Instance["History.RetryEmpty"]);
         if (request.ProfileId is { } forcedId && _profiles.Profiles.All(profile => profile.Id != forcedId))
             throw new KeyNotFoundException($"Profile '{forcedId}' was not found.");
 
@@ -87,9 +91,9 @@ public sealed partial class DictationOrchestrator
         var engineProviderId = engine?.ProviderId ?? "";
 
         var timings = new List<(string Name, TimeSpan Elapsed)>();
-        var processed = await _pipeline.ProcessAsync(request.Text,
+        var processed = await _pipeline.ProcessAsync(rawText,
             BuildPipelineOptions(context, 0, language, configuredLanguage, languageHints, false, false, false, false,
-                engineProviderId, engineModelId, timings), ct);
+                engineProviderId, engineModelId, timings, recordUsage: false), ct);
         var finalText = ApplyProfileStyleFormatting(context, VoiceCommandParser.Parse(processed.Text).Text);
 
         var stepTimingsQueue = new Queue<(string Name, TimeSpan Elapsed)>(timings);

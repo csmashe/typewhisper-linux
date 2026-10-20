@@ -1753,11 +1753,6 @@ public sealed partial class HttpApiService : IDisposable
             }
         }
 
-        if (_dictation is null)
-        {
-            return (501, Serialize(new { error = "Text processing is unavailable.", reason = "not_available" }));
-        }
-
         TextProcessingResult result;
         try
         {
