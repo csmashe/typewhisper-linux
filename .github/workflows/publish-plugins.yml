@@ -141,9 +141,14 @@ jobs:
             New-Item -ItemType Directory -Path (Split-Path $vulkanStagingDir -Parent) -Force | Out-Null
             Copy-Item -Path $vulkanDir -Destination $vulkanStagingDir -Recurse
           }
-          if ($pluginId -eq 'com.typewhisper.whisper-cpp' -and $env:PLUGIN_RID -eq 'linux-x64' -and
-              -not (Test-Path "$stagingDir/runtimes/vulkan/linux-x64/libggml-vulkan-whisper.so")) {
-            throw 'whisper.cpp registry ZIP requires runtimes/vulkan/linux-x64/libggml-vulkan-whisper.so'
+          # Must match WhisperCppPlugin.CheckVulkanAvailability, which refuses Vulkan when any is missing.
+          $vulkanRequired = @('libwhisper.so', 'libggml-whisper.so', 'libggml-vulkan-whisper.so', 'libggml-cpu-whisper.so', 'libggml-base-whisper.so')
+          if ($pluginId -eq 'com.typewhisper.whisper-cpp' -and $env:PLUGIN_RID -eq 'linux-x64') {
+            foreach ($name in $vulkanRequired) {
+              if (-not (Test-Path "$stagingDir/runtimes/vulkan/linux-x64/$name")) {
+                throw "whisper.cpp registry ZIP requires runtimes/vulkan/linux-x64/$name"
+              }
+            }
           }
 
           # Fail closed: if the plugin ships a Scripts/ dir but it didn't reach
@@ -158,8 +163,10 @@ jobs:
           if ($pluginId -eq 'com.typewhisper.whisper-cpp' -and $env:PLUGIN_RID -eq 'linux-x64') {
             $archive = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $PWD $zipName))
             try {
-              if ($null -eq $archive.GetEntry('runtimes/vulkan/linux-x64/libggml-vulkan-whisper.so')) {
-                throw 'whisper.cpp registry ZIP is missing the Vulkan backend'
+              foreach ($name in $vulkanRequired) {
+                if ($null -eq $archive.GetEntry("runtimes/vulkan/linux-x64/$name")) {
+                  throw "whisper.cpp registry ZIP is missing runtimes/vulkan/linux-x64/$name"
+                }
               }
             } finally { $archive.Dispose() }
           }

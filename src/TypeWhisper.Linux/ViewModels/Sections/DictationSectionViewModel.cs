@@ -1516,13 +1516,14 @@ public partial class DictationSectionViewModel : ObservableObject
 
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- two independent availability guards with their own revert handling; braced switch arms read worse.
         if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
         {
             var supportsVulkan = SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
                 TranscriptionAccelerationBackend.Vulkan) == true;
             var message = Loc.Instance[supportsVulkan
                 ? "Dictation.AccelVulkanUnavailable" : "Dictation.AccelVulkanNotSupported"];
-            Dispatcher.UIThread.Post(() =>
+            _postToUi(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
                 OnPropertyChanged(nameof(SelectedAccelerationOption));
@@ -1544,7 +1545,7 @@ public partial class DictationSectionViewModel : ObservableObject
             // Revert on the next UI frame: a ComboBox ignores SelectedItem changes inside its
             // own selection-change cycle, leaving the dropdown stuck on "NVIDIA CUDA".
             // Write the message after the revert — the CPU re-entry clears CudaSetupStatus.
-            Dispatcher.UIThread.Post(() =>
+            _postToUi(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
                 OnPropertyChanged(nameof(SelectedAccelerationOption));

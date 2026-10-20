@@ -3,6 +3,10 @@ using System.Runtime.InteropServices;
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>Checks for a hardware Vulkan device without loading a model runtime.</summary>
+/// <remarks>
+///     <see cref="GetUnavailableReason" /> creates a Vulkan instance, which loads every installed
+///     ICD in-process; call it only from the transcription worker, never from the host.
+/// </remarks>
 public static class VulkanAvailability
 {
     /// <returns>Null when a GPU is available, otherwise a reason for CPU fallback.</returns>
@@ -62,6 +66,71 @@ public static class VulkanAvailability
         }
         finally { NativeLibrary.Free(library); }
     }
+
+    /// <summary>
+    ///     Cheap host-side check that a hardware Vulkan driver manifest is installed. It never
+    ///     loads the loader or an ICD, so it is safe on the app's startup path; the real device
+    ///     probe (<see cref="GetUnavailableReason" />) runs in the crash-isolated worker.
+    /// </summary>
+    public static bool HasHardwareDriverManifest() =>
+        OperatingSystem.IsLinux() && HasHardwareDriverManifest(EnumerateDriverManifestPaths());
+
+    internal static bool HasHardwareDriverManifest(IEnumerable<string> manifestPaths)
+    {
+        foreach (var path in manifestPaths)
+        {
+            List<string> files;
+            try
+            {
+                // Materialize inside the try: enumeration is lazy and would otherwise throw at Any().
+                files = Directory.Exists(path)
+                    ? Directory.EnumerateFiles(path, "*.json").ToList()
+                    : File.Exists(path) ? [path] : [];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            // lavapipe (lvp) is Mesa's CPU rasterizer, which the device probe also rejects.
+            if (files.Any(f => !Path.GetFileName(f).StartsWith("lvp_icd", StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+        return false;
+    }
+
+    // Mirrors the Vulkan loader's driver manifest search order.
+    private static IEnumerable<string> EnumerateDriverManifestPaths()
+    {
+        var overrides = Environment.GetEnvironmentVariable("VK_DRIVER_FILES")
+            ?? Environment.GetEnvironmentVariable("VK_ICD_FILENAMES");
+        var additions = Environment.GetEnvironmentVariable("VK_ADD_DRIVER_FILES");
+        foreach (var path in SplitPathList(additions))
+            yield return path;
+        if (!string.IsNullOrWhiteSpace(overrides))
+        {
+            foreach (var path in SplitPathList(overrides))
+                yield return path;
+            yield break;
+        }
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var roots = new List<string>
+        {
+            Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } configHome
+                ? configHome : Path.Join(home, ".config"),
+        };
+        roots.AddRange(SplitPathList(Environment.GetEnvironmentVariable("XDG_CONFIG_DIRS") ?? "/etc/xdg"));
+        roots.Add("/etc");
+        roots.Add(Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } dataHome
+            ? dataHome : Path.Join(home, ".local", "share"));
+        roots.AddRange(SplitPathList(Environment.GetEnvironmentVariable("XDG_DATA_DIRS") ?? "/usr/local/share:/usr/share"));
+        foreach (var root in roots)
+            yield return Path.Join(root, "vulkan", "icd.d");
+    }
+
+    private static string[] SplitPathList(string? list) =>
+        string.IsNullOrWhiteSpace(list) ? [] : list.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct InstanceCreateInfo

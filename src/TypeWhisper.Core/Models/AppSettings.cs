@@ -289,10 +289,9 @@ public record AppSettings
             return LocalModelAccelerationNvidiaCuda;
         }
 
-        if (string.Equals(trimmed, LocalModelAccelerationVulkan, StringComparison.OrdinalIgnoreCase))
-            return LocalModelAccelerationVulkan;
-
-        return LocalModelAccelerationAuto;
+        return string.Equals(trimmed, LocalModelAccelerationVulkan, StringComparison.OrdinalIgnoreCase)
+            ? LocalModelAccelerationVulkan
+            : LocalModelAccelerationAuto;
     }
 
     // Treats blank/whitespace as "use the default storage path" (null); trims otherwise.

@@ -14,7 +14,7 @@ public class HttpApiAccelerationDtoTests
     {
         var plugin = new FakeAccelerationPlugin
         {
-            AccelerationStatus = new(TranscriptionAccelerationBackend.Vulkan, "Using Vulkan"),
+            AccelerationStatus = new TranscriptionAccelerationStatus(TranscriptionAccelerationBackend.Vulkan, "Using Vulkan"),
         };
         var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin,
             AppSettings.Default with { LocalModelAcceleration = "vulkan" }));

@@ -583,7 +583,9 @@ public sealed partial class SystemCommandAvailabilityService
             hasYdotool,
             ydotoolSocket is not null,
             ydotoolSocket,
-            VulkanAvailability.GetUnavailableReason() is null
+            // Manifest check only: instance creation would load vendor ICDs into the host
+            // on every startup. The worker's device probe downgrades to CPU if none works.
+            VulkanAvailability.HasHardwareDriverManifest()
         );
     }
 

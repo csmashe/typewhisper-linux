@@ -411,23 +411,19 @@ public sealed class WhisperCppPlugin
             //                        new UseGpu (no RuntimeLibraryOrder change needed).
             //   - pinned to "cpu"  → CPU stays fine; CUDA genuinely needs the [Cuda] .so
             //                        set, which can't load twice — refuse (restart only).
-            if (_pinnedRuntimeBackend == "cpu" && normalized is ("cuda" or "vulkan"))
+            switch (_pinnedRuntimeBackend)
             {
-                _host?.Log(
-                    PluginLogLevel.Warning,
-                    $"Cannot switch compute backend to '{normalized}': the native runtime is pinned "
-                        + "to CPU. Restart the app to load the GPU runtime."
-                );
-                return false;
-            }
-
-            if (_pinnedRuntimeBackend is ("cuda" or "vulkan")
-                && normalized is ("cuda" or "vulkan")
-                && _pinnedRuntimeBackend != normalized)
-            {
-                _host?.Log(PluginLogLevel.Warning,
-                    $"Cannot switch compute backend to '{normalized}': the native runtime is pinned to '{_pinnedRuntimeBackend}'. Restart the app to change GPU runtime.");
-                return false;
+                case "cpu" when normalized is "cuda" or "vulkan":
+                    _host?.Log(
+                        PluginLogLevel.Warning,
+                        $"Cannot switch compute backend to '{normalized}': the native runtime is pinned "
+                            + "to CPU. Restart the app to load the GPU runtime."
+                    );
+                    return false;
+                case "cuda" or "vulkan" when normalized is "cuda" or "vulkan" && _pinnedRuntimeBackend != normalized:
+                    _host?.Log(PluginLogLevel.Warning,
+                        $"Cannot switch compute backend to '{normalized}': the native runtime is pinned to '{_pinnedRuntimeBackend}'. Restart the app to change GPU runtime.");
+                    return false;
             }
 
             _computeBackend = normalized;
@@ -723,7 +719,7 @@ public sealed class WhisperCppPlugin
                 _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
             }
             catch (Exception ex)
-                when (_computeBackend is ("cuda" or "vulkan")
+                when (_computeBackend is "cuda" or "vulkan"
                     && RuntimeOptions.LoadedLibrary is null)
             {
                 // The CUDA native library SET failed to load (a driver/runtime symbol
@@ -762,7 +758,7 @@ public sealed class WhisperCppPlugin
             }
 
             if (!TryValidateFactory(_factory)
-                && _computeBackend is ("cuda" or "vulkan"))
+                && _computeBackend is "cuda" or "vulkan")
             {
                 _host?.Log(
                     PluginLogLevel.Warning,
@@ -1273,23 +1269,24 @@ public sealed class WhisperCppPlugin
         };
     }
 
+    private static readonly string[] s_vulkanRuntimeFiles =
+    [
+        "libwhisper.so",
+        "libggml-whisper.so",
+        "libggml-vulkan-whisper.so",
+        "libggml-cpu-whisper.so",
+        "libggml-base-whisper.so",
+    ];
+
     internal static string? CheckVulkanAvailability(string pluginDirectory, Func<string?> probe)
     {
         if (probe() is { } reason) return reason;
-        foreach (var name in new[]
-        {
-            "libwhisper.so",
-            "libggml-whisper.so",
-            "libggml-vulkan-whisper.so",
-            "libggml-cpu-whisper.so",
-            "libggml-base-whisper.so",
-        })
-        {
-            var path = Path.Join(pluginDirectory, "runtimes", "vulkan", "linux-x64", name);
-            if (!File.Exists(path))
-                return $"The Vulkan runtime file is missing: {path}. Reinstall the whisper.cpp plugin.";
-        }
-        return null;
+        var missing = s_vulkanRuntimeFiles
+            .Select(name => Path.Join(pluginDirectory, "runtimes", "vulkan", "linux-x64", name))
+            .FirstOrDefault(path => !File.Exists(path));
+        return missing is null
+            ? null
+            : $"The Vulkan runtime file is missing: {missing}. Reinstall the whisper.cpp plugin.";
     }
 
     // Test seam: simulate the native runtime having loaded and pinned itself to a
