@@ -80,6 +80,29 @@ public sealed partial class GitHubCopilotPluginTests : IDisposable
     }
 
     [Fact]
+    public async Task AnAccountThatCannotLoadModelsWhileSignedOutBecomesUnavailable()
+    {
+        var (plugin, transport, host) = await ActivateAsync();
+        await plugin.SetSettingValueAsync(GitHubCopilotPlugin.AccountSettingKey, s_personal.Key);
+        await SaveProfilesAsync(plugin, ("Work", s_work));
+        await plugin.RefreshAsync(CancellationToken.None);
+        var defaultRole = Role(plugin, GitHubCopilotPlugin.DefaultSelectionId);
+        Assert.True(defaultRole.IsAvailable);
+
+        transport.UnbindableLogins.Add("personal");
+        var notifications = host.Notifications;
+        await plugin.RefreshAsync(CancellationToken.None);
+
+        Assert.False(defaultRole.IsAvailable);
+        Assert.True(plugin.AdditionalLlmProviders.Single(role => !ReferenceEquals(role, defaultRole)).IsAvailable);
+        Assert.True(host.Notifications > notifications);
+
+        transport.UnbindableLogins.Clear();
+        await plugin.RefreshAsync(CancellationToken.None);
+        Assert.True(defaultRole.IsAvailable);
+    }
+
+    [Fact]
     public async Task ProfileRolesKeepTheirInstanceAndSelectionIdWhenRenamed()
     {
         var (plugin, _, _) = await ActivateAsync();
@@ -607,6 +630,7 @@ public sealed partial class GitHubCopilotPluginTests : IDisposable
         internal bool FailAccounts { get; init; }
         internal Exception? AccountFailure { get; set; }
         internal bool FailModels { get; set; }
+        internal HashSet<string> UnbindableLogins { get; } = [];
         internal bool EmptyResult { get; set; }
         internal bool Hold { get; set; }
         internal TaskCompletionSource Holding { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -631,6 +655,11 @@ public sealed partial class GitHubCopilotPluginTests : IDisposable
             if (FailModels)
             {
                 throw new IOException("offline");
+            }
+
+            if (UnbindableLogins.Contains(account.Login))
+            {
+                throw new CopilotSignInRequiredException();
             }
 
             ModelsLoaded?.Invoke(account.Login);

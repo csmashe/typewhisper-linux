@@ -446,6 +446,14 @@ public sealed partial class GitHubCopilotPlugin :
                             _catalogs[account.Key] = models;
                         }
                     }
+                    // Listed by the runtime but no longer bindable; the finally below notifies the host.
+                    catch (CopilotSignInRequiredException)
+                    {
+                        lock (_stateLock)
+                        {
+                            _signedOutAccounts.Add(account.Key);
+                        }
+                    }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         Log(PluginLogLevel.Warning, $"event=catalog-refresh-failed type={ex.GetType().Name}");
