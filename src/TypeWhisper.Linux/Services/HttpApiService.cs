@@ -1713,10 +1713,8 @@ public sealed partial class HttpApiService : IDisposable
     );
 
     /// <summary>
-    ///     Runs raw text through the final dictation pipeline (profile matching, cleanup,
-    ///     snippets, dictionary, formatting) and returns the result. Nothing is inserted or
-    ///     saved. Quality evals use this to score cleanup on fixed inputs; it does not prove
-    ///     the audio-to-delivery path.
+    ///     Runs raw text through the final dictation pipeline without inserting or saving it.
+    ///     For quality evals; it does not exercise the audio path.
     /// </summary>
     private async Task<HttpApiResponse> HandleTextProcessAsync(HttpContext context, CancellationToken ct)
     {

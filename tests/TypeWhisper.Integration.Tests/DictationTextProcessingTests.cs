@@ -9,9 +9,8 @@ using Xunit;
 namespace TypeWhisper.Integration.Tests;
 
 /// <summary>
-///     Text processing powers the local text route used by quality evals. It must produce the
-///     same final text that a dictation of the same transcript produces, or eval scores would
-///     describe a different pipeline than the one users get.
+///     Quality evals score this route, so it must produce the same final text as a dictation
+///     of the same transcript.
 /// </summary>
 public sealed class DictationTextProcessingTests
 {
@@ -40,6 +39,46 @@ public sealed class DictationTextProcessingTests
             Assert.Equal("ready", dictated.Status);
             Assert.Equal(dictated.Text, processed.Text);
             Assert.Equal(transcript, processed.RawText);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ProcessText_TreatsEngineTranslatedTextAsEnglishLikeDictation()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            fixture.Plugin.SupportsTranslation = true;
+            fixture.Settings.Update(current => current.WithLanguageHints(["de"]) with
+            {
+                SpokenFormattingStrategy = SpokenFormattingStrategy.FallbackOnly,
+                TranscriptionTask = "translate",
+            });
+
+            var dictated = await DictateAsync(fixture, "hello comma world");
+            var processed = await fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("hello comma world"));
+
+            Assert.Equal("hello, world", dictated.Text);
+            Assert.Equal(dictated.Text, processed.Text);
+            Assert.Equal("en", processed.Language);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ProcessText_ExplicitAutoLanguageOverridesSavedHints()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            fixture.Settings.Update(current => current.WithLanguageHints(["de"]));
+
+            var inherited = await fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("hello"));
+            var automatic = await fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("hello", Language: "auto"));
+
+            Assert.Equal("de", inherited.Language);
+            Assert.Null(automatic.Language);
         });
     }
 
@@ -109,6 +148,49 @@ public sealed class DictationTextProcessingTests
         });
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ProcessText_RejectsDisabledForcedProfileInsteadOfFallingBack()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            fixture.Provider.GetRequiredService<IProfileService>().AddProfile(
+                new Profile { Id = "off", Name = "Off", IsEnabled = false });
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("hello", ProfileId: "off")));
+            Assert.Contains("disabled", ex.Message);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task ProcessText_DoesNotRaiseDictationStatus()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            UseEnglish(fixture);
+            var statuses = new List<string>();
+            fixture.Orchestrator.StatusMessage += (_, message) => statuses.Add(message);
+
+            // A translation target makes the pipeline report a "Processing Translation" status.
+            fixture.Settings.Update(current => current with { TranslationTargetLanguage = "de" });
+
+            try
+            {
+                await fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("hello there"));
+            }
+            catch (InvalidOperationException)
+            {
+                // No translation provider is configured; only the status side effect matters here.
+            }
+
+            Assert.Empty(statuses);
+        });
+    }
+
     [Theory]
     [InlineData("…")]
     [InlineData(" ... … ")]
@@ -147,8 +229,11 @@ public sealed class DictationTextProcessingTests
             });
             var originalSnippets = snippets.Snippets.ToArray();
             var originalEntries = dictionary.Entries.ToArray();
-            var files = new[] { "snippets.json", "dictionary.json" }
-                .Select(name => Path.Join(TypeWhisperEnvironment.DataPath, name)).ToArray();
+            string[] files =
+            [
+                Path.Join(TypeWhisperEnvironment.DataPath, "snippets.json"),
+                Path.Join(TypeWhisperEnvironment.DataPath, "dictionary.json"),
+            ];
             var before = files.Select(path => (Bytes: File.ReadAllBytes(path), Written: File.GetLastWriteTimeUtc(path))).ToArray();
 
             for (var i = 0; i < 2; i++)
@@ -161,7 +246,7 @@ public sealed class DictationTextProcessingTests
             Assert.Equal(originalEntries, dictionary.Entries);
             for (var i = 0; i < files.Length; i++)
             {
-                Assert.Equal(before[i].Bytes, File.ReadAllBytes(files[i]));
+                Assert.Equal(before[i].Bytes, await File.ReadAllBytesAsync(files[i]));
                 Assert.Equal(before[i].Written, File.GetLastWriteTimeUtc(files[i]));
             }
             Assert.Empty(fixture.Statistics.Records);
@@ -189,8 +274,15 @@ public sealed class DictationTextProcessingTests
                 CleanupLevel = CleanupLevel.Medium,
                 DefaultLlmProvider = "plugin:integration.scripted-llm:scripted-llm-model",
             });
-            if (outcome == "success") fixture.Llm.EnqueueStream("Send the report.");
-            if (outcome == "failure") fixture.Llm.Failure = new InvalidOperationException("provider failed");
+            switch (outcome)
+            {
+                case "success":
+                    fixture.Llm.EnqueueStream("Send the report.");
+                    break;
+                case "failure":
+                    fixture.Llm.Failure = new InvalidOperationException("provider failed");
+                    break;
+            }
 
             var result = await fixture.Orchestrator.ProcessTextAsync(new TextProcessingRequest("umm send the report"));
 

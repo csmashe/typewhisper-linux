@@ -1,8 +1,6 @@
-using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.PluginSDK;
-using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services;
@@ -41,10 +39,8 @@ public sealed record TextProcessingResult(
 public sealed partial class DictationOrchestrator
 {
     /// <summary>
-    ///     Runs <paramref name="request" /> through the same profile matching, post-processing
-    ///     pipeline, voice-command parsing, and profile formatting as the final step of a
-    ///     dictation. Audio-only steps (vocabulary rescoring against token timings) are skipped,
-    ///     as in history recovery. Nothing is inserted, saved to history, or learned.
+    ///     Runs <paramref name="request" /> through the final steps of a dictation, minus the
+    ///     audio-only ones (as in history recovery). Nothing is inserted, saved, or learned.
     /// </summary>
     public async Task<TextProcessingResult> ProcessTextAsync(TextProcessingRequest request, CancellationToken ct = default)
     {
@@ -53,63 +49,77 @@ public sealed partial class DictationOrchestrator
         var rawText = LinuxDictationFinalTextPolicy.SelectRawText(request.Text);
         if (string.IsNullOrWhiteSpace(rawText))
             throw new InvalidOperationException(Loc.Instance["History.RetryEmpty"]);
-        if (request.ProfileId is { } forcedId && _profiles.Profiles.All(profile => profile.Id != forcedId))
-            throw new KeyNotFoundException($"Profile '{forcedId}' was not found.");
+        if (request.ProfileId is { } forcedId)
+        {
+            var forced = _profiles.Profiles.FirstOrDefault(profile => profile.Id == forcedId)
+                ?? throw new KeyNotFoundException($"Profile '{forcedId}' was not found.");
+            // MatchProfile ignores a disabled forced profile and falls back to normal matching.
+            if (!forced.IsEnabled)
+                throw new InvalidOperationException($"Profile '{forcedId}' is disabled.");
+        }
 
         var profile = _profiles.MatchProfile(request.AppProcess, request.Url, request.ProfileId).Profile;
         var context = new RecordingContext(-1, DateTime.UtcNow, request.AppProcess, request.AppProcess, request.Url,
             null, profile, "", null, false, null, null, LanguageSelection.Automatic, [], ct)
         {
             Capture = new LlmCallCapture(),
+            SuppressStatus = true,
         };
 
-        string? requestLanguageTag = null;
-        if (!string.IsNullOrWhiteSpace(request.Language))
-        {
-            var requestedSelection = LanguageSelectionResolver.Resolve(request.Language);
-            if (!requestedSelection.IsAutomatic)
-            {
-                requestLanguageTag = requestedSelection.LanguageTag;
-            }
-        }
+        var requestedSelection = string.IsNullOrWhiteSpace(request.Language)
+            ? null
+            : LanguageSelectionResolver.Resolve(request.Language);
+        var requestLanguageTag = requestedSelection?.LanguageTag;
 
         var promptAction = ResolvePromptAction(context);
         if (IsPromptActionUnavailable(profile?.PromptActionId, promptAction is not null))
             throw new InvalidOperationException($"Prompt action '{profile?.PromptActionId}' for this profile is unavailable.");
-
-        var languageHints = requestLanguageTag is not null
-            ? (IReadOnlyList<string>)[requestLanguageTag]
-            : LanguageSelectionResolver.ResolveHints(profile, _settings.Current);
-        var configuredLanguage = requestLanguageTag ?? LanguageSelectionResolver.ResolvePrimary(languageHints).LanguageTag;
-        var language = ResolvePostProcessingSourceLanguage(requestLanguageTag, configuredLanguage, false, false);
 
         var modelId = profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
         var engine = _models.GetTranscriptionPlugin(modelId);
         var engineModelId = modelId is not null && ModelManagerService.IsPluginModel(modelId)
             ? ModelManagerService.ParsePluginModelId(modelId).ModelId
             : null;
+
+        // A requested language (or "auto") replaces the saved hints, as if the engine had reported it.
+        IReadOnlyList<string> languageHints;
+        LanguageSelection selection;
+        if (requestedSelection is not null)
+        {
+            languageHints = requestLanguageTag is not null ? [requestLanguageTag] : [];
+            selection = requestedSelection;
+        }
+        else
+        {
+            languageHints = LanguageSelectionResolver.ResolveHints(profile, _settings.Current);
+            selection = LanguageSelectionResolver.ResolvePrimary(languageHints);
+            // Capabilities only describe the engine's selected model; selecting another mutates shared state.
+            if (engine is not null && engine.SelectedModelId == engineModelId)
+                (selection, languageHints) = engine.ResolveEffectiveLanguage(selection, languageHints);
+        }
+
+        var configuredLanguage = selection.LanguageTag;
+        var translate = ResolveTranscriptionTask(context) == "translate";
+        if (translate && _models.GetTranslationRejection(modelId) is { } translationRejection)
+            throw new InvalidOperationException(translationRejection);
+        var supportsTranslation = _models.SupportsTranslation(modelId);
+        var language = ResolvePostProcessingSourceLanguage(requestLanguageTag, configuredLanguage, translate,
+            supportsTranslation);
         var engineProviderId = engine?.ProviderId ?? "";
 
         var timings = new List<(string Name, TimeSpan Elapsed)>();
         var processed = await _pipeline.ProcessAsync(rawText,
-            BuildPipelineOptions(context, 0, language, configuredLanguage, languageHints, false, false, false, false,
-                engineProviderId, engineModelId, timings, recordUsage: false), ct);
+            BuildPipelineOptions(context, 0, language, configuredLanguage, languageHints, translate, supportsTranslation,
+                false, false, engineProviderId, engineModelId, timings, recordUsage: false), ct);
         var finalText = ApplyProfileStyleFormatting(context, VoiceCommandParser.Parse(processed.Text).Text);
 
         var stepTimingsQueue = new Queue<(string Name, TimeSpan Elapsed)>(timings);
         var steps = processed.Steps
             .Select(step =>
             {
-                double elapsedMs = 0;
-                if (stepTimingsQueue.Count > 0 && stepTimingsQueue.Peek().Name == step.Name)
-                {
-                    elapsedMs = stepTimingsQueue.Dequeue().Elapsed.TotalMilliseconds;
-                }
-                else
-                {
-                    var match = timings.FirstOrDefault(t => t.Name == step.Name);
-                    elapsedMs = match.Elapsed.TotalMilliseconds;
-                }
+                var elapsedMs = stepTimingsQueue.Count > 0 && stepTimingsQueue.Peek().Name == step.Name
+                    ? stepTimingsQueue.Dequeue().Elapsed.TotalMilliseconds
+                    : timings.FirstOrDefault(t => t.Name == step.Name).Elapsed.TotalMilliseconds;
 
                 return new TextProcessingStep(step.Name, elapsedMs, step.Changed, step.Succeeded);
             })
