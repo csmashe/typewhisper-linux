@@ -45,7 +45,7 @@ public sealed partial class GitHubCopilotPluginTests : IDisposable
         await plugin.RefreshAsync(CancellationToken.None);
 
         var defaultRole = Role(plugin, GitHubCopilotPlugin.DefaultSelectionId);
-        var workRole = plugin.AdditionalLlmProviders.Single(role => role != defaultRole);
+        var workRole = plugin.AdditionalLlmProviders.Single(role => !ReferenceEquals(role, defaultRole));
         Assert.Equal("GitHub Copilot", defaultRole.ProviderName);
         Assert.Equal("GitHub Copilot · Work", workRole.ProviderName);
         Assert.True(defaultRole.IsAvailable);
@@ -72,7 +72,7 @@ public sealed partial class GitHubCopilotPluginTests : IDisposable
         Assert.False(defaultRole.IsAvailable);
         Assert.DoesNotContain(transport.Processed, request => request.Login == "work");
 
-        var workRole = plugin.AdditionalLlmProviders.Single(role => role != defaultRole);
+        var workRole = plugin.AdditionalLlmProviders.Single(role => !ReferenceEquals(role, defaultRole));
         Assert.Equal("work:model-a:x", await workRole.ProcessAsync("s", "x", "model-a", CancellationToken.None));
         // The binding is kept, so signing back in restores the same provider.
         Assert.Equal(s_personal.Key, await plugin.GetSettingValueAsync(GitHubCopilotPlugin.AccountSettingKey));

@@ -340,10 +340,11 @@ internal sealed class FakeCopilotServer : IAsyncDisposable
     {
         await using (stream)
         {
+            var header = new StringBuilder();
+            var one = new byte[1];
             while (!_stop.IsCancellationRequested)
             {
-                var header = new StringBuilder();
-                var one = new byte[1];
+                header.Clear();
                 while (!header.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
                 {
                     if (await stream.ReadAsync(one, _stop.Token) == 0)
