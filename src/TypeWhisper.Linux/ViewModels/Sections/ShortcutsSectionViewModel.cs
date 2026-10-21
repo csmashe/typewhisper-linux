@@ -212,10 +212,13 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     public async Task ApplyCapturedHotkeyAsync(string hotkey)
     {
         if (!IsCapturingHotkey) return;
+        Task apply;
         try
         {
             HotkeyText = hotkey;
-            await ApplyHotkeyAsync();
+            // The chord is bound and saved before ApplyHotkeyAsync awaits the integration probe,
+            // so capture ends now; a cancel or restart during the probe can't misreport it.
+            apply = ApplyHotkeyAsync();
             // Success normalizes HotkeyText to the binding; a captured chord always parses, so a
             // mismatch means it collided. Show the live binding instead of the rejected chord.
             if (HotkeyText != _hotkey.CurrentHotkeyString)
@@ -228,6 +231,8 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         {
             IsCapturingHotkey = false;
         }
+
+        await apply;
     }
 
     // Pre-filter on the delivered snapshot but never update the cache here: only the
