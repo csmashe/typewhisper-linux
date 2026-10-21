@@ -1,10 +1,25 @@
 {
   "Settings.ApiKey": "Clave de API",
-  "Settings.ApiKeyDescription": "Necesaria para la transcripción y la transmisión de Smallest AI Pulse.",
+  "Settings.ApiKeyDescription": "Se usa para la transcripción y la transmisión de Pulse, y para la síntesis de voz de Lightning.",
   "Settings.EnterApiKey": "Introduce primero una clave de API.",
   "Settings.ApiKeyValid": "La clave de API es válida.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
   "Settings.NotConfiguredApiKeyRequired": "El plugin no está configurado. Se requiere una clave de API.",
-  "Manifest.Name": "Smallest AI Pulse",
-  "Manifest.Description": "Motor de transcripción de voz a texto Smallest AI Pulse"
+  "Manifest.Name": "Smallest AI",
+  "Manifest.Description": "Transcripción Smallest AI Pulse y síntesis de voz Lightning",
+  "Settings.ApiKeyValidVoices": "La clave de API es válida. Hay {0} voz/voces disponibles en Respuesta hablada.",
+  "Settings.ApiKeyValidVoicesKept": "La clave de API es válida, pero no se pudieron actualizar las voces, así que se conserva la lista anterior: {0}",
+  "Settings.SpeechSpeed": "Velocidad de voz",
+  "Settings.SpeechSpeedDescription": "Qué tan rápido hablan las voces de Lightning. Elige la voz en Respuesta hablada.",
+  "Settings.RefreshVoices": "Actualizar voces",
+  "Settings.RefreshVoicesDescription": "Carga las voces actuales de Lightning y Lightning Pro desde Smallest AI.",
+  "Speech.VoicesRefreshed": "Hay {0} voz/voces disponibles en Respuesta hablada.",
+  "Speech.InvalidVoiceCatalog": "Smallest AI devolvió una lista de voces ilegible. Se conserva la lista anterior.",
+  "Speech.NoVoices": "Smallest AI no devolvió ninguna voz. Se conserva la lista anterior.",
+  "Speech.ConnectionChanged": "La clave de API cambió mientras se cargaban las voces. Vuelve a actualizar las voces.",
+  "Speech.TextTooLong": "Este texto es demasiado largo para que Smallest AI lo lea de una vez: tardaría más de unos dos minutos a la velocidad actual.",
+  "Speech.AudioTooLarge": "Smallest AI devolvió más de 12 MB de audio, así que no se reprodujo.",
+  "Speech.AudioTooLong": "Smallest AI devolvió más de dos minutos de audio, así que no se reprodujo.",
+  "Speech.UnplayableAudio": "Smallest AI devolvió audio que no se puede reproducir.",
+  "Speech.TimedOut": "Smallest AI tardó demasiado en devolver el audio de voz."
 }
