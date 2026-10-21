@@ -227,9 +227,10 @@ public partial class PluginsSectionViewModel : ObservableObject
             }
         }
 
-        foreach (var replaced in existingRows.Values.Where(existing => !plugins.Contains(existing)))
+        // A kept row with unsaved edits can still belong to a plugin that was just disabled.
+        foreach (var stale in existingRows.Values.Where(existing => !plugins.Contains(existing) || !existing.IsEnabled))
         {
-            replaced.CancelItemTests();
+            stale.CancelItemTests();
         }
 
         plugins = plugins

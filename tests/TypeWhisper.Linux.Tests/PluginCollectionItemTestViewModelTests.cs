@@ -14,6 +14,7 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class PluginCollectionItemTestViewModelTests : IDisposable
 {
     private readonly string _tempDir = TestPaths.CreateTempDirectory("vm-collection-item-test");
+    private PluginManager? _manager;
 
     public void Dispose()
     {
@@ -122,6 +123,27 @@ public sealed class PluginCollectionItemTestViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task DisablingThePlugin_CancelsATestOnARowKeptForUnsavedEdits()
+    {
+        var (vm, row, plugin) = CreateSection(activated: true);
+        plugin.Items.Add(Item("Saved", "c"));
+        plugin.Block = true;
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        var item = Assert.Single(Assert.Single(row.Collections).Items);
+        item.Fields.Single(field => field.Key == "command").Value = "edited";
+        Assert.True(row.HasUnsavedSettings);
+
+        var run = vm.RunCollectionItemTestCommand.ExecuteAsync(item);
+        await plugin.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await _manager!.DisablePluginAsync(plugin.PluginId);
+        await run.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Contains(row, vm.DisabledGroups.SelectMany(group => group.Plugins));
+        Assert.True(plugin.ObservedCancellation);
+        Assert.Equal("Test cancelled.", item.TestMessage);
+    }
+
+    [Fact]
     public async Task RunTest_DisabledPlugin_DoesNotCallThePlugin()
     {
         var (vm, row, plugin) = CreateSection(activated: false);
@@ -185,7 +207,9 @@ public sealed class PluginCollectionItemTestViewModelTests : IDisposable
             loadedPlugins: [loaded],
             activatedPluginIds: activated ? [plugin.PluginId] : []
         );
-        var vm = new PluginsSectionViewModel(manager);
+        _manager = manager;
+        // Synchronous post so a plugin state change rebuilds the rows inside the test.
+        var vm = new PluginsSectionViewModel(manager, null, TimeSpan.FromSeconds(5), postToUi: action => action());
         var row = vm.EnabledGroups.Concat(vm.DisabledGroups)
             .SelectMany(group => group.Plugins)
             .Single(candidate => candidate.Id == plugin.PluginId);
