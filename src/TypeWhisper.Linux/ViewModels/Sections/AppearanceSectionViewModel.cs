@@ -12,6 +12,7 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AppearanceSectionViewModel : ObservableObject
 {
     private readonly Action<Action> _post;
+    private readonly LiveTextPreviewService? _preview;
     private readonly ISettingsService _settings;
 
     // Set while Refresh applies persisted state so the generated On<Property>Changed hooks don't
@@ -34,6 +35,15 @@ public partial class AppearanceSectionViewModel : ObservableObject
     private OverlayPositionOption? _selectedOverlayPosition;
 
     [ObservableProperty]
+    private LiveTextPlacementOption? _selectedLiveTextPlacement;
+
+    [ObservableProperty]
+    private int _liveTextWindowWidth = AppSettings.DefaultLiveTextWindowWidth;
+
+    [ObservableProperty]
+    private int _liveTextWindowHeight = AppSettings.DefaultLiveTextWindowHeight;
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PreviewRightIsIndicator))]
     [NotifyPropertyChangedFor(nameof(PreviewRightIsWaveform))]
     [NotifyPropertyChangedFor(nameof(PreviewRightIsText))]
@@ -43,10 +53,23 @@ public partial class AppearanceSectionViewModel : ObservableObject
     // post marshals refreshes onto the UI thread; it is injected rather than calling
     // Dispatcher.UIThread directly because that dispatcher binds to whichever thread touches it
     // first and nothing pumps it under the test runner, so tests pass a synchronous one.
-    public AppearanceSectionViewModel(ISettingsService settings, Action<Action>? post = null)
+    public AppearanceSectionViewModel(
+        ISettingsService settings,
+        Action<Action>? post = null,
+        LiveTextPreviewService? preview = null)
     {
         _settings = settings;
         _post = post ?? PostToUiThread;
+        _preview = preview;
+        if (_preview is not null)
+        {
+            _preview.Changed += (_, _) =>
+            {
+                OnPropertyChanged(nameof(IsLiveTextPreviewActive));
+                OnPropertyChanged(nameof(LiveTextPreviewButtonText));
+            };
+        }
+
         Refresh(settings.Current);
         _settings.SettingsChanged += OnSettingsChanged;
         // Option labels and the localized status/preview getters are resolved into
@@ -74,6 +97,49 @@ public partial class AppearanceSectionViewModel : ObservableObject
         new(OverlayPosition.Top, "Appearance.PositionTop"),
         new(OverlayPosition.Bottom, "Appearance.PositionBottom"),
     ];
+
+    public IReadOnlyList<LiveTextPlacementOption> LiveTextPlacements { get; } =
+    [
+        new(false, "Appearance.LiveTextAttached"),
+        new(true, "Appearance.LiveTextFloating"),
+    ];
+
+    public bool IsLiveTextFloating => _settings.Current.LiveTextFloating;
+
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
+    public int MinLiveTextWindowWidth => AppSettings.MinLiveTextWindowWidth;
+
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
+    public int MaxLiveTextWindowWidth => AppSettings.MaxLiveTextWindowWidth;
+
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
+    public int MinLiveTextWindowHeight => AppSettings.MinLiveTextWindowHeight;
+
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
+    public int MaxLiveTextWindowHeight => AppSettings.MaxLiveTextWindowHeight;
+
+    public bool IsLiveTextWindowCustomized =>
+        _settings.Current.LiveTextWindowLeft is not null
+        || _settings.Current.LiveTextWindowTop is not null
+        || _settings.Current.LiveTextWindowWidth != AppSettings.DefaultLiveTextWindowWidth
+        || _settings.Current.LiveTextWindowHeight != AppSettings.DefaultLiveTextWindowHeight;
+
+    public string LiveTextWindowPositionStatusText =>
+        _settings.Current is { LiveTextWindowLeft: { } left, LiveTextWindowTop: { } top }
+            ? Loc.Instance.GetString(
+                "Appearance.CustomPositionStatus",
+                (int)Math.Round(left),
+                (int)Math.Round(top))
+            : Loc.Instance["Appearance.LiveTextDefaultPosition"];
+
+    public bool IsLiveTextPreviewActive => _preview?.IsActive == true;
+
+    public string LiveTextPreviewButtonText =>
+        Loc.Instance[IsLiveTextPreviewActive ? "Appearance.LiveTextStopPreview" : "Appearance.LiveTextPreview"];
 
     public IReadOnlyList<OverlayWidgetOption> OverlayWidgets { get; } =
     [
@@ -123,6 +189,41 @@ public partial class AppearanceSectionViewModel : ObservableObject
         _settings.Update(current => current with { OverlayCustomLeft = null, OverlayCustomTop = null });
     }
 
+    [RelayCommand(CanExecute = nameof(IsLiveTextWindowCustomized))]
+    private void ResetLiveTextWindow()
+    {
+        _settings.Update(current => current with
+        {
+            LiveTextWindowLeft = null,
+            LiveTextWindowTop = null,
+            LiveTextWindowWidth = AppSettings.DefaultLiveTextWindowWidth,
+            LiveTextWindowHeight = AppSettings.DefaultLiveTextWindowHeight,
+        });
+    }
+
+    [RelayCommand]
+    private void ToggleLiveTextPreview()
+    {
+        if (_preview is null)
+        {
+            return;
+        }
+
+        if (_preview.IsActive)
+        {
+            _preview.Stop();
+        }
+        else
+        {
+            _preview.Start();
+        }
+    }
+
+    public void StopLiveTextPreview()
+    {
+        _preview?.Stop();
+    }
+
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
         foreach (var option in OverlayPositions)
@@ -135,11 +236,18 @@ public partial class AppearanceSectionViewModel : ObservableObject
             option.RefreshDisplayName();
         }
 
+        foreach (var option in LiveTextPlacements)
+        {
+            option.RefreshDisplayName();
+        }
+
         // The remaining localized labels in this view are computed getters bound
         // via {Binding}, so nudge them to re-read from Loc in the new language.
         OnPropertyChanged(nameof(NotificationBodyPreview));
         OnPropertyChanged(nameof(PreviewBubbleAutoHideSecondsText));
         OnPropertyChanged(nameof(OverlayPositionStatusText));
+        OnPropertyChanged(nameof(LiveTextWindowPositionStatusText));
+        OnPropertyChanged(nameof(LiveTextPreviewButtonText));
         OnPropertyChanged(nameof(PreviewLeftText));
         OnPropertyChanged(nameof(PreviewRightText));
     }
@@ -197,6 +305,15 @@ public partial class AppearanceSectionViewModel : ObservableObject
         PreviewBubbleAutoHideSeconds =
             AppSettings.NormalizePreviewBubbleAutoHideMilliseconds(
                 settings.PreviewBubbleAutoHideMilliseconds) / 1000d;
+        SelectedLiveTextPlacement =
+            LiveTextPlacements.First(option => option.IsFloating == settings.LiveTextFloating);
+        LiveTextWindowWidth = settings.LiveTextWindowWidth;
+        LiveTextWindowHeight = settings.LiveTextWindowHeight;
+
+        OnPropertyChanged(nameof(IsLiveTextFloating));
+        OnPropertyChanged(nameof(IsLiveTextWindowCustomized));
+        OnPropertyChanged(nameof(LiveTextWindowPositionStatusText));
+        ResetLiveTextWindowCommand.NotifyCanExecuteChanged();
 
         OnPropertyChanged(nameof(IsOverlayPositionCustomized));
         OnPropertyChanged(nameof(OverlayPositionStatusText));
@@ -246,6 +363,43 @@ public partial class AppearanceSectionViewModel : ObservableObject
         }
 
         _settings.Update(current => current with { OverlayPosition = value.Value });
+    }
+
+    partial void OnSelectedLiveTextPlacementChanged(LiveTextPlacementOption? value)
+    {
+        if (_hydratingFromSettings || value is null || _settings.Current.LiveTextFloating == value.IsFloating)
+        {
+            return;
+        }
+
+        if (!value.IsFloating)
+        {
+            _preview?.Stop();
+        }
+
+        _settings.Update(current => current with { LiveTextFloating = value.IsFloating });
+    }
+
+    partial void OnLiveTextWindowWidthChanged(int value)
+    {
+        var width = AppSettings.NormalizeLiveTextWindowWidth(value);
+        if (_hydratingFromSettings || _settings.Current.LiveTextWindowWidth == width)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { LiveTextWindowWidth = width });
+    }
+
+    partial void OnLiveTextWindowHeightChanged(int value)
+    {
+        var height = AppSettings.NormalizeLiveTextWindowHeight(value);
+        if (_hydratingFromSettings || _settings.Current.LiveTextWindowHeight == height)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { LiveTextWindowHeight = height });
     }
 
     partial void OnSelectedLeftWidgetChanged(OverlayWidgetOption? value)
@@ -302,6 +456,15 @@ public sealed class OverlayWidgetOption(OverlayWidget value, string displayNameK
     : ObservableObject
 {
     public OverlayWidget Value { get; } = value;
+    public string DisplayName => Loc.Instance[displayNameKey];
+
+    public void RefreshDisplayName() => OnPropertyChanged(nameof(DisplayName));
+}
+
+public sealed class LiveTextPlacementOption(bool isFloating, string displayNameKey)
+    : ObservableObject
+{
+    public bool IsFloating { get; } = isFloating;
     public string DisplayName => Loc.Instance[displayNameKey];
 
     public void RefreshDisplayName() => OnPropertyChanged(nameof(DisplayName));

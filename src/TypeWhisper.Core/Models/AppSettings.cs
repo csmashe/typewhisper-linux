@@ -33,6 +33,14 @@ public record AppSettings
     public const int DefaultPreviewBubbleAutoHideMilliseconds = 1500;
     public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
 
+    // Floating live-text window size in device-independent pixels.
+    public const int MinLiveTextWindowWidth = 280;
+    public const int DefaultLiveTextWindowWidth = 420;
+    public const int MaxLiveTextWindowWidth = 4096;
+    public const int MinLiveTextWindowHeight = 140;
+    public const int DefaultLiveTextWindowHeight = 220;
+    public const int MaxLiveTextWindowHeight = 4096;
+
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
@@ -129,6 +137,13 @@ public record AppSettings
     public int PreviewBubbleAutoHideMilliseconds { get; init; } = DefaultPreviewBubbleAutoHideMilliseconds;
     public double? OverlayCustomLeft { get; init; }
     public double? OverlayCustomTop { get; init; }
+
+    // Live text in its own movable, resizable window instead of inside the overlay.
+    public bool LiveTextFloating { get; init; }
+    public double? LiveTextWindowLeft { get; init; }
+    public double? LiveTextWindowTop { get; init; }
+    public int LiveTextWindowWidth { get; init; } = DefaultLiveTextWindowWidth;
+    public int LiveTextWindowHeight { get; init; } = DefaultLiveTextWindowHeight;
 
     // Translation
     public string TranscriptionTask { get; init; } = "transcribe";
@@ -304,6 +319,12 @@ public record AppSettings
             MinPreviewBubbleAutoHideMilliseconds,
             MaxPreviewBubbleAutoHideMilliseconds);
     }
+
+    public static int NormalizeLiveTextWindowWidth(int width) =>
+        Math.Clamp(width, MinLiveTextWindowWidth, MaxLiveTextWindowWidth);
+
+    public static int NormalizeLiveTextWindowHeight(int height) =>
+        Math.Clamp(height, MinLiveTextWindowHeight, MaxLiveTextWindowHeight);
 
     public static (double Left, double Top) ClampOverlayPositionToWorkArea(
         double left,

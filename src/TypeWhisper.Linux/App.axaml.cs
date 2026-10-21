@@ -208,8 +208,12 @@ public class App : Application
 
             // Close-button: CloseToTray+tray-available → hide; otherwise quit.
             // Hiding with no tray (stock GNOME) would strand the user with no UI.
+            var liveTextPreview = services.GetRequiredService<LiveTextPreviewService>();
             main.Closing += (sender, e) =>
             {
+                // The preview belongs to Appearance; it ends when the settings window goes away.
+                liveTextPreview.Stop();
+
                 if (ShuttingDown)
                 {
                     // Teardown underway: keep canceling closes until ShutdownAndExitAsync
@@ -310,6 +314,9 @@ public class App : Application
             var overlay = services.GetRequiredService<DictationOverlayWindow>();
             overlay.Initialize();
             BootTrace.Stage("overlay.Initialize");
+
+            services.GetRequiredService<LiveTextWindow>().Initialize();
+            BootTrace.Stage("liveTextWindow.Initialize");
 
             // Surface silently-learned target-app corrections with an Undo. On desktop
             // environments this is a dedicated toast window placed beside the corrected element;

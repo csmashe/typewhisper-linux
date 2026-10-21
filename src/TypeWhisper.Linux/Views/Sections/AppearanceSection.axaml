@@ -197,6 +197,117 @@
                 </Grid>
             </Border>
 
+            <TextBlock Text="{loc:Str Appearance.LiveText}"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <StackPanel>
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,320"
+                              ColumnSpacing="16">
+                            <StackPanel VerticalAlignment="Center"
+                                        Spacing="2">
+                                <TextBlock Text="{loc:Str Appearance.LiveTextPlacement}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{loc:Str Appearance.LiveTextPlacementHint}"
+                                           Foreground="#9BAABC"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
+                                      VerticalAlignment="Center"
+                                      ItemsSource="{Binding LiveTextPlacements}"
+                                      SelectedItem="{Binding SelectedLiveTextPlacement}"
+                                      AutomationProperties.Name="{loc:Str Appearance.LiveTextPlacement}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:LiveTextPlacementOption">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <StackPanel IsVisible="{Binding IsLiveTextFloating}">
+                        <Border Height="1" Background="#1AFFFFFF" />
+
+                        <Border Padding="18,14">
+                            <Grid ColumnDefinitions="*,320"
+                                  ColumnSpacing="16">
+                                <StackPanel VerticalAlignment="Center"
+                                            Spacing="2">
+                                    <TextBlock Text="{loc:Str Appearance.LiveTextSize}"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock Text="{loc:Str Appearance.LiveTextSizeHint}"
+                                               Foreground="#9BAABC"
+                                               FontSize="11.5"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Grid Grid.Column="1"
+                                      ColumnDefinitions="*,*"
+                                      ColumnSpacing="10"
+                                      VerticalAlignment="Center">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="{loc:Str Appearance.LiveTextWidth}"
+                                                   Foreground="#9BAABC"
+                                                   FontSize="12" />
+                                        <NumericUpDown Minimum="{Binding MinLiveTextWindowWidth}"
+                                                       Maximum="{Binding MaxLiveTextWindowWidth}"
+                                                       Increment="10"
+                                                       FormatString="0"
+                                                       Value="{Binding LiveTextWindowWidth}"
+                                                       AutomationProperties.Name="{loc:Str Appearance.LiveTextWidth}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"
+                                                Spacing="4">
+                                        <TextBlock Text="{loc:Str Appearance.LiveTextHeight}"
+                                                   Foreground="#9BAABC"
+                                                   FontSize="12" />
+                                        <NumericUpDown Minimum="{Binding MinLiveTextWindowHeight}"
+                                                       Maximum="{Binding MaxLiveTextWindowHeight}"
+                                                       Increment="10"
+                                                       FormatString="0"
+                                                       Value="{Binding LiveTextWindowHeight}"
+                                                       AutomationProperties.Name="{loc:Str Appearance.LiveTextHeight}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
+                        </Border>
+
+                        <Border Height="1" Background="#1AFFFFFF" />
+
+                        <Border Padding="18,14">
+                            <Grid ColumnDefinitions="*,320"
+                                  ColumnSpacing="16">
+                                <StackPanel VerticalAlignment="Center"
+                                            Spacing="2">
+                                    <TextBlock Text="{loc:Str Appearance.LiveTextWindowPosition}"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock Text="{loc:Str Appearance.LiveTextWindowPositionHint}"
+                                               Foreground="#9BAABC"
+                                               FontSize="11.5"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1"
+                                            Spacing="6">
+                                    <TextBlock Text="{Binding LiveTextWindowPositionStatusText}"
+                                               Foreground="#9BAABC"
+                                               FontSize="12"
+                                               HorizontalAlignment="Right" />
+                                    <Button Content="{Binding LiveTextPreviewButtonText}"
+                                            HorizontalAlignment="Right"
+                                            Command="{Binding ToggleLiveTextPreviewCommand}" />
+                                    <Button Content="{loc:Str Appearance.ResetToDefault}"
+                                            HorizontalAlignment="Right"
+                                            Command="{Binding ResetLiveTextWindowCommand}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <TextBlock Text="{loc:Str Appearance.Preview}"
                        Classes="section-title" />
 

@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -255,6 +256,12 @@ internal static class ServiceRegistrations
         // Section VMs are singletons so state stays consistent across sidebar nav and wizard.
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<DictationOverlayViewModel>();
+        services.AddSingleton<LiveTextPreviewService>();
+        services.AddSingleton(sp => new LiveTextWindowViewModel(
+            sp.GetRequiredService<DictationOverlayViewModel>(),
+            sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<LiveTextPreviewService>(),
+            static action => Dispatcher.UIThread.Post(action)));
         services.AddSingleton<GeneralSectionViewModel>();
         services.AddSingleton<AppearanceSectionViewModel>();
         services.AddSingleton<AdvancedSectionViewModel>();
@@ -285,6 +292,7 @@ internal static class ServiceRegistrations
         // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
+        services.AddSingleton<LiveTextWindow>();
         services.AddSingleton<LearnedCorrectionToastWindow>();
         services.AddTransient<PromptPaletteWindow>();
         services.AddTransient<RecentTranscriptionsPaletteWindow>();
