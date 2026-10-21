@@ -107,6 +107,14 @@
       "sdkAbi": "net10.0"
     },
     {
+      "id": "com.typewhisper.github-copilot",
+      "projectPath": "plugins/TypeWhisper.Plugin.GitHubCopilot/TypeWhisper.Plugin.GitHubCopilot.csproj",
+      "releaseSlug": "github-copilot",
+      "platforms": ["linux"],
+      "rids": ["linux-x64"],
+      "sdkAbi": "net10.0"
+    },
+    {
       "id": "com.typewhisper.gladia",
       "projectPath": "plugins/TypeWhisper.Plugin.Gladia/TypeWhisper.Plugin.Gladia.csproj",
       "releaseSlug": "gladia",

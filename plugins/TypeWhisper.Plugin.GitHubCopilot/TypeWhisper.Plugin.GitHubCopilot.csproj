@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>TypeWhisper.Plugin.GitHubCopilot</RootNamespace>
+        <!-- Standalone plugin releases package bin/Release/net10.0, so the SDK must be copied there. -->
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+        <!-- The Copilot runtime (~51 MB) is downloaded on first use, not bundled. -->
+        <CopilotSkipCliDownload>true</CopilotSkipCliDownload>
+    </PropertyGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.13" />
+    </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <Compile Include="..\Shared\Net\ResilientDownloader.cs" Link="Shared\Net\ResilientDownloader.cs" />
+        <Compile Include="..\Shared\Net\DownloadSpace.cs" Link="Shared\Net\DownloadSpace.cs" />
+        <Compile Include="..\Shared\Net\InterProcessFileLock.cs" Link="Shared\Net\InterProcessFileLock.cs" />
+    </ItemGroup>
+    <ItemGroup>
+        <Content Include="manifest.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <Content Include="Localization\*.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <Content Include="THIRD-PARTY-NOTICES.md;Licenses\*">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+</Project>
