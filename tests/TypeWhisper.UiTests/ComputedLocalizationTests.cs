@@ -42,6 +42,8 @@ public sealed class ComputedLocalizationTests(UiSession ui)
                 foreach (var property in s_snippetEditorProperties)
                     Assert.Contains(property, snippetChanged);
                 Assert.Equal(Loc.Instance["Snippets.NewSnippet"], snippets.EditorTitle);
+                Assert.Null(snippets.SelectedTagFilter?.Tag);
+                Assert.Equal(Loc.Instance["Snippets.AllTags"], snippets.SelectedTagFilter?.Label);
             }
             finally
             {

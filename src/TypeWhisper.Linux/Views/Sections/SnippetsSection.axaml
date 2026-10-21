@@ -213,7 +213,13 @@
                                   AutomationProperties.Name="{loc:Str Snippets.TagFilter}"
                                   Width="180"
                                   ItemsSource="{Binding AvailableTags}"
-                                  SelectedItem="{Binding SelectedTagFilter}" />
+                                  SelectedItem="{Binding SelectedTagFilter}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SnippetTagFilterOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                         <Button Grid.Column="2"
                                 Content="{loc:Str Snippets.AllTags}"
                                 Command="{Binding ClearTagFilterCommand}"
