@@ -156,6 +156,15 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
         Assert.Null(sut.SelectedTagFilter?.Tag);
         Assert.Equal(2, sut.FilteredSnippets.Count);
 
+        Assert.Equal(
+            Loc.Instance.GetString("Snippets.TagOption", allTagsLabel),
+            sut.AvailableTags.Single(option => option.Tag == allTagsLabel).Label
+        );
+        Assert.Equal(
+            Loc.Instance.GetString("Snippets.TagOption", "work"),
+            sut.AvailableTags.Single(option => option.Tag == "work").Label
+        );
+
         sut.SelectedTagFilter = sut.AvailableTags.Single(option => option.Tag == allTagsLabel);
 
         Assert.True(sut.HasSelectedTagFilter);

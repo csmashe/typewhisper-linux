@@ -392,9 +392,12 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         {
             AvailableTags.Clear();
             AvailableTags.Add(new SnippetTagFilterOption(null, Loc.Instance["Snippets.AllTags"]));
+            // Every tag is qualified, so no tag can read like "All tags" or like another tag.
             foreach (var tag in _snippets.AllTags)
             {
-                AvailableTags.Add(new SnippetTagFilterOption(tag, tag));
+                AvailableTags.Add(
+                    new SnippetTagFilterOption(tag, Loc.Instance.GetString("Snippets.TagOption", tag))
+                );
             }
 
             SelectedTagFilter =

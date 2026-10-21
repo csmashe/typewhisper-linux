@@ -335,7 +335,7 @@
                                                     VerticalAlignment="Center" />
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                             <ToggleSwitch Grid.Column="5"
-                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
+                                                          AutomationProperties.Name="{Binding Trigger, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Snippets.EnabledToggleName}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"
