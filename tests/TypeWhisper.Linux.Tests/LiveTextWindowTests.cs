@@ -46,6 +46,14 @@ public sealed class LiveTextWindowTests
     }
 
     [Fact]
+    public void Fit_PinsTheWindowToAnEmptyWorkArea()
+    {
+        var bounds = LiveTextWindowPlacement.Fit(new PixelPoint(500, 500), new PixelSize(420, 220), new PixelRect(100, 50, 0, 0));
+
+        Assert.Equal(new PixelRect(100, 50, 1, 1), bounds);
+    }
+
+    [Fact]
     public void IndexOfMostOverlapped_KeepsAWindowOnTheMonitorHoldingMostOfIt()
     {
         // Primary on the right, a shorter secondary on the left; the corner hangs past its left edge.

@@ -22,8 +22,8 @@ internal static class LiveTextWindowPlacement
     {
         var width = Math.Clamp(size.Width, 1, Math.Max(1, workArea.Width));
         var height = Math.Clamp(size.Height, 1, Math.Max(1, workArea.Height));
-        var x = Math.Clamp(position.X, workArea.X, workArea.Right - width);
-        var y = Math.Clamp(position.Y, workArea.Y, workArea.Bottom - height);
+        var x = Math.Clamp(position.X, workArea.X, Math.Max(workArea.X, workArea.Right - width));
+        var y = Math.Clamp(position.Y, workArea.Y, Math.Max(workArea.Y, workArea.Bottom - height));
         return new PixelRect(x, y, width, height);
     }
 
