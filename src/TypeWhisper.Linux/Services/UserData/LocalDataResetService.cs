@@ -186,9 +186,18 @@ public sealed partial class LocalDataResetService
     /// <summary>Carries out a requested reset; the caller holds the startup lock.</summary>
     internal StartupResetResult FinishPendingReset()
     {
-        if (!IsResetPending)
+        // Unlike IsResetPending, a marker that cannot be inspected must not lead to deleting anything.
+        try
         {
-            return new StartupResetResult(StartupResetStatus.None, []);
+            if (SettingsBackupService.NativeFile.GetEntryKind(Path.Join(_basePath, PendingMarkerName))
+                == SettingsBackupService.BackupEntryKind.Absent)
+            {
+                return new StartupResetResult(StartupResetStatus.None, []);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException)
+        {
+            return Fail(ex);
         }
 
         if (!OperatingSystem.IsLinux() || !Directory.Exists("/proc/self/fd"))
@@ -420,7 +429,7 @@ public sealed partial class LocalDataResetService
         {
             return SettingsBackupService.NativeFile.GetEntryKind(path) != SettingsBackupService.BackupEntryKind.Absent;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException)
         {
             return true;
         }
