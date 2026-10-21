@@ -474,7 +474,11 @@ public sealed partial class SherpaOnnxPlugin
             ? CreatePendingAccelerationStatus(preference)
             // Pass the EFFECTIVE provider (_computeBackend) for the "active backend"; the
             // restart flag is derived from the wired runtime inside the helper.
-            : CreateLoadedAccelerationStatus(_computeBackend, preference);
+            : CreateLoadedStatusForModel(
+                _models.FirstOrDefault(model => model.Id == _loadedModelId),
+                _computeBackend,
+                preference
+            );
     }
 
     public bool IsModelDownloaded(string modelId)
@@ -755,14 +759,7 @@ public sealed partial class SherpaOnnxPlugin
                         // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
                         // restart (matches CreateLoadedAccelerationStatus / the swap logic).
                         AccelerationStatus = cudaUnavailableDetail is null
-                            ? model.Family == SherpaModelFamily.Qwen3Asr
-                              && string.Equals(desiredProvider, "cuda", StringComparison.Ordinal)
-                                ? new TranscriptionAccelerationStatus(
-                                    TranscriptionAccelerationBackend.Cpu,
-                                    "Using CPU",
-                                    "Qwen3-ASR always runs on the CPU; a graphics card does not make it faster."
-                                )
-                                : CreateLoadedAccelerationStatus(activeProvider, AccelerationPreference)
+                            ? CreateLoadedStatusForModel(model, activeProvider, AccelerationPreference)
                             : CreateCudaUnavailableStatus(
                                 cudaUnavailableDetail,
                                 requiresRestart: string.Equals(
@@ -1091,9 +1088,11 @@ public sealed partial class SherpaOnnxPlugin
     // unit-tested. effectiveProvider defaults to the wired runtime but can differ for a
     // CUDA-wired runtime running a CPU recognizer (the first-load CUDA-recognizer-failure
     // case): MarkNativeRuntimeLoadedForTests("cuda", effectiveProvider: "cpu").
+    // loadedModelId marks that model's recognizer as loaded.
     internal void MarkNativeRuntimeLoadedForTests(
         string wiredRuntime,
-        string? effectiveProvider = null
+        string? effectiveProvider = null,
+        string? loadedModelId = null
     )
     {
         var wired = string.Equals(wiredRuntime, "cuda", StringComparison.OrdinalIgnoreCase)
@@ -1110,6 +1109,7 @@ public sealed partial class SherpaOnnxPlugin
             _loadedNativeProvider = wired;
             _cudaOrtRuntimeWired = wired == "cuda";
             _computeBackend = effective;
+            _loadedModelId = loadedModelId;
         }
     }
 
@@ -1653,6 +1653,21 @@ public sealed partial class SherpaOnnxPlugin
 
         return new TranscriptionAccelerationStatus(active, displayText);
     }
+
+    private TranscriptionAccelerationStatus CreateLoadedStatusForModel(
+        ModelDefinition? model,
+        string effectiveProvider,
+        TranscriptionAccelerationPreference preference
+    ) =>
+        model?.Family == SherpaModelFamily.Qwen3Asr
+            ? new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "Using CPU",
+                "Qwen3-ASR always runs on the CPU; a graphics card does not make it faster.",
+                // The other models still need the restart to reach CUDA.
+                CreateLoadedAccelerationStatus("cpu", preference).RequiresRestart
+            )
+            : CreateLoadedAccelerationStatus(effectiveProvider, preference);
 
     private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
         TranscriptionAccelerationPreference preference

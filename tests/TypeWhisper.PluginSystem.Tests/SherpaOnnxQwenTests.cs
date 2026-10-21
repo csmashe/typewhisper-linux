@@ -7,6 +7,7 @@ using Moq;
 using SherpaOnnx::TypeWhisper.Plugin.SherpaOnnx;
 using SherpaCuda = SherpaOnnx::TypeWhisper.Plugins.Shared.Cuda;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -173,6 +174,28 @@ public sealed class SherpaOnnxQwenTests : IDisposable
         Assert.Equal("cpu", provider);
         // The other models still get CUDA.
         Assert.Equal("cuda", plugin.ComputeBackendForTests);
+    }
+
+    [Theory]
+    [InlineData(SherpaOnnxPlugin.Qwen06BModelId, "cuda", TranscriptionAccelerationBackend.Cpu, false)]
+    [InlineData("parakeet-ultra-0.6b", "cuda", TranscriptionAccelerationBackend.NvidiaCuda, false)]
+    // A CPU-only runtime still needs the restart before the other models can use CUDA.
+    [InlineData(SherpaOnnxPlugin.Qwen06BModelId, "cpu", TranscriptionAccelerationBackend.Cpu, true)]
+    public void ReapplyingCuda_KeepsALoadedQwenRecognizerReportedOnTheCpu(
+        string modelId,
+        string wiredRuntime,
+        TranscriptionAccelerationBackend expected,
+        bool requiresRestart)
+    {
+        using var plugin = new SherpaOnnxPlugin();
+        // Stands in for a model loaded while CUDA was chosen.
+        plugin.MarkNativeRuntimeLoadedForTests(wiredRuntime, loadedModelId: modelId);
+
+        plugin.SetAccelerationPreference(TranscriptionAccelerationPreference.NvidiaCuda);
+
+        Assert.Equal(modelId, plugin.LoadedModelIdForTests);
+        Assert.Equal(expected, plugin.AccelerationStatus.ActiveBackend);
+        Assert.Equal(requiresRestart, plugin.AccelerationStatus.RequiresRestart);
     }
 
     [Fact]
