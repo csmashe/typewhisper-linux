@@ -1,3 +1,6 @@
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+// Linked into TypeWhisper.UiTests, which wires the platform but only the integration tests read its recordings.
 using TypeWhisper.Linux.Services;
 
 namespace TypeWhisper.Integration.Tests.TestDoubles;

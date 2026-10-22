@@ -74,9 +74,27 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
     public async Task<bool> IsInstalledAsync(DeShortcutSpec spec, CancellationToken ct)
     {
         var inner = await ReadManagedBlockLinesAsync(ct).ConfigureAwait(false);
-        // Must match exactly — a stale trigger or manual edit reads as not-installed.
+        // A stale trigger or manual edit reads as not-installed.
         var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
-        return inner is not null && inner.SequenceEqual(expected);
+        return inner is not null
+               && inner.Count == expected.Count
+               && inner.Zip(expected).All(p => ManagedLineMatches(p.First, p.Second));
+    }
+
+    // Sway resolves bindsym names case-insensitively, and blocks written before the keysym
+    // mapping kept single letters upper-case ("Ctrl+K"); only the exec command must match verbatim.
+    private static bool ManagedLineMatches(string actual, string expected)
+    {
+        const string marker = " exec ";
+        var a = actual.IndexOf(marker, StringComparison.Ordinal);
+        var e = expected.IndexOf(marker, StringComparison.Ordinal);
+        if (a < 0 || e < 0)
+        {
+            return string.Equals(actual, expected, StringComparison.Ordinal);
+        }
+
+        return string.Equals(actual[..a], expected[..e], StringComparison.OrdinalIgnoreCase)
+               && string.Equals(actual[a..], expected[e..], StringComparison.Ordinal);
     }
 
     // The sway config holds one managed sentinel block carrying no shortcut id, so this answers
@@ -290,9 +308,7 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
             sb.Append('+');
         }
 
-        // Multi-char keys are lower-cased (xkbcommon convention) except
-        // function keys, whose keysyms are mixed-case ("F1".."F35").
-        sb.Append(NormalizeSwayKey(tail));
+        sb.Append(DesktopShortcutKey.ToKeysym(tail));
         return sb.ToString();
     }
 
@@ -313,39 +329,6 @@ public sealed class SwayShortcutWriter : IDeShortcutWriter
         {
             yield return $"bindsym {ToSwayBind(spec.OnCancelTrigger!)} exec {spec.OnCancelCommand}";
         }
-    }
-
-    private static string NormalizeSwayKey(string key)
-    {
-        if (key.Length <= 1)
-        {
-            return key;
-        }
-
-        if (IsFunctionKey(key))
-        {
-            return "F" + key[1..];
-        }
-
-        return key.ToLowerInvariant();
-    }
-
-    private static bool IsFunctionKey(string k)
-    {
-        if (k.Length < 2 || (k[0] != 'F' && k[0] != 'f'))
-        {
-            return false;
-        }
-
-        for (var i = 1; i < k.Length; i++)
-        {
-            if (!char.IsDigit(k[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static async Task<IReadOnlyList<string>?> ReadManagedBlockLinesAsync(

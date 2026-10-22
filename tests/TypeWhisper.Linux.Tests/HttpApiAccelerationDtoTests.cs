@@ -10,6 +10,20 @@ namespace TypeWhisper.Linux.Tests;
 public class HttpApiAccelerationDtoTests
 {
     [Fact]
+    public void BuildAccelerationDto_Vulkan_ReportsLoadedBackend()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new TranscriptionAccelerationStatus(TranscriptionAccelerationBackend.Vulkan, "Using Vulkan"),
+        };
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin,
+            AppSettings.Default with { LocalModelAcceleration = "vulkan" }));
+        Assert.Equal("vulkan", json.GetProperty("preference").GetString());
+        Assert.Equal("vulkan", json.GetProperty("activeBackend").GetString());
+        Assert.Equal("Using Vulkan", json.GetProperty("displayText").GetString());
+    }
+
+    [Fact]
     public void BuildAccelerationDto_NoActivePlugin_ReturnsNull()
     {
         var dto = HttpApiService.BuildAccelerationDto(null, AppSettings.Default);

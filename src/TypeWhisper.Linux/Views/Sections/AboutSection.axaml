@@ -242,6 +242,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str About.ErrorCategoryFilter}"
                                       MinWidth="150"
                                       ItemsSource="{Binding CategoryFilters}"
                                       SelectedItem="{Binding SelectedCategoryFilter}"

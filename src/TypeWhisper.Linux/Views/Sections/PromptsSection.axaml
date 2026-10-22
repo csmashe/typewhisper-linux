@@ -73,6 +73,7 @@
                                FontSize="16"
                                FontWeight="SemiBold" />
                     <ComboBox ItemsSource="{Binding DefaultProviderOptions}"
+                              AutomationProperties.Name="{loc:Str Prompts.CleanupProvider}"
                               SelectedItem="{Binding SelectedDefaultLlmProvider}"
                               DropDownOpened="OnProviderDropDownOpened">
                         <ComboBox.ItemTemplate>
@@ -108,6 +109,7 @@
                                        TextWrapping="Wrap" />
                         </StackPanel>
                         <ToggleSwitch Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Prompts.CommandModeToggle}"
                                       IsChecked="{Binding CommandModeEnabled}"
                                       VerticalAlignment="Center" />
                     </Grid>
@@ -116,6 +118,7 @@
                                 IsEnabled="{Binding CommandModeEnabled}">
                         <TextBlock Text="{loc:Str Prompts.CommandKeyphrase}" />
                         <TextBox Text="{Binding CommandKeyphrase, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                 AutomationProperties.Name="{loc:Str Prompts.CommandKeyphrase}"
                                  PlaceholderText="{loc:Str Prompts.CommandKeyphrasePlaceholder}" />
                         <TextBlock Text="{loc:Str Prompts.CommandKeyphraseHelp}"
                                    FontSize="12"
@@ -125,6 +128,7 @@
                         <TextBlock Text="{loc:Str Prompts.CommandModel}"
                                    Margin="0,8,0,0" />
                         <ComboBox ItemsSource="{Binding SpokenCommandProviderOptions}"
+                                  AutomationProperties.Name="{loc:Str Prompts.CommandModel}"
                                   SelectedItem="{Binding SelectedSpokenCommandProvider}"
                                   HorizontalAlignment="Stretch"
                                   DropDownOpened="OnProviderDropDownOpened">
@@ -148,17 +152,25 @@
                     CornerRadius="12"
                     Padding="14,10"
                     IsVisible="{Binding ShowProviderWarning}">
-                <StackPanel Orientation="Horizontal"
-                            Spacing="12">
-                    <TextBlock Text="!"
+                <Grid ColumnDefinitions="Auto,*"
+                      ColumnSpacing="10">
+                    <TextBlock Grid.Column="0"
+                               Text="!"
                                FontWeight="Bold"
-                               Foreground="#FFD400" />
-                    <TextBlock Text="{loc:Str Prompts.NoProvider}"
-                               FontWeight="SemiBold"
-                               Foreground="White" />
-                    <TextBlock Text="{Binding ProviderWarningText}"
-                               Foreground="#F3E1AF" />
-                </StackPanel>
+                               Foreground="#FFD400"
+                               VerticalAlignment="Top"
+                               Margin="0,2,0,0" />
+                    <StackPanel Grid.Column="1"
+                                Spacing="4">
+                        <TextBlock Text="{loc:Str Prompts.NoProvider}"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding ProviderWarningText}"
+                                   Foreground="#F3E1AF"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Grid>
             </Border>
 
             <Border Classes="panel">
@@ -232,6 +244,7 @@
                                                 Padding="12,6" />
                                         <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                         <ToggleSwitch Grid.Column="3"
+                                                      AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                       IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                       Command="{Binding $parent[ItemsControl].((vm:PromptsSectionViewModel)DataContext).ToggleEnabledCommand}"
                                                       CommandParameter="{Binding}"
@@ -261,7 +274,8 @@
                                 Grid.ColumnSpan="2">
                         <TextBlock Text="{loc:Str Prompts.Name}"
                                    Margin="0,0,0,6" />
-                        <TextBox Text="{Binding EditName}" />
+                        <TextBox Text="{Binding EditName}"
+                                 AutomationProperties.Name="{loc:Str Prompts.Name}" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="2"
@@ -271,6 +285,7 @@
                         <TextBlock Text="{loc:Str Prompts.SystemPrompt}"
                                    Margin="0,0,0,6" />
                         <TextBox Text="{Binding EditSystemPrompt}"
+                                 AutomationProperties.Name="{loc:Str Prompts.SystemPrompt}"
                                  AcceptsReturn="True"
                                  TextWrapping="Wrap"
                                  MinHeight="120" />
@@ -282,6 +297,7 @@
                         <TextBlock Text="{loc:Str Prompts.Provider}"
                                    Margin="0,0,0,6" />
                         <ComboBox ItemsSource="{Binding AvailableProviders}"
+                                  AutomationProperties.Name="{loc:Str Prompts.Provider}"
                                   SelectedItem="{Binding SelectedEditProvider}"
                                   DropDownOpened="OnProviderDropDownOpened">
                             <ComboBox.ItemTemplate>
@@ -298,8 +314,8 @@
                         <TextBlock Text="{loc:Str Prompts.ActionPlugin}"
                                    Margin="0,0,0,6" />
                         <ComboBox ItemsSource="{Binding ActionPluginOptions}"
-                                  SelectedValue="{Binding EditTargetActionPluginId}"
-                                  SelectedValueBinding="{Binding Value}">
+                                  AutomationProperties.Name="{loc:Str Prompts.ActionPlugin}"
+                                  SelectedItem="{Binding SelectedActionPlugin}">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ActionPluginOption">
                                     <TextBlock Text="{Binding Label}" />
@@ -314,6 +330,7 @@
                         <TextBlock Text="{loc:Str Prompts.Hotkey}"
                                    Margin="0,0,0,6" />
                         <TextBox Text="{Binding EditHotkeyKey}"
+                                 AutomationProperties.Name="{loc:Str Prompts.Hotkey}"
                                  PlaceholderText="{loc:Str Prompts.HotkeyPlaceholder}" />
                         <TextBlock Text="{Binding HotkeyValidationMessage}"
                                    IsVisible="{Binding HotkeyValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
@@ -329,6 +346,7 @@
                         <TextBlock Text="{loc:Str Prompts.ManualOnly}"
                                    Margin="0,0,0,6" />
                         <ToggleSwitch IsChecked="{Binding EditIsManualOnly}"
+                                      AutomationProperties.Name="{loc:Str Prompts.ManualOnly}"
                                       OnContent="{loc:Str Prompts.ManualOnlyOn}"
                                       OffContent="{loc:Str Prompts.ManualOnlyOff}" />
                     </StackPanel>

@@ -118,6 +118,36 @@ public partial class AboutSectionViewModel : ObservableObject
         _updateCheck.ResultChanged += OnUpdateResultChanged;
         // Reflect any check that already ran (e.g. the startup check).
         ApplyUpdateResult(_updateCheck.LastResult);
+        Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
+    }
+
+    private string _backupStatusDefault = Loc.Instance["About.BackupStatusDefault"];
+    private string _updateStatusDefault = Loc.Instance["About.UpdateStatusDefault"];
+    private string _supportReportStatusDefault = Loc.Instance["About.SupportReportDescription"];
+
+    // Status text is computed, not bound to the catalog: re-resolve defaults and the last
+    // update result in the new language. Keep completed backup and support-report messages.
+    private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
+    {
+        var backupDefault = Loc.Instance["About.BackupStatusDefault"];
+        if (BackupStatusText == _backupStatusDefault)
+            BackupStatusText = backupDefault;
+        _backupStatusDefault = backupDefault;
+
+        var supportDefault = Loc.Instance["About.SupportReportDescription"];
+        if (SupportReportStatusText == _supportReportStatusDefault)
+            SupportReportStatusText = supportDefault;
+        _supportReportStatusDefault = supportDefault;
+
+        var updateDefault = Loc.Instance["About.UpdateStatusDefault"];
+        if (UpdateStatusText == _updateStatusDefault)
+            UpdateStatusText = updateDefault;
+        _updateStatusDefault = updateDefault;
+        if (IsCheckingForUpdates)
+            UpdateStatusText = Loc.Instance["About.CheckingForUpdates"];
+        else
+            ApplyUpdateResult(_updateCheck.LastResult);
+        RefreshErrors();
     }
 
     // Prefers AssemblyInformationalVersion (keeps pre-release suffix, strips +hash).
@@ -477,7 +507,7 @@ public partial class AboutSectionViewModel : ObservableObject
         desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
 
         // Option set unchanged → keep the current selection object as-is.
-        if (CategoryFilters.Select(o => o.Key).SequenceEqual(desired.Select(o => o.Key)))
+        if (CategoryFilters.Select(o => (o.Key, o.Display)).SequenceEqual(desired.Select(o => (o.Key, o.Display))))
         {
             return;
         }

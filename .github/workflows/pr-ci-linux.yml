@@ -116,6 +116,14 @@ jobs:
           --blame-hang-timeout 2m
           --blame-hang-dump-type mini
 
+      # Renders every Settings section headlessly in each UI language and window size, and
+      # fails on clipped text, raw or wrong-language strings, or controls without an accessible name.
+      - name: UI render checks
+        timeout-minutes: 10
+        env:
+          TW_UI_SNAPSHOT_DIR: artifacts/ui-snapshots
+        run: dotnet test tests/TypeWhisper.UiTests/TypeWhisper.UiTests.csproj -c Release --no-build --logger "trx;LogFileName=TypeWhisper.UiTests.trx" --results-directory artifacts/test-results --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini
+
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -123,4 +131,5 @@ jobs:
           path: |
             artifacts/logs/*.binlog
             artifacts/test-results/**
+            artifacts/ui-snapshots/**
           if-no-files-found: ignore

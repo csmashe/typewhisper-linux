@@ -878,6 +878,7 @@ public class ModelManagerServiceTests
         AppSettings.LocalModelAccelerationNvidiaCuda,
         TranscriptionAccelerationPreference.NvidiaCuda
     )]
+    [InlineData(AppSettings.LocalModelAccelerationVulkan, TranscriptionAccelerationPreference.Vulkan)]
     public async Task LoadModelAsync_AppliesSavedAccelerationPreferenceBeforeLoading(
         string savedPreference,
         TranscriptionAccelerationPreference expectedPlugin)
