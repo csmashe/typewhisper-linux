@@ -664,6 +664,13 @@ public partial class PluginsSectionViewModel : ObservableObject
                 () => tester.TestItemAsync(key, draft, input, cts.Token),
                 CancellationToken.None
             );
+            // A plugin may ignore cancellation; its late result is stale.
+            if (cts.IsCancellationRequested)
+            {
+                item.TestMessage = Loc.Instance["Plugins.CollectionTestCancelled"];
+                return;
+            }
+
             if (result is null)
             {
                 throw new InvalidOperationException("The plugin returned no test result.");

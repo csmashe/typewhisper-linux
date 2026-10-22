@@ -104,6 +104,30 @@ public sealed class PluginCollectionItemTestViewModelTests : IDisposable
         Assert.Null(item.TestOutput);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancelTest_ResultReturnedAfterCancellation_IsDiscarded(bool returnNull)
+    {
+        var (vm, row, plugin) = CreateSection(activated: true);
+        plugin.Items.Add(Item("Saved", "c"));
+        plugin.Block = true;
+        plugin.SucceedWhenCancelled = true;
+        plugin.ReturnNullWhenCancelled = returnNull;
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        var item = Assert.Single(Assert.Single(row.Collections).Items);
+
+        var run = vm.RunCollectionItemTestCommand.ExecuteAsync(item);
+        await plugin.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        vm.CancelCollectionItemTestCommand.Execute(item);
+        await run.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(plugin.ObservedCancellation);
+        Assert.False(item.TestSucceeded);
+        Assert.Equal("Test cancelled.", item.TestMessage);
+        Assert.Null(item.TestOutput);
+    }
+
     [Fact]
     public async Task RemovingARunningItem_CancelsItsTest()
     {
@@ -277,6 +301,8 @@ public sealed class PluginCollectionItemTestViewModelTests : IDisposable
         public string? LastInput { get; private set; }
         public bool Block { get; set; }
         public bool Throw { get; set; }
+        public bool SucceedWhenCancelled { get; set; }
+        public bool ReturnNullWhenCancelled { get; set; }
         public bool ObservedCancellation { get; private set; }
 
         public TaskCompletionSource Started { get; } =
@@ -335,6 +361,13 @@ public sealed class PluginCollectionItemTestViewModelTests : IDisposable
             catch (OperationCanceledException)
             {
                 ObservedCancellation = true;
+                if (SucceedWhenCancelled)
+                {
+                    return ReturnNullWhenCancelled
+                        ? null!
+                        : new PluginCollectionItemTestResult(true, "passed late", "late output");
+                }
+
                 throw;
             }
 
