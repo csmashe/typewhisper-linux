@@ -240,6 +240,12 @@ public partial class PluginsSectionViewModel : ObservableObject
             }
         }
 
+        // A kept row with unsaved edits can still belong to a plugin that was just disabled.
+        foreach (var stale in existingRows.Values.Where(existing => !plugins.Contains(existing) || !existing.IsEnabled))
+        {
+            stale.CancelItemTests();
+        }
+
         plugins = plugins
             .OrderBy(p => p.CategorySortOrder)
             .ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
@@ -516,17 +522,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             .Collections.ToList()
             .Select(collection => (
                 collection.Key,
-                Items: collection
-                    .Items.Select(item => new PluginCollectionItem(
-                        item.Fields.ToDictionary(
-                            field => field.Key,
-                            string? (field) =>
-                                field is { IsSecretKind: true, IsUserModified: false }
-                                    ? null
-                                    : field.Value
-                        )
-                    ))
-                    .ToList()
+                Items: collection.Items.Select(item => item.ToDraft()).ToList()
             ));
 
     private async Task<bool> TrySaveCollectionSettingsAsync(
@@ -844,6 +840,90 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
     }
 
+    // Concurrent so each item's test runs and cancels on its own.
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private async Task RunCollectionItemTestAsync(PluginCollectionItemRow item)
+    {
+        var collection = item.OwnerCollection;
+        var row = collection?.OwnerRow;
+        if (
+            collection is not { CanTestItems: true }
+            || row is null
+            || item.IsTestRunning
+            || !_pluginById.TryGetValue(row.Id, out var loaded)
+            || !ReferenceEquals(row.LoadedPlugin, loaded)
+            || loaded.Instance is not IPluginCollectionItemTester tester
+        )
+        {
+            return;
+        }
+
+        item.TestSucceeded = false;
+        item.TestOutput = null;
+        if (!_pluginManager.IsEnabled(row.Id))
+        {
+            item.TestMessage = Loc.Instance["Plugins.CollectionTestRequiresEnabled"];
+            return;
+        }
+
+        // Claimed before the first await so a second click cannot start an overlapping run.
+        using var cts = new CancellationTokenSource();
+        item.TestCancellation = cts;
+        item.IsTestRunning = true;
+        item.TestMessage = Loc.Instance["Plugins.CollectionTestRunning"];
+        var key = collection.Key;
+        var draft = item.ToDraft();
+        var input = item.TestInput;
+        try
+        {
+            // No host time limit, like settings actions: the plugin bounds its test and the user can cancel.
+            var result = await Task.Run(
+                () => tester.TestItemAsync(key, draft, input, cts.Token),
+                CancellationToken.None
+            );
+            // A plugin may ignore cancellation; its late result is stale.
+            if (cts.IsCancellationRequested)
+            {
+                item.TestMessage = Loc.Instance["Plugins.CollectionTestCancelled"];
+                return;
+            }
+
+            if (result is null)
+            {
+                throw new InvalidOperationException("The plugin returned no test result.");
+            }
+
+            item.TestSucceeded = result.IsSuccess;
+            item.TestMessage = result.Message;
+            item.TestOutput = result.Output;
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            item.TestMessage = Loc.Instance["Plugins.CollectionTestCancelled"];
+        }
+        catch (Exception ex)
+        {
+            ReportPluginBoundaryFailure(loaded, $"test an item of collection '{key}'", ex);
+            item.TestMessage = Loc.Instance["Plugins.CollectionTestFailed"];
+        }
+        finally
+        {
+            if (ReferenceEquals(item.TestCancellation, cts))
+            {
+                item.TestCancellation = null;
+            }
+
+            item.IsTestRunning = false;
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: [RelayCommand] generates an instance command bound from the view")]
+    [RelayCommand]
+    private void CancelCollectionItemTest(PluginCollectionItemRow item)
+    {
+        item.CancelTest();
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: [RelayCommand] generates an instance command bound from the view")]
     [RelayCommand]
     private void DismissSettingsActionConfirmation(PluginRow row)
@@ -958,6 +1038,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         row.SettingFields.Clear();
+        row.CancelItemTests();
         row.Collections.Clear();
         row.Actions.Clear();
         row.PendingAction = null;
@@ -1177,6 +1258,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     private static void MarkSettingsLoadFailed(PluginRow row, bool preserveStatus = false)
     {
         row.SettingFields.Clear();
+        row.CancelItemTests();
         row.Collections.Clear();
         row.Actions.Clear();
         row.PendingAction = null;
@@ -1488,6 +1570,15 @@ public partial class PluginRow : ObservableObject
     internal bool HasUnsavedSettings =>
         _settingsBaseline is not null
         && !_settingsBaseline.SequenceEqual(CaptureSettingsDraft());
+
+    // Replaced item rows can no longer show a test result.
+    internal void CancelItemTests()
+    {
+        foreach (var collection in Collections)
+        {
+            collection.CancelItemTests();
+        }
+    }
 
     internal void CaptureSettingsBaseline()
     {

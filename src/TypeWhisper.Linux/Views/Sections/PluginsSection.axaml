@@ -3,7 +3,8 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              xmlns:local="using:TypeWhisper.Linux"
-             xmlns:sdk="using:TypeWhisper.PluginSDK.Models"
+             xmlns:sdk="using:TypeWhisper.PluginSDK"
+             xmlns:sdkmodels="using:TypeWhisper.PluginSDK.Models"
              x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
              x:DataType="vm:PluginsSectionViewModel">
     <UserControl.Resources>
@@ -120,9 +121,9 @@
                                             <StackPanel Orientation="Horizontal"
                                                         Spacing="6">
                                                 <Border Classes="badge location-badge"
-                                                        Classes.local="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdk:PluginNetworkAccess.Local}}"
-                                                        Classes.mixed="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdk:PluginNetworkAccess.Mixed}}"
-                                                        Classes.user-controlled="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdk:PluginNetworkAccess.UserControlled}}"
+                                                        Classes.local="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdkmodels:PluginNetworkAccess.Local}}"
+                                                        Classes.mixed="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdkmodels:PluginNetworkAccess.Mixed}}"
+                                                        Classes.user-controlled="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdkmodels:PluginNetworkAccess.UserControlled}}"
                                                         BorderThickness="1">
                                                     <TextBlock Text="{Binding LocationBadge}"
                                                             FontSize="11"
@@ -250,6 +251,50 @@
                                                                                 <ItemsControl
                                                                                     ItemsSource="{Binding Fields}"
                                                                                     ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
+
+                                                                                <StackPanel
+                                                                                    Spacing="6"
+                                                                                    IsVisible="{Binding CanTest}">
+                                                                                    <TextBlock
+                                                                                        Text="{loc:Str Plugins.CollectionTestInput}"
+                                                                                        FontSize="11.5"
+                                                                                        Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                                                                                    <TextBox
+                                                                                        Text="{Binding TestInput}"
+                                                                                        AcceptsReturn="True"
+                                                                                        TextWrapping="Wrap"
+                                                                                        MinHeight="56" />
+                                                                                    <StackPanel
+                                                                                        Orientation="Horizontal"
+                                                                                        Spacing="6">
+                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                                                        <Button
+                                                                                            Content="{Binding OwnerCollection.TestButtonLabel, FallbackValue=''}"
+                                                                                            Command="{Binding OwnerCollection.OwnerRow.Owner.RunCollectionItemTestCommand}"
+                                                                                            CommandParameter="{Binding}"
+                                                                                            IsEnabled="{Binding !IsTestRunning}" />
+                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                                                        <Button
+                                                                                            Content="{loc:Str Plugins.CollectionTestCancel}"
+                                                                                            Command="{Binding OwnerCollection.OwnerRow.Owner.CancelCollectionItemTestCommand}"
+                                                                                            CommandParameter="{Binding}"
+                                                                                            IsVisible="{Binding IsTestRunning}" />
+                                                                                    </StackPanel>
+                                                                                    <TextBlock
+                                                                                        Text="{Binding TestMessage}"
+                                                                                        IsVisible="{Binding HasTestMessage}"
+                                                                                        TextWrapping="Wrap"
+                                                                                        FontSize="11.5"
+                                                                                        Foreground="{DynamicResource TwTextPrimaryBrush}" />
+                                                                                    <TextBox
+                                                                                        Text="{Binding TestOutput}"
+                                                                                        IsVisible="{Binding HasTestOutput}"
+                                                                                        IsReadOnly="True"
+                                                                                        AcceptsReturn="True"
+                                                                                        TextWrapping="Wrap"
+                                                                                        MaxHeight="220"
+                                                                                        AutomationProperties.Name="{loc:Str Plugins.CollectionTestOutput}" />
+                                                                                </StackPanel>
                                                                             </StackPanel>
                                                                         </Border>
                                                                     </DataTemplate>
@@ -260,6 +305,39 @@
                                                                 Content="{Binding AddButtonLabel}"
                                                                 HorizontalAlignment="Left"
                                                                 Command="{Binding AddItemCommand}" />
+
+                                                            <StackPanel
+                                                                Spacing="6"
+                                                                IsVisible="{Binding HasTemplates}">
+                                                                <TextBlock
+                                                                    Text="{loc:Str Plugins.CollectionTemplate}"
+                                                                    FontSize="11.5"
+                                                                    Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                                                                <StackPanel
+                                                                    Orientation="Horizontal"
+                                                                    Spacing="6">
+                                                                    <ComboBox
+                                                                        ItemsSource="{Binding Templates}"
+                                                                        SelectedItem="{Binding SelectedTemplate}"
+                                                                        MinWidth="220"
+                                                                        AutomationProperties.Name="{loc:Str Plugins.CollectionTemplate}">
+                                                                        <ComboBox.ItemTemplate>
+                                                                            <DataTemplate x:DataType="sdk:PluginCollectionTemplate">
+                                                                                <TextBlock Text="{Binding Label}" />
+                                                                            </DataTemplate>
+                                                                        </ComboBox.ItemTemplate>
+                                                                    </ComboBox>
+                                                                    <Button
+                                                                        Content="{loc:Str Plugins.CollectionAddTemplate}"
+                                                                        Command="{Binding AddTemplateCommand}" />
+                                                                </StackPanel>
+                                                                <TextBlock
+                                                                    Text="{Binding SelectedTemplateDescription}"
+                                                                    IsVisible="{Binding HasSelectedTemplateDescription}"
+                                                                    TextWrapping="Wrap"
+                                                                    FontSize="11"
+                                                                    Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                                                            </StackPanel>
                                                         </StackPanel>
                                                     </DataTemplate>
                                                 </ItemsControl.ItemTemplate>
