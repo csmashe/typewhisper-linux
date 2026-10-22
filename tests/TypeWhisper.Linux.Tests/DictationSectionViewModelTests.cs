@@ -16,6 +16,25 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class DictationSectionViewModelTests
 {
+    [Fact]
+    public void VulkanPreference_OnUnsupportedPlugin_RevertsToCpu()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        var pending = new System.Collections.Concurrent.ConcurrentQueue<Action>();
+        using var context = new ViewModelTestContext(AppSettings.Default,
+            new FakeAudioDeviceEnumerator(), [plugin], dispatchNotification: pending.Enqueue);
+        context.Sut.SelectedModel = context.Sut.ModelOptions.Single(m => m.ModelId == plugin.FirstFullModelId);
+        context.Sut.LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan;
+        // The revert is posted to the UI thread; drain it the way the other view-model tests do.
+        while (pending.TryDequeue(out var job))
+        {
+            job();
+        }
+        Assert.Equal(AppSettings.LocalModelAccelerationCpu, context.Sut.LocalModelAcceleration);
+        Assert.False(context.Sut.CanUseVulkan);
+        Assert.Equal(Loc.Instance["Dictation.AccelVulkanNotSupported"], context.Sut.StatusText);
+    }
+
     [Theory]
     [InlineData("-1", -1, "-1")]
     [InlineData("0", 1, "1")]
