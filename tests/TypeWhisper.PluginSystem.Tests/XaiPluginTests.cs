@@ -87,6 +87,8 @@ public class XaiPluginTests
         Assert.False(sut.SupportsTranslation);
         Assert.Equal("grok-stt", sut.SelectedModelId);
         Assert.Equal(["grok-stt"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal(new DictionaryTermsBudget(MaxTerms: 100, MaxCharsPerTerm: 50), sut.DictionaryTermsBudget);
         Assert.Equal("grok-4.3", sut.SelectedLlmModelId);
         Assert.Equal(["grok-4.3"], sut.SupportedModels.Select(m => m.Id).ToArray());
         Assert.Equal("eve", sut.SelectedVoiceId);
@@ -499,12 +501,150 @@ public class XaiPluginTests
     }
 
     [Fact]
+    public async Task TranscribeAsync_SendsModelAndEachDictionaryTermAsKeyterm()
+    {
+        List<(string Name, string Value)> fields = [];
+        var handler = new CapturingHandler((request, _) =>
+        {
+            fields = ReadFormFields(Assert.IsType<MultipartFormDataContent>(request.Content));
+            return JsonResponse("""{ "text": "TypeWhisper in Washington, D.C." }""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        var tooLong = new string('x', 51);
+        var prompt = PluginTranscriptionPrompt.Encode(
+            "ignored free text",
+            ["Washington, D.C.", "TypeWhisper", tooLong, "typewhisper"]);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt, CancellationToken.None);
+
+        Assert.Equal(("model", "grok-voice-transcribe-2.0"), fields[0]);
+        Assert.Equal(
+            ["Washington, D.C.", "TypeWhisper"],
+            fields.Where(f => f.Name == "keyterm").Select(f => f.Value).ToArray());
+        Assert.Equal("file", fields[^1].Name);
+        Assert.DoesNotContain(fields, f => f.Value.Contains("ignored free text", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_PlainPromptSendsNoKeyterms()
+    {
+        List<(string Name, string Value)> fields = [];
+        var handler = new CapturingHandler((request, _) =>
+        {
+            fields = ReadFormFields(Assert.IsType<MultipartFormDataContent>(request.Content));
+            return JsonResponse("""{ "text": "hello" }""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, "TypeWhisper, Grok", CancellationToken.None);
+
+        Assert.DoesNotContain(fields, f => f.Name == "keyterm");
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_MalformedPromptEnvelopeFailsBeforeSending()
+    {
+        var sent = false;
+        var handler = new CapturingHandler((_, _) =>
+        {
+            sent = true;
+            return JsonResponse("""{ "text": "hello" }""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAsync<FormatException>(() => sut.TranscribeAsync(
+            [1, 2, 3], null, translate: false, PluginTranscriptionPrompt.EnvelopePrefix + "{", CancellationToken.None));
+        Assert.False(sent);
+    }
+
+    [Fact]
+    public async Task StartStreamingWithPrompt_MalformedEnvelopeFailsBeforeConnecting()
+    {
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        var sut = new XaiPlugin();
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAsync<FormatException>(() => sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["de"], PluginTranscriptionPrompt.EnvelopePrefix + "[]", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StartStreamingWithPrompt_RequiresApiKey()
+    {
+        var sut = new XaiPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["de"], PluginTranscriptionPrompt.Encode(null, ["TypeWhisper"]), CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.Configuration, ex.FailureKind);
+    }
+
+    [Fact]
+    public void ParseKeyterms_ClipsToTheKeytermBudget()
+    {
+        var terms = Enumerable.Range(0, 120).Select(i => $"term {i}").Prepend(new string('x', 51));
+
+        var keyterms = XaiPlugin.ParseKeyterms(PluginTranscriptionPrompt.Encode(null, terms));
+
+        Assert.Equal(100, keyterms.Count);
+        Assert.Equal("term 0", keyterms[0]);
+        Assert.Equal("term 99", keyterms[^1]);
+    }
+
+    [Fact]
+    public void StreamingKeyterms_KeepTheQueryWithinTheLengthCap()
+    {
+        var terms = Enumerable.Range(0, 100).Select(i => $"{i:D2}" + new string('東', 48)).ToList();
+
+        var limited = XaiPlugin.StreamingKeyterms(XaiPlugin.ParseKeyterms(PluginTranscriptionPrompt.Encode(null, terms)));
+        var uri = XaiStreamingSession.BuildStreamingUri(null, interimResults: true, limited);
+        var keytermQueryLength = uri.Query.Split('&').Where(p => p.StartsWith("keyterm=", StringComparison.Ordinal))
+            .Sum(p => "&".Length + p.Length);
+
+        Assert.InRange(limited.Count, 1, 99);
+        Assert.Equal(terms.Take(limited.Count), limited);
+        Assert.InRange(keytermQueryLength, 1, XaiPlugin.MaxStreamingKeytermsQueryLength);
+    }
+
+    [Fact]
+    public void StreamingKeyterms_KeepsAFullAsciiBudget()
+    {
+        var terms = Enumerable.Range(0, 100).Select(i => $"term {i}").ToList();
+
+        Assert.Equal(terms, XaiPlugin.StreamingKeyterms(terms));
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_SendsModelAndEscapedKeytermsInTheQuery()
+    {
+        var options = await new XaiWebSocketAdapter("xai-key", "de", ["Washington, D.C.", "A&B"])
+            .GetConnectionOptionsAsync(CancellationToken.None);
+
+        var query = options.Uri.Query;
+        Assert.Contains("model=grok-voice-transcribe-2.0", query);
+        Assert.Contains("keyterm=Washington%2C%20D.C.", query);
+        Assert.Contains("keyterm=A%26B", query);
+        Assert.Contains("language=de", query);
+    }
+
+    [Fact]
     public void StreamingSession_BuildsExpectedUriAndExposesAuthHeader()
     {
-        var uri = XaiStreamingSession.BuildStreamingUri("de", interimResults: true);
+        var uri = XaiStreamingSession.BuildStreamingUri("de", interimResults: true, []);
         Assert.Equal("wss", uri.Scheme);
         Assert.Equal("api.x.ai", uri.Host);
         Assert.Equal("/v1/stt", uri.AbsolutePath);
+        Assert.Contains("model=grok-voice-transcribe-2.0", uri.Query);
+        Assert.DoesNotContain("keyterm=", uri.Query);
         Assert.Contains("sample_rate=16000", uri.Query);
         Assert.Contains("encoding=pcm", uri.Query);
         Assert.Contains("interim_results=true", uri.Query);
@@ -1090,6 +1230,13 @@ public class XaiPluginTests
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
+
+    // The handler has already buffered the body, so reading each part completes synchronously.
+    private static List<(string Name, string Value)> ReadFormFields(MultipartFormDataContent form) =>
+        form.Select(part => (
+                part.Headers.ContentDisposition?.Name?.Trim('"') ?? "",
+                part.ReadAsStringAsync().GetAwaiter().GetResult()))
+            .ToList();
 
     private sealed class CapturingHandler(
         Func<HttpRequestMessage, string?, HttpResponseMessage> responder) : HttpMessageHandler
