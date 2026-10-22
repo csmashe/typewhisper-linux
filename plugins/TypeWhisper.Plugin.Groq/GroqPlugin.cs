@@ -352,7 +352,7 @@ public sealed class GroqPlugin
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         try
         {
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
         catch

@@ -10,6 +10,42 @@ namespace TypeWhisper.Linux.Services;
 
 public sealed partial class DictationOrchestrator
 {
+    internal static async Task<string> CompleteCleanupAsync(
+        LlmCleanupService cleanup, PromptProcessingService prompts, LiveCleanupDraft? draft,
+        string text, CleanupLevel level, LlmCallCapture? capture,
+        Func<string, Task>? status, CancellationToken token)
+    {
+        // ReSharper disable once InvertIf -- inverting would duplicate the final cleanup call below.
+        if (draft is not null)
+        {
+            try
+            {
+                string? provider = null;
+                try { provider = prompts.GetCleanupProviderSelection(); }
+                catch (PluginRequestException) { /* Final cleanup reports configuration errors. */ }
+                if (draft.MatchesFinal(level, provider))
+                {
+                    // Only waiting for speculative work is bounded. A miss gets ordinary
+                    // final cleanup with no deadline and no shared provider gate.
+                    using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    budget.CancelAfter(TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        var reused = await draft.ReuseAsync(text.Trim(), capture, budget.Token);
+                        if (reused is not null)
+                        {
+                            Trace.WriteLine("[LiveCleanup] Reused matching draft for final cleanup.");
+                            return reused;
+                        }
+                    }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                }
+            }
+            finally { draft.Dispose(); }
+        }
+        return await cleanup.CleanAsync(text, level, status, capture, ct: token);
+    }
+
     private readonly Lock _recoveryLock = new();
     private CancellationTokenSource? _recoveryCts;
     private TaskCompletionSource? _recoveryCompletion;
@@ -26,7 +62,8 @@ public sealed partial class DictationOrchestrator
         bool skipVocabularyBooster,
         string engineProviderId,
         string? engineModelId,
-        List<(string Name, TimeSpan Elapsed)>? stepTimings = null
+        List<(string Name, TimeSpan Elapsed)>? stepTimings = null,
+        bool recordUsage = true
     )
     {
         var pipelineContext = new PostProcessingContext
@@ -60,20 +97,12 @@ public sealed partial class DictationOrchestrator
             ))
             .ToList();
 
-        var spokenStrategy = ResolveSpokenFormattingStrategy(
-            _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
-            translate && engineSupportsTranslation, _settings.Current.SpokenFormattingStrategy);
-
-        return new PipelineOptions
+        return BuildPreCleanupOptions(context, postProcessingLanguage, configuredLanguage,
+            languageHints, translate, engineSupportsTranslation, engineProviderId, engineModelId) with
         {
-            NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
-            NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
-            SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
-            AppFormatter = AppFormatterService.Format,
-            TargetProcessName = context.AppProcess,
             DictionaryCorrector = SelectFinalDictionaryCorrector(
                 usedPreviewFallback,
-                _dictionary.ApplyCorrections
+                recordUsage ? _dictionary.ApplyCorrections : _dictionary.PreviewCorrections
             ),
             VocabularyBooster = !skipVocabularyBooster && _settings.Current.VocabularyBoostingEnabled
                 ? _vocabularyBoosting.Apply
@@ -81,20 +110,15 @@ public sealed partial class DictationOrchestrator
             CleanupHandler =
                 cleanupLevel == CleanupLevel.None
                     ? null
-                    : (text, token) =>
-                        _cleanup.CleanAsync(
-                            text,
-                            cleanupLevel,
-                            message =>
-                            {
-                                ReportStatus(context, message);
-                                return Task.CompletedTask;
-                            },
-                            context.Capture,
-                            token
-                        ),
+                    : (text, token) => CompleteCleanupAsync(
+                        _cleanup, _promptProcessing, context.LiveCleanup, text, cleanupLevel,
+                        context.Capture, message =>
+                        {
+                            ReportStatus(context, message);
+                            return Task.CompletedTask;
+                        }, token),
             SnippetExpander = text =>
-                _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
+                _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null
                 ? (text, token) => RunPromptActionAsync(context, promptAction, text, token)
                 : null,
@@ -107,6 +131,36 @@ public sealed partial class DictationOrchestrator
                 ? null
                 : translationTarget,
             RequireTranslationSuccess = !string.IsNullOrWhiteSpace(translationTarget),
+            EnglishOutputVariant = _settings.Current.EnglishOutputVariant,
+            GermanOutputVariant = _settings.Current.GermanOutputVariant,
+            PluginPostProcessors = pluginProcessors,
+            StepCompleted = (name, elapsed, _) => { stepTimings?.Add((name, elapsed)); },
+            StatusCallback = status =>
+            {
+                ReportStatus(
+                    context,
+                    status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
+                );
+                return Task.CompletedTask;
+            },
+        };
+    }
+
+    private PipelineOptions BuildPreCleanupOptions(RecordingContext context,
+        string? postProcessingLanguage, string? configuredLanguage, IReadOnlyList<string> languageHints,
+        bool translate, bool engineSupportsTranslation, string engineProviderId, string? engineModelId)
+    {
+        var spokenStrategy = ResolveSpokenFormattingStrategy(
+            _spokenFormattingResolver, engineProviderId, engineModelId, languageHints, postProcessingLanguage,
+            translate && engineSupportsTranslation, _settings.Current.SpokenFormattingStrategy);
+
+        return new PipelineOptions
+        {
+            NormalizeSpokenLineBreaks = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+            NormalizeSpokenPunctuation = spokenStrategy.Strategy != SpokenFormattingStrategy.NativeOnly,
+            SpokenFormatter = CreateSpokenFormatter(_spokenFormatting, spokenStrategy),
+            AppFormatter = AppFormatterService.Format,
+            TargetProcessName = context.AppProcess,
             EffectiveSourceLanguage = postProcessingLanguage,
             DetectedLanguage = postProcessingLanguage,
             // Same rule as postProcessingLanguage above: an engine that ignores the
@@ -120,19 +174,7 @@ public sealed partial class DictationOrchestrator
             ConfiguredLanguageCandidates = languageHints,
             TranscriptionNumberNormalizationEnabled =
                 _settings.Current.TranscriptionNumberNormalizationEnabled,
-            EnglishOutputVariant = _settings.Current.EnglishOutputVariant,
-            GermanOutputVariant = _settings.Current.GermanOutputVariant,
             ShortUtterancePunctuationEnabled = _settings.Current.ShortUtterancePunctuationEnabled,
-            PluginPostProcessors = pluginProcessors,
-            StepCompleted = (name, elapsed, _) => { stepTimings?.Add((name, elapsed)); },
-            StatusCallback = status =>
-            {
-                ReportStatus(
-                    context,
-                    status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
-                );
-                return Task.CompletedTask;
-            },
         };
     }
 

@@ -84,6 +84,40 @@ public sealed class DictationShortcutSpecFactoryTests : IDisposable
     }
 
     [Theory]
+    [InlineData("hyprland", "F9")]
+    [InlineData("sway", "F9")]
+    [InlineData("sway", "Right Ctrl")]
+    public void Build_PushToTalk_ModifierlessTrigger_DropsCancelBindInsteadOfGrabbingEscape(
+        string writerId,
+        string trigger
+    )
+    {
+        var settings = CreateSettings(RecordingMode.PushToTalk, trigger);
+
+        var spec = Assert.IsType<DeShortcutSpec>(
+            DictationShortcutSpecFactory.Build(settings, CreateWriter(writerId))
+        );
+
+        Assert.Equal(trigger, spec.Trigger);
+        Assert.Null(spec.OnCancelTrigger);
+        Assert.Null(spec.OnCancelCommand);
+        Assert.EndsWith("record start", spec.OnPressCommand);
+        Assert.EndsWith("record stop", spec.OnReleaseCommand);
+    }
+
+    [Theory]
+    [InlineData("gnome", RecordingMode.Toggle)]
+    [InlineData("kde", RecordingMode.Toggle)]
+    [InlineData("hyprland", RecordingMode.Toggle)]
+    [InlineData("hyprland", RecordingMode.PushToTalk)]
+    public void Build_SideSpecificModifierTrigger_StaysInAppBackend(string writerId, RecordingMode mode)
+    {
+        var settings = CreateSettings(mode, "Right Ctrl");
+
+        Assert.Null(DictationShortcutSpecFactory.Build(settings, CreateWriter(writerId)));
+    }
+
+    [Theory]
     [InlineData("gnome")]
     [InlineData("kde")]
     public void Build_PushToTalk_ReturnsNullForPressOnlyWriter(string writerId)

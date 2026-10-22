@@ -373,6 +373,45 @@ public sealed class CompositorShortcutWriterConcurrencyTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(
+        "hyprland",
+        "bind  = CTRL SHIFT, SPACE, exec, typewhisper record toggle\nbindr = CTRL SHIFT, SPACE, exec, typewhisper record stop"
+    )]
+    [InlineData(
+        "sway",
+        "bindsym --no-repeat Ctrl+Shift+space exec typewhisper record toggle\nbindsym --release Ctrl+Shift+space exec typewhisper record stop"
+    )]
+    [InlineData("sway", "bindsym --no-repeat Ctrl+K exec typewhisper record toggle", "Ctrl+K")]
+    public async Task IsInstalledAsync_AcceptsBlocksWrittenWithTheLegacyKeySpelling(
+        string compositor,
+        string legacyBlock,
+        string trigger = "Ctrl+Shift+Space"
+    )
+    {
+        var path = compositor == "hyprland" ? HyprlandConfigPath : SwayConfigPath;
+        IDeShortcutWriter writer = compositor == "hyprland"
+            ? new HyprlandShortcutWriter()
+            : new SwayShortcutWriter();
+        var spec = CreateSpec() with { Trigger = trigger };
+        if (trigger != "Ctrl+Shift+Space")
+        {
+            spec = spec with { OnReleaseCommand = null };
+        }
+
+        WriteConfig(path, ManagedConfig("# user line", legacyBlock));
+
+        // Compositors resolve key names case-insensitively; a block written before the keysym
+        // mapping must not read as stale, or the app route re-arms and dictation fires twice.
+        Assert.True(await writer.IsInstalledAsync(spec, CancellationToken.None));
+        Assert.False(
+            await writer.IsInstalledAsync(
+                spec with { OnPressCommand = "Typewhisper record toggle" },
+                CancellationToken.None
+            )
+        );
+    }
+
     private static DeShortcutSpec CreateSpec()
     {
         return new DeShortcutSpec(

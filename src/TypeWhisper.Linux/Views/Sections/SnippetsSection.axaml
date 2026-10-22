@@ -105,12 +105,15 @@
                       ColumnDefinitions="160,*,150"
                       ColumnSpacing="10">
                     <TextBox Grid.Column="0"
+                             AutomationProperties.Name="{loc:Str Snippets.TriggerPlaceholder}"
                              Text="{Binding NewTrigger}"
                              PlaceholderText="{loc:Str Snippets.TriggerPlaceholder}" />
                     <TextBox Grid.Column="1"
+                             AutomationProperties.Name="{loc:Str Snippets.ReplacementPlaceholder}"
                              Text="{Binding NewReplacement}"
                              PlaceholderText="{loc:Str Snippets.ReplacementPlaceholder}" />
                     <ComboBox Grid.Column="2"
+                              AutomationProperties.Name="{loc:Str Snippets.TriggerModeLabel}"
                               ItemsSource="{Binding TriggerModeOptions}"
                               SelectedValue="{Binding SelectedTriggerMode}"
                               SelectedValueBinding="{Binding Value}">
@@ -127,9 +130,11 @@
                       ColumnSpacing="10"
                       Margin="0,10,0,0">
                     <TextBox Grid.Column="0"
+                             AutomationProperties.Name="{loc:Str Snippets.TagsPlaceholder}"
                              Text="{Binding NewTags}"
                              PlaceholderText="{loc:Str Snippets.TagsPlaceholder}" />
                     <TextBox Grid.Column="1"
+                             AutomationProperties.Name="{loc:Str Snippets.ProfileIdsPlaceholder}"
                              Text="{Binding NewProfileIds}"
                              PlaceholderText="{loc:Str Snippets.ProfileIdsPlaceholder}" />
                     <CheckBox Grid.Column="2"
@@ -205,9 +210,16 @@
                                    Foreground="#8A9AAE"
                                    VerticalAlignment="Center" />
                         <ComboBox Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Snippets.TagFilter}"
                                   Width="180"
                                   ItemsSource="{Binding AvailableTags}"
-                                  SelectedItem="{Binding SelectedTagFilter}" />
+                                  SelectedItem="{Binding SelectedTagFilter}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SnippetTagFilterOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                         <Button Grid.Column="2"
                                 Content="{loc:Str Snippets.AllTags}"
                                 Command="{Binding ClearTagFilterCommand}"
@@ -323,6 +335,7 @@
                                                     VerticalAlignment="Center" />
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                             <ToggleSwitch Grid.Column="5"
+                                                          AutomationProperties.Name="{Binding Trigger, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Snippets.EnabledToggleName}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"

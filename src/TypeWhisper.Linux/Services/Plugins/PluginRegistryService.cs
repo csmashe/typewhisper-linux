@@ -942,19 +942,27 @@ public sealed class PluginRegistryService
         return string.Join('/', segments);
     }
 
+    // Whisper.net nests its GPU runtimes one level below runtimes/ (runtimes/vulkan/linux-x64).
+    private static readonly string[] s_nestedRuntimeBackends = ["vulkan", "cuda"];
+
     private static void ValidateNativeRuntimePath(string normalizedPath, string declaredRid)
     {
         var segments = normalizedPath.Split('/');
+        if (segments.Length < 2 || !string.Equals(segments[0], "runtimes", StringComparison.OrdinalIgnoreCase))
+            return;
+        if (string.Equals(segments[1], declaredRid, StringComparison.OrdinalIgnoreCase))
+            return;
+        // A backend directory entry itself (runtimes/vulkan) or a file under its declared RID.
         if (
-            segments.Length >= 2
-            && string.Equals(segments[0], "runtimes", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(segments[1], declaredRid, StringComparison.OrdinalIgnoreCase)
+            s_nestedRuntimeBackends.Contains(segments[1], StringComparer.OrdinalIgnoreCase)
+            && (segments.Length == 2
+                || string.Equals(segments[2], declaredRid, StringComparison.OrdinalIgnoreCase))
         )
-        {
-            throw new InvalidDataException(
-                $"Plugin archive contains undeclared native runtime '{segments[1]}'."
-            );
-        }
+            return;
+
+        throw new InvalidDataException(
+            $"Plugin archive contains undeclared native runtime '{segments[1]}'."
+        );
     }
 
     private static bool IsSymbolicLink(ZipArchiveEntry entry)
