@@ -427,6 +427,61 @@ public sealed class DictionarySectionViewModelTests : IDisposable
         Assert.Equal(Loc.Instance["Common.Disabled"], sut.AcousticBoostingStatusText);
     }
 
+    [Theory]
+    [InlineData(DictionaryEntryType.Term, "TypeWhisper", null, "TypeWhisper")]
+    [InlineData(DictionaryEntryType.Correction, "type whisper", "TypeWhisper", "TypeWhisper")]
+    public void SuggestAliasesFor_OpensWithTheCorrectSpelling(
+        DictionaryEntryType type,
+        string original,
+        string? replacement,
+        string expectedTerm
+    )
+    {
+        var sut = CreateViewModel(CreateDictionaryService());
+
+        sut.SuggestAliasesForCommand.Execute(
+            new DictionaryEntry
+            {
+                Id = "entry",
+                EntryType = type,
+                Original = original,
+                Replacement = replacement,
+            }
+        );
+
+        Assert.True(sut.AliasSuggestions.IsOpen);
+        Assert.Equal(expectedTerm, sut.AliasSuggestions.Term);
+    }
+
+    [Theory]
+    [InlineData("\\n", true, false, false)]
+    [InlineData("\\n", false, false, true)]
+    [InlineData("TypeWhisper", true, false, true)]
+    [InlineData("TypeWhisper", false, true, false)]
+    public void SuggestAliasesFor_SkipsCommandAndRegexCorrections(
+        string replacement,
+        bool expandEscapes,
+        bool isRegex,
+        bool opens
+    )
+    {
+        var sut = CreateViewModel(CreateDictionaryService());
+
+        sut.SuggestAliasesForCommand.Execute(
+            new DictionaryEntry
+            {
+                Id = "entry",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "new paragraph",
+                Replacement = replacement,
+                ExpandEscapes = expandEscapes,
+                IsRegex = isRegex,
+            }
+        );
+
+        Assert.Equal(opens, sut.AliasSuggestions.IsOpen);
+    }
+
     private DictionaryService CreateDictionaryService()
     {
         return new DictionaryService(Path.Join(_tempDir, "dictionary.json"));
@@ -444,7 +499,8 @@ public sealed class DictionarySectionViewModelTests : IDisposable
             dictionary,
             settings,
             models,
-            new VocabularyRescoringService(_plugins, settings, dictionary, models)
+            new VocabularyRescoringService(_plugins, settings, dictionary, models),
+            new DictionaryAliasSuggestionService(_plugins)
         );
     }
 }
