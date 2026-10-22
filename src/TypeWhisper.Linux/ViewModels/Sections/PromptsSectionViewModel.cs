@@ -66,12 +66,13 @@ public partial class PromptsSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isCreatingNew;
 
-    // Suppress picker setters while option lists rebuild and the ComboBoxes reselect.
+    // Suppress picker setters while option lists rebuild and the ComboBoxes reselect, so a
+    // transient null selection cannot clear a saved one.
     private bool _isRefreshingProviders;
     private bool _isSelectingActionPlugin;
 
     // Placeholder added for the editor's current unresolvable override, so it can be dropped again
-    // when the editor moves on. Null while the list is whatever RefreshPluginOptions last built.
+    // when the editor moves on.
     private ProviderOption? _synthesizedProviderOption;
     private ActionPluginOption? _synthesizedActionPluginOption;
 
@@ -96,6 +97,7 @@ public partial class PromptsSectionViewModel : ObservableObject
         _pluginManager = pluginManager;
         _settings = settings;
         _errorLog = errorLog;
+        var lastDefaultLlmProvider = settings.Current.DefaultLlmProvider;
 
         _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) =>
@@ -113,9 +115,15 @@ public partial class PromptsSectionViewModel : ObservableObject
         _settings.SettingsChanged += value =>
             Dispatcher.UIThread.Post(() =>
             {
-                OnPropertyChanged(nameof(DefaultLlmProvider));
-                OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
                 HydrateCommandSettings(value);
+                if (!string.Equals(lastDefaultLlmProvider, value.DefaultLlmProvider, StringComparison.Ordinal))
+                {
+                    lastDefaultLlmProvider = value.DefaultLlmProvider;
+                    RefreshProviderOptions();
+                }
+                OnPropertyChanged(nameof(DefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
             });
 
         HydrateCommandSettings(_settings.Current);
@@ -125,6 +133,8 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     public ObservableCollection<PromptAction> Actions { get; } = [];
     public ObservableCollection<ProviderOption> AvailableProviders { get; } = [];
+    public ObservableCollection<ProviderOption> DefaultProviderOptions { get; } = [];
+    public ObservableCollection<ProviderOption> SpokenCommandProviderOptions { get; } = [];
     public ObservableCollection<ActionPluginOption> ActionPluginOptions { get; } = [];
 
     public ActionPluginOption? SelectedActionPlugin
@@ -187,6 +197,23 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
     }
 
+    /// <summary>The provider and model used by automatic LLM cleanup and default prompt actions.</summary>
+    public ProviderOption? SelectedDefaultLlmProvider
+    {
+        get => DefaultProviderOptions.FirstOrDefault(option =>
+            string.Equals(option.Value, _settings.Current.DefaultLlmProvider, StringComparison.Ordinal));
+        set
+        {
+            if (_isRefreshingProviders
+                || string.Equals(_settings.Current.DefaultLlmProvider, value?.Value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            DefaultLlmProvider = value?.Value;
+        }
+    }
+
     public ProviderOption? SelectedEditProvider
     {
         get =>
@@ -209,15 +236,15 @@ public partial class PromptsSectionViewModel : ObservableObject
     }
 
     /// <summary>
-    ///     Model used for spoken commands. Shares <see cref="AvailableProviders" />; the null "use
+    ///     Model used for spoken commands. The null "use
     ///     default" option persists as no override, deferring to <see cref="DefaultLlmProvider" />.
     /// </summary>
     public ProviderOption? SelectedSpokenCommandProvider
     {
         get =>
-            AvailableProviders.FirstOrDefault(option =>
+            SpokenCommandProviderOptions.FirstOrDefault(option =>
                 option.Value == _settings.Current.SpokenCommandLlmProvider)
-            ?? AvailableProviders.FirstOrDefault();
+            ?? SpokenCommandProviderOptions.FirstOrDefault();
         set
         {
             if (_isRefreshingProviders)
@@ -732,8 +759,41 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     private void RefreshPluginOptions()
     {
-        var selectedProvider = EditProviderOverride;
         var selectedActionPlugin = EditTargetActionPluginId;
+        RefreshProviderOptions();
+
+        _isRefreshingProviders = true;
+        try
+        {
+            _synthesizedActionPluginOption = null;
+            ActionPluginOptions.Clear();
+            ActionPluginOptions.Add(
+                new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
+            );
+            foreach (
+                var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
+            )
+            {
+                ActionPluginOptions.Add(
+                    new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
+                );
+            }
+
+            RefreshActionPluginOption(selectedActionPlugin);
+        }
+        finally
+        {
+            _isRefreshingProviders = false;
+        }
+
+        OnPropertyChanged(nameof(SelectedActionPlugin));
+    }
+
+    // Rebuilds only the provider pickers, so a provider-setting change never touches the
+    // editor's action-plugin selection.
+    private void RefreshProviderOptions()
+    {
+        var selectedProvider = EditProviderOverride;
 
         _isRefreshingProviders = true;
         try
@@ -772,54 +832,50 @@ public partial class PromptsSectionViewModel : ObservableObject
                 }
             }
 
-            AddMissingSelectionOption(resolvedOptions, _settings.Current.DefaultLlmProvider);
-            AddMissingSelectionOption(resolvedOptions, selectedProvider);
-            AddMissingSelectionOption(resolvedOptions, _settings.Current.SpokenCommandLlmProvider);
-
-            // The rebuilt list carries every saved selection again, so nothing synthesized before it
-            // is still owned by the editor.
+            // Each picker owns its missing selection. Editor-only options must never become
+            // global or spoken-command choices.
             _synthesizedProviderOption = null;
-            AvailableProviders.Clear();
-            AvailableProviders.Add(
-                new ProviderOption(
-                    null,
-                    DefaultProviderPlaceholderLabel(resolvedOptions, firstAvailableOption)
-                )
-            );
-            foreach (var option in resolvedOptions)
+            ReplaceProviderOptions(DefaultProviderOptions, resolvedOptions,
+                firstAvailableOption is null
+                    ? Loc.Instance["Prompts.AutomaticProvider"]
+                    : Loc.Instance.GetString("Prompts.AutomaticProviderFormat", firstAvailableOption.Label),
+                _settings.Current.DefaultLlmProvider);
+            var defaultLabel = DefaultProviderPlaceholderLabel(resolvedOptions, firstAvailableOption);
+            ReplaceProviderOptions(SpokenCommandProviderOptions, resolvedOptions, defaultLabel,
+                _settings.Current.SpokenCommandLlmProvider);
+            ReplaceProviderOptions(AvailableProviders, resolvedOptions, defaultLabel, null);
+            if (!string.IsNullOrWhiteSpace(selectedProvider)
+                && AvailableProviders.All(option => option.Value != selectedProvider))
             {
-                AvailableProviders.Add(option);
+                _synthesizedProviderOption = MissingSelectionOption(selectedProvider);
+                AvailableProviders.Add(_synthesizedProviderOption);
             }
-            _synthesizedActionPluginOption = null;
-            ActionPluginOptions.Clear();
-            ActionPluginOptions.Add(
-                new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
-            );
-            foreach (
-                var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
-            )
-            {
-                ActionPluginOptions.Add(
-                    new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
-                );
-            }
-
-            RefreshActionPluginOption(selectedActionPlugin);
         }
         finally
         {
             _isRefreshingProviders = false;
         }
+
         OnPropertyChanged(nameof(SelectedEditProvider));
+        OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
         OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
-        OnPropertyChanged(nameof(SelectedActionPlugin));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
     // Keeps a saved selection selectable after the provider behind it disappears, so a refresh
     // never silently rewrites the user's choice.
-    private static void AddMissingSelectionOption(List<ProviderOption> options, string? value)
+    private static void ReplaceProviderOptions(
+        ObservableCollection<ProviderOption> options,
+        IReadOnlyList<ProviderOption> resolvedOptions,
+        string placeholderLabel,
+        string? value)
     {
+        options.Clear();
+        options.Add(new ProviderOption(null, placeholderLabel));
+        foreach (var option in resolvedOptions)
+        {
+            options.Add(option);
+        }
         if (string.IsNullOrWhiteSpace(value)
             || options.Any(option => string.Equals(option.Value, value, StringComparison.Ordinal)))
         {
@@ -851,7 +907,8 @@ public partial class PromptsSectionViewModel : ObservableObject
         var configuredOption = string.IsNullOrWhiteSpace(configured)
             ? null
             : resolvedOptions.FirstOrDefault(option =>
-                string.Equals(option.Value, configured, StringComparison.Ordinal));
+                string.Equals(option.Value, configured, StringComparison.Ordinal))
+                ?? MissingSelectionOption(configured);
         if (configuredOption is not null)
         {
             // A configured default that can't serve the request is named, not hidden — the
