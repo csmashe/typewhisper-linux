@@ -13,6 +13,8 @@ public static class LlmResponseTruncationGuard
         "max_tokens",
         "max_output_tokens",
         "model_context_window_exceeded",
+        // Mistral: context length reached mid-answer.
+        "model_length",
     ];
 
     /// <summary>Rejects a token-limited OpenAI-compatible chat completion.</summary>

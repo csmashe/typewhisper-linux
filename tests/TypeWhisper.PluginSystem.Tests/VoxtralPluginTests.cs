@@ -10,7 +10,7 @@ public class VoxtralPluginTests
 {
     [Fact]
     public Task RequestFailures_AreClassified() =>
-        ProviderFailureAssertions.VerifyAsync<VoxtralPlugin>();
+        ProviderFailureAssertions.VerifyAsync<VoxtralPlugin>(alsoTranscription: true);
 
 
     [Fact]
