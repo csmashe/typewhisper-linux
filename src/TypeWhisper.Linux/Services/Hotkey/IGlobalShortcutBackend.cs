@@ -18,6 +18,9 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     /// </summary>
     bool IsGlobalScope { get; }
 
+    /// <summary>Discard queued capture actions. Backends without press/release queues need no reset.</summary>
+    void SetCaptureSuspended(bool suspended) { }
+
     // ReSharper disable once UnusedMemberInSuper.Global -- interface contract member; callers invoke IsAvailable on concrete backends (e.g. BackendSelector probes portal.IsAvailable())
     bool IsAvailable();
 

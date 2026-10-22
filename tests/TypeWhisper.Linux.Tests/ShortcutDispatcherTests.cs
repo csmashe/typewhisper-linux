@@ -7,6 +7,101 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class ShortcutDispatcherTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CaptureDiscardsQueuedWorkflowAndDrainsHeldKeysOnCancel(bool queuedBeforeCapture)
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle) with
+        {
+            PasteLastTranscriptionKey = KeyCode.VcV,
+            PasteLastTranscriptionModifiers = ModifierMask.LeftCtrl,
+        });
+        var calls = 0;
+        dispatcher.PasteLastTranscriptionRequested += () => calls++;
+        if (!queuedBeforeCapture) dispatcher.SetCaptureSuspended(true);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, true);
+        if (queuedBeforeCapture) dispatcher.SetCaptureSuspended(true);
+        dispatcher.SetCaptureSuspended(false);
+        // Cancellation or collision must not let repeats or release dispatch the workflow.
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, false);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+        Assert.Equal(0, calls);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcV, ModifierMask.None, false);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void CaptureDraining_PrunesModifierWhoseReleaseWasLost()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggles = 0;
+        dispatcher.DictationToggleRequested += () => toggles++;
+        dispatcher.SetCaptureSuspended(true);
+        // Backends strip a modifier's own bit from the mask on its press.
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.SetCaptureSuspended(false);
+        // The Ctrl release never arrives (focus moved away); ordinary typing resumes.
+        dispatcher.Handle(KeyCode.VcA, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcA, ModifierMask.None, false);
+
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal(1, toggles);
+    }
+
+    [Fact]
+    public void CaptureDraining_OrdinaryKeyWhoseReleaseWasLostOnlyBlocksItsOwnRepeats()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggles = 0;
+        dispatcher.DictationToggleRequested += () => toggles++;
+        dispatcher.SetCaptureSuspended(true);
+        dispatcher.Handle(KeyCode.VcA, ModifierMask.None, true);
+        dispatcher.SetCaptureSuspended(false);
+        // The A release never arrives (focus moved away); the next chord must still work.
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+
+        Assert.Equal(1, toggles);
+    }
+
+    [Fact]
+    public void CaptureDraining_SuppressesRepeatsOfTheHeldChordUntilReleased()
+    {
+        var dispatcher = new ShortcutDispatcher();
+        dispatcher.UpdateShortcuts(Set(RecordingMode.Toggle));
+        var toggles = 0;
+        dispatcher.DictationToggleRequested += () => toggles++;
+        dispatcher.SetCaptureSuspended(true);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        // Capture ends (window deactivated) while the chord is still held: auto-repeat must not start dictation.
+        dispatcher.SetCaptureSuspended(false);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, false);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        Assert.Equal(0, toggles);
+
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, false);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, false);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, false);
+        dispatcher.Handle(KeyCode.VcLeftControl, ModifierMask.None, true);
+        dispatcher.Handle(KeyCode.VcLeftShift, ModifierMask.LeftCtrl, true);
+        dispatcher.Handle(KeyCode.VcSpace, ModifierMask.LeftCtrl | ModifierMask.LeftShift, true);
+        Assert.Equal(1, toggles);
+    }
+
     [Fact]
     public void ReadLastTranscription_RaisesOncePerPress()
     {

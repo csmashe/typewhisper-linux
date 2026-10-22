@@ -1,5 +1,6 @@
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using Xunit;
 
@@ -141,6 +142,38 @@ public sealed class SnippetsSectionViewModelTests : IDisposable
             "This trigger matches a dictionary correction: wispr -> Wispr.",
             sut.ConflictWarningText
         );
+    }
+
+    [Fact]
+    public void TagFilter_TagNamedLikeAllTagsLabel_IsARealFilter()
+    {
+        var service = CreateSnippetService();
+        var allTagsLabel = Loc.Instance["Snippets.AllTags"];
+        service.AddSnippet(new Snippet { Id = "a", Trigger = "a", Replacement = "A", Tags = allTagsLabel });
+        service.AddSnippet(new Snippet { Id = "b", Trigger = "b", Replacement = "B", Tags = "work" });
+        var sut = CreateViewModel(service);
+
+        Assert.Null(sut.SelectedTagFilter?.Tag);
+        Assert.Equal(2, sut.FilteredSnippets.Count);
+
+        Assert.Equal(
+            Loc.Instance.GetString("Snippets.TagOption", allTagsLabel),
+            sut.AvailableTags.Single(option => option.Tag == allTagsLabel).Label
+        );
+        Assert.Equal(
+            Loc.Instance.GetString("Snippets.TagOption", "work"),
+            sut.AvailableTags.Single(option => option.Tag == "work").Label
+        );
+
+        sut.SelectedTagFilter = sut.AvailableTags.Single(option => option.Tag == allTagsLabel);
+
+        Assert.True(sut.HasSelectedTagFilter);
+        Assert.Equal("a", Assert.Single(sut.FilteredSnippets).Id);
+
+        sut.ClearTagFilterCommand.Execute(null);
+
+        Assert.False(sut.HasSelectedTagFilter);
+        Assert.Equal(2, sut.FilteredSnippets.Count);
     }
 
     private SnippetService CreateSnippetService()

@@ -982,6 +982,7 @@ validate_payload() {
 # These SONAMEs are intentionally weak: the corresponding integration can be
 # absent without preventing startup, and each entry has a working fallback.
 declare -A OPTIONAL_ELF_SONAMES=(
+  ["libvulkan.so.1"]="optional Vulkan whisper.cpp backend (falls back to CPU when absent)"
   # GLX acceleration is optional because Avalonia can continue with EGL/software.
   ["libGL.so.1"]="optional GLX rendering"
   # The GLX dispatcher is used only by the optional accelerated rendering path.

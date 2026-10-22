@@ -84,6 +84,7 @@
                     </StackPanel>
 
                     <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableVocabularyBoosting}"
                                   IsChecked="{Binding VocabularyBoostingEnabled}"
                                   VerticalAlignment="Top" />
                 </Grid>
@@ -111,6 +112,7 @@
                     </StackPanel>
 
                     <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableAcousticBoosting}"
                                   IsChecked="{Binding AcousticVocabularyBoostingEnabled}"
                                   VerticalAlignment="Top" />
                 </Grid>
@@ -158,6 +160,7 @@
                 <Grid ColumnDefinitions="*,Auto"
                       ColumnSpacing="12">
                     <TextBox Grid.Column="0"
+                             AutomationProperties.Name="{loc:Str Dictionary.SearchPlaceholder}"
                              Text="{Binding SearchText}"
                              PlaceholderText="{loc:Str Dictionary.SearchPlaceholder}"
                              IsVisible="{Binding ShowSearchBox}" />
@@ -311,6 +314,7 @@
 
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="4"
+                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"
@@ -367,6 +371,7 @@
 
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="1"
+                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).TogglePackCommand}"
                                                           CommandParameter="{Binding}"
@@ -384,9 +389,10 @@
                     Padding="14,12"
                     IsVisible="{Binding ShowAddBar}">
                 <StackPanel Spacing="6">
-                    <Grid ColumnDefinitions="*,Auto,*,92,Auto,Auto,Auto,Auto,Auto"
+                    <Grid ColumnDefinitions="*,Auto,*,92"
                           ColumnSpacing="10">
                         <TextBox Grid.Column="0"
+                                 AutomationProperties.Name="{loc:Str History.Original}"
                                  Text="{Binding NewOriginal}"
                                  PlaceholderText="{loc:Str Dictionary.OriginalPlaceholder}" />
                         <TextBlock Grid.Column="1"
@@ -394,33 +400,38 @@
                                    VerticalAlignment="Center"
                                    Foreground="#8A9AAE" />
                         <TextBox Grid.Column="2"
+                                 AutomationProperties.Name="{loc:Str Dictionary.ReplacementPlaceholder}"
                                  Text="{Binding NewReplacement}"
                                  PlaceholderText="{loc:Str Dictionary.ReplacementPlaceholder}" />
                         <NumericUpDown Grid.Column="3"
+                                       AutomationProperties.Name="{loc:Str Dictionary.PriorityPlaceholder}"
                                        Minimum="0"
                                        Maximum="999"
                                        Value="{Binding NewPriority}"
                                        PlaceholderText="{loc:Str Dictionary.PriorityPlaceholder}" />
-                        <ToggleButton Grid.Column="4"
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto"
+                          ColumnSpacing="10">
+                        <ToggleButton Grid.Column="0"
                                       IsChecked="{Binding IsNewTypeCorrection}"
                                       Content="{loc:Str Dictionary.TypeCorrection}"
                                       Padding="10,6" />
-                        <ToggleButton Grid.Column="5"
+                        <ToggleButton Grid.Column="1"
                                       IsChecked="{Binding IsNewTypeTerm}"
                                       Content="{loc:Str Dictionary.TypeTerm}"
                                       Padding="10,6" />
-                        <CheckBox Grid.Column="6"
+                        <CheckBox Grid.Column="2"
                                   Content="Aa"
                                   IsChecked="{Binding CaseSensitive}"
                                   ToolTip.Tip="{loc:Str Dictionary.CaseSensitive}"
                                   VerticalAlignment="Center" />
-                        <CheckBox Grid.Column="7"
+                        <CheckBox Grid.Column="3"
                                   Content=".*"
                                   IsChecked="{Binding NewIsRegex}"
                                   IsVisible="{Binding IsNewTypeCorrection}"
                                   ToolTip.Tip="{loc:Str Dictionary.Regex}"
                                   VerticalAlignment="Center" />
-                        <Button Grid.Column="8"
+                        <Button Grid.Column="5"
                                 Content="{loc:Str Dictionary.Add}"
                                 Command="{Binding AddEntryCommand}"
                                 Padding="14,7" />

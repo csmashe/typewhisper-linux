@@ -13,6 +13,7 @@ using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -516,6 +517,10 @@ public partial class DictationSectionViewModel : ObservableObject
                 : _commands.HasCudaRuntimeLibraries
         );
 
+    public bool CanUseVulkan => _commands.HasVulkanGpu && SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+        TranscriptionAccelerationBackend.Vulkan
+    ) == true;
+
     // The engine that owns the model selected in the Dictation UI — the one a CUDA download
     // must target. Distinct from ActiveTranscriptionPlugin (the loaded engine), which is null
     // before any model loads (e.g. at startup) and can lag a freshly selected model.
@@ -574,6 +579,12 @@ public partial class DictationSectionViewModel : ObservableObject
                             : Loc.Instance["Dictation.AccelCudaNotVisible"],
                     AppSettings.LocalModelAccelerationNvidiaCuda =>
                         Loc.Instance["Dictation.AccelCudaReady"],
+                    AppSettings.LocalModelAccelerationVulkan when !_commands.HasVulkanGpu =>
+                        Loc.Instance["Dictation.AccelVulkanUnavailable"],
+                    AppSettings.LocalModelAccelerationVulkan when !CanUseVulkan =>
+                        Loc.Instance["Dictation.AccelVulkanNotSupported"],
+                    AppSettings.LocalModelAccelerationVulkan =>
+                        Loc.Instance["Dictation.AccelVulkanReady"],
                     _ => Loc.Instance["Dictation.AccelAutoStatus"],
                 };
             }
@@ -1093,6 +1104,12 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
     {
+        var microphoneIdle = Loc.Instance["Dictation.MicTestIdle"];
+        if (MicrophoneTestStatus == _microphoneTestIdleStatus)
+            MicrophoneTestStatus = microphoneIdle;
+        _microphoneTestIdleStatus = microphoneIdle;
+        OnPropertyChanged(nameof(MicrophoneTestButtonText));
+
         var acceleration = LocalModelAcceleration;
         var language = Language;
         var additionalLanguageCodes = AdditionalLanguages.Select(option => option.Code).ToArray();
@@ -1151,6 +1168,8 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(DownloadCudaRuntimeText));
             OnPropertyChanged(nameof(ClearGpuRuntimeText));
             OnPropertyChanged(nameof(AccelerationStatusText));
+            // Engine, model status, and active-model labels are computed text; recompute them in the new language.
+            RefreshModelState();
         }
         finally
         {
@@ -1165,6 +1184,7 @@ public partial class DictationSectionViewModel : ObservableObject
             new(AppSettings.LocalModelAccelerationAuto, Loc.Instance["Dictation.AccelerationAuto"]),
             new(AppSettings.LocalModelAccelerationCpu, Loc.Instance["Dictation.AccelerationCpu"]),
             new(AppSettings.LocalModelAccelerationNvidiaCuda, Loc.Instance["Dictation.AccelerationNvidiaCuda"]),
+            new(AppSettings.LocalModelAccelerationVulkan, Loc.Instance["Dictation.AccelerationVulkan"]),
         ];
     }
 
@@ -1496,6 +1516,7 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshLanguageChoices();
         OnPropertyChanged(nameof(CanDeleteSelectedModel));
         OnPropertyChanged(nameof(CanUseCuda));
+        OnPropertyChanged(nameof(CanUseVulkan));
         OnPropertyChanged(nameof(ShowCudaLibraryPathAction));
         OnPropertyChanged(nameof(ShowDownloadCudaRuntimeAction));
         OnPropertyChanged(nameof(AccelerationStatusText));
@@ -1533,6 +1554,22 @@ public partial class DictationSectionViewModel : ObservableObject
 
         var normalized = AppSettings.NormalizeLocalModelAcceleration(value);
 
+        // ReSharper disable once ConvertIfStatementToSwitchStatement -- two independent availability guards with their own revert handling; braced switch arms read worse.
+        if (normalized == AppSettings.LocalModelAccelerationVulkan && !CanUseVulkan)
+        {
+            var supportsVulkan = SelectedModelPlugin?.SupportedAccelerationBackends.Contains(
+                TranscriptionAccelerationBackend.Vulkan) == true;
+            var message = Loc.Instance[supportsVulkan
+                ? "Dictation.AccelVulkanUnavailable" : "Dictation.AccelVulkanNotSupported"];
+            _postToUi(() =>
+            {
+                LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
+                OnPropertyChanged(nameof(SelectedAccelerationOption));
+                StatusText = message;
+            });
+            return;
+        }
+
         // Guard: CUDA can't be selected when unavailable; Auto always works and resolves to CPU.
         if (normalized == AppSettings.LocalModelAccelerationNvidiaCuda && !CanUseCuda)
         {
@@ -1546,7 +1583,7 @@ public partial class DictationSectionViewModel : ObservableObject
             // Revert on the next UI frame: a ComboBox ignores SelectedItem changes inside its
             // own selection-change cycle, leaving the dropdown stuck on "NVIDIA CUDA".
             // Write the message after the revert — the CPU re-entry clears CudaSetupStatus.
-            Dispatcher.UIThread.Post(() =>
+            _postToUi(() =>
             {
                 LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu;
                 OnPropertyChanged(nameof(SelectedAccelerationOption));

@@ -4,6 +4,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -13,6 +14,41 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptsSectionViewModelTests : IDisposable
 {
+    [Fact]
+    public void MissingActionPlugin_IsScopedToEditedPromptAndSurvivesRelocalizationAndSave()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+            var missing = new PromptAction { Id = "missing", Name = "Missing", SystemPrompt = "x", TargetActionPluginId = "missing.plugin" };
+            var other = new PromptAction { Id = "other", Name = "Other", SystemPrompt = "y", TargetActionPluginId = "other.plugin" };
+            prompts.AddAction(missing);
+            prompts.AddAction(other);
+            using var plugins = TestPluginManagerFactory.Create();
+            var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+            var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, plugins, settings.Object)
+            {
+                SelectedAction = missing,
+            };
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "missing.plugin");
+            // Refresh the labels while the missing ID is selected, then move to another draft.
+            Loc.Instance.CurrentLanguage = original == "de" ? "es" : "de";
+            typeof(PromptsSectionViewModel).GetMethod("RefreshPluginOptions", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(sut, null);
+            Assert.Equal("missing.plugin", sut.EditTargetActionPluginId);
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "missing.plugin" && o.Label == Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", "missing.plugin"));
+            sut.SelectedAction = other;
+            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value == "missing.plugin");
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "other.plugin");
+            sut.SelectedAction = missing;
+            sut.SaveActionCommand.Execute(null);
+            Assert.Equal("missing.plugin", prompts.Actions.Single(a => a.Id == "missing").TargetActionPluginId);
+            sut.StartCreateCommand.Execute(null);
+            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value is "missing.plugin" or "other.plugin");
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
     private readonly HotkeyService _hotkeys;
     private readonly ProfileService _profiles;
     private readonly string _tempDir;
@@ -814,14 +850,34 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
     }
 
-    private static void InvokeRefreshPluginOptions(PromptsSectionViewModel viewModel)
+    private static void InvokeRefreshPluginOptions(PromptsSectionViewModel viewModel,
+        string methodName = "RefreshPluginOptions")
     {
         var method =
             typeof(PromptsSectionViewModel).GetMethod(
-                "RefreshPluginOptions",
+                methodName,
                 BindingFlags.Instance | BindingFlags.NonPublic
-            ) ?? throw new MissingMethodException(nameof(PromptsSectionViewModel), "RefreshPluginOptions");
+            ) ?? throw new MissingMethodException(nameof(PromptsSectionViewModel), methodName);
         method.Invoke(viewModel, null);
+    }
+
+    [Fact]
+    public void ProviderRefresh_KeepsUnavailableTargetActionPluginThroughSave()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Rewrite";
+        sut.EditSystemPrompt = "Rewrite this";
+        sut.EditTargetActionPluginId = "com.typewhisper.linear";
+
+        // A default-provider change refreshes only the provider pickers.
+        InvokeRefreshPluginOptions(sut, "RefreshProviderOptions");
+        sut.SaveActionCommand.Execute(null);
+
+        Assert.Equal("com.typewhisper.linear", Assert.Single(prompts.Actions).TargetActionPluginId);
     }
 
     private static void SetPrivateField(object target, string fieldName, object value)
@@ -836,6 +892,61 @@ public sealed class PromptsSectionViewModelTests : IDisposable
                 )
             ?? throw new MissingFieldException(target.GetType().FullName, fieldName);
         field.SetValue(target, value);
+    }
+
+    [Fact]
+    public void SelectedDefaultLlmProvider_UpdatesSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin("com.typewhisper.openai", "OpenAI", "gpt-4.1-mini");
+        using var pluginManager = TestPluginManagerFactory.Create([provider]);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        var option = Assert.Single(sut.DefaultProviderOptions, candidate =>
+            candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini");
+        var rows = sut.DefaultProviderOptions.ToArray();
+
+        sut.SelectedDefaultLlmProvider = option;
+
+        Assert.Equal(option.Value, settings.Object.Current.DefaultLlmProvider);
+        Assert.Same(option, sut.SelectedDefaultLlmProvider);
+        Assert.Equal(rows, sut.DefaultProviderOptions); // No synchronous rebuild inside SelectedItem.
+
+        sut.SelectedDefaultLlmProvider = Assert.Single(sut.DefaultProviderOptions, candidate => candidate.Value is null);
+
+        Assert.Null(settings.Object.Current.DefaultLlmProvider);
+        Assert.Null(sut.SelectedDefaultLlmProvider!.Value);
+    }
+
+    [Fact]
+    public void AutomaticProvider_NamesAvailableAlternativeAndKeepsMissingDefaultSeparate()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var unavailable = new FakeLlmProviderPlugin("missing", "Unavailable", "model") { IsAvailable = false };
+        var available = new FakeLlmProviderPlugin("available", "Available", "model", "Actual model");
+        using var pluginManager = TestPluginManagerFactory.Create([unavailable, available]);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings
+        {
+            DefaultLlmProvider = "plugin:missing:model",
+            SpokenCommandLlmProvider = "plugin:command-only:model",
+        });
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        Assert.Equal("Automatic (first available: Available / Actual model)",
+            Assert.Single(sut.DefaultProviderOptions, option => option.Value is null).Label);
+        Assert.Equal("plugin:missing:model", sut.SelectedDefaultLlmProvider!.Value);
+        Assert.True(sut.SelectedDefaultLlmProvider.IsUnavailable);
+
+        sut.EditProviderOverride = "plugin:editor-only:model";
+        InvokeRefreshPluginOptions(sut);
+        Assert.DoesNotContain(sut.DefaultProviderOptions, option => option.Value is "plugin:editor-only:model" or "plugin:command-only:model");
+        Assert.DoesNotContain(sut.SpokenCommandProviderOptions, option => option.Value == "plugin:editor-only:model");
+        Assert.DoesNotContain(sut.AvailableProviders, option => option.Value == "plugin:command-only:model");
+
+        sut.EditProviderOverride = "plugin:next-editor:model";
+        Assert.DoesNotContain(sut.AvailableProviders, option => option.Value == "plugin:editor-only:model");
+        Assert.StartsWith("Use default provider", sut.SpokenCommandProviderOptions[0].Label);
+        Assert.StartsWith("Use default provider", sut.AvailableProviders[0].Label);
     }
 
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
