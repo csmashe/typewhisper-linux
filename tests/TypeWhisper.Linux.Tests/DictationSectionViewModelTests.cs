@@ -16,6 +16,87 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class DictationSectionViewModelTests
 {
+    [Fact]
+    public void LiveCleanupAvailability_DefaultFillerProcessorBlocksWithoutChangingPreference()
+    {
+        var filler = new Mock<IPostProcessorPlugin>();
+        filler.SetupGet(plugin => plugin.Priority).Returns(70);
+        filler.SetupGet(plugin => plugin.ProcessorName).Returns("Filler Words");
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { LiveCleanupEnabled = true },
+            new FakeAudioDeviceEnumerator(), processors: [filler.Object]);
+
+        Assert.False(context.Sut.CanUseLiveCleanup);
+        Assert.True(context.Sut.ShowLiveCleanupUnavailableReason);
+        Assert.Contains("Filler Words", context.Sut.LiveCleanupUnavailableReason);
+        Assert.Contains("Plugins", context.Sut.LiveCleanupUnavailableReason);
+        Assert.True(context.Sut.LiveCleanupEnabled);
+        Assert.True(context.Settings.Object.Current.LiveCleanupEnabled);
+    }
+
+    [Fact]
+    public void LiveCleanupAvailability_PluginAndProviderUpdatesNotifyWithoutSaving()
+    {
+        var pending = new Queue<Action>();
+        var processor = new Mock<IPostProcessorPlugin>();
+        processor.SetupGet(plugin => plugin.Priority).Returns(250);
+        processor.SetupGet(plugin => plugin.ProcessorName).Returns("Early processor");
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { LiveCleanupEnabled = true },
+            new FakeAudioDeviceEnumerator(), dispatchNotification: pending.Enqueue,
+            processors: [processor.Object]);
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+
+        // A provider-only change must leave the blocking processor and preference intact.
+        context.NotifyPluginStateChanged();
+        Assert.Empty(notifications);
+        while (pending.TryDequeue(out var notify)) notify();
+        Assert.Contains(nameof(context.Sut.CanUseLiveCleanup), notifications);
+        Assert.Contains(nameof(context.Sut.LiveCleanupUnavailableReason), notifications);
+        Assert.False(context.Sut.CanUseLiveCleanup);
+
+        // Disabling the blocker leaves later processors active and restores the control.
+        var laterProcessor = new Mock<IPostProcessorPlugin>();
+        laterProcessor.SetupGet(plugin => plugin.Priority).Returns(251);
+        context.SetPostProcessors([laterProcessor.Object]);
+        context.NotifyPluginStateChanged();
+        while (pending.TryDequeue(out var notify)) notify();
+        Assert.True(context.Sut.CanUseLiveCleanup);
+        Assert.False(context.Sut.ShowLiveCleanupUnavailableReason);
+        Assert.Empty(context.Sut.LiveCleanupUnavailableReason);
+        Assert.True(context.Sut.LiveCleanupEnabled);
+        Assert.True(context.Settings.Object.Current.LiveCleanupEnabled);
+        context.Settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+        context.Sut.LiveCleanupEnabled = false;
+        Assert.False(context.Settings.Object.Current.LiveCleanupEnabled);
+        context.SetPostProcessors([processor.Object]);
+        context.NotifyPluginStateChanged();
+        while (pending.TryDequeue(out var notify)) notify();
+        Assert.False(context.Sut.CanUseLiveCleanup);
+        Assert.False(context.Sut.LiveCleanupEnabled);
+    }
+
+    [Fact]
+    public void VulkanPreference_OnUnsupportedPlugin_RevertsToCpu()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        var pending = new System.Collections.Concurrent.ConcurrentQueue<Action>();
+        using var context = new ViewModelTestContext(AppSettings.Default,
+            new FakeAudioDeviceEnumerator(), [plugin], dispatchNotification: pending.Enqueue);
+        context.Sut.SelectedModel = context.Sut.ModelOptions.Single(m => m.ModelId == plugin.FirstFullModelId);
+        context.Sut.LocalModelAcceleration = AppSettings.LocalModelAccelerationVulkan;
+        // The revert is posted to the UI thread; drain it the way the other view-model tests do.
+        while (pending.TryDequeue(out var job))
+        {
+            job();
+        }
+        Assert.Equal(AppSettings.LocalModelAccelerationCpu, context.Sut.LocalModelAcceleration);
+        Assert.False(context.Sut.CanUseVulkan);
+        Assert.Equal(Loc.Instance["Dictation.AccelVulkanNotSupported"], context.Sut.StatusText);
+    }
+
     [Theory]
     [InlineData("-1", -1, "-1")]
     [InlineData("0", 1, "1")]
@@ -481,6 +562,32 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public async Task ExplicitOnlyEngine_OffersEverySupportedLanguageWithoutAuto()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { Language = "ja", SelectedModelId = null },
+            devices,
+            [plugin]
+        );
+
+        context.Sut.SelectedModel = Assert.Single(
+            context.Sut.ModelOptions,
+            option => option.ModelId == plugin.FourthFullModelId
+        );
+        await WaitUntilAsync(() =>
+            context.Sut.LanguageChoices.Select(option => option.Code).Order()
+                .SequenceEqual(ModelDependentLanguagePlugin.ExplicitOnlyLanguages)
+        );
+
+        Assert.Equal("ja", context.Sut.SelectedLanguageOption?.Code);
+        Assert.False(context.Sut.LanguageSelectionRequired);
+    }
+
+    [Fact]
     public async Task AutoOnlyEngine_InvalidSavedChoice_ShowsSwitchToAutoWarning()
     {
         var plugin = new ModelDependentLanguagePlugin();
@@ -750,11 +857,16 @@ public sealed class DictationSectionViewModelTests
             IReadOnlyList<ITranscriptionEngineRole>? engines = null,
             IAtSpiEventClient? atSpiClient = null,
             Action<Action>? dispatchNotification = null,
-            TimeProvider? timeProvider = null
+            TimeProvider? timeProvider = null,
+            IReadOnlyList<IPostProcessorPlugin>? processors = null
         )
         {
             Settings = TestPluginManagerFactory.CreateSettings(initialSettings);
             PluginManager = TestPluginManagerFactory.Create();
+            if (processors is not null)
+            {
+                SetPostProcessors(processors);
+            }
             if (engines is not null)
             {
                 SetTranscriptionEngines(PluginManager, engines);
@@ -802,6 +914,14 @@ public sealed class DictationSectionViewModelTests
         private ModelManagerService Models { get; }
         public AudioRecordingService Audio { get; }
         public List<int> OpenedDeviceIndices { get; } = [];
+
+        public void SetPostProcessors(IReadOnlyList<IPostProcessorPlugin> processors) =>
+            typeof(PluginManager).GetField("_postProcessors", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(PluginManager, processors.ToList());
+
+        public void NotifyPluginStateChanged() =>
+            ((EventHandler?)typeof(PluginManager).GetField("PluginStateChanged", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(PluginManager))?.Invoke(PluginManager, EventArgs.Empty);
 
         public void Dispose()
         {
@@ -852,6 +972,11 @@ public sealed class DictationSectionViewModelTests
         private const string FirstModelId = "multilingual";
         private const string SecondModelId = "english-only";
         private const string ThirdModelId = "auto-only";
+        private const string FourthModelId = "explicit-only";
+
+        // Cohere Transcribe's languages.
+        internal static string[] ExplicitOnlyLanguages { get; } =
+            ["ar", "de", "el", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "vi", "zh"];
 
         public string FirstFullModelId =>
             ModelManagerService.GetPluginModelId(PluginId, FirstModelId);
@@ -859,6 +984,8 @@ public sealed class DictationSectionViewModelTests
             ModelManagerService.GetPluginModelId(PluginId, SecondModelId);
         public string ThirdFullModelId =>
             ModelManagerService.GetPluginModelId(PluginId, ThirdModelId);
+        public string FourthFullModelId =>
+            ModelManagerService.GetPluginModelId(PluginId, FourthModelId);
         public string PluginId => "com.test.language-picker";
         public string PluginName => "Language picker fake";
         public string PluginVersion => "1.0.0";
@@ -870,11 +997,12 @@ public sealed class DictationSectionViewModelTests
             new(FirstModelId, "Multilingual"),
             new(SecondModelId, "English only"),
             new(ThirdModelId, "Auto only"),
+            new(FourthModelId, "Explicit only"),
         ];
         public string? SelectedModelId { get; private set; }
         public bool SupportsTranslation { get; init; }
         public LanguageSelectionSupport AutomaticDetectionSupport =>
-            SelectedModelId == SecondModelId
+            SelectedModelId is SecondModelId or FourthModelId
                 ? LanguageSelectionSupport.Unsupported
                 : LanguageSelectionSupport.Supported;
         public LanguageSelectionSupport ExplicitSelectionSupport =>
@@ -882,7 +1010,12 @@ public sealed class DictationSectionViewModelTests
                 ? LanguageSelectionSupport.Unsupported
                 : LanguageSelectionSupport.Supported;
         public IReadOnlyList<string> SupportedLanguages =>
-            SelectedModelId == SecondModelId ? ["en"] : ["de", "fr"];
+            SelectedModelId switch
+            {
+                SecondModelId => ["en"],
+                FourthModelId => ExplicitOnlyLanguages,
+                _ => ["de", "fr"],
+            };
 
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
         public Task DeactivateAsync() => Task.CompletedTask;

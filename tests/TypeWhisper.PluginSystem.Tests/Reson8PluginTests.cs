@@ -830,7 +830,7 @@ public partial class Reson8PluginTests
     }
 
     private static async Task<Reson8Plugin> CreateStreamingPluginAsync(
-        Func<string?, CancellationToken, Task<IStreamingSession>> connect,
+        Func<Reson8StreamingRequest, CancellationToken, Task<IStreamingSession>> connect,
         Action onBatch,
         TimeSpan? finalizeGrace = null)
     {

@@ -356,52 +356,64 @@
       },
       "org.k2fsa.sherpa.onnx": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "MG8PmUYqJQuSLEqjm9s8UCHaUu8TR0UdgZKRzoU6L2X2Kw9q4WLWSfBtNmJpCMgNHxMbCHlyyxg6WzaTgLFZgQ==",
+        "resolved": "1.13.8",
+        "contentHash": "CVBBX154lJ0STD8At5t0LvnSuOiXRwOI/8YeTvEEd+K1xwbtLZTQ4tQESyGEcfdIXTf+ucaGF4LMpHfI4R5yCw==",
         "dependencies": {
-          "org.k2fsa.sherpa.onnx.runtime.linux-arm64": "1.12.23",
-          "org.k2fsa.sherpa.onnx.runtime.linux-x64": "1.12.23",
-          "org.k2fsa.sherpa.onnx.runtime.osx-arm64": "1.12.23",
-          "org.k2fsa.sherpa.onnx.runtime.osx-x64": "1.12.23",
-          "org.k2fsa.sherpa.onnx.runtime.win-arm64": "1.12.23",
-          "org.k2fsa.sherpa.onnx.runtime.win-x64": "1.12.23",
-          "org.k2fsa.sherpa.onnx.runtime.win-x86": "1.12.23"
+          "org.k2fsa.sherpa.onnx.runtime.android-arm64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.android-x64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.linux-arm64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.linux-x64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.osx-arm64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.osx-x64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.win-arm64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.win-x64": "1.13.8",
+          "org.k2fsa.sherpa.onnx.runtime.win-x86": "1.13.8"
         }
+      },
+      "org.k2fsa.sherpa.onnx.runtime.android-arm64": {
+        "type": "Transitive",
+        "resolved": "1.13.8",
+        "contentHash": "0bEXZHGGu3ywaXjx0nwmHoBkPsVDKQjfC6FpqGGpBLnfokMbvPaGXgFShFW73bW8PSOB4gc9cLrVRkgOImy67A=="
+      },
+      "org.k2fsa.sherpa.onnx.runtime.android-x64": {
+        "type": "Transitive",
+        "resolved": "1.13.8",
+        "contentHash": "BMltFcQOnoIgWRUDb2lNGF2FHuoWoWMP6DKrJgzsdkRXCIdl3jX0lpbj+etBeW+8wdXmKxREGA2hrvO8h42k0g=="
       },
       "org.k2fsa.sherpa.onnx.runtime.linux-arm64": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "NNo33xtAvM1Bqatm88KzFX5cSswFbvSlEJ3ArBVrdSbS9FgnnqIizfJPbM4tpSEuZXSBy/iImJevrCaZdaWm8w=="
+        "resolved": "1.13.8",
+        "contentHash": "Vg6iDY3YDILvapwKrCrByAnBu2OImxuZNsB0Sg1k+Gox3GV2runHidTZtNTHJZUA9zFdjAz9Ab4HzqsaATjrzg=="
       },
       "org.k2fsa.sherpa.onnx.runtime.linux-x64": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "oCGWaFlcnXBU1YSN5WkHyPYyEdpYoghAT9EBAkrp6Z6TOYwDie2qqDwgjat1spHAcvqmUmvfb8hrO7vCiQsSrw=="
+        "resolved": "1.13.8",
+        "contentHash": "rqWNcekzaZHKX0xwYHePwGMwa9lb/JiuNh6Cc0f+Jnz6r5U45BdAtqUUJNh9F5DO2d2CuabAbBe3IqkngtVR8w=="
       },
       "org.k2fsa.sherpa.onnx.runtime.osx-arm64": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "dYX4WRNLMk9IIlXYKMFq32ORBjVifuTj8FdlJljTFLMBKxtxIkcrEsHpIm6WaWhUeBbSbuF+Kh5nq5sgu8vFDg=="
+        "resolved": "1.13.8",
+        "contentHash": "lhEqIPi/KlleNXrNMxXLpBrT1e3uONY/Nt0v7kswxXzvOwj89484ylpMu4jns7rpVug0Y/MfFP6kCDuV2CZo5Q=="
       },
       "org.k2fsa.sherpa.onnx.runtime.osx-x64": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "W+OfMjL0GyfyswKhYFYZSuwzyo72QRVsPD1Q5VbAvQ9Pu4+Sib4MMZm/KChOaPh2VmOXC8pgiDX6jEQvbJFCUw=="
+        "resolved": "1.13.8",
+        "contentHash": "jUYwCbi+y7yNHbAFB3u2pyQihsrdk0fl8tC5yPvaqeLqgfUn1wdsrXsS+maJTx/8Phxfx+HHlcii31zlQHSv2w=="
       },
       "org.k2fsa.sherpa.onnx.runtime.win-arm64": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "RIsL+jwD469CAhsZ5XFsO7Msx0c7iZnQVls+Mv1CQJejWxn0yD22Bwj/+tzYx5J8UXuDpL7RuKqKKbf+t7Fviw=="
+        "resolved": "1.13.8",
+        "contentHash": "EQk0M1dpvIOG9uVtYz7kgkmlrdajQcqbzAPCdTHeOOSYy68biXk1/O8pyHeBwTF9J9i2xDiJq+PtyNc7C8Vmbg=="
       },
       "org.k2fsa.sherpa.onnx.runtime.win-x64": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "i4H6TD2CzAK+4LJLHPmuTOhEHPLo2pI5eZwmbnOKT/pfzVt/ImAlSUIxsb0qD53EaidJsNx6OBtVnH8ywsHEfw=="
+        "resolved": "1.13.8",
+        "contentHash": "qQS9IQTRet05fl82IlM93XLNnuhW50lhepOBR2qzbjxWKjSXFTvx8SlALAoCLDGyURrQ5iOgl97JZFEeIG9A9g=="
       },
       "org.k2fsa.sherpa.onnx.runtime.win-x86": {
         "type": "Transitive",
-        "resolved": "1.12.23",
-        "contentHash": "ebNDDANGYO/dAJJ2RNB78R3JZ/k+gQx6kwScRRI834WuEJu0RMCupjou/S/JeoHHR31lyyxhnOo7Hot8SXQkog=="
+        "resolved": "1.13.8",
+        "contentHash": "QbpkOX0LBcYq/AUZTIlrwz7tPunhqVAFT8A9+JnVw6a6TYRFKvSBwxIWUPbNfpyGYPkTFNunpFIJzcLyiek0gg=="
       },
       "PortAudioSharp2": {
         "type": "Transitive",
@@ -495,6 +507,11 @@
         "resolved": "1.8.1",
         "contentHash": "DW2JhlBbt0W5W+cIP8Uevt5+7XnjPIsG9b5FyAdeB9taNk9w1WFw9W7TYSNaqgyEbEHHPNOXA6hl+yrmBwOfsQ=="
       },
+      "Whisper.net.Runtime.Vulkan": {
+        "type": "Transitive",
+        "resolved": "1.8.1",
+        "contentHash": "hZmqxZZ6foU3WVmrewuFguIrodMkfb/7uyitBBPrZipo55jK16t/xxKUsWMLETYgEgGVwkZ33YNu8i3+4Kbjpg=="
+      },
       "xunit.abstractions": {
         "type": "Transitive",
         "resolved": "2.0.3",
@@ -550,8 +567,8 @@
           "Sentry": "[6.11.0, )",
           "SharpHook": "[5.3.9, )",
           "Tmds.DBus.Protocol": "[0.92.0, )",
-          "TypeWhisper.Core": "[0.16.1, )",
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.Core": "[0.17.0, )",
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.core": {
@@ -563,73 +580,73 @@
       "typewhisper.plugin.assemblyai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.authenticatedcli": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.cerebras": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.claude": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.cloudflareasr": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.cohere": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.deepgram": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.elevenlabs": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.filememory": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.fillerwords": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.fireworks": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.gemini": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.gemmalocal": {
@@ -637,73 +654,73 @@
         "dependencies": {
           "LLamaSharp": "[0.27.0, )",
           "LLamaSharp.Backend.Cpu": "[0.27.0, )",
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.gladia": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.googlecloudstt": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.groq": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.linear": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.meta": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.microsoftai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.obsidian": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.openai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.openaicompatible": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.openaivectormemory": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.openrouter": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.parakeetctc": {
@@ -711,84 +728,85 @@
         "dependencies": {
           "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
           "SharpCompress": "[0.48.0, )",
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.qwen3stt": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.reson8": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.script": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.sherpaonnx": {
         "type": "Project",
         "dependencies": {
           "SharpCompress": "[0.48.0, )",
-          "TypeWhisper.PluginSDK": "[0.16.1, )",
-          "org.k2fsa.sherpa.onnx": "[1.12.23, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )",
+          "org.k2fsa.sherpa.onnx": "[1.13.8, )"
         }
       },
       "typewhisper.plugin.smallestai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.soniox": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.speechmatics": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.supertonictts": {
         "type": "Project",
         "dependencies": {
           "Microsoft.ML.OnnxRuntime": "[1.24.1, )",
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.voxtral": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.webhook": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.plugin.whispercpp": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )",
+          "TypeWhisper.PluginSDK": "[0.17.0, )",
           "Whisper.net": "[1.8.1, )",
-          "Whisper.net.Runtime": "[1.8.1, )"
+          "Whisper.net.Runtime": "[1.8.1, )",
+          "Whisper.net.Runtime.Vulkan": "[1.8.1, )"
         }
       },
       "typewhisper.plugin.xai": {
         "type": "Project",
         "dependencies": {
-          "TypeWhisper.PluginSDK": "[0.16.1, )"
+          "TypeWhisper.PluginSDK": "[0.17.0, )"
         }
       },
       "typewhisper.pluginsdk": {

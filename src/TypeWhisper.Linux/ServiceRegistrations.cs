@@ -234,6 +234,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<RecentTranscriptionsService>();
         services.AddSingleton<LastTranscriptionReadbackService>();
         services.AddSingleton<MemoryService>();
+        services.AddSingleton<DictionaryAliasSuggestionService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
@@ -246,6 +247,7 @@ internal static class ServiceRegistrations
             )
         );
         services.AddSingleton<LocalDataExportService>();
+        services.AddSingleton<LocalDataResetService>();
         services.AddSingleton<ApiDiscoveryFile>();
         services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();
@@ -282,6 +284,7 @@ internal static class ServiceRegistrations
 
         // Tiling WM recording indicator (desktop notification instead of overlay; no-op on DEs).
         services.AddSingleton<RecordingNotificationService>();
+        services.AddSingleton<InterfaceThemeService>();
         // Tiling WM learned-corrections feedback: same suppressed-overlay situation as above,
         // so the "Learned X → Y" toast + Undo is delivered as a desktop notification instead.
         services.AddSingleton<LearnedCorrectionsNotificationService>();

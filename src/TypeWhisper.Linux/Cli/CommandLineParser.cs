@@ -1,3 +1,5 @@
+using TypeWhisper.Linux.Services;
+
 namespace TypeWhisper.Linux.Cli;
 
 /// <summary>What the parsed argv tells us to do; Program.Main switches on <see cref="CliAction.Kind" />.</summary>
@@ -27,7 +29,8 @@ internal sealed record CliAction(
     CliActionKind Kind,
     string? RecordVerb = null,
     string? ErrorMessage = null,
-    bool StartMinimized = false
+    bool StartMinimized = false,
+    SettingsPage? Page = null
 );
 
 /// <summary>
@@ -46,7 +49,19 @@ internal static class CommandLineParser
         + "  typewhisper record cancel         Drop in-flight audio with no transcription.\n"
         + "  typewhisper status                Print current state as JSON.\n"
         + "  typewhisper --minimized           Launch the GUI minimized to the tray.\n"
-        + "  typewhisper --help                Show this help.\n";
+        + "  typewhisper --page <page>         Open a settings page, starting the GUI if needed.\n"
+        + "  typewhisper --page plugin:<id>    Open one plugin's settings.\n"
+        + "  typewhisper --help                Show this help.\n"
+        + "\n"
+        + "Pages: " + PageList + "\n";
+
+    private const string PageOption = "--page";
+
+    // Kept in step with SettingsPage's catalog by a test; a const so UsageText stays one.
+    private const string PageList =
+        "dashboard, dictation, shortcuts, text-insertion, file-transcription, recorder,\n"
+        + "       history, dictionary, snippets, profiles, prompts, plugins, general,\n"
+        + "       appearance, advanced, about";
 
     public static CliAction Parse(string[] args)
     {
@@ -68,6 +83,7 @@ internal static class CommandLineParser
         // --minimized with no subcommand launches the GUI minimized. Unknown flags
         // are treated as GUI launch to preserve forward-compat with older autostart entries.
         var minimized = false;
+        SettingsPage? page = null;
         var sawNonFlag = false;
         var firstNonFlag = -1;
         for (var i = 0; i < args.Length; i++)
@@ -76,6 +92,36 @@ internal static class CommandLineParser
             if (string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase))
             {
                 minimized = true;
+                continue;
+            }
+
+            if (TryReadPageValue(args, ref i, out var pageValue))
+            {
+                if (page is not null)
+                {
+                    return new CliAction(
+                        CliActionKind.Invalid,
+                        ErrorMessage: "--page may be given only once"
+                    );
+                }
+
+                if (string.IsNullOrEmpty(pageValue) || pageValue.StartsWith('-'))
+                {
+                    return new CliAction(
+                        CliActionKind.Invalid,
+                        ErrorMessage: "missing page name after --page"
+                    );
+                }
+
+                page = SettingsPage.TryParse(pageValue);
+                if (page is null)
+                {
+                    return new CliAction(
+                        CliActionKind.Invalid,
+                        ErrorMessage: $"unknown settings page '{pageValue}'"
+                    );
+                }
+
                 continue;
             }
 
@@ -92,7 +138,24 @@ internal static class CommandLineParser
 
         if (!sawNonFlag)
         {
-            return new CliAction(CliActionKind.LaunchGui, StartMinimized: minimized);
+            if (page is not null && minimized)
+            {
+                return new CliAction(
+                    CliActionKind.Invalid,
+                    ErrorMessage: "--page cannot be combined with --minimized"
+                );
+            }
+
+            return new CliAction(CliActionKind.LaunchGui, StartMinimized: minimized, Page: page);
+        }
+
+        // A subcommand never opens a window; reject --page anywhere around it rather than ignore it.
+        if (page is not null || args.Any(IsPageOption))
+        {
+            return new CliAction(
+                CliActionKind.Invalid,
+                ErrorMessage: $"--page cannot be combined with '{args[firstNonFlag]}'"
+            );
         }
 
         // Only 'record' and 'status' are recognized; trailing positional arguments
@@ -143,6 +206,33 @@ internal static class CommandLineParser
 
         return new CliAction(CliActionKind.Status);
     }
+
+    /// <summary>
+    ///     Recognizes <c>--page &lt;value&gt;</c> and <c>--page=&lt;value&gt;</c>, advancing
+    ///     <paramref name="index" /> past a separate value. A missing value comes back empty.
+    /// </summary>
+    private static bool TryReadPageValue(string[] args, ref int index, out string value)
+    {
+        var arg = args[index];
+        if (string.Equals(arg, PageOption, StringComparison.OrdinalIgnoreCase))
+        {
+            value = index + 1 < args.Length ? args[++index] : "";
+            return true;
+        }
+
+        if (arg.StartsWith(PageOption + "=", StringComparison.OrdinalIgnoreCase))
+        {
+            value = arg[(PageOption.Length + 1)..];
+            return true;
+        }
+
+        value = "";
+        return false;
+    }
+
+    private static bool IsPageOption(string arg) =>
+        string.Equals(arg, PageOption, StringComparison.OrdinalIgnoreCase)
+        || arg.StartsWith(PageOption + "=", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     ///     Returns true if any argument after <paramref name="lastConsumedIndex" />

@@ -10,7 +10,23 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 internal static class ProviderFailureAssertions
 {
-    internal static async Task VerifyAsync<T>() where T : ITypeWhisperPlugin, new()
+    // A plugin with both roles is checked through its LLM role, plus transcription when asked.
+    internal static async Task VerifyAsync<T>(bool alsoTranscription = false) where T : ITypeWhisperPlugin, new()
+    {
+        bool isLlm, isTranscription;
+        using (var probe = new T())
+        {
+            isLlm = probe is ILlmProviderRole;
+            isTranscription = probe is ITranscriptionEngineRole;
+        }
+
+        if (isLlm)
+            await VerifyRoleAsync<T>(transcription: false);
+        if (isTranscription && (!isLlm || alsoTranscription))
+            await VerifyRoleAsync<T>(transcription: true);
+    }
+
+    private static async Task VerifyRoleAsync<T>(bool transcription) where T : ITypeWhisperPlugin, new()
     {
         int[] statuses = [401, 429, 500, 0];
         foreach (var status in statuses)
@@ -34,15 +50,15 @@ internal static class ProviderFailureAssertions
                 typeof(T).GetField("_baseUrl", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(plugin, "");
             var ex = await Assert.ThrowsAsync<PluginRequestException>(async () =>
             {
-                switch (plugin)
+                if (transcription)
                 {
-                    case ILlmProviderRole llm:
-                        await llm.ProcessAsync("system", "user", llm.SupportedModels.Count > 0 ? llm.SupportedModels[0].Id : "model", CancellationToken.None);
-                        break;
-                    case ITranscriptionEngineRole transcription:
-                        await transcription.TranscribeAsync(CreateWav(), plugin is CloudflareAsrPlugin ? null : "en", false, null, CancellationToken.None);
-                        break;
+                    await ((ITranscriptionEngineRole)plugin).TranscribeAsync(
+                        CreateWav(), plugin is CloudflareAsrPlugin ? null : "en", false, null, CancellationToken.None);
+                    return;
                 }
+
+                var llm = (ILlmProviderRole)plugin;
+                await llm.ProcessAsync("system", "user", llm.SupportedModels.Count > 0 ? llm.SupportedModels[0].Id : "model", CancellationToken.None);
             });
             Assert.Equal(status switch
             {
@@ -56,7 +72,7 @@ internal static class ProviderFailureAssertions
             if (status == 429)
                 Assert.Equal(TimeSpan.FromSeconds(2), ex.RetryAfter);
             Assert.DoesNotContain("test-secret-key", ex.Message);
-            if (plugin is not ILlmProviderRole streamingLlm)
+            if (transcription || plugin is not ILlmProviderRole streamingLlm)
                 continue;
             var streamFailure = await Assert.ThrowsAsync<PluginRequestException>(async () =>
             {

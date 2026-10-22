@@ -142,7 +142,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
-        var xai = await new XaiWebSocketAdapter("xai-key", "de")
+        var xai = await new XaiWebSocketAdapter("xai-key", "de", [])
             .GetConnectionOptionsAsync(CancellationToken.None);
         var openAi = await new OpenAiRealtimeWebSocketAdapter(
                 OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
@@ -687,7 +687,7 @@ public sealed class StreamingProviderAdapterConformanceTests
             "Speechmatics" => new SpeechmaticsWebSocketAdapter(
                 "key", new Uri(SpeechmaticsPlugin.AvailableRegions[0].RealtimeUrl), "en", "enhanced", []),
             "Gladia" => new GladiaWebSocketAdapter(new HttpClient(), "key", null, []),
-            "xAI" => new XaiWebSocketAdapter("key", null),
+            "xAI" => new XaiWebSocketAdapter("key", null, []),
             _ => new OpenAiRealtimeWebSocketAdapter(
                 OpenAiRealtimeStreamingSession.OpenAiRealtimeEndpoint,
                 OpenAiRealtimeStreamingSession.CreateRealtimeHeaders("key"),

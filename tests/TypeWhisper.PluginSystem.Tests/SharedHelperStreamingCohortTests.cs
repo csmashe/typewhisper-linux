@@ -5,6 +5,7 @@ using TypeWhisper.Plugin.Cerebras;
 using TypeWhisper.Plugin.Cohere;
 using TypeWhisper.Plugin.Fireworks;
 using TypeWhisper.Plugin.Gemini;
+using TypeWhisper.Plugin.Voxtral;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
@@ -71,6 +72,16 @@ public sealed class SharedHelperStreamingCohortTests
     }
 
     [Fact]
+    public async Task Voxtral_ProcessStreamingAsync_StreamsDeltas()
+    {
+        var (chunks, body, url) = await StreamAsync(h => new VoxtralPlugin(h), "api-key", "mistral-test");
+
+        Assert.Equal(["Hel", "lo"], chunks);
+        Assert.Equal("https://api.mistral.ai/v1/chat/completions", url);
+        AssertStreamBody(body, "mistral-test");
+    }
+
+    [Fact]
     public async Task Cerebras_ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk() =>
         await AssertToggleOffYieldsBulk(h => new CerebrasPlugin(h), "api-key");
 
@@ -85,6 +96,10 @@ public sealed class SharedHelperStreamingCohortTests
     [Fact]
     public async Task Gemini_ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk() =>
         await AssertToggleOffYieldsBulk(h => new GeminiPlugin(h), "api-key");
+
+    [Fact]
+    public async Task Voxtral_ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk() =>
+        await AssertToggleOffYieldsBulk(h => new VoxtralPlugin(h), "api-key");
 
     [Fact]
     public async Task ProcessStreamingAsync_ThrowsOnErrorFrameAfterPartialDeltas()

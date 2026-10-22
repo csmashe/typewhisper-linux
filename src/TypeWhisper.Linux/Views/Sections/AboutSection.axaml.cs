@@ -236,6 +236,33 @@ public partial class AboutSection : UserControl
         }
     }
 
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnDeleteAllData(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AboutSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        try
+        {
+            var confirmed = await new MessageDialogWindow().ShowConfirmationAsync(
+                Loc.Instance["About.ResetConfirmTitle"],
+                Loc.Instance[viewModel.DeleteModelsOnReset ? "About.ResetConfirmWithModels" : "About.ResetConfirm"],
+                Loc.Instance["About.ResetConfirmButton"],
+                acknowledgement: Loc.Instance["About.ResetAcknowledge"]
+            );
+            if (confirmed)
+            {
+                await viewModel.ResetAllDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowMessage(Loc.Instance["About.ResetFailed"], ex.Message);
+        }
+    }
+
     private static async Task ShowMessage(string title, string message)
     {
         var dialog = new MessageDialogWindow();

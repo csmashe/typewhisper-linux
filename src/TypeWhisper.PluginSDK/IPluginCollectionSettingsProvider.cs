@@ -61,7 +61,43 @@ public sealed record PluginCollectionDefinition(
     /// </summary>
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     public bool IsSearchable { get; init; }
+
+    /// <summary>
+    ///     Starting points the user can add as new unsaved items. Adding one copies its values
+    ///     into the draft; nothing is stored until the user saves. Empty hides the template picker.
+    /// </summary>
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    public IReadOnlyList<PluginCollectionTemplate> Templates { get; init; } = [];
+
+    /// <summary>
+    ///     Offers a test of each item's unsaved draft when the plugin implements
+    ///     <see cref="IPluginCollectionItemTester" />. Null hides the test controls.
+    /// </summary>
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    public PluginCollectionItemTest? ItemTest { get; init; }
 }
+
+/// <summary>A ready-made item the user can add to a collection.</summary>
+/// <param name="Id">Unique template identifier within the collection.</param>
+/// <param name="Label">Name shown in the template picker.</param>
+/// <param name="Description">Optional explanation shown with the picker.</param>
+/// <param name="Values">
+///     Field values for the new item. Fields not listed get the same defaults as an empty item;
+///     internal "__" fields such as "__id" are always generated fresh.
+/// </param>
+// ReSharper disable once UnusedType.Global
+public sealed record PluginCollectionTemplate(
+    string Id,
+    string Label,
+    string? Description,
+    IReadOnlyDictionary<string, string?> Values
+);
+
+/// <summary>Describes the per-item test the host offers for a collection.</summary>
+/// <param name="ButtonLabel">Text of the button that runs the test.</param>
+/// <param name="SampleInput">Initial, editable test input.</param>
+// ReSharper disable once UnusedType.Global
+public sealed record PluginCollectionItemTest(string ButtonLabel, string SampleInput);
 
 /// <summary>A single item in a plugin collection, represented as a field-value map.</summary>
 // ReSharper disable once UnusedType.Global

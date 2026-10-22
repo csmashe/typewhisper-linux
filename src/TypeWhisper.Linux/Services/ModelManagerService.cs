@@ -771,6 +771,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             AppSettings.LocalModelAccelerationNvidiaCuda =>
                 TranscriptionAccelerationPreference.NvidiaCuda,
+            AppSettings.LocalModelAccelerationVulkan =>
+                TranscriptionAccelerationPreference.Vulkan,
             AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
             _ => TranscriptionAccelerationPreference.Auto,
         };

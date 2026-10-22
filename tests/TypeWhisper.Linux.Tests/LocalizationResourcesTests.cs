@@ -39,6 +39,43 @@ public sealed class LocalizationResourcesTests
         Assert.Contains("{0}", catalog["History.RetryFailed"]);
     }
 
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void AppImportKeys_AreTranslatedWithMatchingPlaceholders(string language)
+    {
+        var english = Load("en");
+        var catalog = Load(language);
+        var keys = english.Keys
+            .Where(key => key.StartsWith("AppImport.", StringComparison.Ordinal)
+                || key.StartsWith("HandyImport.", StringComparison.Ordinal)
+                || key.StartsWith("WisprImport.", StringComparison.Ordinal)
+                || key.StartsWith("Dictionary.ImportFrom", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(34, keys.Count);
+        foreach (var key in keys)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(catalog[key]), key);
+            for (var i = 0; i < 4; i++)
+            {
+                Assert.Equal(english[key].Contains($"{{{i}}}"), catalog[key].Contains($"{{{i}}}"));
+            }
+
+            // "{0} → {1}" has no words to translate.
+            if (language != "en" && key != "AppImport.CorrectionEntry")
+            {
+                Assert.NotEqual(english[key], catalog[key]);
+            }
+        }
+
+        foreach (var outcome in Enum.GetNames<TypeWhisper.Core.Services.AppImport.DictionaryImportOutcome>())
+        {
+            Assert.True(catalog.ContainsKey($"AppImport.Outcome{outcome}"), outcome);
+        }
+    }
+
     [Fact]
     public void CanonicalCatalogLoadsAndIsNonEmpty()
     {
@@ -548,6 +585,34 @@ public sealed class LocalizationResourcesTests
             orphans.Count == 0,
             $"{lang}.json has keys not present in {CanonicalLanguage}.json: {string.Join(", ", orphans)}"
         );
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveProfileCardRuleStringsWithPlaceholders(string language)
+    {
+        var catalog = Load(language);
+        Assert.True(
+            catalog.TryGetValue("Profiles.AppRulesCount", out var appRules),
+            $"Missing {language} key: Profiles.AppRulesCount"
+        );
+        Assert.Contains("{0}", appRules, StringComparison.Ordinal);
+
+        Assert.True(
+            catalog.TryGetValue("Profiles.UrlRulesCount", out var urlRules),
+            $"Missing {language} key: Profiles.UrlRulesCount"
+        );
+        Assert.Contains("{0}", urlRules, StringComparison.Ordinal);
+
+        Assert.True(
+            catalog.TryGetValue("Profiles.RulesSummary", out var rulesSummary),
+            $"Missing {language} key: Profiles.RulesSummary"
+        );
+        Assert.Contains("{0}", rulesSummary, StringComparison.Ordinal);
+        Assert.Contains("{1}", rulesSummary, StringComparison.Ordinal);
     }
 
     [Theory]

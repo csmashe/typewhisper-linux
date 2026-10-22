@@ -41,7 +41,7 @@ public sealed class SherpaOnnxModelDownloadTests : IDisposable
         var models = plugin.TranscriptionModels;
 
         Assert.Equal(
-            ["parakeet-ultra-0.6b", "parakeet-tdt-0.6b", "canary-180m-flash"],
+            ["parakeet-ultra-0.6b", "parakeet-tdt-0.6b", "canary-180m-flash", "qwen3-asr-0.6b", "qwen3-asr-1.7b"],
             models.Select(m => m.Id)
         );
         Assert.Equal("parakeet-ultra-0.6b", Assert.Single(models, m => m.IsRecommended).Id);

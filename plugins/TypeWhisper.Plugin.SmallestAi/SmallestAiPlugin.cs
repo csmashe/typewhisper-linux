@@ -11,7 +11,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SmallestAi;
 
-public sealed class SmallestAiPlugin
+public sealed partial class SmallestAiPlugin
     : ITranscriptionEnginePlugin,
         ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
@@ -52,7 +52,7 @@ public sealed class SmallestAiPlugin
     // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.smallest-ai";
-    public string PluginName => "Smallest AI Pulse";
+    public string PluginName => "Smallest AI";
     public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
@@ -60,6 +60,7 @@ public sealed class SmallestAiPlugin
         _host = host;
         ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _selectedModelId = DefaultModelId;
+        RestoreSpeechSettings(host);
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -158,8 +159,9 @@ public sealed class SmallestAiPlugin
             }
 
             ApiKey = normalized;
+            var catalogReset = changed && ResetVoiceCatalog();
 
-            if (_host is not null && changed && wasConfigured != IsConfigured)
+            if (_host is not null && changed && (wasConfigured != IsConfigured || catalogReset))
                 hostToNotify = _host;
         }
         finally
@@ -414,6 +416,7 @@ public sealed class SmallestAiPlugin
                 true,
                 Description: Loc.L("Settings.ApiKeyDescription")
             ),
+            SpeechSpeedSettingDefinition(),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -421,6 +424,7 @@ public sealed class SmallestAiPlugin
             key switch
             {
                 ApiKeySecretName => ApiKey,
+                SpeechSpeedSettingName => FormatSpeed(SpeechSpeed),
                 _ => null,
             }
         );
@@ -436,6 +440,9 @@ public sealed class SmallestAiPlugin
             case ApiKeySecretName:
                 await SetApiKeyAsync(value ?? string.Empty);
                 break;
+            case SpeechSpeedSettingName:
+                SetSpeechSpeed(value);
+                break;
         }
     }
 
@@ -445,8 +452,20 @@ public sealed class SmallestAiPlugin
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
         var valid = await ValidateApiKeyAsync(ApiKey, ct);
-        return valid
-            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
-            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        if (!valid)
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+
+        // A disabled plugin has no host to cache voices in; they load once it is enabled.
+        if (_host is null)
+            return new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"));
+
+        // A valid key with a failed catalog refresh is still a valid key; the cached voices stay.
+        var refresh = await RefreshVoicesAsync(ct);
+        return new PluginSettingsValidationResult(
+            true,
+            refresh.IsSuccess
+                ? Loc.L("Settings.ApiKeyValidVoices", Voices.Length)
+                : Loc.L("Settings.ApiKeyValidVoicesKept", refresh.Message)
+        );
     }
 }

@@ -8,14 +8,17 @@ using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using System.Net.Sockets;
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Cli.Commands;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.UserData;
 using TypeWhisper.Linux.ViewModels;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Linux.Views;
@@ -44,6 +47,27 @@ public class App : Application
     ///     desktop.Shutdown(). Access is UI-thread-only.
     /// </summary>
     private static bool ClosePermitted { get; set; }
+
+    /// <summary>Set by <see cref="RequestRestart" />; Program starts the app again once it has exited.</summary>
+    internal static bool RestartRequested { get; private set; }
+
+    /// <summary>
+    ///     Quits through the normal shutdown, which finishes or stops active work, and starts the app
+    ///     again afterwards. False when the app is already quitting. Call on the UI thread.
+    /// </summary>
+    internal static bool RequestRestart()
+    {
+        if (ShuttingDown
+            || Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            return false;
+        }
+
+        ShuttingDown = true;
+        RestartRequested = true;
+        _ = ShutdownAndExitAsync(Program.Services, desktop);
+        return true;
+    }
 
     // ReSharper disable once UnusedAutoPropertyAccessor.Global -- diagnostic seam, kept for degraded-startup inspection.
     internal BootstrapReport? LastBootstrapReport { get; private set; }
@@ -84,6 +108,9 @@ public class App : Application
             Loc.Instance.Initialize();
             Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
             BootTrace.Stage("Loc.Initialize");
+
+            // Before any window exists, so the first render already uses the saved theme.
+            services.GetRequiredService<InterfaceThemeService>().Start(this);
 
             var secretMigration = services.GetRequiredService<SecretProtectionMigrationService>();
             var secretMigrationResult = secretMigration.MigrateAllAtStartup();
@@ -181,6 +208,29 @@ public class App : Application
                     await dialog.ShowMessageAsync(
                         Loc.Instance["Security.SecretMigrationWarningTitle"],
                         secretMigrationWarning
+                    );
+                };
+            }
+
+            if (services.GetRequiredService<LocalDataResetService>().TakeIncompleteReport() is { } resetReport)
+            {
+                var resetReportShown = false;
+                main.Opened += async (_, _) =>
+                {
+                    if (resetReportShown)
+                    {
+                        return;
+                    }
+
+                    resetReportShown = true;
+                    await new MessageDialogWindow().ShowMessageAsync(
+                        Loc.Instance["About.ResetIncompleteTitle"],
+                        Loc.Instance.GetString(
+                            "About.ResetIncomplete",
+                            resetReport.RemainingCount,
+                            TypeWhisperEnvironment.BasePath,
+                            string.Join("\n", resetReport.Remaining)
+                        )
                     );
                 };
             }
@@ -287,6 +337,31 @@ public class App : Application
                 return;
             }
 
+            // A plugin page waits for plugins to load; the bootstrap fallback covers a skipped
+            // plugin stage, which never completes Initialization, and first-run installs.
+            var bootstrapFinished = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var pluginsReady = Task.WhenAny(
+                services.GetRequiredService<PluginManager>().Initialization,
+                bootstrapFinished.Task
+            );
+
+            // A second `typewhisper --page` lands here; a first launch takes the same path below.
+            controlSocket.SettingsPageRequested += page =>
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (ShuttingDown)
+                    {
+                        return;
+                    }
+
+                    ShowMainWindow(main);
+                    FireAndForget(
+                        OpenSettingsPageAsync(main, page, pluginsReady, bootstrapFinished.Task)
+                    );
+                });
+
             // The bind doubles as the single-instance guard; AddressAlreadyInUse means
             // a live peer got here first — shut this instance down cleanly.
             try
@@ -295,12 +370,26 @@ public class App : Application
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
             {
-                Console.Error.WriteLine("TypeWhisper is already running.");
+                // Program's probe missed the peer that won the bind; hand it the page instead.
+                var exitCode = 0;
+                if (Program.StartPage is { } lostPage)
+                {
+                    exitCode = SettingsPageCommand.HandOffToStartingInstance(
+                        SocketPathResolver.ResolveControlSocketPath(),
+                        lostPage,
+                        TimeSpan.FromSeconds(3)
+                    );
+                }
+                else
+                {
+                    Console.Error.WriteLine("TypeWhisper is already running.");
+                }
+
                 ShuttingDown = true;
                 // Window never opens on this path, so notify startup complete to clear
                 // the GNOME launch cursor (main.Opened won't fire).
                 LinuxStartupNotification.NotifyComplete();
-                _ = ShutdownAndExitAsync(services, desktop);
+                _ = ShutdownAndExitAsync(services, desktop, exitCode);
                 return;
             }
             catch (Exception ex)
@@ -310,6 +399,13 @@ public class App : Application
             }
 
             BootTrace.Stage("controlSocket.Start");
+
+            if (Program.StartPage is { } startPage)
+            {
+                FireAndForget(
+                    OpenSettingsPageAsync(main, startPage, pluginsReady, bootstrapFinished.Task)
+                );
+            }
 
             var overlay = services.GetRequiredService<DictationOverlayWindow>();
             overlay.Initialize();
@@ -630,6 +726,11 @@ public class App : Application
 
             BootTrace.Stage("synchronous init complete; starting BootstrapDeferredAsync");
             var bootstrapTask = BootstrapDeferredAsync(services);
+            // BootstrapDeferredAsync never faults.
+            _ = bootstrapTask.ContinueWith(
+                _ => bootstrapFinished.TrySetResult(),
+                TaskScheduler.Default
+            );
 
             // Detached from bootstrapTask so a slow update check can't delay
             // first-run onboarding (which awaits bootstrap below).
@@ -827,6 +928,32 @@ public class App : Application
         // GNOME Wayland may ignore an Activate() issued in the same UI turn
         // as the state change; re-issue it once the change has been applied.
         Dispatcher.UIThread.Post(window.Activate);
+    }
+
+    private static async Task OpenSettingsPageAsync(
+        MainWindow window,
+        SettingsPage page,
+        Task pluginsReady,
+        Task pluginsSettled
+    )
+    {
+        if (window.DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        var result = await viewModel.OpenPageAsync(page, pluginsReady, pluginsSettled);
+        if (result != PluginRevealResult.NotInstalled || ShuttingDown)
+        {
+            return;
+        }
+
+        // The wait may outlast the window: a hidden owner cannot host the dialog.
+        ShowMainWindow(window);
+        await new MessageDialogWindow().ShowMessageAsync(
+            Loc.Instance["Plugins.PageNotFoundTitle"],
+            Loc.Instance.GetString("Plugins.PageNotFound", page.PluginId ?? "")
+        );
     }
 
     /// <summary>

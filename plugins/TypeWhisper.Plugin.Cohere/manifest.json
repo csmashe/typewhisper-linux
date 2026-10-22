@@ -3,9 +3,9 @@
   "name": "Cohere",
   "version": "1.0.0",
   "author": "TypeWhisper",
-  "description": "Cohere Command LLM for prompt processing",
+  "description": "Cohere Transcribe speech-to-text and Command LLM for prompt processing",
   "networkAccess": "network",
-  "categories": ["llm"],
+  "categories": ["transcription", "llm"],
   "assemblyName": "TypeWhisper.Plugin.Cohere.dll",
   "pluginClass": "TypeWhisper.Plugin.Cohere.CoherePlugin"
 }

@@ -44,6 +44,9 @@ public partial class AppearanceSectionViewModel : ObservableObject
     private int _liveTextWindowHeight = AppSettings.DefaultLiveTextWindowHeight;
 
     [ObservableProperty]
+    private InterfaceThemeOption? _selectedTheme;
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PreviewRightIsIndicator))]
     [NotifyPropertyChangedFor(nameof(PreviewRightIsWaveform))]
     [NotifyPropertyChangedFor(nameof(PreviewRightIsText))]
@@ -91,6 +94,13 @@ public partial class AppearanceSectionViewModel : ObservableObject
     /// <summary>Mode-aware body text matching what the notification actually shows.</summary>
     public string NotificationBodyPreview =>
         RecordingNotificationService.BodyFor(_settings.Current.Mode);
+
+    public IReadOnlyList<InterfaceThemeOption> Themes { get; } =
+    [
+        new(InterfaceTheme.System, "Appearance.ThemeSystem"),
+        new(InterfaceTheme.Light, "Appearance.ThemeLight"),
+        new(InterfaceTheme.Dark, "Appearance.ThemeDark"),
+    ];
 
     public IReadOnlyList<OverlayPositionOption> OverlayPositions { get; } =
     [
@@ -226,6 +236,11 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     private void OnLanguageChanged(object? sender, EventArgs e)
     {
+        foreach (var option in Themes)
+        {
+            option.RefreshDisplayName();
+        }
+
         foreach (var option in OverlayPositions)
         {
             option.RefreshDisplayName();
@@ -293,6 +308,10 @@ public partial class AppearanceSectionViewModel : ObservableObject
 
     private void ApplySettings(AppSettings settings)
     {
+        // An unknown stored value shows as Dark, the theme InterfaceThemeService applies for it.
+        SelectedTheme =
+            Themes.FirstOrDefault(option => option.Value == settings.InterfaceTheme)
+            ?? Themes.First(option => option.Value == InterfaceTheme.Dark);
         SelectedOverlayPosition =
             OverlayPositions.FirstOrDefault(option => option.Value == settings.OverlayPosition)
             ?? OverlayPositions[0];
@@ -353,6 +372,16 @@ public partial class AppearanceSectionViewModel : ObservableObject
             OverlayWidget.AppName => Loc.Instance["Appearance.SampleAppName"],
             _ => "",
         };
+    }
+
+    partial void OnSelectedThemeChanged(InterfaceThemeOption? value)
+    {
+        if (_hydratingFromSettings || value is null || _settings.Current.InterfaceTheme == value.Value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { InterfaceTheme = value.Value });
     }
 
     partial void OnSelectedOverlayPositionChanged(OverlayPositionOption? value)
@@ -443,6 +472,15 @@ public partial class AppearanceSectionViewModel : ObservableObject
 // Stores the localization key (not the resolved string) so DisplayName can be
 // re-resolved on a live UI-language switch. Item instances stay stable, so the
 // ComboBox selection is preserved — only the rendered text changes.
+public sealed class InterfaceThemeOption(InterfaceTheme value, string displayNameKey)
+    : ObservableObject
+{
+    public InterfaceTheme Value { get; } = value;
+    public string DisplayName => Loc.Instance[displayNameKey];
+
+    public void RefreshDisplayName() => OnPropertyChanged(nameof(DisplayName));
+}
+
 public sealed class OverlayPositionOption(OverlayPosition value, string displayNameKey)
     : ObservableObject
 {

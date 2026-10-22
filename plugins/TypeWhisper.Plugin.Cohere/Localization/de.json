@@ -1,12 +1,13 @@
 {
   "Settings.ApiKey": "API-Schlüssel",
-  "Settings.ApiKeyDescription": "Erforderlich für Cohere-LLM-Anfragen.",
+  "Settings.ApiKeyDescription": "Erforderlich für Cohere-Transkription und Command-Anfragen.",
   "Settings.StreamResponses": "Antworten streamen",
   "Settings.StreamResponsesDescription": "Prompt-Aktions-Ausgabe Token für Token während der Generierung anzeigen, statt auf die vollständige Antwort zu warten.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",
+  "Errors.RecordingTooLarge": "Die Aufnahme ist für Cohere Transcribe zu groß (Grenze 25 MB). Verwenden Sie eine kürzere Aufnahme.",
   "Manifest.Name": "Cohere",
-  "Manifest.Description": "Cohere Command LLM für die Prompt-Verarbeitung"
+  "Manifest.Description": "Cohere Transcribe für Spracherkennung und Cohere Command LLM für die Prompt-Verarbeitung"
 }

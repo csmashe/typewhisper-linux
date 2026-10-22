@@ -7,7 +7,7 @@ namespace TypeWhisper.Plugin.SherpaOnnx;
 /// <summary>
 ///     Reads token durations from the native offline result.
 ///     <para>
-///         The managed binding's result struct (sherpa-onnx 1.12.23, unchanged on master)
+///         The managed binding's result struct (sherpa-onnx 1.12.23 through 1.13.8)
 ///         declares <c>Durations</c> right after <c>Tokens</c>, where the native
 ///         <c>SherpaOnnxOfflineRecognizerResult</c> has <c>tokens_arr</c>. Its
 ///         <see cref="OfflineRecognizerResult.Durations" /> is therefore halves of heap

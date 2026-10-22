@@ -7,6 +7,7 @@
         mc:Ignorable="d"
         x:Class="TypeWhisper.Linux.Views.DictationOverlayWindow"
         x:DataType="vm:DictationOverlayViewModel"
+        RequestedThemeVariant="Dark"
         Background="Transparent"
         TransparencyLevelHint="Transparent"
         WindowDecorations="None"

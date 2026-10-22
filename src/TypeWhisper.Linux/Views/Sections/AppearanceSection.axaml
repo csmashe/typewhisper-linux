@@ -6,8 +6,8 @@
              x:DataType="vm:AppearanceSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
@@ -23,6 +23,36 @@
         <StackPanel Margin="28"
                     MaxWidth="980"
                     Spacing="18">
+            <TextBlock Text="{loc:Str Appearance.Theme}"
+                       Classes="section-title" />
+            <Border Classes="panel"
+                    Padding="18,14">
+                <Grid ColumnDefinitions="*,320"
+                      ColumnSpacing="16">
+                    <StackPanel Spacing="3"
+                                VerticalAlignment="Center">
+                        <TextBlock Text="{loc:Str Appearance.Theme}"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str Appearance.ThemeHint}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Center"
+                              AutomationProperties.Name="{loc:Str Appearance.Theme}"
+                              ItemsSource="{Binding Themes}"
+                              SelectedItem="{Binding SelectedTheme}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:InterfaceThemeOption">
+                                <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+            </Border>
+
             <!-- Tiling window managers: recording is a desktop notification, not
                  the overlay, so the overlay controls below don't apply. Show what
                  the notification looks like instead. -->
@@ -34,11 +64,11 @@
                         Padding="18,16">
                     <StackPanel Spacing="14">
                         <TextBlock TextWrapping="Wrap"
-                                   Foreground="#C7D2DE"
+                                   Foreground="{DynamicResource TwTextBodyBrush}"
                                    Text="{loc:Str Appearance.NotificationIndicatorHint}" />
                         <!-- Mock of the real notification (text mirrors what's shown). -->
-                        <Border Background="#1E222B"
-                                BorderBrush="#2A3340"
+                        <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                                BorderBrush="{DynamicResource TwBorderBrush}"
                                 BorderThickness="1"
                                 CornerRadius="10"
                                 Padding="14"
@@ -56,7 +86,7 @@
                                                FontWeight="SemiBold"
                                                FontSize="13.5" />
                                     <TextBlock Text="{Binding NotificationBodyPreview}"
-                                               Foreground="#9BAABC"
+                                               Foreground="{DynamicResource TwTextMutedBrush}"
                                                FontSize="12"
                                                TextWrapping="Wrap" />
                                 </StackPanel>
@@ -82,6 +112,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Appearance.Position}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayPositions}"
                                       SelectedItem="{Binding SelectedOverlayPosition}">
@@ -94,7 +125,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="1" Background="#1AFFFFFF" />
+                    <Border Grid.Row="1" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="2" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -103,6 +134,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Appearance.LeftContent}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayWidgets}"
                                       SelectedItem="{Binding SelectedLeftWidget}">
@@ -115,7 +147,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3" Background="#1AFFFFFF" />
+                    <Border Grid.Row="3" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="4" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -124,6 +156,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Appearance.RightContent}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayWidgets}"
                                       SelectedItem="{Binding SelectedRightWidget}">
@@ -136,7 +169,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5" Background="#1AFFFFFF" />
+                    <Border Grid.Row="5" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="6" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -146,17 +179,18 @@
                                 <TextBlock Text="{loc:Str Appearance.AutoHideDelay}"
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{loc:Str Appearance.AutoHideDelayHint}"
-                                           Foreground="#9BAABC"
+                                           Foreground="{DynamicResource TwTextMutedBrush}"
                                            FontSize="11.5"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel Grid.Column="1"
                                         Spacing="6">
                                 <TextBlock Text="{Binding PreviewBubbleAutoHideSecondsText}"
-                                           Foreground="#9BAABC"
+                                           Foreground="{DynamicResource TwTextMutedBrush}"
                                            FontSize="12"
                                            HorizontalAlignment="Right" />
                                 <Slider Minimum="0"
+                                        AutomationProperties.Name="{loc:Str Appearance.AutoHideDelay}"
                                         Maximum="5"
                                         SmallChange="0.25"
                                         LargeChange="0.5"
@@ -167,7 +201,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7" Background="#1AFFFFFF" />
+                    <Border Grid.Row="7" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="8" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -177,14 +211,14 @@
                                 <TextBlock Text="{loc:Str Appearance.WindowPosition}"
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{loc:Str Appearance.WindowPositionHint}"
-                                           Foreground="#9BAABC"
+                                           Foreground="{DynamicResource TwTextMutedBrush}"
                                            FontSize="11.5"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <StackPanel Grid.Column="1"
                                         Spacing="6">
                                 <TextBlock Text="{Binding OverlayPositionStatusText}"
-                                           Foreground="#9BAABC"
+                                           Foreground="{DynamicResource TwTextMutedBrush}"
                                            FontSize="12"
                                            HorizontalAlignment="Right" />
                                 <Button Content="{loc:Str Appearance.ResetToDefault}"
@@ -210,7 +244,7 @@
                                 <TextBlock Text="{loc:Str Appearance.LiveTextPlacement}"
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{loc:Str Appearance.LiveTextPlacementHint}"
-                                           Foreground="#9BAABC"
+                                           Foreground="{DynamicResource TwTextMutedBrush}"
                                            FontSize="11.5"
                                            TextWrapping="Wrap" />
                             </StackPanel>
@@ -230,7 +264,7 @@
                     </Border>
 
                     <StackPanel IsVisible="{Binding IsLiveTextFloating}">
-                        <Border Height="1" Background="#1AFFFFFF" />
+                        <Border Height="1" Background="{DynamicResource TwBorderSubtleBrush}" />
 
                         <Border Padding="18,14">
                             <Grid ColumnDefinitions="*,320"
@@ -240,7 +274,7 @@
                                     <TextBlock Text="{loc:Str Appearance.LiveTextSize}"
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Appearance.LiveTextSizeHint}"
-                                               Foreground="#9BAABC"
+                                               Foreground="{DynamicResource TwTextMutedBrush}"
                                                FontSize="11.5"
                                                TextWrapping="Wrap" />
                                 </StackPanel>
@@ -250,7 +284,7 @@
                                       VerticalAlignment="Center">
                                     <StackPanel Spacing="4">
                                         <TextBlock Text="{loc:Str Appearance.LiveTextWidth}"
-                                                   Foreground="#9BAABC"
+                                                   Foreground="{DynamicResource TwTextMutedBrush}"
                                                    FontSize="12" />
                                         <NumericUpDown Minimum="{Binding MinLiveTextWindowWidth}"
                                                        Maximum="{Binding MaxLiveTextWindowWidth}"
@@ -262,7 +296,7 @@
                                     <StackPanel Grid.Column="1"
                                                 Spacing="4">
                                         <TextBlock Text="{loc:Str Appearance.LiveTextHeight}"
-                                                   Foreground="#9BAABC"
+                                                   Foreground="{DynamicResource TwTextMutedBrush}"
                                                    FontSize="12" />
                                         <NumericUpDown Minimum="{Binding MinLiveTextWindowHeight}"
                                                        Maximum="{Binding MaxLiveTextWindowHeight}"
@@ -275,7 +309,7 @@
                             </Grid>
                         </Border>
 
-                        <Border Height="1" Background="#1AFFFFFF" />
+                        <Border Height="1" Background="{DynamicResource TwBorderSubtleBrush}" />
 
                         <Border Padding="18,14">
                             <Grid ColumnDefinitions="*,320"
@@ -285,14 +319,14 @@
                                     <TextBlock Text="{loc:Str Appearance.LiveTextWindowPosition}"
                                                FontWeight="SemiBold" />
                                     <TextBlock Text="{loc:Str Appearance.LiveTextWindowPositionHint}"
-                                               Foreground="#9BAABC"
+                                               Foreground="{DynamicResource TwTextMutedBrush}"
                                                FontSize="11.5"
                                                TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1"
                                             Spacing="6">
                                     <TextBlock Text="{Binding LiveTextWindowPositionStatusText}"
-                                               Foreground="#9BAABC"
+                                               Foreground="{DynamicResource TwTextMutedBrush}"
                                                FontSize="12"
                                                HorizontalAlignment="Right" />
                                     <Button Content="{Binding LiveTextPreviewButtonText}"
