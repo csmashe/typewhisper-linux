@@ -178,8 +178,8 @@ public sealed class SseConsumerConformanceTests
 
     private static string TerminalEvent(Consumer consumer) => consumer switch
     {
-        Consumer.SharedOpenAiCompatible or Consumer.BufferedChatGpt => DataEvent("[DONE]"),
-        Consumer.XaiResponses => DataEvent("{\"type\":\"response.completed\"}"),
+        Consumer.SharedOpenAiCompatible => DataEvent("[DONE]"),
+        Consumer.XaiResponses or Consumer.BufferedChatGpt => DataEvent("{\"type\":\"response.completed\"}"),
         Consumer.ClaudeMessages =>
             "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
         _ => throw new ArgumentOutOfRangeException(nameof(consumer)),
@@ -257,7 +257,7 @@ public sealed class SseConsumerConformanceTests
             }
             case Consumer.BufferedChatGpt:
             {
-                var client = new OpenAiChatGptClient(httpClient, "token", null);
+                var client = new OpenAiChatGptClient(httpClient, "token");
                 return await client.ProcessAsync(
                     "system", "user", "model", null, CancellationToken.None);
             }

@@ -42,8 +42,29 @@ public sealed class OpenAiChatGptClientTests
             OpenAiChatGptClient.ParseResponseTextAsync(stream));
 
         Assert.Equal("ChatGPT SSE stream", ex.StreamName);
-        Assert.Equal("[DONE]", ex.ExpectedTerminal);
+        // The Responses API stream ends with a `response.completed` event; that
+        // event, not a `[DONE]` sentinel, is the terminal the parser requires.
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
+        Assert.Contains("response.completed", ex.Message);
         Assert.DoesNotContain("partial-secret", ex.Message);
+    }
+
+    [Fact]
+    public async Task ParseResponseText_SseResponseCompletedWithoutDone_ReturnsText()
+    {
+        var stream = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}",
+            "",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}",
+            "",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}",
+            "",
+            "");
+
+        var result = await OpenAiChatGptClient.ParseResponseTextAsync(stream);
+
+        Assert.Equal("Hello world", result);
     }
 
     [Theory]
@@ -96,7 +117,7 @@ public sealed class OpenAiChatGptClientTests
     }
 
     [Fact]
-    public async Task ParseResponseText_SseDoneTerminatedStream_ReturnsText()
+    public async Task ParseResponseText_SseDoneWithoutCompleted_Throws()
     {
         var stream = string.Join(
             "\n",
@@ -108,9 +129,8 @@ public sealed class OpenAiChatGptClientTests
             "",
             "");
 
-        var result = await OpenAiChatGptClient.ParseResponseTextAsync(stream);
-
-        Assert.Equal("Hello world", result);
+        await Assert.ThrowsAsync<IncompleteSseStreamException>(() =>
+            OpenAiChatGptClient.ParseResponseTextAsync(stream));
     }
 
     [Fact]

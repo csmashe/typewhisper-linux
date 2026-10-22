@@ -285,6 +285,105 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         Assert.True(plugin.Cancelled);
     }
 
+    [Fact]
+    public async Task ExpandingSettings_DoesNotRefreshOrSaveProviderModelCatalog()
+    {
+        var plugin = new FakeCatalogPlugin();
+        var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, plugin.PluginId, plugin);
+        var manager = TestPluginManagerFactory.Create(
+            loadedPlugins: [loaded],
+            activatedPluginIds: [plugin.PluginId]
+        );
+        var vm = new PluginsSectionViewModel(
+            manager,
+            new ErrorLogService(_tempDir),
+            TimeSpan.FromSeconds(5),
+            postToUi: action => action()
+        );
+        var row = vm.EnabledGroups.Concat(vm.DisabledGroups)
+            .SelectMany(group => group.Plugins)
+            .Single(candidate => candidate.Id == plugin.PluginId);
+
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        Assert.Equal(0, plugin.RefreshCount);
+        Assert.Equal(0, plugin.SaveCount);
+        await vm.RefreshModelCatalogCommand.ExecuteAsync(row);
+        Assert.Equal(1, plugin.RefreshCount);
+        Assert.Equal(0, plugin.SaveCount);
+        Assert.Equal("current-model", plugin.SelectedModel);
+        Assert.Contains(plugin.CachedModels, model => model == "current-model");
+
+        plugin.FailRefresh = true;
+        await vm.RefreshModelCatalogCommand.ExecuteAsync(row);
+        Assert.Equal(Loc.Instance["Plugins.ModelRefreshFailed"], row.Status);
+        Assert.Equal(["current-model"], plugin.CachedModels);
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_PreservesEditsAndRunningStateAcrossAmbientRebuild()
+    {
+        var plugin = new FakeCatalogPlugin { HoldRefresh = true };
+        var (vm, row) = await CreateExpandedAsync(plugin);
+        row.Collections.Single().Items.Single().Fields.Single(field => field.Key == "name").Value = "saved-before-refresh";
+        var refresh = vm.RefreshModelCatalogCommand.ExecuteAsync(row);
+        await plugin.Started.Task.WaitAsync(s_hangGuard);
+        Assert.Equal("saved-before-refresh", plugin.CollectionValue);
+        InvokeRefresh(vm);
+        var rebuilt = CurrentRow(vm);
+        Assert.Same(row, rebuilt);
+        Assert.True(rebuilt.IsRefreshingModels);
+        Assert.False(rebuilt.CanRefreshModels);
+        rebuilt.SettingFields.Single().Value = "draft-during-refresh";
+        rebuilt.Collections.Single().Items.Single().Fields.Single(field => field.Key == "name").Value = "collection-draft";
+        InvokeRefresh(vm);
+        Assert.Same(rebuilt, CurrentRow(vm));
+        plugin.Release.SetResult();
+        await refresh.WaitAsync(s_hangGuard);
+        Assert.Equal("draft-during-refresh", CurrentRow(vm).SettingFields.Single().Value);
+        Assert.Equal("collection-draft", CurrentRow(vm).Collections.Single().Items.Single().Fields.Single(field => field.Key == "name").Value);
+        Assert.True(CurrentRow(vm).HasUnsavedSettings);
+        Assert.False(CurrentRow(vm).IsRefreshingModels);
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_ReplacedPluginRowDoesNotInheritTheRefresh()
+    {
+        var plugin = new FakeCatalogPlugin { HoldRefresh = true };
+        var (vm, row) = await CreateExpandedAsync(plugin);
+        var refresh = vm.RefreshModelCatalogCommand.ExecuteAsync(row);
+        await plugin.Started.Task.WaitAsync(s_hangGuard);
+        ReplaceLoadedPlugins(vm, new FakeCatalogPlugin());
+        InvokeRefresh(vm);
+        var replaced = CurrentRow(vm);
+        Assert.NotSame(row, replaced);
+        Assert.False(replaced.IsRefreshingModels);
+        await WaitUntilAsync(() => replaced.CanEditSettings);
+        Assert.True(replaced.CanRefreshModels);
+        plugin.Release.SetResult();
+        await refresh.WaitAsync(s_hangGuard);
+        Assert.Same(replaced, CurrentRow(vm));
+        Assert.False(replaced.IsRefreshingModels);
+        Assert.True(replaced.CanRefreshModels);
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_EditsMadeDuringTheSaveStayUnsaved()
+    {
+        var plugin = new FakeCatalogPlugin { HoldSave = true };
+        var (vm, row) = await CreateExpandedAsync(plugin);
+        row.Collections.Single().Items.Single().Fields.Single(field => field.Key == "name").Value = "submitted";
+        var refresh = vm.RefreshModelCatalogCommand.ExecuteAsync(row);
+        await plugin.SaveStarted.Task.WaitAsync(s_hangGuard);
+        row.SettingFields.Single().Value = "typed-during-save";
+        plugin.SaveRelease.SetResult();
+        await refresh.WaitAsync(s_hangGuard);
+        Assert.Equal("submitted", plugin.CollectionValue);
+        Assert.Equal(1, plugin.RefreshCount);
+        Assert.Equal("typed-during-save", CurrentRow(vm).SettingFields.Single().Value);
+        Assert.True(CurrentRow(vm).HasUnsavedSettings);
+    }
+
     private async Task<(PluginsSectionViewModel Vm, PluginRow Row)> CreateExpandedAsync(
         ITypeWhisperPlugin plugin,
         TimeSpan? validationTimeout = null,
@@ -463,6 +562,82 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
         public Task DeactivateAsync() => Task.CompletedTask;
         public void Dispose() { }
+    }
+
+    private sealed class FakeCatalogPlugin : ITypeWhisperPlugin, IPluginSettingsProvider, IModelCatalogProvider, IPluginCollectionSettingsProvider
+    {
+        private readonly List<string> _cachedModels = ["old-model"];
+
+        public string PluginId => "com.test.catalog";
+        public string PluginName => "Catalog";
+        public string PluginVersion => "1.0.0";
+        public int RefreshCount { get; private set; }
+        public int SaveCount { get; private set; }
+        public bool FailRefresh { get; set; }
+        public bool HoldRefresh { get; init; }
+        public bool HoldSave { get; init; }
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SaveStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SaveRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string SelectedModel { get; private set; } = "old-model";
+        public IReadOnlyList<string> CachedModels => _cachedModels;
+        public string CollectionValue { get; private set; } = "saved";
+
+        public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
+            [new("items", "Items", null, [new PluginSettingDefinition("name", "Name", Kind: PluginSettingKind.Text)], "name")];
+
+        public Task<IReadOnlyList<PluginCollectionItem>> GetItemsAsync(string collectionKey, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<PluginCollectionItem>>(
+                [new PluginCollectionItem(new Dictionary<string, string?> { ["name"] = CollectionValue })]);
+
+        public async Task<PluginSettingsValidationResult> SetItemsAsync(string collectionKey, IReadOnlyList<PluginCollectionItem> items, CancellationToken ct = default)
+        {
+            SaveStarted.TrySetResult();
+            if (HoldSave)
+                await SaveRelease.Task.WaitAsync(ct);
+            CollectionValue = items.Single().Values["name"] ?? "";
+            return new PluginSettingsValidationResult(true, "saved");
+        }
+
+        public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
+        [
+            new(
+                "selectedModel",
+                "Model",
+                Options: _cachedModels.Select(model => new PluginSettingOption(model, model)).ToList(),
+                Kind: PluginSettingKind.Dropdown
+            ),
+        ];
+
+        public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<string?>(SelectedModel);
+
+        public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
+        {
+            SaveCount++;
+            SelectedModel = value ?? "";
+            return Task.CompletedTask;
+        }
+
+        public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
+        {
+            RefreshCount++;
+            Started.TrySetResult();
+            if (HoldRefresh)
+                await Release.Task.WaitAsync(ct);
+            if (FailRefresh)
+                throw new HttpRequestException("Controlled catalog failure");
+            _cachedModels.Clear();
+            _cachedModels.Add("current-model");
+            SelectedModel = "current-model";
+        }
+
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+        public Task DeactivateAsync() => Task.CompletedTask;
+        public void Dispose() { }
+        public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
+            Task.FromResult<PluginSettingsValidationResult?>(null);
     }
 
 }

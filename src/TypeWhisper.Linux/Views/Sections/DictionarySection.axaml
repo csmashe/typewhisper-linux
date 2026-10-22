@@ -5,10 +5,12 @@
              xmlns:converters="using:TypeWhisper.Linux.Converters"
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
+             xmlns:services="using:TypeWhisper.Linux.Services"
              x:Class="TypeWhisper.Linux.Views.Sections.DictionarySection"
              x:DataType="vm:DictionarySectionViewModel">
     <UserControl.Resources>
         <converters:CtcSimilarityLabelConverter x:Key="CtcSimilarityLabelConverter" />
+        <converters:AliasSuggestionsAvailableConverter x:Key="AliasSuggestionsAvailableConverter" />
     </UserControl.Resources>
     <UserControl.Styles>
         <Style Selector="TextBlock.page-title">
@@ -16,8 +18,8 @@
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
@@ -27,14 +29,14 @@
             <Setter Property="Margin" Value="0,0,8,0" />
         </Style>
         <Style Selector="Border.entry-card">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="0,0,0,1" />
             <Setter Property="Padding" Value="16,13" />
         </Style>
         <Style Selector="Border.pack-card">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="12" />
             <Setter Property="Padding" Value="16,14" />
@@ -46,21 +48,129 @@
 
     <DockPanel Margin="28">
         <StackPanel MaxWidth="980">
-            <Grid ColumnDefinitions="*,Auto,Auto"
+            <Grid ColumnDefinitions="*,Auto,Auto,Auto"
                   ColumnSpacing="10"
                   Margin="0,0,0,14">
                 <TextBlock Text="{loc:Str Dictionary.Title}"
                            Classes="page-title"
                            VerticalAlignment="Center" />
                 <Button Grid.Column="1"
+                        Content="{loc:Str Dictionary.SuggestAliases}"
+                        Command="{Binding AliasSuggestions.OpenCommand}"
+                        Padding="12,7" />
+                <Button Grid.Column="2"
                         Content="{loc:Str Common.Import}"
                         Click="OnImport"
                         Padding="12,7" />
-                <Button Grid.Column="2"
+                <Button Grid.Column="3"
                         Content="{loc:Str Common.Export}"
                         Click="OnExport"
                         Padding="12,7" />
             </Grid>
+
+            <Panel DataContext="{Binding AliasSuggestions}">
+                <Border Classes="panel"
+                        x:DataType="vm:DictionaryAliasSuggestionsViewModel"
+                        Padding="14,12"
+                        Margin="0,0,0,12"
+                        IsVisible="{Binding IsOpen}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="{loc:Str Dictionary.AliasesTitle}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str Dictionary.AliasesIntro}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                        <Grid ColumnDefinitions="*,160,*"
+                              RowDefinitions="Auto,Auto"
+                              ColumnSpacing="10"
+                              RowSpacing="4">
+                            <TextBlock Grid.Row="0"
+                                       Grid.Column="0"
+                                       Text="{loc:Str Dictionary.AliasesTerm}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                            <TextBlock Grid.Row="0"
+                                       Grid.Column="1"
+                                       Text="{loc:Str Dictionary.AliasesLanguage}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                            <TextBlock Grid.Row="0"
+                                       Grid.Column="2"
+                                       Text="{loc:Str Dictionary.AliasesModel}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                            <TextBox Grid.Row="1"
+                                     Grid.Column="0"
+                                     Text="{Binding Term}"
+                                     MaxLength="160"
+                                     IsEnabled="{Binding IsIdle}"
+                                     AutomationProperties.Name="{loc:Str Dictionary.AliasesTerm}" />
+                            <ComboBox Grid.Row="1"
+                                      Grid.Column="1"
+                                      ItemsSource="{Binding Languages}"
+                                      SelectedItem="{Binding SelectedLanguage}"
+                                      IsEnabled="{Binding IsIdle}"
+                                      HorizontalAlignment="Stretch"
+                                      AutomationProperties.Name="{loc:Str Dictionary.AliasesLanguage}" />
+                            <ComboBox Grid.Row="1"
+                                      Grid.Column="2"
+                                      ItemsSource="{Binding Models}"
+                                      SelectedItem="{Binding SelectedModel}"
+                                      DisplayMemberBinding="{Binding DisplayName, x:DataType=services:LocalAliasModel}"
+                                      IsEnabled="{Binding IsIdle}"
+                                      HorizontalAlignment="Stretch"
+                                      AutomationProperties.Name="{loc:Str Dictionary.AliasesModel}" />
+                        </Grid>
+                        <TextBlock Text="{loc:Str Dictionary.AliasesPrivacy}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                        <ProgressBar IsIndeterminate="True"
+                                     IsVisible="{Binding IsBusy}" />
+                        <ScrollViewer MaxHeight="220"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding Suggestions}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:AliasSuggestionItem">
+                                        <CheckBox IsChecked="{Binding IsSelected}"
+                                                  IsEnabled="{Binding IsAvailable}">
+                                            <TextBlock Text="{Binding Label}"
+                                                       TextWrapping="Wrap" />
+                                        </CheckBox>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <TextBlock Text="{Binding Status}"
+                                   IsVisible="{Binding HasStatus}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwWarningTextBrush}"
+                                   TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8"
+                                    HorizontalAlignment="Right">
+                            <Button Content="{loc:Str Dictionary.AliasesStop}"
+                                    Command="{Binding StopCommand}"
+                                    IsVisible="{Binding IsBusy}"
+                                    Padding="12,7" />
+                            <Button Content="{loc:Str Dictionary.AliasesRegenerate}"
+                                    Command="{Binding RegenerateCommand}"
+                                    IsVisible="{Binding CanRegenerate}"
+                                    Padding="12,7" />
+                            <Button Content="{Binding PrimaryButtonText}"
+                                    Command="{Binding RunPrimaryCommand}"
+                                    IsEnabled="{Binding CanRunPrimary}"
+                                    Padding="14,7" />
+                            <Button Content="{loc:Str Common.Cancel}"
+                                    Command="{Binding CloseCommand}"
+                                    Padding="12,7" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Panel>
 
             <Border Classes="panel"
                     Padding="14,12"
@@ -74,16 +184,17 @@
                         <TextBlock
                             Text="{loc:Str Dictionary.VocabularyBoostingHint}"
                             FontSize="12"
-                            Foreground="#8A9AAE"
+                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                             TextWrapping="Wrap"
                             Margin="0,4,0,0" />
                         <TextBlock Text="{Binding VocabularyBoostingStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    Margin="0,8,0,0" />
                     </StackPanel>
 
                     <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableVocabularyBoosting}"
                                   IsChecked="{Binding VocabularyBoostingEnabled}"
                                   VerticalAlignment="Top" />
                 </Grid>
@@ -101,16 +212,17 @@
                         <TextBlock
                             Text="{loc:Str Dictionary.AcousticBoostingHint}"
                             FontSize="12"
-                            Foreground="#8A9AAE"
+                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                             TextWrapping="Wrap"
                             Margin="0,4,0,0" />
                         <TextBlock Text="{Binding AcousticBoostingStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    Margin="0,8,0,0" />
                     </StackPanel>
 
                     <ToggleSwitch Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Dictionary.EnableAcousticBoosting}"
                                   IsChecked="{Binding AcousticVocabularyBoostingEnabled}"
                                   VerticalAlignment="Top" />
                 </Grid>
@@ -120,33 +232,29 @@
                         Margin="0,0,0,12">
                 <Button Command="{Binding SetTabCommand}"
                         CommandParameter="0"
-                        Background="{Binding IsAllTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        BorderBrush="{Binding IsAllTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        Foreground="{Binding IsAllTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
+                        Classes="tab"
+                        Classes.selected="{Binding IsAllTabSelected}"
                         Padding="12,8"
                         Margin="0,0,8,0"
                         Content="{loc:Str Dictionary.TabAll}" />
                 <Button Command="{Binding SetTabCommand}"
                         CommandParameter="1"
-                        Background="{Binding IsTermsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        BorderBrush="{Binding IsTermsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        Foreground="{Binding IsTermsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
+                        Classes="tab"
+                        Classes.selected="{Binding IsTermsTabSelected}"
                         Padding="12,8"
                         Margin="0,0,8,0"
                         Content="{loc:Str Dictionary.TabTerms}" />
                 <Button Command="{Binding SetTabCommand}"
                         CommandParameter="2"
-                        Background="{Binding IsCorrectionsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        BorderBrush="{Binding IsCorrectionsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        Foreground="{Binding IsCorrectionsTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
+                        Classes="tab"
+                        Classes.selected="{Binding IsCorrectionsTabSelected}"
                         Padding="12,8"
                         Margin="0,0,8,0"
                         Content="{loc:Str Dictionary.TabCorrections}" />
                 <Button Command="{Binding SetTabCommand}"
                         CommandParameter="3"
-                        Background="{Binding IsPacksTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        BorderBrush="{Binding IsPacksTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=Transparent'}"
-                        Foreground="{Binding IsPacksTabSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#FFFFFF|False=#D6DEE9'}"
+                        Classes="tab"
+                        Classes.selected="{Binding IsPacksTabSelected}"
                         Padding="12,8"
                         Content="{loc:Str Dictionary.TabPacks}" />
             </StackPanel>
@@ -158,13 +266,14 @@
                 <Grid ColumnDefinitions="*,Auto"
                       ColumnSpacing="12">
                     <TextBox Grid.Column="0"
+                             AutomationProperties.Name="{loc:Str Dictionary.SearchPlaceholder}"
                              Text="{Binding SearchText}"
                              PlaceholderText="{loc:Str Dictionary.SearchPlaceholder}"
                              IsVisible="{Binding ShowSearchBox}" />
                     <TextBlock Grid.Column="1"
                                Text="{Binding EntryCount, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Dictionary.EntriesCount}"
                                VerticalAlignment="Center"
-                               Foreground="#8A9AAE"
+                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                FontSize="12" />
                 </Grid>
             </Border>
@@ -172,7 +281,7 @@
             <TextBlock
                 Text="{loc:Str Dictionary.PacksHeader}"
                 FontSize="12.5"
-                Foreground="#8A9AAE"
+                Foreground="{DynamicResource TwTextSecondaryBrush}"
                 TextWrapping="Wrap"
                 Margin="0,0,0,12"
                 IsVisible="{Binding ShowPacksHeader}" />
@@ -186,7 +295,7 @@
                                 IsVisible="{Binding ShowEmptyState}">
                         <TextBlock Text="▣"
                                    FontSize="38"
-                                   Foreground="#566273"
+                                   Foreground="{DynamicResource TwTextDisabledBrush}"
                                    HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding EmptyStateTitle}"
                                    FontSize="16"
@@ -195,7 +304,7 @@
                                    Margin="0,10,0,0" />
                         <TextBlock Text="{Binding EmptyStateSubtitle}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,6,0,0" />
                     </StackPanel>
@@ -216,7 +325,7 @@
                                                            FontWeight="SemiBold" />
                                                 <TextBlock Text="{Binding Replacement}"
                                                            FontSize="12"
-                                                           Foreground="#8A9AAE"
+                                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                            Margin="0,4,0,0"
                                                            IsVisible="{Binding Replacement, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                             </StackPanel>
@@ -225,27 +334,27 @@
                                                         Orientation="Horizontal"
                                                         Spacing="8"
                                                         VerticalAlignment="Center">
-                                                <Border Background="#1B2430"
-                                                        BorderBrush="#223243"
+                                                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                                                        BorderBrush="{DynamicResource TwBorderBrush}"
                                                         BorderThickness="1"
                                                         CornerRadius="999"
                                                         Padding="8,3">
                                                     <TextBlock Text="{Binding EntryType}"
                                                                FontSize="10.5"
-                                                               Foreground="#D6DEE9" />
+                                                               Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
-                                                <Border Background="#1B2430"
-                                                        BorderBrush="#223243"
+                                                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                                                        BorderBrush="{DynamicResource TwBorderBrush}"
                                                         BorderThickness="1"
                                                         CornerRadius="999"
                                                         Padding="8,3"
                                                         IsVisible="{Binding CaseSensitive}">
                                                     <TextBlock Text="Aa"
                                                                FontSize="10.5"
-                                                               Foreground="#D6DEE9" />
+                                                               Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
-                                                <Border Background="#1B2430"
-                                                        BorderBrush="#223243"
+                                                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                                                        BorderBrush="{DynamicResource TwBorderBrush}"
                                                         BorderThickness="1"
                                                         CornerRadius="999"
                                                         Padding="8,3"
@@ -253,25 +362,25 @@
                                                         IsVisible="{Binding IsRegex}">
                                                     <TextBlock Text=".*"
                                                                FontSize="10.5"
-                                                               Foreground="#D6DEE9" />
+                                                               Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
-                                                <Border Background="#1B2430"
-                                                        BorderBrush="#223243"
+                                                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                                                        BorderBrush="{DynamicResource TwBorderBrush}"
                                                         BorderThickness="1"
                                                         CornerRadius="999"
                                                         Padding="8,3">
                                                     <TextBlock Text="{Binding UsageCount, StringFormat='{}{0}x'}"
                                                                FontSize="10.5"
-                                                               Foreground="#D6DEE9" />
+                                                               Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
-                                                <Border Background="#1B2430"
-                                                        BorderBrush="#223243"
+                                                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                                                        BorderBrush="{DynamicResource TwBorderBrush}"
                                                         BorderThickness="1"
                                                         CornerRadius="999"
                                                         Padding="8,3">
                                                     <TextBlock Text="{Binding Priority, StringFormat='Priority {0}'}"
                                                                FontSize="10.5"
-                                                               Foreground="#D6DEE9" />
+                                                               Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
                                             </StackPanel>
 
@@ -296,6 +405,13 @@
                                                         ToolTip.Tip="{loc:Str Dictionary.CtcSimilarityTooltip}"
                                                         Padding="8,6" />
                                                 <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Content="{loc:Str Dictionary.AliasesForEntry}"
+                                                        IsVisible="{Binding Converter={StaticResource AliasSuggestionsAvailableConverter}}"
+                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).SuggestAliasesForCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip.Tip="{loc:Str Dictionary.AliasesForEntryTooltip}"
+                                                        Padding="8,6" />
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                                 <Button Content="−"
                                                         Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DecreasePriorityCommand}"
                                                         CommandParameter="{Binding}"
@@ -311,6 +427,7 @@
 
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="4"
+                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"
@@ -355,11 +472,11 @@
                                                 </TextBlock>
                                                 <TextBlock Text="{Binding TermCountLabel}"
                                                            FontSize="11"
-                                                           Foreground="#8A9AAE"
+                                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                            Margin="0,2,0,0" />
                                                 <TextBlock Text="{Binding TermsPreview}"
                                                            FontSize="12"
-                                                           Foreground="#8A9AAE"
+                                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                            MaxLines="2"
                                                            TextTrimming="CharacterEllipsis"
                                                            Margin="0,8,0,0" />
@@ -367,6 +484,7 @@
 
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
                                             <ToggleSwitch Grid.Column="1"
+                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).TogglePackCommand}"
                                                           CommandParameter="{Binding}"
@@ -384,43 +502,49 @@
                     Padding="14,12"
                     IsVisible="{Binding ShowAddBar}">
                 <StackPanel Spacing="6">
-                    <Grid ColumnDefinitions="*,Auto,*,92,Auto,Auto,Auto,Auto,Auto"
+                    <Grid ColumnDefinitions="*,Auto,*,92"
                           ColumnSpacing="10">
                         <TextBox Grid.Column="0"
+                                 AutomationProperties.Name="{loc:Str History.Original}"
                                  Text="{Binding NewOriginal}"
                                  PlaceholderText="{loc:Str Dictionary.OriginalPlaceholder}" />
                         <TextBlock Grid.Column="1"
                                    Text="→"
                                    VerticalAlignment="Center"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
                         <TextBox Grid.Column="2"
+                                 AutomationProperties.Name="{loc:Str Dictionary.ReplacementPlaceholder}"
                                  Text="{Binding NewReplacement}"
                                  PlaceholderText="{loc:Str Dictionary.ReplacementPlaceholder}" />
                         <NumericUpDown Grid.Column="3"
+                                       AutomationProperties.Name="{loc:Str Dictionary.PriorityPlaceholder}"
                                        Minimum="0"
                                        Maximum="999"
                                        Value="{Binding NewPriority}"
                                        PlaceholderText="{loc:Str Dictionary.PriorityPlaceholder}" />
-                        <ToggleButton Grid.Column="4"
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto"
+                          ColumnSpacing="10">
+                        <ToggleButton Grid.Column="0"
                                       IsChecked="{Binding IsNewTypeCorrection}"
                                       Content="{loc:Str Dictionary.TypeCorrection}"
                                       Padding="10,6" />
-                        <ToggleButton Grid.Column="5"
+                        <ToggleButton Grid.Column="1"
                                       IsChecked="{Binding IsNewTypeTerm}"
                                       Content="{loc:Str Dictionary.TypeTerm}"
                                       Padding="10,6" />
-                        <CheckBox Grid.Column="6"
+                        <CheckBox Grid.Column="2"
                                   Content="Aa"
                                   IsChecked="{Binding CaseSensitive}"
                                   ToolTip.Tip="{loc:Str Dictionary.CaseSensitive}"
                                   VerticalAlignment="Center" />
-                        <CheckBox Grid.Column="7"
+                        <CheckBox Grid.Column="3"
                                   Content=".*"
                                   IsChecked="{Binding NewIsRegex}"
                                   IsVisible="{Binding IsNewTypeCorrection}"
                                   ToolTip.Tip="{loc:Str Dictionary.Regex}"
                                   VerticalAlignment="Center" />
-                        <Button Grid.Column="8"
+                        <Button Grid.Column="5"
                                 Content="{loc:Str Dictionary.Add}"
                                 Command="{Binding AddEntryCommand}"
                                 Padding="14,7" />
@@ -429,11 +553,11 @@
                                IsVisible="{Binding IsNewTypeCorrection}"
                                TextWrapping="Wrap"
                                FontSize="12"
-                               Foreground="#8A9AAE" />
+                               Foreground="{DynamicResource TwTextSecondaryBrush}" />
                     <TextBlock Text="{Binding RegexValidationError}"
                                IsVisible="{Binding HasRegexValidationError}"
                                FontSize="12"
-                               Foreground="#E0A845"
+                               Foreground="{DynamicResource TwWarningTextBrush}"
                                TextWrapping="Wrap" />
                 </StackPanel>
             </Border>

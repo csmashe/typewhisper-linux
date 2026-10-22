@@ -13,6 +13,60 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class AboutSectionViewModelTests : IDisposable
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LanguageChange_RebuildsCategoryLabelsAndPreservesSelectedKey(bool selectCategory)
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = CreateViewModel(new FakeProcessRunner(), entries: [ErrorLogEntry.Create("test")]);
+            if (selectCategory)
+                sut.SelectedCategoryFilter = sut.CategoryFilters.Single(o => o.Key == ErrorCategory.General);
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(Loc.Instance["About.ErrorFilterAll"], sut.CategoryFilters[0].Display);
+            Assert.Equal(selectCategory ? ErrorCategory.General : null, sut.SelectedCategoryFilter?.Key);
+            Assert.Contains(sut.SelectedCategoryFilter!, sut.CategoryFilters);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
+    [Fact]
+    public void LanguageChange_RefreshesOnlyDefaultSupportStatus()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = CreateViewModel(new FakeProcessRunner());
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(Loc.Instance["About.SupportReportDescription"], sut.SupportReportStatusText);
+            sut.SupportReportStatusText = "saved report.zip";
+            Loc.Instance.CurrentLanguage = "es";
+            Assert.Equal("saved report.zip", sut.SupportReportStatusText);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
+    [Fact]
+    public void LanguageChange_KeepsCheckingState()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = CreateViewModel(new FakeProcessRunner());
+            sut.IsCheckingForUpdates = true;
+            sut.UpdateStatusText = Loc.Instance["About.CheckingForUpdates"];
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal(Loc.Instance["About.CheckingForUpdates"], sut.UpdateStatusText);
+            Assert.False(sut.CanCheckForUpdates);
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
     private readonly string _tempDir = TestPaths.CreateTempDirectory(
         "TypeWhisper.AboutSectionViewModelTests"
     );
@@ -107,6 +161,57 @@ public sealed class AboutSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ResetAllData_RecordsTheResetAndRestartsTheApp()
+    {
+        var dataDir = Path.Join(_tempDir, "data");
+        var restarts = 0;
+        var reset = new LocalDataResetService(dataDir);
+        var sut = CreateViewModel(new FakeProcessRunner(), dataReset: reset, requestRestart: () => ++restarts > 0);
+        sut.DeleteModelsOnReset = true;
+
+        await sut.ResetAllDataAsync();
+
+        Assert.True(reset.IsResetPending);
+        Assert.Equal(1, restarts);
+        Assert.Contains("\"deleteModels\": true", await File.ReadAllTextAsync(Path.Join(dataDir, LocalDataResetService.PendingMarkerName)));
+        // The card stays busy until the app exits.
+        Assert.True(sut.IsBackupBusy);
+    }
+
+    [Fact]
+    public async Task ResetAllData_WhenItCannotBeRecorded_DoesNotRestart()
+    {
+        var blocker = Path.Join(_tempDir, "not-a-folder");
+        await File.WriteAllTextAsync(blocker, "");
+        var restarts = 0;
+        var sut = CreateViewModel(
+            new FakeProcessRunner(),
+            dataReset: new LocalDataResetService(Path.Join(blocker, "data")),
+            requestRestart: () => ++restarts > 0
+        );
+
+        await Assert.ThrowsAnyAsync<IOException>(sut.ResetAllDataAsync);
+
+        Assert.Equal(0, restarts);
+        Assert.False(sut.IsBackupBusy);
+        Assert.Equal(Loc.Instance["About.ResetFailed"], sut.BackupStatusText);
+    }
+
+    [Fact]
+    public async Task ResetAllData_WhileQuitting_RunsAtTheNextLaunch()
+    {
+        var sut = CreateViewModel(
+            new FakeProcessRunner(),
+            dataReset: new LocalDataResetService(Path.Join(_tempDir, "data")),
+            requestRestart: () => false
+        );
+
+        await sut.ResetAllDataAsync();
+
+        Assert.Equal(Loc.Instance["About.ResetAtNextLaunch"], sut.BackupStatusText);
+    }
+
+    [Fact]
     public async Task CancelDataExport_StopsTheExportWithoutWritingAFile()
     {
         var dataDir = Path.Join(_tempDir, "data");
@@ -194,11 +299,14 @@ public sealed class AboutSectionViewModelTests : IDisposable
     private AboutSectionViewModel CreateViewModel(
         FakeProcessRunner runner,
         LocalDataExportService? dataExport = null,
-        SupportReportService? supportReport = null
+        SupportReportService? supportReport = null,
+        LocalDataResetService? dataReset = null,
+        Func<bool>? requestRestart = null,
+        IReadOnlyList<ErrorLogEntry>? entries = null
     )
     {
         var errorLog = new Mock<IErrorLogService>();
-        errorLog.SetupGet(service => service.Entries).Returns([]);
+        errorLog.SetupGet(service => service.Entries).Returns(entries ?? []);
         var preferences = new LinuxPreferencesService(
             Path.Join(_tempDir, "linux-preferences.json")
         );
@@ -209,7 +317,9 @@ public sealed class AboutSectionViewModelTests : IDisposable
             new UrlLauncher(runner),
             TimeZoneInfo.Utc,
             dataExport,
-            supportReport
+            supportReport,
+            dataReset ?? new LocalDataResetService(Path.Join(_tempDir, "reset-data")),
+            requestRestart ?? (() => true)
         );
     }
 }

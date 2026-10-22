@@ -1,0 +1,4 @@
+Test run for /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+
+Passed!  - Failed:     0, Passed:     2, Skipped:     0, Total:     2, Duration: 120 ms - TypeWhisper.Linux.Tests.dll (net10.0)

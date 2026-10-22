@@ -3,14 +3,13 @@
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:svc="using:TypeWhisper.Linux.Services"
              xmlns:models="using:TypeWhisper.Core.Models"
-             xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DictationSection"
              x:DataType="vm:DictationSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.settings-panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Margin" Value="0,0,0,18" />
@@ -23,6 +22,21 @@
         <Style Selector="Border.row">
             <Setter Property="Padding" Value="18,12" />
         </Style>
+        <Style Selector="Border.model-status.ready">
+            <Setter Property="Background" Value="{DynamicResource TwSuccessFaintBrush}" />
+        </Style>
+        <Style Selector="Border.model-status-badge">
+            <Setter Property="Background" Value="{DynamicResource TwFillSubtleBrush}" />
+        </Style>
+        <Style Selector="Border.model-status-badge.ready">
+            <Setter Property="Background" Value="{DynamicResource TwSuccessSubtleBrush}" />
+        </Style>
+        <Style Selector="TextBlock.model-status-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwTextStrongBrush}" />
+        </Style>
+        <Style Selector="TextBlock.model-status-text.ready">
+            <Setter Property="Foreground" Value="{DynamicResource TwSuccessTextBrush}" />
+        </Style>
         <Style Selector="TextBlock.row-label">
             <Setter Property="FontSize" Value="12.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -34,8 +48,8 @@
             <Setter Property="HorizontalAlignment" Value="Right" />
         </Style>
         <Style Selector="Border.chip">
-            <Setter Property="Background" Value="#1B2430" />
-            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Padding" Value="8,4" />
@@ -50,7 +64,7 @@
             <Setter Property="Height" Value="18" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
         </Style>
     </UserControl.Styles>
 
@@ -64,11 +78,19 @@
                 <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,320,Auto"
-                              ColumnSpacing="10">
+                        <!-- The model list shrinks before the label in narrow windows and with long
+                             translations of the delete button; it never grows past 320. -->
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" MinWidth="150" />
+                                <ColumnDefinition Width="2*" MaxWidth="320" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
                             <TextBlock Text="{loc:Str Dictation.DefaultModel}"
-                                       Classes="row-label" />
+                                       Classes="row-label"
+                                       TextWrapping="Wrap" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.DefaultModel}"
                                       ItemsSource="{Binding ModelOptions}"
                                       SelectedItem="{Binding SelectedModel}"
                                       DropDownOpened="OnModelDropDownOpened"
@@ -87,7 +109,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row">
@@ -101,14 +123,11 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
-                    <!-- BoolBrushConverter accepts "True=<color>|False=<color>" as
-                         its ConverterParameter to pick one of two brushes based on
-                         a boolean binding. -->
                     <Border Grid.Row="4"
-                            Classes="row"
-                            Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1439B980|False=Transparent'}">
+                            Classes="row model-status"
+                            Classes.ready="{Binding ModelReady}">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
                             <TextBlock Text="{loc:Str Dictation.ModelStatus}"
                                        Classes="row-label" />
@@ -135,17 +154,18 @@
                                     CornerRadius="999"
                                     Padding="12,6"
                                     IsVisible="{Binding !IsModelDownloading}"
-                                    Background="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1E39B980|False=#1A2B3A4B'}">
+                                    Classes="model-status-badge"
+                                    Classes.ready="{Binding ModelReady}">
                                 <TextBlock Text="{Binding ModelStatusText}"
-                                           Classes="row-value"
-                                           TextWrapping="Wrap"
-                                           Foreground="{Binding ModelReady, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#39B980|False=#F5F8FC'}" />
+                                           Classes="row-value model-status-text"
+                                           Classes.ready="{Binding ModelReady}"
+                                           TextWrapping="Wrap" />
                             </Border>
                         </Grid>
                     </Border>
 
                     <Border Grid.Row="5"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="6"
                             Classes="row">
@@ -154,6 +174,7 @@
                             <TextBlock Text="{loc:Str Dictation.LocalModelAcceleration}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.LocalModelAcceleration}"
                                       ItemsSource="{Binding AccelerationOptions}"
                                       SelectedItem="{Binding SelectedAccelerationOption}"
                                       HorizontalAlignment="Stretch">
@@ -179,17 +200,17 @@
                     </Border>
 
                     <Border Grid.Row="7"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <StackPanel Spacing="6">
                             <TextBlock Text="{Binding AccelerationStatusText}"
                                        FontSize="12"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        TextWrapping="Wrap" />
                             <TextBlock Text="{Binding CudaSetupStatus}"
                                        FontSize="12"
-                                       Foreground="#D6B45F"
+                                       Foreground="{DynamicResource TwWarningTextBrush}"
                                        TextWrapping="Wrap"
                                        IsVisible="{Binding CudaSetupStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
@@ -210,7 +231,7 @@
                                            Classes="row-label" />
                                 <TextBlock Text="{Binding ModelStoragePath}"
                                            FontSize="12"
-                                           Foreground="#8A9AAE"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <Button Grid.Column="1"
@@ -226,14 +247,14 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row"
                             IsVisible="{Binding ModelStorageStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                         <TextBlock Text="{Binding ModelStorageStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </Border>
                 </Grid>
@@ -249,6 +270,7 @@
                             <TextBlock Text="{loc:Str Dictation.InputDevice}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.InputDevice}"
                                       ItemsSource="{Binding Devices}"
                                       SelectedItem="{Binding SelectedDevice}"
                                       HorizontalAlignment="Stretch">
@@ -262,7 +284,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row">
@@ -281,7 +303,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">
@@ -329,6 +351,7 @@
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       Grid.Row="0"
+                                      AutomationProperties.Name="{loc:Str Dictation.SpokenLanguage}"
                                       ItemsSource="{Binding LanguageChoices}"
                                       SelectedItem="{Binding SelectedLanguageOption}"
                                       HorizontalAlignment="Stretch">
@@ -344,13 +367,13 @@
                                        Text="{Binding LanguageSelectionWarning}"
                                        IsVisible="{Binding LanguageSelectionRequired}"
                                        FontSize="12"
-                                       Foreground="#D6B45F"
+                                       Foreground="{DynamicResource TwWarningTextBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,8,0,0" />
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="1" Background="#18FFFFFF"
+                    <Border Grid.Row="1" Background="{DynamicResource TwFillBrush}"
                             IsVisible="{Binding IsAdditionalLanguagesVisible}" />
                     <Border Grid.Row="2" Classes="row"
                             IsVisible="{Binding IsAdditionalLanguagesVisible}">
@@ -373,7 +396,7 @@
                                         <DataTemplate x:DataType="vm:SpokenLanguageOption">
                                             <Border Classes="chip">
                                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <TextBlock Text="{Binding DisplayName}" FontSize="11" />
+                                                    <TextBlock Text="{Binding DisplayName}" FontSize="11" TextWrapping="Wrap" />
                                                     <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                     <Button Content="‹"
                                                             Classes="chip-remove"
@@ -403,6 +426,7 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="6">
                                 <ComboBox ItemsSource="{Binding AvailableAdditionalLanguages}"
+                                          AutomationProperties.Name="{loc:Str Dictation.AdditionalLanguages}"
                                           SelectedItem="{Binding SelectedAdditionalLanguage}"
                                           HorizontalAlignment="Stretch">
                                     <ComboBox.ItemTemplate>
@@ -419,7 +443,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">
@@ -427,6 +451,7 @@
                             <TextBlock Grid.Column="0" Text="{loc:Str Dictation.TargetLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.TargetLanguage}"
                                       ItemsSource="{Binding TranslationTargetOptions}"
                                       SelectedItem="{Binding SelectedTranslationTargetOption}"
                                       HorizontalAlignment="Stretch">
@@ -439,7 +464,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5" Background="#18FFFFFF"
+                    <Border Grid.Row="5" Background="{DynamicResource TwFillBrush}"
                             IsVisible="{Binding IsEnglishOutputVariantVisible}" />
                     <Border Grid.Row="6" Classes="row"
                             IsVisible="{Binding IsEnglishOutputVariantVisible}">
@@ -453,6 +478,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.EnglishOutputVariant}"
                                       ItemsSource="{Binding EnglishOutputVariantOptions}"
                                       SelectedItem="{Binding SelectedEnglishOutputVariantOption}"
                                       HorizontalAlignment="Stretch">
@@ -465,7 +491,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="7" Background="#18FFFFFF"
+                    <Border Grid.Row="7" Background="{DynamicResource TwFillBrush}"
                             IsVisible="{Binding IsGermanOutputVariantVisible}" />
                     <Border Grid.Row="8" Classes="row"
                             IsVisible="{Binding IsGermanOutputVariantVisible}">
@@ -479,6 +505,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.GermanOutputVariant}"
                                       ItemsSource="{Binding GermanOutputVariantOptions}"
                                       SelectedItem="{Binding SelectedGermanOutputVariantOption}"
                                       HorizontalAlignment="Stretch">
@@ -491,7 +518,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="9" Background="#18FFFFFF" />
+                    <Border Grid.Row="9" Background="{DynamicResource TwFillBrush}" />
                     <Border Grid.Row="10" Classes="row">
                         <Grid ColumnDefinitions="*,240">
                             <StackPanel Spacing="4">
@@ -500,6 +527,7 @@
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox Grid.Column="1" ItemsSource="{Binding SpokenFormattingStrategyOptions}"
+                                      AutomationProperties.Name="{loc:Str Dictation.SpokenFormatting}"
                                       SelectedItem="{Binding SelectedSpokenFormattingStrategyOption}" HorizontalAlignment="Stretch">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:SpokenFormattingStrategyOption">
@@ -509,7 +537,7 @@
                             </ComboBox>
                         </Grid>
                     </Border>
-                    <Border Grid.Row="11" Background="#18FFFFFF" IsVisible="{Binding IsSpokenFormattingVerificationVisible}" />
+                    <Border Grid.Row="11" Background="{DynamicResource TwFillBrush}" IsVisible="{Binding IsSpokenFormattingVerificationVisible}" />
                     <Border Grid.Row="12" Classes="row" IsVisible="{Binding IsSpokenFormattingVerificationVisible}">
                         <StackPanel Spacing="8">
                             <TextBlock Text="{loc:Str Dictation.SpokenFormattingVerify}" Classes="row-label" />
@@ -549,6 +577,7 @@
                             <TextBlock Text="{loc:Str Dictation.AutoPaste}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoPaste}"
                                           IsChecked="{Binding AutoPaste}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -556,7 +585,7 @@
 
                     <Border Grid.Row="1"
                             IsVisible="{Binding IsLockPasteToFocusedFieldAvailable}"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
                     <Border Grid.Row="2"
                             IsVisible="{Binding IsLockPasteToFocusedFieldAvailable}"
                             Classes="row">
@@ -570,6 +599,7 @@
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.LockPasteToFocusedField}"
                                           IsChecked="{Binding LockPasteToFocusedField}"
                                           IsEnabled="{Binding AutoPaste}"
                                           HorizontalAlignment="Right" />
@@ -577,7 +607,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">
@@ -585,12 +615,14 @@
                             <TextBlock Text="{loc:Str Dictation.AppInsertionStrategies}"
                                        Classes="row-label" />
 
-                            <Grid ColumnDefinitions="*,180,Auto"
+                            <Grid ColumnDefinitions="*,150,Auto"
                                   ColumnSpacing="10">
                                 <TextBox Grid.Column="0"
+                                         AutomationProperties.Name="{loc:Str Dictation.ProcessNamePlaceholder}"
                                          PlaceholderText="{loc:Str Dictation.ProcessNamePlaceholder}"
                                          Text="{Binding NewInsertionAppProcess}" />
                                 <ComboBox Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.InsertionStrategy}"
                                           ItemsSource="{Binding InsertionStrategyOptions}"
                                           SelectedItem="{Binding SelectedNewInsertionStrategyOption}">
                                     <ComboBox.ItemTemplate>
@@ -607,12 +639,14 @@
                             <ItemsControl ItemsSource="{Binding AppInsertionStrategies}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:AppInsertionStrategyRow">
-                                        <Grid ColumnDefinitions="*,180,Auto"
+                                        <Grid ColumnDefinitions="*,150,Auto"
                                               ColumnSpacing="10"
                                               Margin="0,2,0,0">
                                             <TextBox Grid.Column="0"
+                                                     AutomationProperties.Name="{loc:Str Dictation.ProcessNamePlaceholder}"
                                                      Text="{Binding ProcessName}" />
                                             <ComboBox Grid.Column="1"
+                                                      AutomationProperties.Name="{loc:Str Dictation.InsertionStrategy}"
                                                       ItemsSource="{Binding StrategyOptions}"
                                                       SelectedItem="{Binding SelectedStrategyOption}">
                                                 <ComboBox.ItemTemplate>
@@ -634,7 +668,7 @@
                     </Border>
 
                     <Border Grid.Row="5"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="6"
                             Classes="row">
@@ -645,16 +679,18 @@
                                 <TextBlock
                                     Text="{loc:Str Dictation.AutoLearnCorrectionsHint}"
                                     FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoLearnCorrections}"
                                           IsChecked="{Binding AutoAddDictionaryCorrections}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
 
                     <Border Grid.Row="7"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="8"
                             Classes="row">
@@ -670,6 +706,7 @@
                                         TextWrapping="Wrap" />
                                 </StackPanel>
                                 <ToggleSwitch Grid.Column="1"
+                                              AutomationProperties.Name="{loc:Str Dictation.TargetAppCorrectionLearning}"
                                               IsChecked="{Binding TargetAppCorrectionLearningEnabled}"
                                               HorizontalAlignment="Right" />
                             </Grid>
@@ -678,15 +715,15 @@
                                  and Qt apps won't expose text to correction learning until
                                  the user enables it. -->
                             <Border IsVisible="{Binding ShowAccessibilityBridgeSetup}"
-                                    Background="#14D6B45F"
-                                    BorderBrush="#33D6B45F"
+                                    Background="{DynamicResource TwWarningSubtleBrush}"
+                                    BorderBrush="{DynamicResource TwWarningBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="10"
                                     Padding="14,12">
                                 <StackPanel Spacing="10">
                                     <TextBlock Text="{loc:Str Dictation.A11yBridgeSetupExplanation}"
                                                FontSize="12"
-                                               Foreground="#E4C475"
+                                               Foreground="{DynamicResource TwWarningTextBrush}"
                                                TextWrapping="Wrap" />
                                     <Button Content="{loc:Str Dictation.A11yBridgeEnableButton}"
                                             Command="{Binding EnableAccessibilityBridgeCommand}"
@@ -697,15 +734,15 @@
                             <!-- The bridge is on and this app turned it on; offer to remove
                                  it. -->
                             <Border IsVisible="{Binding ShowAccessibilityBridgeRemove}"
-                                    Background="#0FFFFFFF"
-                                    BorderBrush="#1AFFFFFF"
+                                    Background="{DynamicResource TwFillFaintBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                     BorderThickness="1"
                                     CornerRadius="10"
                                     Padding="14,12">
                                 <StackPanel Spacing="10">
                                     <TextBlock Text="{loc:Str Dictation.A11yBridgeRemoveExplanation}"
                                                FontSize="12"
-                                               Foreground="#8A9AAE"
+                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                TextWrapping="Wrap" />
                                     <Button Content="{loc:Str Dictation.A11yBridgeRemoveButton}"
                                             Command="{Binding RemoveAccessibilityBridgeCommand}"
@@ -715,35 +752,47 @@
 
                             <TextBlock Text="{Binding AccessibilityBridgeStatus}"
                                        FontSize="12"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        TextWrapping="Wrap"
                                        IsVisible="{Binding AccessibilityBridgeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
                     </Border>
 
                     <Border Grid.Row="9"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="10"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
-                                       Classes="row-label" />
-                            <ComboBox Grid.Column="1"
-                                      ItemsSource="{Binding CleanupLevelOptions}"
-                                      SelectedItem="{Binding SelectedCleanupLevelOption}"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:CleanupLevelOption">
-                                        <TextBlock Text="{Binding DisplayName}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </Grid>
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,240">
+                                <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
+                                           Classes="row-label" />
+                                <ComboBox Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoCleanup}"
+                                          ItemsSource="{Binding CleanupLevelOptions}"
+                                          SelectedItem="{Binding SelectedCleanupLevelOption}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:CleanupLevelOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <CheckBox IsChecked="{Binding LiveCleanupEnabled}"
+                                      IsEnabled="{Binding CanUseLiveCleanup}"
+                                      AutomationProperties.Name="{loc:Str Dictation.LiveCleanup}"
+                                      Content="{loc:Str Dictation.LiveCleanup}" />
+                            <TextBlock Text="{Binding LiveCleanupUnavailableReason}"
+                                       IsVisible="{Binding ShowLiveCleanupUnavailableReason}"
+                                       FontSize="12" Foreground="{DynamicResource TwWarningTextBrush}" TextWrapping="Wrap" />
+                            <TextBlock Text="{loc:Str Dictation.LiveCleanupHint}"
+                                       FontSize="12" Foreground="{DynamicResource TwTextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="11"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="12"
                             Classes="row">
@@ -751,13 +800,14 @@
                             <TextBlock Text="{loc:Str Common.WhisperMode}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Common.WhisperMode}"
                                           IsChecked="{Binding WhisperModeEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
 
                     <Border Grid.Row="13"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="14"
                             Classes="row">
@@ -768,9 +818,11 @@
                                 <TextBlock Text="{Binding SoundFeedbackUnavailableReason}"
                                            FontSize="11"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           IsVisible="{Binding ShowSoundFeedbackUnavailableReason}" />
+                                           IsVisible="{Binding ShowSoundFeedbackUnavailableReason}"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.SoundFeedback}"
                                           IsChecked="{Binding SoundFeedbackEnabled}"
                                           IsEnabled="{Binding CanUseSoundFeedback}"
                                           ToolTip.Tip="{Binding SoundFeedbackUnavailableReason}"
@@ -779,7 +831,7 @@
                     </Border>
 
                     <Border Grid.Row="15"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="16"
                             Classes="row">
@@ -787,13 +839,14 @@
                             <TextBlock Text="{loc:Str Dictation.TranscribeShortQuietClips}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.TranscribeShortQuietClips}"
                                           IsChecked="{Binding TranscribeShortQuietClipsAggressively}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
 
                     <Border Grid.Row="17"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="18"
                             Classes="row">
@@ -801,13 +854,14 @@
                             <TextBlock Text="{loc:Str Dictation.AutoStopOnSilence}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoStopOnSilence}"
                                           IsChecked="{Binding SilenceAutoStopEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
 
                     <Border Grid.Row="19"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="20"
                             Classes="row">
@@ -815,6 +869,7 @@
                             <TextBlock Text="{loc:Str Dictation.SilenceTimeoutSeconds}"
                                        Classes="row-label" />
                             <TextBox Grid.Column="1"
+                                     AutomationProperties.Name="{loc:Str Dictation.SilenceTimeoutSeconds}"
                                      Width="120"
                                      Text="{Binding SilenceAutoStopSeconds}"
                                      HorizontalAlignment="Right" />
@@ -822,7 +877,7 @@
                     </Border>
 
                     <Border Grid.Row="21"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="22"
                             Classes="row">
@@ -833,16 +888,18 @@
                                 <TextBlock
                                     Text="{loc:Str Dictation.LiveTranscriptionPreviewHint}"
                                     FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.LiveTranscriptionPreview}"
                                           IsChecked="{Binding LiveTranscriptionEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
 
                     <Border Grid.Row="23"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="24"
                             Classes="row">
@@ -853,9 +910,11 @@
                                 <TextBlock
                                     Text="{loc:Str Dictation.OnlineBatchLivePreviewHint}"
                                     FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.OnlineBatchLivePreview}"
                                           IsChecked="{Binding OnlineAsrBatchLiveTranscriptionEnabled}"
                                           IsEnabled="{Binding LiveTranscriptionEnabled}"
                                           HorizontalAlignment="Right" />
@@ -863,7 +922,7 @@
                     </Border>
 
                     <Border Grid.Row="25"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="26"
                             Classes="row">
@@ -878,6 +937,7 @@
                                     TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.RealtimeStreamingLivePreview}"
                                           IsChecked="{Binding LiveTranscriptionStreamingEnabled}"
                                           IsEnabled="{Binding LiveTranscriptionEnabled}"
                                           HorizontalAlignment="Right" />
@@ -885,7 +945,7 @@
                     </Border>
 
                     <Border Grid.Row="27"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="28"
                             Classes="row">
@@ -899,12 +959,13 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.NormalizeNumbers}"
                                           IsChecked="{Binding TranscriptionNumberNormalizationEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="29" Background="#18FFFFFF" />
+                    <Border Grid.Row="29" Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="30"
                             Classes="row">
@@ -918,6 +979,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.ShortUtterancePunctuation}"
                                           IsChecked="{Binding ShortUtterancePunctuationEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -939,9 +1001,11 @@
                                 <TextBlock Text="{Binding AudioDuckingUnavailableReason}"
                                            FontSize="11"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           IsVisible="{Binding ShowAudioDuckingUnavailableReason}" />
+                                           IsVisible="{Binding ShowAudioDuckingUnavailableReason}"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.ReduceOtherAudio}"
                                           IsChecked="{Binding AudioDuckingEnabled}"
                                           IsEnabled="{Binding CanUseAudioDucking}"
                                           ToolTip.Tip="{Binding AudioDuckingUnavailableReason}"
@@ -950,7 +1014,7 @@
                     </Border>
 
                     <Border Grid.Row="1"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="2"
                             Classes="row"
@@ -963,6 +1027,7 @@
                                 <Run Text="{Binding AudioDuckingReductionPercent, StringFormat='{}{0:0}%'}" />
                             </TextBlock>
                             <Slider Minimum="20"
+                                    AutomationProperties.Name="{loc:Str Dictation.DuckingLevel}"
                                     Maximum="90"
                                     TickFrequency="5"
                                     IsSnapToTickEnabled="True"
@@ -972,7 +1037,7 @@
                     </Border>
 
                     <Border Grid.Row="3"
-                            Background="#18FFFFFF" />
+                            Background="{DynamicResource TwFillBrush}" />
 
                     <Border Grid.Row="4"
                             Classes="row">
@@ -983,9 +1048,11 @@
                                 <TextBlock Text="{Binding MediaPauseUnavailableReason}"
                                            FontSize="11"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           IsVisible="{Binding ShowMediaPauseUnavailableReason}" />
+                                           IsVisible="{Binding ShowMediaPauseUnavailableReason}"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.PauseMediaPlayback}"
                                           IsChecked="{Binding PauseMediaDuringRecording}"
                                           IsEnabled="{Binding CanUseMediaPause}"
                                           ToolTip.Tip="{Binding MediaPauseUnavailableReason}"
@@ -1004,6 +1071,7 @@
                                        FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                         <TextBox Grid.Column="1" Width="80" VerticalAlignment="Center"
+                                 AutomationProperties.Name="{loc:Str Dictation.RecoveryRetention}"
                                  Text="{Binding DictationRecoveryRetentionDays}" />
                     </Grid>
                 </Border>

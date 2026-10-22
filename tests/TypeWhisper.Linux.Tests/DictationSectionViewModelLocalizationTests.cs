@@ -12,6 +12,42 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationSectionViewModelLocalizationTests
 {
     [Fact]
+    public void LanguageChange_RefreshesEngineAndModelStatusLabels()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+            using var pluginManager = TestPluginManagerFactory.Create();
+            var commands = new SystemCommandAvailabilityService();
+            using var models = new ModelManagerService(pluginManager, settings.Object, commands);
+            using var audio = new AudioRecordingService(_ => { }, () => 0, () => { });
+            var accessibilityBus = new Mock<IAccessibilityBusActivation>();
+            accessibilityBus.Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+            var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(typeof(DictationOrchestrator));
+            var sut = new DictationSectionViewModel(dictation, models, audio, settings.Object, pluginManager, commands,
+                new CudaLibraryPathSetupService(), accessibilityBus.Object, () => []);
+            Assert.Null(sut.SelectedModel);
+            Assert.Equal("No engine selected", sut.EngineName);
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.Equal(Loc.Instance["Dictation.MicTestIdle"], sut.MicrophoneTestStatus);
+            sut.MicrophoneTestStatus = "microphone error";
+            Loc.Instance.CurrentLanguage = "es";
+            Assert.Equal("microphone error", sut.MicrophoneTestStatus);
+            Assert.Equal(Loc.Instance["Dictation.NoEngineSelected"], sut.EngineName);
+            Assert.Equal(Loc.Instance["Dictation.StatusNotSelected"], sut.ModelStatusText);
+            Assert.NotEqual("No engine selected", sut.EngineName);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void LanguageChange_RebuildsLocalizedOptions_PreservesSelectionsWithoutSaving()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;
@@ -46,8 +82,8 @@ public sealed class DictationSectionViewModelLocalizationTests
                 () => { }
             );
             // ReSharper disable once InconsistentNaming -- "a11y" is the standard numeronym for accessibility.
-            var a11yBus = new Mock<IAccessibilityBusActivation>();
-            a11yBus
+            var accessibilityBus = new Mock<IAccessibilityBusActivation>();
+            accessibilityBus
                 .Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(false);
             var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(
@@ -61,7 +97,7 @@ public sealed class DictationSectionViewModelLocalizationTests
                 pluginManager,
                 commands,
                 new CudaLibraryPathSetupService(),
-                a11yBus.Object,
+                accessibilityBus.Object,
                 () => []
             )
             {
@@ -203,8 +239,8 @@ public sealed class DictationSectionViewModelLocalizationTests
             postToUiThread: serviceJobs.Add
         );
         // ReSharper disable once InconsistentNaming -- "a11y" is the standard numeronym for accessibility.
-        var a11yBus = new Mock<IAccessibilityBusActivation>();
-        a11yBus
+        var accessibilityBus = new Mock<IAccessibilityBusActivation>();
+        accessibilityBus
             .Setup(bus => bus.IsActivatedAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         var dictation = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(
@@ -218,7 +254,7 @@ public sealed class DictationSectionViewModelLocalizationTests
             pluginManager,
             commands,
             new CudaLibraryPathSetupService(),
-            a11yBus.Object,
+            accessibilityBus.Object,
             () => []
         );
 

@@ -651,7 +651,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
 
         var capture = new LlmCallCapture();
-        await sut.ProcessSystemPromptAsync("Clean this up", "hello", capture, CancellationToken.None);
+        await sut.ProcessSystemPromptAsync("Clean this up", "hello", capture, ct: CancellationToken.None);
 
         var call = Assert.Single(capture.Calls);
         Assert.Equal("Cleanup", call.Stage);

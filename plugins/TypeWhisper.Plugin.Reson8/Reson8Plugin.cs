@@ -33,6 +33,11 @@ public sealed partial class Reson8Plugin
         "nl", "en", "fr", "de", "it", "pl", "pt", "es", "sv",
     ];
 
+    private static readonly DictionaryTermsBudget s_phrasesBudget = new(MaxTerms: 250, MaxCharsPerTerm: 255);
+
+    // Phrases go in the request URL; this keeps it inside common request-line limits.
+    internal const int MaxPhrasesQueryLength = 6000;
+
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -84,6 +89,9 @@ public sealed partial class Reson8Plugin
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public bool SupportsLanguageHints => true;
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_phrasesBudget;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
@@ -98,7 +106,7 @@ public sealed partial class Reson8Plugin
 
     internal TimeSpan StreamingFinalizeGrace { get; init; } = TimeSpan.FromSeconds(15);
 
-    internal Func<string?, CancellationToken, Task<IStreamingSession>>? StreamingSessionFactory { get; init; }
+    internal Func<Reson8StreamingRequest, CancellationToken, Task<IStreamingSession>>? StreamingSessionFactory { get; init; }
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -120,9 +128,27 @@ public sealed partial class Reson8Plugin
         }
     }
 
-    public async Task<PluginTranscriptionResult> TranscribeAsync(
+    public Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
         string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct) =>
+        TranscribeCoreAsync(wavAudio, NormalizeLanguage(language), translate, prompt, ct);
+
+    public Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
+        byte[] wavAudio,
+        IReadOnlyList<string> languageHints,
+        bool translate,
+        string? prompt,
+        CancellationToken ct) =>
+        TranscribeCoreAsync(wavAudio, AdvisoryLanguageList(languageHints), translate, prompt, ct);
+
+    // language is one code, which pins it, or a comma-separated list Reson8 detects among.
+    private async Task<PluginTranscriptionResult> TranscribeCoreAsync(
+        byte[] wavAudio,
+        string? language,
+        // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- the one translation check for every batch path, including the streaming fallback.
         bool translate,
         string? prompt,
         CancellationToken ct)
@@ -131,11 +157,12 @@ public sealed partial class Reson8Plugin
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         var connection = EnsureReadyForRequest();
+        var phrases = PhrasesFor(prompt, connection.ModelId);
 
         var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            BuildPrerecordedUri(connection.BaseUrl, connection.ModelId, NormalizeLanguage(language)));
+            BuildPrerecordedUri(connection.BaseUrl, connection.ModelId, language, phrases));
         AddAuthHeader(request, connection.ApiKey, connection.AuthHeader);
         request.Content = new ByteArrayContent(pcm16);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
@@ -145,10 +172,28 @@ public sealed partial class Reson8Plugin
             (errorResponse, errorBody) => FormatApiError(errorResponse.StatusCode, errorBody));
         var json = await response.Content.ReadAsStringAsync(ct);
 
-        return ParseTranscriptionResponse(json, NormalizeLanguage(language), pcm16.Length);
+        return ParseTranscriptionResponse(json, PinnedLanguage(language), pcm16.Length);
     }
 
-    public async Task<PluginTranscriptionResult> TranscribeStreamingAsync(
+    public Task<PluginTranscriptionResult> TranscribeStreamingAsync(
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        Func<string, bool> onProgress,
+        CancellationToken ct) =>
+        TranscribeStreamingCoreAsync(wavAudio, NormalizeLanguage(language), translate, prompt, onProgress, ct);
+
+    public Task<PluginTranscriptionResult> TranscribeStreamingWithLanguageHintsAsync(
+        byte[] wavAudio,
+        IReadOnlyList<string> languageHints,
+        bool translate,
+        string? prompt,
+        Func<string, bool> onProgress,
+        CancellationToken ct) =>
+        TranscribeStreamingCoreAsync(wavAudio, AdvisoryLanguageList(languageHints), translate, prompt, onProgress, ct);
+
+    private async Task<PluginTranscriptionResult> TranscribeStreamingCoreAsync(
         byte[] wavAudio,
         string? language,
         bool translate,
@@ -159,7 +204,8 @@ public sealed partial class Reson8Plugin
         if (translate)
             throw new InvalidOperationException("Reson8 does not support translation.");
 
-        EnsureReadyForRequest();
+        var connection = EnsureReadyForRequest();
+        var streamingRequest = new Reson8StreamingRequest(language, PhrasesFor(prompt, connection.ModelId), connection.ModelId);
 
         return await RunStreamingWithBatchFallbackAsync(
             async markProgressStopped =>
@@ -172,7 +218,7 @@ public sealed partial class Reson8Plugin
                 // and returning a result the caller no longer wants.
                 using var streamingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 await using var session = await WithDeadlineAsync(
-                    token => ConnectStreamingSessionAsync(language, token),
+                    token => ConnectStreamingSessionAsync(streamingRequest, token),
                     StreamingConnectTimeout,
                     "The Reson8 streaming connection timed out.",
                     streamingCts.Token);
@@ -216,12 +262,12 @@ public sealed partial class Reson8Plugin
                     ? null
                     : new PluginTranscriptionResult(
                         text,
-                        NormalizeLanguage(language) ?? collector.DetectedLanguage,
+                        PinnedLanguage(language) ?? collector.DetectedLanguage,
                         PcmDurationSeconds(pcm16.Length),
                         NoSpeechProbability: null
                     );
             },
-            () => TranscribeAsync(wavAudio, language, translate, prompt, ct),
+            () => TranscribeCoreAsync(wavAudio, language, translate, prompt, ct),
             ct
         );
     }
@@ -245,8 +291,8 @@ public sealed partial class Reson8Plugin
         }
     }
 
-    private Task<IStreamingSession> ConnectStreamingSessionAsync(string? language, CancellationToken ct) =>
-        StreamingSessionFactory?.Invoke(language, ct) ?? StartStreamingAsync(language, ct);
+    private Task<IStreamingSession> ConnectStreamingSessionAsync(Reson8StreamingRequest request, CancellationToken ct) =>
+        StreamingSessionFactory?.Invoke(request, ct) ?? StartStreamingCoreAsync(request, ct);
 
     internal static async Task<T> RunStreamingWithBatchFallbackAsync<T>(
         Func<Action, Task<T?>> runStreaming,
@@ -282,7 +328,31 @@ public sealed partial class Reson8Plugin
         return streamed ?? await runBatch();
     }
 
-    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        ConnectStreamingSessionAsync(new Reson8StreamingRequest(NormalizeLanguage(language), []), ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+        IReadOnlyList<string> languageHints,
+        CancellationToken ct) =>
+        ConnectStreamingSessionAsync(new Reson8StreamingRequest(AdvisoryLanguageList(languageHints), []), ct);
+
+    // This call cannot tell an explicit language from an advisory hint, so a lone hint pins the
+    // session. Dictation, its only caller, sends hints only when a language is selected.
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct)
+    {
+        var connection = EnsureReadyForRequest();
+        return ConnectStreamingSessionAsync(
+            new Reson8StreamingRequest(
+                LanguageList(languageHints),
+                PhrasesFor(prompt, connection.ModelId),
+                connection.ModelId),
+            ct);
+    }
+
+    private async Task<IStreamingSession> StartStreamingCoreAsync(Reson8StreamingRequest request, CancellationToken ct)
     {
         var connection = EnsureReadyForRequest();
 
@@ -290,8 +360,9 @@ public sealed partial class Reson8Plugin
             connection.ApiKey,
             connection.BaseUrl,
             connection.AuthHeader,
-            connection.ModelId,
-            NormalizeLanguage(language),
+            request.ModelId ?? connection.ModelId,
+            request.Language,
+            request.Phrases,
             ct);
     }
 
@@ -433,7 +504,11 @@ public sealed partial class Reson8Plugin
         }
     }
 
-    internal static Uri BuildPrerecordedUri(string baseUrl, string? modelId, string? language)
+    internal static Uri BuildPrerecordedUri(
+        string baseUrl,
+        string? modelId,
+        string? language,
+        IReadOnlyList<string>? phrases = null)
     {
         var query = new List<string>
         {
@@ -451,6 +526,9 @@ public sealed partial class Reson8Plugin
         {
             query.Add($"custom_model_id={Uri.EscapeDataString(modelId)}");
         }
+
+        if (phrases is { Count: > 0 })
+            query.Add($"phrases={EncodePhrases(phrases)}");
 
         return new Uri($"{NormalizeBaseUrl(baseUrl)}/v1/speech-to-text/prerecorded?{string.Join("&", query)}");
     }
@@ -489,6 +567,55 @@ public sealed partial class Reson8Plugin
             return string.IsNullOrWhiteSpace(json) ? "Unknown error" : json;
         }
     }
+
+    internal static string EncodePhrases(IReadOnlyList<string> phrases) =>
+        Uri.EscapeDataString(string.Join(",", phrases));
+
+    // Dictionary terms are sent only with the default model: Reson8 does not document combining
+    // phrases with a custom model, which already carries its own phrases.
+    internal static IReadOnlyList<string> PhrasesFor(string? prompt, string modelId)
+    {
+        var terms = PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms;
+        if (!string.Equals(modelId, DefaultModelId, StringComparison.Ordinal))
+            return [];
+
+        var phrases = new List<string>();
+        var queryLength = 0;
+        foreach (var term in PluginDictionaryTerms.Clip(terms, s_phrasesBudget))
+        {
+            // Reson8 splits phrases on commas, so such a term would arrive as several.
+            if (term.Contains(','))
+                continue;
+
+            var nextLength = queryLength + (phrases.Count == 0 ? 0 : 3) + Uri.EscapeDataString(term).Length;
+            if (nextLength > MaxPhrasesQueryLength)
+                break;
+
+            phrases.Add(term);
+            queryLength = nextLength;
+        }
+
+        return phrases;
+    }
+
+    // A comma-separated list restricts Reson8's per-utterance detection to those languages.
+    internal static string? LanguageList(IReadOnlyList<string> languageHints)
+    {
+        var languages = languageHints
+            .Select(NormalizeLanguage)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return languages.Count == 0 ? null : string.Join(",", languages);
+    }
+
+    // The host sends a lone hint through these overloads only under automatic detection; as
+    // Reson8's language it would force that language, so detection stays open instead.
+    internal static string? AdvisoryLanguageList(IReadOnlyList<string> languageHints) =>
+        LanguageList(languageHints) is { } list && list.Contains(',') ? list : null;
+
+    private static string? PinnedLanguage(string? language) =>
+        language is not null && !language.Contains(',') ? language : null;
 
     // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
     internal static string? NormalizeLanguage(string? language)

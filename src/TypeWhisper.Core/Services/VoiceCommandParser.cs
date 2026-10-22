@@ -26,23 +26,17 @@ public static partial class VoiceCommandParser
         var current = text.Trim();
         var trailingOutput = new StringBuilder();
         var autoEnter = false;
+        var sawCancel = false;
 
         // Repeatedly strip recognized trailing commands so stacked commands like
         // "hello new line press enter" are handled correctly.
         while (true)
         {
+            // Resolved after the loop: reparsing the remainder per "cancel" is exponential.
             if (TryRemoveSuffix(current, s_cancelSuffix, out var withoutCancel))
             {
-                var remaining = TrimTrailingNoise(withoutCancel);
-                if (
-                    string.IsNullOrWhiteSpace(remaining)
-                    || string.IsNullOrWhiteSpace(Parse(remaining).Text)
-                )
-                {
-                    return new VoiceCommandParseResult("", CancelInsertion: true);
-                }
-
-                current = remaining;
+                sawCancel = true;
+                current = TrimTrailingNoise(withoutCancel);
                 continue;
             }
 
@@ -68,6 +62,11 @@ public static partial class VoiceCommandParser
             }
 
             break;
+        }
+
+        if (sawCancel && string.IsNullOrWhiteSpace(current))
+        {
+            return new VoiceCommandParseResult("", CancelInsertion: true);
         }
 
         return new VoiceCommandParseResult(current + trailingOutput, autoEnter);
