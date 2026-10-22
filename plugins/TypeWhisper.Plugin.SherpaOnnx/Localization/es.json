@@ -1,4 +1,4 @@
 {
   "Manifest.Name": "Modelos locales (sherpa-onnx)",
-  "Manifest.Description": "Transcripción sin conexión mediante sherpa-onnx (NVIDIA NeMo Parakeet, Parakeet Ultra + Canary)"
+  "Manifest.Description": "Transcripción sin conexión mediante sherpa-onnx (NVIDIA NeMo Parakeet, Parakeet Ultra, Canary + Qwen3-ASR)"
 }

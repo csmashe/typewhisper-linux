@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -70,6 +71,14 @@ internal sealed class SherpaDecodeCoordinator
     private const float NotSilentRmsThreshold = 0.005f;
     internal const float RetryGain = 1.5f;
 
+    // Qwen3-ASR decodes windows independently, so they do not overlap; each also has to fit the
+    // recognizer's 512-token budget together with its text.
+    private const int QwenMaximumChunkDurationSeconds = 10;
+    internal const int QwenMaximumChunkSampleCount = SampleRate * QwenMaximumChunkDurationSeconds;
+
+    // The 1.7B export drops whole windows of quiet speech that it decodes at this peak.
+    internal const float QwenTargetPeak = 0.707f;
+
     private readonly SherpaDecodeDelegate _decode;
     private readonly Action<string>? _warn;
 
@@ -120,6 +129,47 @@ internal sealed class SherpaDecodeCoordinator
 
         return new SherpaDecodeResult(string.Join(' ', parts), detectedLanguage, []);
     }
+
+    /// <summary>Decodes Qwen3-ASR windows in order and joins their text; no token timings.</summary>
+    internal SherpaDecodeResult DecodeQwen(float[] audioSamples, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(audioSamples);
+        var parts = new List<string>();
+        // ReSharper disable once LoopCanBeConvertedToQuery -- each pass runs a native decode and its cancellation checks; a query would hide that.
+        foreach (var chunk in CreateChunks(audioSamples, 0, QwenMaximumChunkSampleCount, ct))
+        {
+            if (!audioSamples.AsSpan(chunk.Start, chunk.End - chunk.Start).ContainsAnyExcept(0f))
+                continue;
+            var text = DecodeChunk(audioSamples, chunk, parseCanaryPayload: false, ct, QwenTargetPeak).Text.Trim();
+            if (text.Length > 0)
+                parts.Add(text);
+        }
+
+        ct.ThrowIfCancellationRequested();
+        return new SherpaDecodeResult(JoinWindows(parts), null, []);
+    }
+
+    // Chinese and Japanese write no spaces between words, so a cut between two of their
+    // characters must not add one.
+    internal static string JoinWindows(IReadOnlyList<string> parts)
+    {
+        var joined = new StringBuilder();
+        foreach (var part in parts)
+        {
+            if (joined.Length > 0 && !(IsUnspacedScript(joined[^1]) && IsUnspacedScript(part[0])))
+                joined.Append(' ');
+            joined.Append(part);
+        }
+
+        return joined.ToString();
+    }
+
+    private static bool IsUnspacedScript(char c) =>
+        c is >= '\u3000' and <= '\u30FF' // CJK punctuation, Hiragana, Katakana
+            or >= '\u3400' and <= '\u4DBF' // CJK Extension A
+            or >= '\u4E00' and <= '\u9FFF' // CJK Unified Ideographs
+            or >= '\uF900' and <= '\uFAFF' // CJK Compatibility Ideographs
+            or >= '\uFF00' and <= '\uFFEF'; // Full-width forms
 
     private SherpaDecodeResult DecodeTransducer(float[] audioSamples, CancellationToken ct)
     {
@@ -188,14 +238,15 @@ internal sealed class SherpaDecodeCoordinator
         float[] audioSamples,
         SherpaChunkWindow chunk,
         bool parseCanaryPayload,
-        CancellationToken ct
+        CancellationToken ct,
+        float targetPeak = TargetPeak
     )
     {
-        // sherpa-onnx 1.12.23 exposes only a synchronous Decode call. These
+        // sherpa-onnx exposes only a synchronous Decode call. These
         // checkpoints cannot interrupt that call, but chunking bounds normal
         // uncancellable work and stops before the next native invocation.
         ct.ThrowIfCancellationRequested();
-        var samples = NormalizeLevel(audioSamples, chunk.Start, chunk.End);
+        var samples = NormalizeLevel(audioSamples, chunk.Start, chunk.End, targetPeak);
         var decoded = _decode(samples);
         ct.ThrowIfCancellationRequested();
         if (!IsEmpty(decoded, parseCanaryPayload) || Rms(samples) < NotSilentRmsThreshold)
@@ -223,16 +274,16 @@ internal sealed class SherpaDecodeCoordinator
             : string.IsNullOrWhiteSpace(decoded.Text) && (decoded.Tokens is null || decoded.Tokens.Length == 0);
 
     // The gain is capped so near-silence is not blown up into noise.
-    internal static float[] NormalizeLevel(float[] audioSamples, int start, int end)
+    internal static float[] NormalizeLevel(float[] audioSamples, int start, int end, float targetPeak = TargetPeak)
     {
         var peak = 0f;
         for (var i = start; i < end; i++)
             peak = Math.Max(peak, Math.Abs(audioSamples[i]));
 
-        if (peak is <= 0 or >= TargetPeak)
+        if (peak <= 0 || peak >= targetPeak)
             return start == 0 && end == audioSamples.Length ? audioSamples : audioSamples[start..end];
 
-        var gain = Math.Min(TargetPeak / peak, MaximumGain);
+        var gain = Math.Min(targetPeak / peak, MaximumGain);
         var scaled = new float[end - start];
         for (var i = 0; i < scaled.Length; i++)
             scaled[i] = audioSamples[start + i] * gain;
@@ -262,23 +313,38 @@ internal sealed class SherpaDecodeCoordinator
         float[] audioSamples,
         bool parseCanaryPayload,
         CancellationToken ct
+    ) =>
+        CreateChunks(
+            audioSamples,
+            parseCanaryPayload ? 0 : BoundaryContextSampleCount,
+            MaximumChunkSampleCount,
+            ct
+        );
+
+    internal static IReadOnlyList<SherpaChunkWindow> PlanQwenChunks(float[] audioSamples) =>
+        CreateChunks(audioSamples, 0, QwenMaximumChunkSampleCount, CancellationToken.None).ToArray();
+
+    private static IEnumerable<SherpaChunkWindow> CreateChunks(
+        float[] audioSamples,
+        int context,
+        int maximumChunkSampleCount,
+        CancellationToken ct
     )
     {
         ct.ThrowIfCancellationRequested();
 
         // Preserve the existing single-call path for short recordings, including an
         // empty recording. Only long audio pays the copy/overlap cost.
-        var context = parseCanaryPayload ? 0 : BoundaryContextSampleCount;
         var start = 0;
         var ownedStart = 0;
-        while (audioSamples.Length - start > MaximumChunkSampleCount)
+        while (audioSamples.Length - start > maximumChunkSampleCount)
         {
             ct.ThrowIfCancellationRequested();
             // The context after the cut must still fit in this chunk.
-            var latestCut = start + MaximumChunkSampleCount - context;
+            var latestCut = start + maximumChunkSampleCount - context;
             // Spread what is left evenly: Parakeet decodes a short final chunk of real
             // speech to nothing.
-            var ownedPerChunk = MaximumChunkSampleCount - 2 * context;
+            var ownedPerChunk = maximumChunkSampleCount - 2 * context;
             var chunksLeft = (audioSamples.Length - ownedStart + ownedPerChunk - 1) / ownedPerChunk;
             var target = ownedStart + (audioSamples.Length - ownedStart) / chunksLeft;
             var cut = FindLowEnergyCut(
