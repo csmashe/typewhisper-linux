@@ -1,0 +1,81 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
+        xmlns:vm="using:TypeWhisper.Linux.ViewModels"
+        mc:Ignorable="d"
+        x:Class="TypeWhisper.Linux.Views.LiveTextWindow"
+        x:DataType="vm:LiveTextWindowViewModel"
+        RequestedThemeVariant="Dark"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        WindowDecorations="None"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        CanResize="True"
+        SizeToContent="Manual"
+        Width="420"
+        Height="220"
+        MinWidth="280"
+        MinHeight="140">
+    <!-- No margin or border stroke, for the same NVIDIA + XWayland compositing reasons as
+         DictationOverlayWindow: the dark fill fills the window exactly. -->
+    <Grid IsVisible="{Binding HasVisibleContent}">
+        <Border Background="#F0181818"
+                CornerRadius="14"
+                Padding="14,8,14,14">
+            <Grid RowDefinitions="Auto,*"
+                  RowSpacing="6">
+                <Border x:Name="DragHandle"
+                        Background="Transparent"
+                        Cursor="SizeAll"
+                        MinHeight="26"
+                        ToolTip.Tip="{loc:Str LiveText.DragHint}"
+                        AutomationProperties.Name="{loc:Str LiveText.DragHint}">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="7"
+                                VerticalAlignment="Center">
+                        <TextBlock Text="⠿"
+                                   FontSize="15"
+                                   Foreground="#80FFFFFF"
+                                   VerticalAlignment="Center" />
+                        <Ellipse Width="6"
+                                 Height="6"
+                                 Fill="#1593F5"
+                                 VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding HeaderText}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#99FFFFFF"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <ScrollViewer x:Name="TextScrollViewer"
+                              Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <TextBlock Text="{Binding Text}"
+                               TextWrapping="Wrap"
+                               FontSize="13"
+                               Foreground="#E6FFFFFF" />
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- Resize grip glyph; the edge handles below do the resizing. -->
+        <Canvas Width="12"
+                Height="12"
+                Margin="0,0,6,6"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                IsHitTestVisible="False">
+            <Line StartPoint="2,11" EndPoint="11,2" Stroke="#66FFFFFF" StrokeThickness="1" />
+            <Line StartPoint="7,11" EndPoint="11,7" Stroke="#66FFFFFF" StrokeThickness="1" />
+        </Canvas>
+
+        <Panel x:Name="ResizeHandles" />
+    </Grid>
+</Window>

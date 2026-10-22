@@ -6,17 +6,30 @@
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
         xmlns:svc="using:TypeWhisper.Linux.Services"
         xmlns:models="using:TypeWhisper.Core.Models"
-        xmlns:local="using:TypeWhisper.Linux"
         xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="720"
         x:Class="TypeWhisper.Linux.Views.WelcomeWizard"
         x:DataType="vm:WelcomeWizardViewModel"
-        RequestedThemeVariant="Dark"
         Title="{loc:Str Wizard.WindowTitle}"
         Icon="avares://typewhisper/Resources/typewhisper.ico"
         Width="640" Height="720"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
+    <Window.Styles>
+        <Style Selector="Ellipse.step-dot">
+            <Setter Property="Fill" Value="{DynamicResource TwTextTertiaryBrush}" />
+        </Style>
+        <Style Selector="Ellipse.step-dot.active">
+            <Setter Property="Fill" Value="{DynamicResource TwAccentBrush}" />
+        </Style>
+        <Style Selector="TextBlock.task-status">
+            <Setter Property="Foreground" Value="{DynamicResource TwWarningTextBrush}" />
+        </Style>
+        <Style Selector="TextBlock.task-status.satisfied">
+            <Setter Property="Foreground" Value="{DynamicResource TwSuccessTextBrush}" />
+        </Style>
+    </Window.Styles>
+
     <Grid RowDefinitions="Auto,*,Auto" Margin="0">
         <!-- Header -->
         <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,32,0,20" Spacing="6">
@@ -36,7 +49,8 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:WelcomeStepDot">
                         <Ellipse Width="24" Height="6"
-                                 Fill="{Binding IsActive, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2196F3|False=#6F7A86'}" />
+                                 Classes="step-dot"
+                                 Classes.active="{Binding IsActive}" />
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
@@ -69,16 +83,16 @@
                               HorizontalAlignment="Stretch">
                         <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:WizardModelRow">
-                                <!-- Explicit colors: the ComboBox dropdown popup resolves theme
-                                     DynamicResources against the light variant, so size/Recommended
-                                     would render dark-on-dark. Hardcode readable light tones. -->
+                                <!-- Explicit Tw* colors: the dropdown popup resolves them against the
+                                     application theme, which windows no longer override, so the popup
+                                     matches the window in both Light and Dark. -->
                                 <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <TextBlock Text="{Binding DisplayName}" Foreground="#ECECEC" />
+                                    <TextBlock Text="{Binding DisplayName}" Foreground="{DynamicResource TwTextStrongBrush}" />
                                     <TextBlock Text="{Binding SizeDescription}" FontSize="11"
-                                               Foreground="#9CA3AF"
+                                               Foreground="{DynamicResource TwTextMutedBrush}"
                                                VerticalAlignment="Center" />
                                     <TextBlock Text="{loc:Str Wizard.RecommendedSuffix}" FontSize="11"
-                                               Foreground="#5BA3F5"
+                                               Foreground="{DynamicResource TwAccentTextBrush}"
                                                VerticalAlignment="Center"
                                                IsVisible="{Binding IsRecommended}" />
                                 </StackPanel>
@@ -111,9 +125,9 @@
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="models:IndustryPreset">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <TextBlock Text="{Binding Name}" Foreground="#ECECEC" />
+                                        <TextBlock Text="{Binding Name}" Foreground="{DynamicResource TwTextStrongBrush}" />
                                         <TextBlock Text="{Binding Description}" FontSize="11"
-                                                   Foreground="#9CA3AF"
+                                                   Foreground="{DynamicResource TwTextMutedBrush}"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
                                 </DataTemplate>
@@ -222,7 +236,8 @@
                                                                FontWeight="Bold"
                                                                FontSize="15"
                                                                VerticalAlignment="Top"
-                                                               Foreground="{Binding IsSatisfied, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#4CAF50|False=#E0A030'}" />
+                                                               Classes="task-status"
+                                                               Classes.satisfied="{Binding IsSatisfied}" />
                                                     <StackPanel Grid.Column="1" Spacing="2">
                                                         <Grid ColumnDefinitions="*,Auto">
                                                             <TextBlock Grid.Column="0"
@@ -394,8 +409,8 @@
 
                     <!-- Shown when setup added the user to the input group: the
                          global shortcut only activates after a re-login. -->
-                    <Border Background="#3A2F12"
-                            BorderBrush="#7A5E1E" BorderThickness="1"
+                    <Border Background="{DynamicResource TwWarningSubtleBrush}"
+                            BorderBrush="{DynamicResource TwWarningBorderBrush}" BorderThickness="1"
                             CornerRadius="6" Padding="14,12"
                             MaxWidth="480" HorizontalAlignment="Center"
                             Margin="0,16,0,0"

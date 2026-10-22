@@ -1,12 +1,25 @@
 {
   "Settings.ApiKey": "API-Schlüssel",
-  "Settings.ApiKeyDescription": "Erforderlich für Voxtral-Transkription über Mistral.",
+  "Settings.ApiKeyDescription": "Erforderlich für Voxtral-Transkription und Mistral-Textverarbeitung. Beim Validieren werden auch die für diesen Schlüssel verfügbaren Mistral-Textmodelle geladen.",
   "Settings.TranscriptionModel": "Transkriptionsmodell",
   "Settings.ModelDescription": "Wählen Sie das Voxtral-Modell.",
+  "Settings.StreamResponses": "Textantworten streamen",
+  "Settings.StreamResponsesDescription": "Mistral-Prompt-Aktions-Ausgabe Token für Token während der Generierung anzeigen, statt auf die vollständige Antwort zu warten.",
+  "Settings.TemperatureMode": "Texttemperatur",
+  "Settings.TemperatureModeDescription": "Bei der Anbietervorgabe wird keine Temperatur gesendet, sodass Mistral die Vorgabe des jeweiligen Modells verwendet; bei „Benutzerdefiniert“ wird der unten angegebene Wert gesendet.",
+  "Settings.TemperatureProviderDefault": "Anbietervorgabe",
+  "Settings.TemperatureCustom": "Benutzerdefiniert",
+  "Settings.TemperatureValue": "Wert der Texttemperatur",
+  "Settings.TemperatureValueDescription": "Von 0 bis 1.5. Niedrigere Werte liefern konsistentere Ergebnisse. Wird nur im benutzerdefinierten Temperaturmodus verwendet.",
+  "Settings.TemperatureInvalid": "Geben Sie eine Temperatur von 0 bis 1.5 mit einem Punkt als Dezimaltrennzeichen ein.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
-  "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
+  "Settings.ApiKeyValidFetchedTextModels": "API-Schlüssel ist gültig. {0} für dieses Konto verfügbare Mistral-Textmodell(e) geladen.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
+  "Settings.ModelRefreshFailed": "Mistral-Textmodelle konnten nicht geladen werden: {0} Die gespeicherte Modellliste bleibt unverändert.",
+  "Settings.ModelRefreshStale": "Der API-Schlüssel wurde geändert, während die Modelle geladen wurden. Validieren Sie erneut.",
+  "Errors.ModelRefreshTimedOut": "Das Laden hat zu lange gedauert.",
+  "Errors.ModelCatalogInvalid": "Mistral hat eine ungültige oder zu große Modellliste oder eine ohne Textmodelle zurückgegeben.",
   "Settings.NotConfiguredMistralApiKeyRequired": "Plugin nicht konfiguriert. Mistral-API-Schlüssel erforderlich.",
   "Manifest.Name": "Voxtral",
-  "Manifest.Description": "Voxtral (Mistral) Audiotranskription und Übersetzung"
+  "Manifest.Description": "Voxtral (Mistral) Audiotranskription und Mistral-Textverarbeitung"
 }

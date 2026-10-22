@@ -1,0 +1,97 @@
+[
+  {
+    "name": "public-ui-off",
+    "draft_calls": 0,
+    "final_calls": 1,
+    "reused": false,
+    "timings_ms": {
+      "transcription_and_precleanup_upper_bound": 718.8,
+      "cleanup_to_final_event_upper_bound": 267.2,
+      "delivery_observed_upper_bound": 386.81,
+      "stop_to_clipboard_readback": 1577.65
+    },
+    "acceleration": {
+      "preference": "cpu",
+      "active_backend": "cpu",
+      "display_text": "Using CPU",
+      "detail": null,
+      "requires_restart": false
+    }
+  },
+  {
+    "name": "public-hit",
+    "draft_calls": 1,
+    "final_calls": 0,
+    "reused": true,
+    "timings_ms": {
+      "transcription_and_precleanup_upper_bound": 606.0,
+      "cleanup_to_final_event_upper_bound": 11.0,
+      "delivery_observed_upper_bound": 387.03,
+      "stop_to_clipboard_readback": 1211.46
+    },
+    "acceleration": {
+      "preference": "cpu",
+      "active_backend": "cpu",
+      "display_text": "Using CPU",
+      "detail": null,
+      "requires_restart": false
+    }
+  },
+  {
+    "name": "public-miss",
+    "draft_calls": 1,
+    "final_calls": 1,
+    "reused": false,
+    "timings_ms": {
+      "transcription_and_precleanup_upper_bound": 438.5,
+      "cleanup_to_final_event_upper_bound": 261.5,
+      "delivery_observed_upper_bound": 397.05,
+      "stop_to_clipboard_readback": 1310.43
+    },
+    "acceleration": {
+      "preference": "cpu",
+      "active_backend": "cpu",
+      "display_text": "Using CPU",
+      "detail": null,
+      "requires_restart": false
+    }
+  },
+  {
+    "name": "spoken-hit",
+    "draft_calls": 1,
+    "final_calls": 0,
+    "reused": true,
+    "timings_ms": {
+      "transcription_and_precleanup_upper_bound": 563.0,
+      "cleanup_to_final_event_upper_bound": 10.0,
+      "delivery_observed_upper_bound": 394.38,
+      "stop_to_clipboard_readback": 1217.41
+    },
+    "acceleration": {
+      "preference": "cpu",
+      "active_backend": "cpu",
+      "display_text": "Using CPU",
+      "detail": null,
+      "requires_restart": false
+    }
+  },
+  {
+    "name": "spoken-miss",
+    "draft_calls": 1,
+    "final_calls": 1,
+    "reused": false,
+    "timings_ms": {
+      "transcription_and_precleanup_upper_bound": 430.43,
+      "cleanup_to_final_event_upper_bound": 260.57,
+      "delivery_observed_upper_bound": 394.9,
+      "stop_to_clipboard_readback": 1302.87
+    },
+    "acceleration": {
+      "preference": "cpu",
+      "active_backend": "cpu",
+      "display_text": "Using CPU",
+      "detail": null,
+      "requires_restart": false
+    }
+  }
+]

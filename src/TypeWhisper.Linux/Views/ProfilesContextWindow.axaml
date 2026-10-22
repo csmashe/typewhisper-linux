@@ -4,7 +4,6 @@
         xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         x:Class="TypeWhisper.Linux.Views.ProfilesContextWindow"
         x:DataType="vm:ProfilesSectionViewModel"
-        RequestedThemeVariant="Dark"
         Title="{loc:Str ProfilesContext.Title}"
         Width="460"
         Height="320"

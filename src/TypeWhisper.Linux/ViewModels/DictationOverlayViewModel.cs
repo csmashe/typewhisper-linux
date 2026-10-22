@@ -173,6 +173,10 @@ public partial class DictationOverlayViewModel : ObservableObject
 
     public bool HasActionResultUrl => !string.IsNullOrWhiteSpace(ActionResultUrl);
 
+    // Floating live text is shown by LiveTextWindow instead.
+    public bool ShowInlinePartialText =>
+        !_settings.Current.LiveTextFloating && !string.IsNullOrEmpty(PartialText);
+
     public string RecordingTimerText
     {
         get
@@ -306,6 +310,11 @@ public partial class DictationOverlayViewModel : ObservableObject
     partial void OnActionResultUrlChanged(string? value)
     {
         OnPropertyChanged(nameof(HasActionResultUrl));
+    }
+
+    partial void OnPartialTextChanged(string? value)
+    {
+        OnPropertyChanged(nameof(ShowInlinePartialText));
     }
 
     [RelayCommand]
@@ -479,6 +488,7 @@ public partial class DictationOverlayViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowRightWaveform));
         OnPropertyChanged(nameof(ShowRightText));
         OnPropertyChanged(nameof(RightText));
+        OnPropertyChanged(nameof(ShowInlinePartialText));
         UpdateClockTimer();
     }
 

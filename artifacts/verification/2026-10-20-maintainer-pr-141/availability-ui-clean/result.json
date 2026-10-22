@@ -1,0 +1,31 @@
+{
+  "blocked": {
+    "name": "Clean drafts while recording",
+    "role": "check box",
+    "enabled": false,
+    "sensitive": false,
+    "checked": true
+  },
+  "reason": "Live cleanup is unavailable while these text processors are enabled: Filler Words. Disable them in Plugins to use live cleanup. Your live cleanup preference is kept. Final cleanup still runs after you stop.",
+  "plugin_toggle": {
+    "name": "ToggleSwitch",
+    "role": "toggle button",
+    "enabled": true,
+    "sensitive": true,
+    "checked": true,
+    "clicked": true
+  },
+  "available": {
+    "name": "Clean drafts while recording",
+    "role": "check box",
+    "enabled": true,
+    "sensitive": true,
+    "checked": true
+  },
+  "persisted_states": [
+    false,
+    true
+  ],
+  "preference_preserved_across_availability": true,
+  "llm_calls": 0
+}

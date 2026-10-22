@@ -166,7 +166,17 @@ public sealed class SettingsService : ISettingsService
 
     // One place for the invariants every committed snapshot must satisfy, whichever path wrote it.
     private static AppSettings NormalizeSettings(AppSettings settings) =>
-        NormalizeRetention(NormalizeSpokenFormattingProfiles(NormalizeLanguageHints(settings)));
+        NormalizeLiveTextWindow(NormalizeRetention(NormalizeSpokenFormattingProfiles(NormalizeLanguageHints(settings))));
+
+    // A hand-edited or corrupt position must not place the window at NaN or infinity.
+    private static AppSettings NormalizeLiveTextWindow(AppSettings settings) =>
+        settings with
+        {
+            LiveTextWindowLeft = settings.LiveTextWindowLeft is { } left && double.IsFinite(left) ? left : null,
+            LiveTextWindowTop = settings.LiveTextWindowTop is { } top && double.IsFinite(top) ? top : null,
+            LiveTextWindowWidth = AppSettings.NormalizeLiveTextWindowWidth(settings.LiveTextWindowWidth),
+            LiveTextWindowHeight = AppSettings.NormalizeLiveTextWindowHeight(settings.LiveTextWindowHeight),
+        };
 
     private static AppSettings NormalizeSpokenFormattingProfiles(AppSettings settings) =>
         settings with { SpokenFormattingProfiles = SpokenFormatting.SpokenFormattingProfileStore.NormalizeProfiles(settings.SpokenFormattingProfiles) };

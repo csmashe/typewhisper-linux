@@ -22,6 +22,8 @@
             with WhisperCudaRuntimeInstaller.RuntimeVersion.
         -->
         <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" />
+        <!-- whisper.cpp Vulkan runtime supports Linux x64 and uses the system Vulkan driver. -->
+        <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.8.1" />
     </ItemGroup>
 
     <ItemGroup>

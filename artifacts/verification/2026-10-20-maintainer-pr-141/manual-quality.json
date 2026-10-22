@@ -1,0 +1,67 @@
+[
+  {
+    "case_id": "public-hit",
+    "raw_text": "He bent his face over her hair.",
+    "text": "He bent his face over her hair.",
+    "clipboard_text": "He bent his face over her hair. ",
+    "mechanism_pass": true,
+    "quality_verdict": "pass",
+    "needs_cleanup_edit": false,
+    "critical_errors": [],
+    "critique": "The public sentence is complete. For the miss, the complete added Tuesday phrase survives. The final clipboard text matches the recorded result.",
+    "evidence_kind": "simulated cleanup provider with real ASR",
+    "polished_prose_model_quality": "not assessed"
+  },
+  {
+    "case_id": "public-miss",
+    "raw_text": "He bent his face over her hair. Please send it next Tuesday instead.",
+    "text": "He bent his face over her hair. Please send it next Tuesday instead.",
+    "clipboard_text": "He bent his face over her hair. Please send it next Tuesday instead. ",
+    "mechanism_pass": true,
+    "quality_verdict": "pass",
+    "needs_cleanup_edit": false,
+    "critical_errors": [],
+    "critique": "The public sentence is complete. For the miss, the complete added Tuesday phrase survives. The final clipboard text matches the recorded result.",
+    "evidence_kind": "simulated cleanup provider with real ASR",
+    "polished_prose_model_quality": "not assessed"
+  },
+  {
+    "case_id": "public-ui-off",
+    "raw_text": "He bent his face over her hair.",
+    "text": "He bent his face over her hair.",
+    "clipboard_text": "He bent his face over her hair. ",
+    "mechanism_pass": true,
+    "quality_verdict": "pass",
+    "needs_cleanup_edit": false,
+    "critical_errors": [],
+    "critique": "The public sentence is complete. For the miss, the complete added Tuesday phrase survives. The final clipboard text matches the recorded result.",
+    "evidence_kind": "simulated cleanup provider with real ASR",
+    "polished_prose_model_quality": "not assessed"
+  },
+  {
+    "case_id": "spoken-hit",
+    "raw_text": "Can you send 23 files question mark?",
+    "text": "Can you send 23 files?",
+    "clipboard_text": "Can you send 23 files? ",
+    "mechanism_pass": true,
+    "quality_verdict": "pass",
+    "needs_cleanup_edit": false,
+    "critical_errors": [],
+    "critique": "The complete source meaning survives. Spoken-punctuation words become one question mark in the spoken hit. The final clipboard text matches the recorded result.",
+    "evidence_kind": "simulated cleanup provider with real ASR",
+    "polished_prose_model_quality": "not assessed"
+  },
+  {
+    "case_id": "spoken-miss",
+    "raw_text": "Can you send 23 files? Question mark. Please send it next Tuesday instead.",
+    "text": "Can you send 23 files?? Please send it next Tuesday instead.",
+    "clipboard_text": "Can you send 23 files?? Please send it next Tuesday instead. ",
+    "mechanism_pass": true,
+    "quality_verdict": "fail",
+    "needs_cleanup_edit": true,
+    "critical_errors": [],
+    "critique": "ASR supplied both a question mark and the words Question mark. Existing preprocessing produced two question marks before the LLM request. The echo provider preserved them. The Tuesday correction is complete, but punctuation needs an edit.",
+    "evidence_kind": "simulated cleanup provider with real ASR",
+    "polished_prose_model_quality": "not assessed"
+  }
+]

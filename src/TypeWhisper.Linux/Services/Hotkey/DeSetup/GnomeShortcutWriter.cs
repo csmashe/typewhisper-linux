@@ -631,10 +631,7 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
             }
         }
 
-        var key = parts[^1];
-        // GTK expects lowercase ("space", "k"), but function keys (F1..F35) must
-        // preserve the leading capital — GTK's keysym parser is case-sensitive there.
-        key = IsFunctionKey(key) ? "F" + key[1..] : key.ToLowerInvariant();
+        var key = DesktopShortcutKey.ToKeysym(parts[^1]);
 
         sb.Append(key);
         return sb.ToString();
@@ -690,24 +687,6 @@ public sealed class GnomeShortcutWriter : IDeShortcutWriter
         }
 
         return h.ToString("x8", CultureInfo.InvariantCulture);
-    }
-
-    private static bool IsFunctionKey(string k)
-    {
-        if (k.Length < 2 || (k[0] != 'F' && k[0] != 'f'))
-        {
-            return false;
-        }
-
-        for (var i = 1; i < k.Length; i++)
-        {
-            if (!char.IsDigit(k[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private async Task<(bool Ok, string Raw, string Error)> ReadListAsync(

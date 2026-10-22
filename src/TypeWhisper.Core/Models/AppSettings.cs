@@ -28,10 +28,19 @@ public record AppSettings
     public const string LocalModelAccelerationAuto = "auto";
     public const string LocalModelAccelerationCpu = "cpu";
     public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";
+    public const string LocalModelAccelerationVulkan = "vulkan";
 
     public const int MinPreviewBubbleAutoHideMilliseconds = 0;
     public const int DefaultPreviewBubbleAutoHideMilliseconds = 1500;
     public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
+
+    // Floating live-text window size in device-independent pixels.
+    public const int MinLiveTextWindowWidth = 280;
+    public const int DefaultLiveTextWindowWidth = 420;
+    public const int MaxLiveTextWindowWidth = 4096;
+    public const int MinLiveTextWindowHeight = 140;
+    public const int DefaultLiveTextWindowHeight = 220;
+    public const int MaxLiveTextWindowHeight = 4096;
 
     public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
     public string RecentTranscriptionsHotkey { get; init; } = "";
@@ -67,6 +76,7 @@ public record AppSettings
     } = new(StringComparer.OrdinalIgnoreCase);
 
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
+    public bool LiveCleanupEnabled { get; init; }
 
     // Hybrid: quick tap toggles, held key acts as push-to-talk. Most forgiving
     // default — avoids the rapid on/off thrash Toggle produces on a held key.
@@ -129,6 +139,13 @@ public record AppSettings
     public int PreviewBubbleAutoHideMilliseconds { get; init; } = DefaultPreviewBubbleAutoHideMilliseconds;
     public double? OverlayCustomLeft { get; init; }
     public double? OverlayCustomTop { get; init; }
+
+    // Live text in its own movable, resizable window instead of inside the overlay.
+    public bool LiveTextFloating { get; init; }
+    public double? LiveTextWindowLeft { get; init; }
+    public double? LiveTextWindowTop { get; init; }
+    public int LiveTextWindowWidth { get; init; } = DefaultLiveTextWindowWidth;
+    public int LiveTextWindowHeight { get; init; } = DefaultLiveTextWindowHeight;
 
     // Translation
     public string TranscriptionTask { get; init; } = "transcribe";
@@ -218,6 +235,9 @@ public record AppSettings
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }
 
+    // Dark keeps the look of releases that had no theme choice.
+    public InterfaceTheme InterfaceTheme { get; init; } = InterfaceTheme.Dark;
+
     // Dashboard
     public int DashboardSelectedPeriod { get; init; }
 
@@ -257,8 +277,8 @@ public record AppSettings
 
     /// <summary>
     ///     Maps a stored/user acceleration string to a canonical value
-    ///     (<see cref="LocalModelAccelerationAuto" />, <c>…Cpu</c>, or
-    ///     <c>…NvidiaCuda</c>), accepting aliases like "cuda" and "nvidia cuda" and
+    ///     (<see cref="LocalModelAccelerationAuto" />, <c>…Cpu</c>, <c>…NvidiaCuda</c>,
+    ///     or <c>…Vulkan</c>), accepting aliases like "cuda" and "nvidia cuda" and
     ///     falling back to "auto" for blank or unrecognized input.
     /// </summary>
     public static string NormalizeLocalModelAcceleration(string? value)
@@ -288,7 +308,9 @@ public record AppSettings
             return LocalModelAccelerationNvidiaCuda;
         }
 
-        return LocalModelAccelerationAuto;
+        return string.Equals(trimmed, LocalModelAccelerationVulkan, StringComparison.OrdinalIgnoreCase)
+            ? LocalModelAccelerationVulkan
+            : LocalModelAccelerationAuto;
     }
 
     // Treats blank/whitespace as "use the default storage path" (null); trims otherwise.
@@ -304,6 +326,12 @@ public record AppSettings
             MinPreviewBubbleAutoHideMilliseconds,
             MaxPreviewBubbleAutoHideMilliseconds);
     }
+
+    public static int NormalizeLiveTextWindowWidth(int width) =>
+        Math.Clamp(width, MinLiveTextWindowWidth, MaxLiveTextWindowWidth);
+
+    public static int NormalizeLiveTextWindowHeight(int height) =>
+        Math.Clamp(height, MinLiveTextWindowHeight, MaxLiveTextWindowHeight);
 
     public static (double Left, double Top) ClampOverlayPositionToWorkArea(
         double left,

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Moq;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.GemmaLocal;
 using TypeWhisper.PluginSDK;
@@ -152,6 +153,27 @@ public sealed class GemmaLocalLiveModelTests
         Assert.Contains("your", answer, StringComparison.OrdinalIgnoreCase);
         await loaded.Instance.DeactivateAsync();
         loaded.Instance.Dispose();
+    }
+
+    [GemmaLiveModelFact]
+    public async Task AliasSuggestions_RealModelReturnsReviewableVariants()
+    {
+        using var plugin = new GemmaLocalPlugin();
+        await LoadAsync(plugin);
+
+        foreach (var (term, language) in new[] { ("GitHub", "English"), ("TypeWhisper", "German"), ("Kubernetes", "English") })
+        {
+            var aliases = await DictionaryAliasSuggestions.GenerateAsync(term, language,
+                (prompt, input, token) => plugin.ProcessAsync(prompt, input, ModelId, token), CancellationToken.None);
+
+            Trace.WriteLine($"[alias-suggestions] {term} ({language}): {string.Join(" | ", aliases)}");
+            Assert.InRange(aliases.Count, 1, DictionaryAliasSuggestions.MaximumSuggestions);
+            Assert.All(aliases, alias =>
+            {
+                Assert.True(DictionaryAliasSuggestions.IsAlias(alias));
+                Assert.NotEqual(term, alias, StringComparer.OrdinalIgnoreCase);
+            });
+        }
     }
 
     private static async Task LoadAsync(GemmaLocalPlugin plugin, TimeSpan? idleTimeout = null)

@@ -7,6 +7,7 @@
         mc:Ignorable="d"
         x:Class="TypeWhisper.Linux.Views.DictationOverlayWindow"
         x:DataType="vm:DictationOverlayViewModel"
+        RequestedThemeVariant="Dark"
         Background="Transparent"
         TransparencyLevelHint="Transparent"
         WindowDecorations="None"
@@ -126,7 +127,7 @@
                               MaxHeight="120"
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
-                              IsVisible="{Binding PartialText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                              IsVisible="{Binding ShowInlinePartialText}">
                     <TextBlock Text="{Binding PartialText}"
                                TextWrapping="Wrap"
                                MaxWidth="420"

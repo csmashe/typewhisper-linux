@@ -12,7 +12,7 @@
     </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
-        <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.12.23" />
+        <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.8" />
         <!-- Streams the sherpa-onnx GPU runtime .tar.bz2 (ReaderFactory). -->
         <PackageReference Include="SharpCompress" Version="0.48.0" />
     </ItemGroup>

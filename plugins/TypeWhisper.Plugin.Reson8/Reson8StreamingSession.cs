@@ -6,6 +6,12 @@ using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Reson8;
 
+/// <summary>
+/// What a live session asks Reson8 for: a language or comma-separated list, and phrases to bias toward.
+/// ModelId is the model the phrases were chosen for; null uses the current selection.
+/// </summary>
+internal sealed record Reson8StreamingRequest(string? Language, IReadOnlyList<string> Phrases, string? ModelId = null);
+
 internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSessionHealth
 {
     private readonly WebSocketSessionPump _pump;
@@ -29,6 +35,7 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
         string authHeader,
         string? modelId,
         string? language,
+        IReadOnlyList<string> phrases,
         CancellationToken ct
     )
     {
@@ -38,7 +45,8 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
                 baseUrl,
                 authHeader,
                 modelId,
-                language
+                language,
+                phrases
             ),
             ct
         );
@@ -69,7 +77,8 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
     public static Uri BuildRealtimeUri(
         string baseUrl,
         string? modelId,
-        string? language
+        string? language,
+        IReadOnlyList<string>? phrases = null
     )
     {
         var normalizedBase = baseUrl.Trim().TrimEnd('/');
@@ -114,6 +123,11 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
             query.Add($"custom_model_id={Uri.EscapeDataString(modelId.Trim())}");
         }
 
+        if (phrases is { Count: > 0 })
+        {
+            query.Add($"phrases={Reson8Plugin.EncodePhrases(phrases)}");
+        }
+
         builder.Query = string.Join("&", query);
         return builder.Uri;
     }
@@ -144,7 +158,8 @@ internal sealed class Reson8WebSocketAdapter(
     string baseUrl,
     string authHeader,
     string? modelId,
-    string? language
+    string? language,
+    IReadOnlyList<string>? phrases = null
 ) : IWebSocketSessionAdapter
 {
     private readonly Reson8TranscriptCollector _collector = new();
@@ -166,7 +181,7 @@ internal sealed class Reson8WebSocketAdapter(
     ) =>
         ValueTask.FromResult(
             new WebSocketConnectionOptions(
-                Reson8StreamingSession.BuildRealtimeUri(baseUrl, modelId, language),
+                Reson8StreamingSession.BuildRealtimeUri(baseUrl, modelId, language, phrases),
                 Reson8StreamingSession.CreateStreamingHeaders(apiKey, authHeader)
             )
         );

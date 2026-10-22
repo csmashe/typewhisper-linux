@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -233,6 +234,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<RecentTranscriptionsService>();
         services.AddSingleton<LastTranscriptionReadbackService>();
         services.AddSingleton<MemoryService>();
+        services.AddSingleton<DictionaryAliasSuggestionService>();
         services.AddSingleton<BundledPluginDeployer>();
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
@@ -245,6 +247,7 @@ internal static class ServiceRegistrations
             )
         );
         services.AddSingleton<LocalDataExportService>();
+        services.AddSingleton<LocalDataResetService>();
         services.AddSingleton<ApiDiscoveryFile>();
         services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();
@@ -255,6 +258,12 @@ internal static class ServiceRegistrations
         // Section VMs are singletons so state stays consistent across sidebar nav and wizard.
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<DictationOverlayViewModel>();
+        services.AddSingleton<LiveTextPreviewService>();
+        services.AddSingleton(sp => new LiveTextWindowViewModel(
+            sp.GetRequiredService<DictationOverlayViewModel>(),
+            sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<LiveTextPreviewService>(),
+            static action => Dispatcher.UIThread.Post(action)));
         services.AddSingleton<GeneralSectionViewModel>();
         services.AddSingleton<AppearanceSectionViewModel>();
         services.AddSingleton<AdvancedSectionViewModel>();
@@ -275,6 +284,7 @@ internal static class ServiceRegistrations
 
         // Tiling WM recording indicator (desktop notification instead of overlay; no-op on DEs).
         services.AddSingleton<RecordingNotificationService>();
+        services.AddSingleton<InterfaceThemeService>();
         // Tiling WM learned-corrections feedback: same suppressed-overlay situation as above,
         // so the "Learned X → Y" toast + Undo is delivered as a desktop notification instead.
         services.AddSingleton<LearnedCorrectionsNotificationService>();
@@ -285,6 +295,7 @@ internal static class ServiceRegistrations
         // Avalonia windows
         services.AddSingleton<MainWindow>();
         services.AddSingleton<DictationOverlayWindow>();
+        services.AddSingleton<LiveTextWindow>();
         services.AddSingleton<LearnedCorrectionToastWindow>();
         services.AddTransient<PromptPaletteWindow>();
         services.AddTransient<RecentTranscriptionsPaletteWindow>();

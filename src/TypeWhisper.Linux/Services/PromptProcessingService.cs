@@ -36,7 +36,7 @@ public sealed class PromptProcessingService
 
     /// <summary>
     ///     Whether a request would find no provider at all. An explicit selection (prompt override,
-    ///     else the configured default) is resolved strictly by <see cref="ResolveProvider(string?)" />
+    ///     else the configured default) is resolved strictly by <see cref="ResolveProvider(string?, bool)" />
     ///     and reports its own specific failure, so callers must not pre-empt it with a generic
     ///     "no provider configured" message.
     /// </summary>
@@ -44,6 +44,12 @@ public sealed class PromptProcessingService
     {
         return !HasSelectedProvider(providerOverride)
                && !_pluginManager.LlmProviders.Any(provider => provider.IsAvailable);
+    }
+
+    public string? GetCleanupProviderSelection()
+    {
+        var (provider, model) = ResolveProvider(null, reportProviderProblems: false);
+        return provider is null ? null : $"plugin:{provider.GetLlmSelectionId()}:{model}";
     }
 
     private bool HasSelectedProvider(string? providerOverride)
@@ -194,10 +200,12 @@ public sealed class PromptProcessingService
         string systemPrompt,
         string inputText,
         LlmCallCapture? capture = null,
+        string? providerOverride = null,
+        bool reportProviderProblems = true,
         CancellationToken ct = default
     )
     {
-        var (provider, modelId) = ResolveProvider(providerOverride: null);
+        var (provider, modelId) = ResolveProvider(providerOverride, reportProviderProblems);
         if (provider is null)
         {
             throw new InvalidOperationException(Localization.Loc.Instance["Prompts.NoProvider"]);
@@ -216,6 +224,9 @@ public sealed class PromptProcessingService
 
         var response = await LlmRequestRetryPolicy.ExecuteAsync(
             token => provider.ProcessAsync(systemPrompt, userPrompt, modelId, token), ct);
+        // A timed-out optional cleanup may have already inserted Light output. Its late
+        // response must not be attached to that recording as the cleanup that was used.
+        ct.ThrowIfCancellationRequested();
         provenance?.ResponseReceived = response;
 
         return response;
@@ -312,17 +323,17 @@ public sealed class PromptProcessingService
         return ResolveProvider(action.ProviderOverride);
     }
 
-    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(string? providerOverride)
+    private (ILlmProviderRole? Provider, string ModelId) ResolveProvider(string? providerOverride, bool reportProviderProblems = true)
     {
         if (!string.IsNullOrWhiteSpace(providerOverride))
         {
-            return RequireConfiguredProvider(ResolvePluginModelId(providerOverride), providerOverride);
+            return RequireConfiguredProvider(ResolvePluginModelId(providerOverride), providerOverride, reportProviderProblems);
         }
 
         var defaultProvider = _settings.Current.DefaultLlmProvider;
         if (!string.IsNullOrWhiteSpace(defaultProvider))
         {
-            return RequireConfiguredProvider(ResolvePluginModelId(defaultProvider), defaultProvider);
+            return RequireConfiguredProvider(ResolvePluginModelId(defaultProvider), defaultProvider, reportProviderProblems);
         }
 
         foreach (var provider in _pluginManager.LlmProviders)
@@ -398,10 +409,11 @@ public sealed class PromptProcessingService
     // bill — a provider they did not pick.
     private (ILlmProviderRole Provider, string ModelId) RequireConfiguredProvider(
         (ILlmProviderRole? Provider, string ModelId) resolved,
-        string selection
+        string selection,
+        bool reportProviderProblems = true
     )
     {
-        var problem = DescribeProviderProblem(resolved, selection);
+        var problem = DescribeProviderProblem(resolved, selection, reportProviderProblems);
         if (problem is not null)
         {
             throw new PluginRequestException(
@@ -420,7 +432,8 @@ public sealed class PromptProcessingService
     // spoken-command configuration failure.
     private string? DescribeProviderProblem(
         (ILlmProviderRole? Provider, string ModelId) resolved,
-        string selection
+        string selection,
+        bool reportProviderProblems = true
     )
     {
         var problem = resolved.Provider switch
@@ -448,6 +461,8 @@ public sealed class PromptProcessingService
             ),
             _ => null,
         };
+
+        if (!reportProviderProblems) return problem;
 
         string? newProblem = null;
         lock (_loggedProviderProblems)

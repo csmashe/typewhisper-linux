@@ -1,12 +1,13 @@
 {
   "Settings.ApiKey": "API-ключ",
-  "Settings.ApiKeyDescription": "Требуется для запросов LLM Cohere.",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции Cohere и запросов к Command.",
   "Settings.StreamResponses": "Потоковая передача ответов",
   "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации, не дожидаясь полного ответа.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyValid": "API-ключ действителен.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
   "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
+  "Errors.RecordingTooLarge": "Запись слишком велика для Cohere Transcribe (ограничение 25 МБ). Используйте запись покороче.",
   "Manifest.Name": "Cohere",
-  "Manifest.Description": "LLM Cohere Command для обработки промптов"
+  "Manifest.Description": "Cohere Transcribe для распознавания речи и LLM Cohere Command для обработки промптов"
 }

@@ -29,11 +29,13 @@ public interface ISnippetService
     ///     Expands snippet triggers found in <paramref name="text" />.
     ///     <paramref name="clipboardProvider" /> supplies the value for clipboard placeholders;
     ///     <paramref name="profileId" /> scopes matching to a profile when set.
+    ///     Set <paramref name="recordUsage" /> to false for previews and evaluations that must not save usage.
     /// </summary>
     string ApplySnippets(
         string text,
         Func<string>? clipboardProvider = null,
-        string? profileId = null
+        string? profileId = null,
+        bool recordUsage = true
     );
 
     /// <summary>Expands the placeholders in a single replacement string, for live preview in the editor.</summary>

@@ -91,6 +91,18 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void InterfaceTheme_DefaultsDarkForExistingFiles_AndRoundTrips()
+    {
+        Assert.Equal(InterfaceTheme.Dark, new SettingsService(_filePath).Current.InterfaceTheme);
+        File.WriteAllText(_filePath, "{\"uiLanguage\":\"de\"}");
+        Assert.Equal(InterfaceTheme.Dark, new SettingsService(_filePath).Current.InterfaceTheme);
+
+        new SettingsService(_filePath).Save(AppSettings.Default with { InterfaceTheme = InterfaceTheme.Light });
+
+        Assert.Equal(InterfaceTheme.Light, new SettingsService(_filePath).Current.InterfaceTheme);
+    }
+
+    [Fact]
     public void DiagnosticLog_DefaultsOff_AndUnofferedRetentionFallsBackToSevenDays()
     {
         Assert.False(new SettingsService(_filePath).Current.DiagnosticLogEnabled);
@@ -102,6 +114,36 @@ public sealed class SettingsServiceTests : IDisposable
         var sut = new SettingsService(_filePath);
         sut.Save(AppSettings.Default with { DiagnosticLogRetentionDays = 14 });
         Assert.Equal(14, new SettingsService(_filePath).Current.DiagnosticLogRetentionDays);
+    }
+
+    [Fact]
+    public void LiveTextWindow_DefaultsAttached_AndLoadClampsSizeAndRoundTripsPosition()
+    {
+        var defaults = new SettingsService(_filePath).Current;
+        Assert.False(defaults.LiveTextFloating);
+        Assert.Null(defaults.LiveTextWindowLeft);
+        Assert.Equal(AppSettings.DefaultLiveTextWindowWidth, defaults.LiveTextWindowWidth);
+
+        File.WriteAllText(_filePath,
+            "{\"liveTextFloating\":true,\"liveTextWindowLeft\":-50.5,\"liveTextWindowTop\":30,"
+            + "\"liveTextWindowWidth\":10,\"liveTextWindowHeight\":99999}");
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.True(loaded.LiveTextFloating);
+        Assert.Equal(-50.5, loaded.LiveTextWindowLeft);
+        Assert.Equal(30, loaded.LiveTextWindowTop);
+        Assert.Equal(AppSettings.MinLiveTextWindowWidth, loaded.LiveTextWindowWidth);
+        Assert.Equal(AppSettings.MaxLiveTextWindowHeight, loaded.LiveTextWindowHeight);
+    }
+
+    [Fact]
+    public void Save_DropsNonFiniteLiveTextWindowPosition()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { LiveTextWindowLeft = double.NaN, LiveTextWindowTop = double.PositiveInfinity });
+
+        Assert.Null(sut.Current.LiveTextWindowLeft);
+        Assert.Null(sut.Current.LiveTextWindowTop);
     }
 
     [Theory]
