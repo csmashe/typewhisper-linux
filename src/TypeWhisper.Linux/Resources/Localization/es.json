@@ -1067,6 +1067,7 @@
   "Snippets.EditSnippet": "Editar fragmento",
   "Snippets.EmptySubtitle": "Crea disparadores cortos que se expanden automáticamente en texto más largo tras la transcripción.",
   "Snippets.EmptyTitle": "Aún no hay fragmentos.",
+  "Snippets.EnabledToggleName": "Activado: {0}",
   "Snippets.NewSnippet": "Nuevo fragmento",
   "Snippets.PlaceholdersHint": "Marcadores: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}",
   "Snippets.Preview": "Vista previa",
@@ -1076,6 +1077,7 @@
   "Snippets.SaveFailed": "No se pudieron guardar tus fragmentos: {0}",
   "Snippets.SummaryText": "{0} fragmentos, {1} activados",
   "Snippets.TagFilter": "Filtro de etiquetas:",
+  "Snippets.TagOption": "Etiqueta: {0}",
   "Snippets.TagsPlaceholder": "Etiquetas",
   "Snippets.Title": "Fragmentos",
   "Snippets.TriggerModeAnywhere": "En cualquier lugar",
@@ -1214,5 +1216,9 @@
   "LanguageSelection.Invalid": "El idioma de transcripción «{0}» no es válido. Elige Auto o introduce una etiqueta BCP-47 válida.",
   "LanguageSelection.AutomaticNotSupported": "{0} no puede detectar el idioma automáticamente. Elige un idioma explícito.",
   "LanguageSelection.ExplicitNotSupported": "{0} no acepta un idioma explícito. Elige Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} no admite «{1}». Elige una de estas opciones: {2}.",
+  "About.ErrorCategoryFilter": "Categoría de error",
+  "Dictation.InsertionStrategy": "Estrategia de inserción",
+  "Profiles.HotkeyBehavior": "Comportamiento del atajo",
+  "Snippets.TriggerModeLabel": "Modo del disparador"
 }

@@ -7,12 +7,31 @@
     <Application.Styles>
         <FluentTheme />
 
-        <!-- Localize the default ToggleSwitch On/Off labels app-wide.
-             Toggles that set their own OnContent/OffContent (a local value)
-             override this style, so per-control labels still win. -->
+        <!-- Localize the default ToggleSwitch On/Off labels app-wide; a toggle's own
+             OnContent/OffContent is a local value and still wins. -->
         <Style Selector="ToggleSwitch">
             <Setter Property="OnContent" Value="{loc:Str Common.On}" />
             <Setter Property="OffContent" Value="{loc:Str Common.Off}" />
+        </Style>
+
+        <!-- Compact ToggleSwitch for list tiles, cards, and narrow sidebars
+             where "On"/"Off" text takes up too much horizontal space. -->
+        <Style Selector="ToggleSwitch.compact">
+            <Setter Property="OnContent" Value="{x:Null}" />
+            <Setter Property="OffContent" Value="{x:Null}" />
+            <Setter Property="MinWidth" Value="0" />
+        </Style>
+
+        <!-- Standard typography and layout styles for compact list tiles and cards -->
+        <Style Selector="TextBlock.card-title">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="TextBlock.card-subtitle">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
     </Application.Styles>
 </Application>

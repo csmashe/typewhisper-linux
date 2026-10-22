@@ -1067,6 +1067,7 @@
   "Snippets.EditSnippet": "Textbaustein bearbeiten",
   "Snippets.EmptySubtitle": "Erstelle kurze Auslöser, die nach der Transkription automatisch in längeren Text erweitert werden.",
   "Snippets.EmptyTitle": "Noch keine Textbausteine vorhanden.",
+  "Snippets.EnabledToggleName": "Aktiv: {0}",
   "Snippets.NewSnippet": "Neuer Textbaustein",
   "Snippets.PlaceholdersHint": "Platzhalter: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}",
   "Snippets.Preview": "Vorschau",
@@ -1076,6 +1077,7 @@
   "Snippets.SaveFailed": "Snippets konnten nicht gespeichert werden: {0}",
   "Snippets.SummaryText": "{0} Textbausteine, {1} aktiv",
   "Snippets.TagFilter": "Tag-Filter:",
+  "Snippets.TagOption": "Tag: {0}",
   "Snippets.TagsPlaceholder": "Tags",
   "Snippets.Title": "Textbausteine",
   "Snippets.TriggerModeAnywhere": "Überall",
@@ -1214,5 +1216,9 @@
   "LanguageSelection.Invalid": "Ungültige Transkriptionssprache „{0}“. Wählen Sie Auto oder geben Sie ein gültiges BCP-47-Tag ein.",
   "LanguageSelection.AutomaticNotSupported": "{0} kann die Sprache nicht automatisch erkennen. Wählen Sie eine Sprache ausdrücklich aus.",
   "LanguageSelection.ExplicitNotSupported": "{0} akzeptiert keine ausdrückliche Sprachauswahl. Wählen Sie Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} unterstützt „{1}“ nicht. Wählen Sie eine der folgenden Sprachen: {2}.",
+  "About.ErrorCategoryFilter": "Fehlerkategorie",
+  "Dictation.InsertionStrategy": "Einfügestrategie",
+  "Profiles.HotkeyBehavior": "Hotkey-Verhalten",
+  "Snippets.TriggerModeLabel": "Auslösermodus"
 }

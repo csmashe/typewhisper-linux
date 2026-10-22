@@ -1067,6 +1067,7 @@
   "Snippets.EditSnippet": "Edit snippet",
   "Snippets.EmptySubtitle": "Create short triggers that expand into longer text automatically after transcription.",
   "Snippets.EmptyTitle": "No snippets yet.",
+  "Snippets.EnabledToggleName": "Enabled: {0}",
   "Snippets.NewSnippet": "New snippet",
   "Snippets.PlaceholdersHint": "Placeholders: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}",
   "Snippets.Preview": "Preview",
@@ -1076,6 +1077,7 @@
   "Snippets.SaveFailed": "Could not save your snippets: {0}",
   "Snippets.SummaryText": "{0} snippets, {1} enabled",
   "Snippets.TagFilter": "Tag filter:",
+  "Snippets.TagOption": "Tag: {0}",
   "Snippets.TagsPlaceholder": "Tags",
   "Snippets.Title": "Snippets",
   "Snippets.TriggerModeAnywhere": "Anywhere",
@@ -1214,5 +1216,9 @@
   "LanguageSelection.Invalid": "Invalid transcription language “{0}”. Choose Auto or enter a valid BCP-47 tag.",
   "LanguageSelection.AutomaticNotSupported": "{0} cannot detect the language automatically. Choose an explicit language.",
   "LanguageSelection.ExplicitNotSupported": "{0} does not accept an explicit language. Choose Auto.",
-  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} does not support “{1}”. Choose one of: {2}.",
+  "About.ErrorCategoryFilter": "Error category",
+  "Dictation.InsertionStrategy": "Insertion strategy",
+  "Profiles.HotkeyBehavior": "Hotkey behavior",
+  "Snippets.TriggerModeLabel": "Trigger mode"
 }

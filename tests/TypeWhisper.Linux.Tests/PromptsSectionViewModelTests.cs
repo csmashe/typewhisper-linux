@@ -4,6 +4,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -13,6 +14,41 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptsSectionViewModelTests : IDisposable
 {
+    [Fact]
+    public void MissingActionPlugin_IsScopedToEditedPromptAndSurvivesRelocalizationAndSave()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+            var missing = new PromptAction { Id = "missing", Name = "Missing", SystemPrompt = "x", TargetActionPluginId = "missing.plugin" };
+            var other = new PromptAction { Id = "other", Name = "Other", SystemPrompt = "y", TargetActionPluginId = "other.plugin" };
+            prompts.AddAction(missing);
+            prompts.AddAction(other);
+            using var plugins = TestPluginManagerFactory.Create();
+            var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+            var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, plugins, settings.Object)
+            {
+                SelectedAction = missing,
+            };
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "missing.plugin");
+            // Refresh the labels while the missing ID is selected, then move to another draft.
+            Loc.Instance.CurrentLanguage = original == "de" ? "es" : "de";
+            typeof(PromptsSectionViewModel).GetMethod("RefreshPluginOptions", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(sut, null);
+            Assert.Equal("missing.plugin", sut.EditTargetActionPluginId);
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "missing.plugin" && o.Label == Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", "missing.plugin"));
+            sut.SelectedAction = other;
+            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value == "missing.plugin");
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "other.plugin");
+            sut.SelectedAction = missing;
+            sut.SaveActionCommand.Execute(null);
+            Assert.Equal("missing.plugin", prompts.Actions.Single(a => a.Id == "missing").TargetActionPluginId);
+            sut.StartCreateCommand.Execute(null);
+            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value is "missing.plugin" or "other.plugin");
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
     private readonly HotkeyService _hotkeys;
     private readonly ProfileService _profiles;
     private readonly string _tempDir;

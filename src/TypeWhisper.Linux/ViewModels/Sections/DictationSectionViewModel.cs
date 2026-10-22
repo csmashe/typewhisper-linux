@@ -1064,6 +1064,12 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
     {
+        var microphoneIdle = Loc.Instance["Dictation.MicTestIdle"];
+        if (MicrophoneTestStatus == _microphoneTestIdleStatus)
+            MicrophoneTestStatus = microphoneIdle;
+        _microphoneTestIdleStatus = microphoneIdle;
+        OnPropertyChanged(nameof(MicrophoneTestButtonText));
+
         var acceleration = LocalModelAcceleration;
         var language = Language;
         var additionalLanguageCodes = AdditionalLanguages.Select(option => option.Code).ToArray();
@@ -1121,6 +1127,8 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(DownloadCudaRuntimeText));
             OnPropertyChanged(nameof(ClearGpuRuntimeText));
             OnPropertyChanged(nameof(AccelerationStatusText));
+            // Engine, model status, and active-model labels are computed text; recompute them in the new language.
+            RefreshModelState();
         }
         finally
         {

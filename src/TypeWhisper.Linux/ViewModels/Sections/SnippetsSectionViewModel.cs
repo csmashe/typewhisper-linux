@@ -42,7 +42,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     private string _newTrigger = "";
 
     [ObservableProperty]
-    private string _selectedTagFilter = Loc.Instance["Snippets.AllTags"];
+    private SnippetTagFilterOption? _selectedTagFilter;
 
     [ObservableProperty]
     private SnippetTriggerMode _selectedTriggerMode = SnippetTriggerMode.Anywhere;
@@ -63,11 +63,28 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         _entriesChangedHandler = () => Dispatcher.UIThread.Post(NotifyConflictWarningChanged);
         _snippets.SnippetsChanged += _snippetsChangedHandler;
         _dictionary.EntriesChanged += _entriesChangedHandler;
+        // "All tags", the mode labels, and the editor texts are computed from the catalog;
+        // the tag filter also compares against "All tags".
+        _languageChangedHandler = (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            var currentMode = SelectedTriggerMode;
+            TriggerModeOptions = CreateTriggerModeOptions();
+            OnPropertyChanged(nameof(TriggerModeOptions));
+            SelectedTriggerMode = currentMode;
+            OnPropertyChanged(nameof(EditorTitle));
+            OnPropertyChanged(nameof(EditorSaveText));
+            NotifyConflictWarningChanged();
+            Refresh();
+        });
+        Loc.Instance.LanguageChanged += _languageChangedHandler;
         Refresh();
     }
 
+    private readonly EventHandler _languageChangedHandler;
+    private bool _rebuildingTagFilter;
+
     public ObservableCollection<Snippet> FilteredSnippets { get; } = [];
-    public ObservableCollection<string> AvailableTags { get; } = [Loc.Instance["Snippets.AllTags"]];
+    public ObservableCollection<SnippetTagFilterOption> AvailableTags { get; } = [];
 
     public int SnippetCount => _snippets.Snippets.Count;
     public int EnabledSnippetCount => _snippets.Snippets.Count(snippet => snippet.IsEnabled);
@@ -78,8 +95,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 
     public bool HasError => !string.IsNullOrEmpty(ErrorText);
 
-    public bool HasSelectedTagFilter =>
-        !string.Equals(SelectedTagFilter, Loc.Instance["Snippets.AllTags"], StringComparison.Ordinal);
+    public bool HasSelectedTagFilter => SelectedTagFilter?.Tag is not null;
 
     public bool IsEditingExisting => !string.IsNullOrWhiteSpace(EditingSnippetId);
     public string EditorTitle =>
@@ -93,7 +109,10 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     public bool HasConflictWarning => !string.IsNullOrWhiteSpace(ConflictWarningText);
     public string ConflictWarningText => BuildConflictWarning(NewTrigger);
 
-    public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; } =
+    public IReadOnlyList<SnippetTriggerModeOption> TriggerModeOptions { get; private set; } =
+        CreateTriggerModeOptions();
+
+    private static IReadOnlyList<SnippetTriggerModeOption> CreateTriggerModeOptions() =>
     [
         new(SnippetTriggerMode.Anywhere, Loc.Instance["Snippets.TriggerModeAnywhere"]),
         new(SnippetTriggerMode.ExactPhrase, Loc.Instance["Snippets.TriggerModeExactPhrase"]),
@@ -103,6 +122,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     {
         _snippets.SnippetsChanged -= _snippetsChangedHandler;
         _dictionary.EntriesChanged -= _entriesChangedHandler;
+        Loc.Instance.LanguageChanged -= _languageChangedHandler;
         GC.SuppressFinalize(this);
     }
 
@@ -125,9 +145,12 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
         }
     }
 
-    partial void OnSelectedTagFilterChanged(string value)
+    partial void OnSelectedTagFilterChanged(SnippetTagFilterOption? value)
     {
-        Refresh();
+        if (!_rebuildingTagFilter)
+        {
+            Refresh();
+        }
     }
 
     partial void OnNewTriggerChanged(string value)
@@ -162,7 +185,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ClearTagFilter()
     {
-        SelectedTagFilter = Loc.Instance["Snippets.AllTags"];
+        SelectedTagFilter = AvailableTags[0];
     }
 
     [RelayCommand]
@@ -274,7 +297,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
             StringComparer.OrdinalIgnoreCase
         );
 
-        if (HasSelectedTagFilter)
+        if (SelectedTagFilter?.Tag is { } selectedTag)
         {
             snippets = snippets.Where(snippet =>
                 snippet
@@ -283,7 +306,7 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
                     )
                     .Any(tag =>
-                        string.Equals(tag, SelectedTagFilter, StringComparison.OrdinalIgnoreCase)
+                        string.Equals(tag, selectedTag, StringComparison.OrdinalIgnoreCase)
                     )
             );
         }
@@ -362,16 +385,31 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 
     private void RebuildTagFilter()
     {
-        var current = SelectedTagFilter;
-        AvailableTags.Clear();
-        AvailableTags.Add(Loc.Instance["Snippets.AllTags"]);
-        foreach (var tag in _snippets.AllTags)
+        // Match on Tag, not the label: "All tags" is localized and may equal a real tag.
+        var currentTag = SelectedTagFilter?.Tag;
+        _rebuildingTagFilter = true;
+        try
         {
-            AvailableTags.Add(tag);
-        }
+            AvailableTags.Clear();
+            AvailableTags.Add(new SnippetTagFilterOption(null, Loc.Instance["Snippets.AllTags"]));
+            // Every tag is qualified, so no tag can read like "All tags" or like another tag.
+            foreach (var tag in _snippets.AllTags)
+            {
+                AvailableTags.Add(
+                    new SnippetTagFilterOption(tag, Loc.Instance.GetString("Snippets.TagOption", tag))
+                );
+            }
 
-        SelectedTagFilter =
-            AvailableTags.Contains(current) ? current : Loc.Instance["Snippets.AllTags"];
+            SelectedTagFilter =
+                AvailableTags.FirstOrDefault(option =>
+                    option.Tag is not null
+                    && string.Equals(option.Tag, currentTag, StringComparison.OrdinalIgnoreCase)
+                ) ?? AvailableTags[0];
+        }
+        finally
+        {
+            _rebuildingTagFilter = false;
+        }
     }
 
     private static List<string> ParseProfileIds(string value)
@@ -384,3 +422,6 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
 }
 
 public sealed record SnippetTriggerModeOption(SnippetTriggerMode Value, string Label);
+
+/// <summary>A tag filter entry; a null <see cref="Tag"/> is the "All tags" option.</summary>
+public sealed record SnippetTagFilterOption(string? Tag, string Label);

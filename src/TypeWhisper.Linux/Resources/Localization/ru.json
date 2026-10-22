@@ -1067,6 +1067,7 @@
   "Snippets.EditSnippet": "Изменить сниппет",
   "Snippets.EmptySubtitle": "Создавайте короткие триггеры, которые автоматически разворачиваются в более длинный текст после транскрипции.",
   "Snippets.EmptyTitle": "Пока нет сниппетов.",
+  "Snippets.EnabledToggleName": "Включено: {0}",
   "Snippets.NewSnippet": "Новый сниппет",
   "Snippets.PlaceholdersHint": "Подстановки: {date}, {time}, {datetime}, {day}, {year}, {clipboard}, {date:FORMAT}",
   "Snippets.Preview": "Предпросмотр",
@@ -1076,6 +1077,7 @@
   "Snippets.SaveFailed": "Не удалось сохранить сниппеты: {0}",
   "Snippets.SummaryText": "Сниппетов: {0}, включено: {1}",
   "Snippets.TagFilter": "Фильтр тегов:",
+  "Snippets.TagOption": "Тег: {0}",
   "Snippets.TagsPlaceholder": "Теги",
   "Snippets.Title": "Сниппеты",
   "Snippets.TriggerModeAnywhere": "Где угодно",
@@ -1214,5 +1216,9 @@
   "LanguageSelection.Invalid": "Недопустимый язык транскрипции «{0}». Выберите «Авто» или укажите допустимый тег BCP-47.",
   "LanguageSelection.AutomaticNotSupported": "{0} не может определить язык автоматически. Выберите язык явно.",
   "LanguageSelection.ExplicitNotSupported": "{0} не принимает явно выбранный язык. Выберите «Авто».",
-  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}."
+  "LanguageSelection.LanguageNotSupported": "{0} не поддерживает «{1}». Выберите один из вариантов: {2}.",
+  "About.ErrorCategoryFilter": "Категория ошибок",
+  "Dictation.InsertionStrategy": "Стратегия вставки",
+  "Profiles.HotkeyBehavior": "Действие горячей клавиши",
+  "Snippets.TriggerModeLabel": "Режим триггера"
 }
