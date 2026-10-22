@@ -215,6 +215,14 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
         return safe.ToString();
     }
 
+    private static string FormatShortcut(string trigger)
+    {
+        var parts = trigger.Split('+', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "";
+        parts[^1] = DesktopShortcutKey.ToQtName(parts[^1]);
+        return string.Join('+', parts);
+    }
+
     private static string BuildDesktopFile(DeShortcutSpec spec)
     {
         // No timestamp — two runs with the same spec must produce identical bytes so the
@@ -231,7 +239,7 @@ public sealed class KdeShortcutWriter : IDeShortcutWriter
             + "X-TypeWhisper-ShortcutId={3}\n",
             EscapeDesktopValue(spec.DisplayName),
             EscapeDesktopValue(spec.OnPressCommand),
-            EscapeDesktopValue(spec.Trigger),
+            EscapeDesktopValue(FormatShortcut(spec.Trigger)),
             EscapeDesktopValue(spec.ShortcutId)
         );
     }

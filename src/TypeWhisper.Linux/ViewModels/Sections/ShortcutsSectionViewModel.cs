@@ -26,6 +26,12 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
 
     private readonly HotkeyService _hotkey;
+    private readonly DictationOrchestrator? _dictation;
+
+    [ObservableProperty]
+    private bool _isCapturingHotkey;
+
+    public bool CanStartHotkeyCapture => !IsCapturingHotkey && _dictation?.IsRecording != true;
     private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
     private readonly IReadOnlyList<IDeShortcutWriter> _writers;
@@ -116,9 +122,10 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     public ShortcutsSectionViewModel(
         HotkeyService hotkey,
         ISettingsService settings,
-        IEnumerable<IDeShortcutWriter> writers
+        IEnumerable<IDeShortcutWriter> writers,
+        DictationOrchestrator? dictation = null
     )
-        : this(hotkey, settings, writers, PostToUiThread)
+        : this(hotkey, settings, writers, PostToUiThread, dictation)
     {
     }
 
@@ -126,10 +133,13 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         HotkeyService hotkey,
         ISettingsService settings,
         IEnumerable<IDeShortcutWriter> writers,
-        Action<Action> post
+        Action<Action> post,
+        DictationOrchestrator? dictation = null
     )
     {
         _hotkey = hotkey;
+        _dictation = dictation;
+        if (_dictation is not null) _dictation.RecordingStateChanged += OnRecordingStateChanged;
         _post = post;
         _settings = settings;
         _writers = writers.ToArray();
@@ -160,9 +170,69 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             return;
         }
 
+        IsCapturingHotkey = false;
+        if (_dictation is not null) _dictation.RecordingStateChanged -= OnRecordingStateChanged;
         _settings.SettingsChanged -= OnSettingsChanged;
         Interlocked.Increment(ref _keyboardAccessRefreshVersion);
         Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
+    }
+
+    private void OnRecordingStateChanged(object? sender, bool recording) => _post(() =>
+    {
+        if (recording) IsCapturingHotkey = false;
+        OnPropertyChanged(nameof(CanStartHotkeyCapture));
+        StartHotkeyCaptureCommand.NotifyCanExecuteChanged();
+    });
+
+    partial void OnIsCapturingHotkeyChanged(bool value)
+    {
+        _hotkey.IsSuspended = value;
+        OnPropertyChanged(nameof(CanStartHotkeyCapture));
+        StartHotkeyCaptureCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanStartHotkeyCapture))]
+    private void StartHotkeyCapture()
+    {
+        if (!CanStartHotkeyCapture) return;
+        StatusMessage = "";
+        IsCapturingHotkey = true;
+    }
+
+    [RelayCommand]
+    private void CancelHotkeyCapture()
+    {
+        if (!IsCapturingHotkey) return;
+        IsCapturingHotkey = false;
+        StatusMessage = Loc.Instance["Shortcuts.CaptureCancelled"];
+    }
+
+    public void ReportUnsupportedHotkey() => StatusMessage = Loc.Instance["Shortcuts.UnsupportedCaptureKey"];
+
+    public async Task ApplyCapturedHotkeyAsync(string hotkey)
+    {
+        if (!IsCapturingHotkey) return;
+        Task apply;
+        try
+        {
+            HotkeyText = hotkey;
+            // The chord is bound and saved before ApplyHotkeyAsync awaits the integration probe,
+            // so capture ends now; a cancel or restart during the probe can't misreport it.
+            apply = ApplyHotkeyAsync();
+            // Success normalizes HotkeyText to the binding; a captured chord always parses, so a
+            // mismatch means it collided. Show the live binding instead of the rejected chord.
+            if (HotkeyText != _hotkey.CurrentHotkeyString)
+            {
+                HotkeyText = _hotkey.CurrentHotkeyString;
+                StatusMessage = Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", hotkey);
+            }
+        }
+        finally
+        {
+            IsCapturingHotkey = false;
+        }
+
+        await apply;
     }
 
     // Pre-filter on the delivered snapshot but never update the cache here: only the
@@ -486,13 +556,15 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
                 return string.Empty;
             }
 
-            return BuildSpec(writer) is null
-                ? Loc.Instance.GetString(
-                    "Shortcuts.DesktopIntegrationStaleUnsupported",
-                    writer.DisplayName,
-                    GetModeDisplayName()
-                )
-                : Loc.Instance["Shortcuts.DesktopIntegrationStaleHint"];
+            if (BuildSpec(writer) is not null)
+                return Loc.Instance["Shortcuts.DesktopIntegrationStaleHint"];
+            if (IsNativeModifierUnsupported(writer))
+                return Loc.Instance.GetString("Shortcuts.NativeModifierUnsupported", writer.DisplayName);
+            return Loc.Instance.GetString(
+                "Shortcuts.DesktopIntegrationStaleUnsupported",
+                writer.DisplayName,
+                GetModeDisplayName()
+            );
         }
     }
 
@@ -524,7 +596,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             }
 
             var spec = BuildSpec(w);
-            return spec is null ? GetUnsupportedModeMessage(w) : w.PreviewLines(spec);
+            return spec is null ? GetUnsupportedIntegrationMessage(w) : w.PreviewLines(spec);
         }
     }
 
@@ -742,8 +814,14 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
     }
 
-    private string GetUnsupportedModeMessage(IDeShortcutWriter writer)
+    private bool IsNativeModifierUnsupported(IDeShortcutWriter writer) =>
+        DesktopShortcutKey.IsSideSpecificModifier(_settings.Current.ToggleHotkey)
+        && !DictationShortcutSpecFactory.NativeSupportsModifierOnly(writer);
+
+    private string GetUnsupportedIntegrationMessage(IDeShortcutWriter writer)
     {
+        if (IsNativeModifierUnsupported(writer))
+            return Loc.Instance.GetString("Shortcuts.NativeModifierUnsupported", writer.DisplayName);
         return Loc.Instance.GetString(
             "Shortcuts.AutoSetupModeUnsupported",
             writer.DisplayName,
@@ -916,7 +994,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         var spec = BuildSpec(writer);
         if (spec is null)
         {
-            IntegrationStatusMessage = GetUnsupportedModeMessage(writer);
+            IntegrationStatusMessage = GetUnsupportedIntegrationMessage(writer);
             return;
         }
 
@@ -1111,6 +1189,8 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
                     );
                     HotkeyText = _hotkey.CurrentHotkeyString;
                     OnPropertyChanged(nameof(IntegrationPreview));
+                    OnPropertyChanged(nameof(CanWriteDesktopIntegration));
+                    OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
                 }
             );
         }

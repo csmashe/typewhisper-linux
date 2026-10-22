@@ -26,6 +26,8 @@ public sealed class EvdevGlobalShortcutBackend : IGlobalShortcutBackend
     private readonly IEvdevKeyboardEnumerator _deviceEnumerator;
     private readonly IEvdevDeviceReaderFactory _deviceReaderFactory;
     private readonly ShortcutDispatcher _dispatcher = new();
+
+    public void SetCaptureSuspended(bool suspended) => _dispatcher.SetCaptureSuspended(suspended);
     private readonly bool _enableDeviceMonitoring;
     private readonly Lock _lock = new();
     private readonly bool _ownsSessionActivityMonitor;

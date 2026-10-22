@@ -1220,5 +1220,11 @@
   "About.ErrorCategoryFilter": "Fehlerkategorie",
   "Dictation.InsertionStrategy": "Einfügestrategie",
   "Profiles.HotkeyBehavior": "Hotkey-Verhalten",
-  "Snippets.TriggerModeLabel": "Auslösermodus"
+  "Snippets.TriggerModeLabel": "Auslösermodus",
+  "Shortcuts.RecordShortcut": "Tasten aufnehmen",
+  "Shortcuts.NativeModifierUnsupported": "{0} kann keine Tastenkombination für eine einzelne linke oder rechte Modifikatortaste installieren. Verwenden Sie TypeWhispers integrierten Hotkey oder nehmen Sie eine Tastenkombination auf.",
+  "Shortcuts.CancelCapture": "Abbrechen",
+  "Shortcuts.CaptureCancelled": "Aufnahme abgebrochen.",
+  "Shortcuts.CapturePrompt": "Drücken Sie eine Taste oder Tastenkombination und lassen Sie alle Tasten los. Escape bricht ab.",
+  "Shortcuts.UnsupportedCaptureKey": "Diese Taste wird nicht unterstützt. Verwenden Sie Buchstaben, Ziffern, Funktionstasten, Navigationstasten oder eine einzelne Modifikatortaste."
 }

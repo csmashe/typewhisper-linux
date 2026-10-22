@@ -114,6 +114,57 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyCapturedHotkey_CollisionRestoresCurrentBinding()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Shift+P");
+        var original = hotkey.CurrentHotkeyString;
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+
+        sut.StartHotkeyCaptureCommand.Execute(null);
+        await sut.ApplyCapturedHotkeyAsync("Ctrl+Shift+P");
+
+        Assert.Equal(original, sut.HotkeyText);
+        Assert.Contains("collides", sut.StatusMessage);
+        Assert.False(sut.IsCapturingHotkey);
+    }
+
+    [Fact]
+    public async Task ApplyCapturedHotkey_LateCompletionLeavesRestartedCaptureRunning()
+    {
+        var probeGate = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var settings = CreateToggleSettings();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var writer = new FakeDeShortcutWriter { IsInstalledHandler = (_, _) => probeGate.Task };
+        var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer], action => action());
+
+        sut.StartHotkeyCaptureCommand.Execute(null);
+        var inFlight = sut.ApplyCapturedHotkeyAsync("Ctrl+Alt+F9");
+        var appliedStatus = sut.StatusMessage;
+        sut.CancelHotkeyCaptureCommand.Execute(null);
+
+        // The chord is live and saved before the probe, so a cancel during it must not claim otherwise.
+        Assert.False(sut.IsCapturingHotkey);
+        Assert.Equal(appliedStatus, sut.StatusMessage);
+        Assert.False(inFlight.IsCompleted);
+        Assert.Equal(hotkey.CurrentHotkeyString, settings.Current.ToggleHotkey);
+
+        sut.StartHotkeyCaptureCommand.Execute(null);
+        sut.HotkeyText = "";
+
+        probeGate.SetResult(true);
+        await inFlight;
+
+        Assert.True(sut.IsCapturingHotkey);
+        Assert.True(hotkey.IsSuspended);
+        Assert.Equal("", sut.HotkeyText);
+    }
+
+    [Fact]
     public void WaylandEvdevHotkeysEnabled_PersistsToSettings()
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
