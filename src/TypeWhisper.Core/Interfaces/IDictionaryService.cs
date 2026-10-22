@@ -1,5 +1,6 @@
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.AppImport;
 
 namespace TypeWhisper.Core.Interfaces;
 
@@ -24,6 +25,9 @@ public interface IDictionaryService
     void AddEntry(DictionaryEntry entry);
     // ReSharper disable once UnusedMemberInSuper.Global
     void AddEntries(IEnumerable<DictionaryEntry> entries);
+    /// <summary>Adds a reviewed import's terms in one write, or nothing when the dictionary changed since the review.</summary>
+    DictionaryImportCommitResult CommitReviewedImport(DictionaryImportReview review);
+
     void UpdateEntry(DictionaryEntry entry);
     void DeleteEntry(string id);
     // ReSharper disable once UnusedMemberInSuper.Global

@@ -279,13 +279,22 @@ public sealed class AtomicJsonStore<T>
                 _loadedRevision = _coordinator.Revision;
                 return _current;
             }
-            catch
+            catch (Exception ex)
             {
                 // A mutable snapshot may have been mutated in place before the failure. Drop the
                 // cache only when it no longer matches what is committed, so the next read
                 // reloads rather than exposing an update that never landed — while an immutable
                 // snapshot, which cannot have diverged, keeps the instance it already handed out.
-                if (!CacheStillMatchesLocked(committedJson))
+                // A primary published without a confirmed directory sync is what readers now load.
+                var publishedPrimary = ex is AtomicFileWriteIndeterminateCommitException { PublishedPath: var published }
+                    && published == FilePath;
+                if (publishedPrimary)
+                {
+                    // Peers sharing this path must also reload the file that is now on disk.
+                    _coordinator.Revision++;
+                }
+
+                if (publishedPrimary || !CacheStillMatchesLocked(committedJson))
                 {
                     _loaded = false;
                 }

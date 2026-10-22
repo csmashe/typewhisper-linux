@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.AppImport;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Vocabulary;
 
@@ -212,6 +213,11 @@ public partial class DictionarySectionViewModel : ObservableObject
     public int ImportFromCsv(string csv)
     {
         return _dict.ImportFromCsv(csv);
+    }
+
+    public AppImportViewModel CreateAppImport(AppImportSource source, string path)
+    {
+        return new AppImportViewModel(_dict, source, path);
     }
 
     internal void ReconcileEnabledPacksFromSettings()
