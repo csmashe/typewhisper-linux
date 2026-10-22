@@ -72,8 +72,9 @@ public sealed partial class DictationOrchestrator
         var requestLanguageTag = requestedSelection?.LanguageTag;
 
         var promptAction = ResolvePromptAction(context);
-        if (IsPromptActionUnavailable(profile?.PromptActionId, promptAction is not null))
-            throw new InvalidOperationException($"Prompt action '{profile?.PromptActionId}' for this profile is unavailable.");
+        var promptActionId = profile?.PromptActionId;
+        if (IsPromptActionUnavailable(promptActionId, promptAction is not null))
+            throw new InvalidOperationException($"Prompt action '{promptActionId}' for this profile is unavailable.");
 
         var modelId = profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
         var engine = _models.GetTranscriptionPlugin(modelId);

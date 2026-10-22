@@ -28,8 +28,8 @@ public sealed class HttpApiUnixSocketTests
         using var fixture = new ApiFixture();
         fixture.Start();
         using var client = fixture.CreateTcpClient(withBearer: false);
-        using var response = await client.PostAsync("/v1/text/process",
-            new StringContent("""{"text":"hello"}""", Encoding.UTF8, "application/json"));
+        using var content = new StringContent("""{"text":"hello"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/text/process", content);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -43,8 +43,8 @@ public sealed class HttpApiUnixSocketTests
         using var fixture = new ApiFixture();
         fixture.Start();
         using var client = fixture.CreateTcpClient(withBearer: true);
-        using var response = await client.PostAsync("/v1/text/process",
-            new StringContent(body, Encoding.UTF8, "application/json"));
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/text/process", content);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(error, json.RootElement.GetProperty("error").GetString());
@@ -56,8 +56,8 @@ public sealed class HttpApiUnixSocketTests
         using var fixture = new ApiFixture();
         fixture.Start();
         using var client = fixture.CreateTcpClient(withBearer: true);
-        using var response = await client.PostAsync("/v1/text/process",
-            new StringContent("""{"text":"twenty one","language":"not-a-tag"}""", Encoding.UTF8, "application/json"));
+        using var content = new StringContent("""{"text":"twenty one","language":"not-a-tag"}""", Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("/v1/text/process", content);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("invalid_language_selection", json.RootElement.GetProperty("reason").GetString());
