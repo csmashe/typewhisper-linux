@@ -14,7 +14,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class SmallestAiPluginTests
+public partial class SmallestAiPluginTests
 {
     [Fact]
     public Task RequestFailures_AreClassified() =>
@@ -36,8 +36,8 @@ public class SmallestAiPluginTests
         var manifest = LoadManifest();
 
         Assert.Equal("com.typewhisper.smallest-ai", manifest.GetProperty("id").GetString());
-        Assert.Equal("Smallest AI Pulse", manifest.GetProperty("name").GetString());
-        Assert.Equal(["transcription"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
+        Assert.Equal("Smallest AI", manifest.GetProperty("name").GetString());
+        Assert.Equal(["transcription", "tts"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.SmallestAi.dll",
             manifest.GetProperty("assemblyName").GetString()
@@ -56,12 +56,12 @@ public class SmallestAiPluginTests
 
         Assert.Equal("API key", en.GetProperty("Settings.ApiKey").GetString());
         Assert.Equal("API-Schlüssel", de.GetProperty("Settings.ApiKey").GetString());
-        Assert.Equal("API-Schlüssel ist gültig.", de.GetProperty("Settings.ApiKeyValid").GetString());
+        Assert.Equal("Sprechgeschwindigkeit", de.GetProperty("Settings.SpeechSpeed").GetString());
         Assert.Equal("API-Schlüssel ist ungültig.", de.GetProperty("Settings.ApiKeyInvalid").GetString());
     }
 
     [Fact]
-    public async Task ActivateAsync_RestoresApiKeyAndExposesPulseModel()
+    public async Task ActivateAsync_RestoresApiKeyAndExposesPulseModelAndDefaultVoice()
     {
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "smallest-key" } };
 
@@ -69,7 +69,7 @@ public class SmallestAiPluginTests
         await sut.ActivateAsync(host);
 
         Assert.Equal("com.typewhisper.smallest-ai", sut.PluginId);
-        Assert.Equal("Smallest AI Pulse", sut.PluginName);
+        Assert.Equal("Smallest AI", sut.PluginName);
         Assert.Equal("smallest-ai", sut.ProviderId);
         Assert.Equal("Smallest AI", sut.ProviderDisplayName);
         Assert.True(sut.IsConfigured);
@@ -79,6 +79,9 @@ public class SmallestAiPluginTests
         Assert.Equal(["pulse"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
         Assert.Contains("de", sut.SupportedLanguages);
         Assert.Contains("multi", sut.SupportedLanguages);
+        var voice = Assert.Single(sut.AvailableVoices);
+        Assert.Equal("lightning_v3.1:magnus", voice.Id);
+        Assert.Null(sut.SelectedVoiceId);
     }
 
     [Fact]
@@ -113,15 +116,18 @@ public class SmallestAiPluginTests
     }
 
     [Fact]
-    public async Task SettingsProvider_DefinesApiKeySecretAndRoundTripsValue()
+    public async Task SettingsProvider_DefinesApiKeySecretAndSpeechSpeedAndRoundTripsValues()
     {
         var host = new TestPluginHostServices();
         var sut = new SmallestAiPlugin();
         await sut.ActivateAsync(host);
 
-        var definition = Assert.Single(sut.GetSettingDefinitions());
-        Assert.Equal("api-key", definition.Key);
-        Assert.True(definition.IsSecret);
+        var definitions = sut.GetSettingDefinitions();
+        Assert.Equal(["api-key", "speechSpeed"], definitions.Select(d => d.Key).ToArray());
+        Assert.True(definitions[0].IsSecret);
+        Assert.Equal(
+            ["0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"],
+            definitions[1].Options!.Select(o => o.Value).ToArray());
 
         Assert.Null(await sut.GetSettingValueAsync("api-key"));
         Assert.Null(await sut.GetSettingValueAsync("unknown"));
@@ -131,6 +137,13 @@ public class SmallestAiPluginTests
         Assert.Equal("smallest-key", await sut.GetSettingValueAsync("api-key"));
         Assert.True(sut.IsConfigured);
         Assert.Equal("smallest-key", host.Secrets["api-key"]);
+
+        Assert.Equal("1", await sut.GetSettingValueAsync("speechSpeed"));
+        await sut.SetSettingValueAsync("speechSpeed", "1.25");
+        await sut.SetSettingValueAsync("speechSpeed", "3");
+        await sut.SetSettingValueAsync("speechSpeed", "fast");
+        Assert.Equal("1.25", await sut.GetSettingValueAsync("speechSpeed"));
+        Assert.Equal(1.25, host.GetSetting<double?>("speechSpeed"));
     }
 
     [Fact]
@@ -149,9 +162,12 @@ public class SmallestAiPluginTests
 
         await sut.SetSettingValueAsync("api-key", "smallest-key");
 
+        // The probe accepts the key; the voice refresh fails, so the default catalog stays.
         var valid = await sut.ValidateAsync();
         Assert.NotNull(valid);
         Assert.True(valid.IsSuccess);
+        Assert.StartsWith("Settings.ApiKeyValidVoicesKept", valid.Message);
+        Assert.Single(sut.AvailableVoices);
     }
 
     [Fact]
@@ -454,6 +470,7 @@ public class SmallestAiPluginTests
         public void Log(PluginLogLevel level, string message) { }
         public void NotifyCapabilitiesChanged() => NotifyCapabilitiesChangedCount++;
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } = UnavailablePluginPcmPlaybackService.Instance;
     }
 
     private sealed class TestPluginLocalization : IPluginLocalization
