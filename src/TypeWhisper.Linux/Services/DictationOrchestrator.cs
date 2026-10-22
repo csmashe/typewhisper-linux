@@ -5324,7 +5324,15 @@ public sealed partial class DictationOrchestrator : IDisposable
             return;
         }
 
-        ScheduleLiveCleanup(sessionVersion, captureSession, partialText);
+        try
+        {
+            ScheduleLiveCleanup(sessionVersion, captureSession, partialText);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Live cleanup scheduling failed: {ex.GetType().Name}");
+        }
+
         if (string.Equals(_lastPublishedPartialText, partialText, StringComparison.Ordinal))
         {
             return;
@@ -5384,6 +5392,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 if (_liveCleanupDraft is null || !_liveCleanupDraft.Matches(level, language, provider))
                 {
                     _liveCleanupDraft?.Dispose();
+                    _liveCleanupDraft = null;
                     var engine = _models.GetTranscriptionPlugin(profile?.TranscriptionModelOverride ?? settings.SelectedModelId);
                     if (engine is null) return;
                     var hints = LanguageSelectionResolver.ResolveHints(profile, settings);
