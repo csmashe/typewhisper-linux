@@ -3,6 +3,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -11,9 +12,10 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Voxtral;
 
-public sealed class VoxtralPlugin
+public sealed partial class VoxtralPlugin
     : ITranscriptionEnginePlugin,
         ITranscriptionLanguageSelectionCapabilities,
+        ILlmProviderPlugin,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
@@ -57,12 +59,18 @@ public sealed class VoxtralPlugin
                 host.Log(PluginLogLevel.Warning, $"Failed to persist model id migration: {ex.Message}");
             }
         }
+        ActivateTextRole(host);
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
     public Task DeactivateAsync()
     {
-        _host = null;
+        lock (_catalogLock)
+        {
+            _catalogGeneration++;
+            _host = null;
+        }
+
         return Task.CompletedTask;
     }
 
@@ -246,33 +254,42 @@ public sealed class VoxtralPlugin
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
 
-    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        try
-        {
-            using var response = await _httpClient.SendAsync(request, ct);
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
-        if (_host is not null)
-        {
-            if (string.IsNullOrWhiteSpace(apiKey))
-                await _host.DeleteSecretAsync("api-key");
-            else
-                await _host.StoreSecretAsync("api-key", apiKey.Trim());
+        var trimmed = apiKey.Trim();
+        var normalized = string.IsNullOrEmpty(trimmed) ? null : trimmed;
 
-            _host.NotifyCapabilitiesChanged();
+        IPluginHostServices? host;
+        // Serialized so an overlapping save cannot restore a key another save already removed.
+        await _apiKeyWriteLock.WaitAsync();
+        try
+        {
+            // The saved text catalog is keyed to its owner, so a failed secret write leaves the old pair intact.
+            host = _host;
+            if (host is not null)
+            {
+                if (normalized is null)
+                    await host.DeleteSecretAsync("api-key");
+                else
+                    await host.StoreSecretAsync("api-key", normalized);
+            }
+
+            if (!string.Equals(ApiKey, normalized, StringComparison.Ordinal))
+            {
+                lock (_catalogLock)
+                {
+                    _catalogGeneration++;
+                    ApiKey = normalized;
+                    SetTextCatalog(host is null ? [] : LoadSavedTextCatalog(host, normalized));
+                }
+            }
         }
+        finally
+        {
+            _apiKeyWriteLock.Release();
+        }
+
+        host?.NotifyCapabilitiesChanged();
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
@@ -292,6 +309,30 @@ public sealed class VoxtralPlugin
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
+            new(
+                Key: LlmStreamingSettings.StreamResponsesSettingKey,
+                Label: Loc.L("Settings.StreamResponses"),
+                Description: Loc.L("Settings.StreamResponsesDescription"),
+                Kind: PluginSettingKind.Boolean
+            ),
+            new(
+                Key: TemperatureModeSettingKey,
+                Label: Loc.L("Settings.TemperatureMode"),
+                Description: Loc.L("Settings.TemperatureModeDescription"),
+                Kind: PluginSettingKind.Dropdown,
+                Options:
+                [
+                    new PluginSettingOption(ProviderDefaultTemperatureMode, Loc.L("Settings.TemperatureProviderDefault")),
+                    new PluginSettingOption(CustomTemperatureMode, Loc.L("Settings.TemperatureCustom")),
+                ]
+            ),
+            new(
+                Key: TemperatureSettingKey,
+                Label: Loc.L("Settings.TemperatureValue"),
+                Description: Loc.L("Settings.TemperatureValueDescription"),
+                Placeholder: DefaultCustomTemperature.ToString(CultureInfo.InvariantCulture),
+                Kind: PluginSettingKind.Text
+            ),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
@@ -300,6 +341,10 @@ public sealed class VoxtralPlugin
             {
                 "api-key" => ApiKey,
                 "selectedModel" => SelectedModelId,
+                LlmStreamingSettings.StreamResponsesSettingKey
+                    => _streamResponses ? "true" : "false",
+                TemperatureModeSettingKey => _temperatureMode,
+                TemperatureSettingKey => _temperature.ToString(CultureInfo.InvariantCulture),
                 _ => null,
             }
         );
@@ -319,19 +364,52 @@ public sealed class VoxtralPlugin
                 if (!string.IsNullOrWhiteSpace(value))
                     SelectModel(value);
                 break;
+            case LlmStreamingSettings.StreamResponsesSettingKey:
+                SetStreamResponses(ParseBool(value));
+                break;
+            case TemperatureModeSettingKey:
+                SetTemperatureMode(value);
+                break;
+            case TemperatureSettingKey:
+                SetTemperature(value);
+                break;
         }
     }
 
+    // Validation doubles as the text model refresh; any failure leaves the saved catalog untouched.
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(ApiKey))
+        var apiKey = ApiKey;
+        if (string.IsNullOrWhiteSpace(apiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(ApiKey, ct);
-        return valid
-            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
-            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        long generation;
+        lock (_catalogLock)
+            generation = _catalogGeneration;
+
+        List<string> models;
+        try
+        {
+            models = await FetchTextModelsAsync(apiKey, ct);
+        }
+        catch (PluginRequestException ex) when (ex.FailureKind is PluginRequestFailureKind.Authentication
+                                                    or PluginRequestFailureKind.Permission)
+        {
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        }
+        catch (PluginRequestException ex)
+        {
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ModelRefreshFailed", ex.Message));
+        }
+
+        return TryCommitTextCatalog(models, generation, apiKey)
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidFetchedTextModels", models.Count))
+            : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelRefreshStale"));
     }
 
-    public void Dispose() => _httpClient.Dispose();
+    public void Dispose()
+    {
+        _httpClient.Dispose();
+        _apiKeyWriteLock.Dispose();
+    }
 }

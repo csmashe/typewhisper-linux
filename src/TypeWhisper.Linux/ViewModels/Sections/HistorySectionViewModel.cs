@@ -123,6 +123,9 @@ public partial class HistorySectionViewModel : ObservableObject
             }
         };
         _audioPlayback.PlaybackStateChanged += () => Dispatcher.UIThread.Post(RefreshPlaybackState);
+        // "All apps" and the date-group headers are computed text; the app filter also compares
+        // against "All apps", so a stale label would stop matching after a language change.
+        Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(Refresh);
         _ = LoadAsync();
     }
 

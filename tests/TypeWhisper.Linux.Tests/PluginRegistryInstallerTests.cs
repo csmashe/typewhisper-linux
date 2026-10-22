@@ -115,6 +115,51 @@ public sealed class PluginRegistryInstallerTests : IDisposable
     }
 
     [Fact]
+    public async Task InstallPluginAsync_NestedGpuRuntimeForDeclaredRid_IsAccepted()
+    {
+        var archive = CreateWebhookArchive(
+            "2.0.0",
+            mutateArchive: zip =>
+            {
+                zip.CreateEntry("runtimes/vulkan/");
+                zip.CreateEntry("runtimes/vulkan/linux-x64/");
+                WriteEntry(
+                    zip.CreateEntry("runtimes/vulkan/linux-x64/libggml-vulkan-whisper.so"),
+                    "native"
+                );
+            }
+        );
+        _archiveHandler.Archive = archive;
+        var service = CreateService(CreateManager());
+
+        await service.InstallPluginAsync(RegistryEntry(archive, "2.0.0"));
+
+        Assert.True(File.Exists(Path.Join(
+            _pluginsRoot, PluginId, "runtimes", "vulkan", "linux-x64", "libggml-vulkan-whisper.so")));
+    }
+
+    [Theory]
+    [InlineData("runtimes/vulkan/linux-arm64/libggml-vulkan-whisper.so")]
+    [InlineData("runtimes/vulkan/libggml-vulkan-whisper.so")]
+    [InlineData("runtimes/opencl/linux-x64/libggml-opencl-whisper.so")]
+    public async Task InstallPluginAsync_NestedRuntimeForOtherRidOrBackend_IsRejected(string entryPath)
+    {
+        var archive = CreateWebhookArchive(
+            "2.0.0",
+            mutateArchive: zip => WriteEntry(zip.CreateEntry(entryPath), "native")
+        );
+        _archiveHandler.Archive = archive;
+        var service = CreateService(CreateManager());
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.InstallPluginAsync(RegistryEntry(archive, "2.0.0"))
+        );
+
+        Assert.Contains("undeclared native runtime", exception.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Join(_pluginsRoot, PluginId)));
+    }
+
+    [Fact]
     public async Task InstallPluginAsync_TamperedSha256_IsRejectedWithoutExtraction()
     {
         var archive = CreateWebhookArchive("2.0.0");

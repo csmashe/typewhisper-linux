@@ -7,14 +7,14 @@
              x:DataType="vm:SnippetsSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
         <Style Selector="Border.badge">
-            <Setter Property="Background" Value="#1B2430" />
-            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Padding" Value="8,3" />
@@ -44,21 +44,21 @@
                                Margin="0,0,0,4" />
                     <TextBlock Text="{Binding SummaryText}"
                                FontSize="12"
-                               Foreground="#8A9AAE"
+                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                Margin="0,0,0,4" />
                     <TextBlock
                         Text="{loc:Str Snippets.PlaceholdersHint}"
                         FontSize="11.5"
-                        Foreground="#8A9AAE"
+                        Foreground="{DynamicResource TwTextSecondaryBrush}"
                         TextWrapping="Wrap"
                         Margin="0,0,0,4" />
                     <TextBlock Text="{loc:Str Snippets.EditHint}"
                                FontSize="11.5"
-                               Foreground="#8A9AAE"
+                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                TextWrapping="Wrap" />
 
-                    <Border Background="#3A1D1D"
-                            BorderBrush="#7A2E2E"
+                    <Border Background="{DynamicResource TwErrorSubtleBrush}"
+                            BorderBrush="{DynamicResource TwErrorBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="8"
                             Padding="10"
@@ -67,7 +67,7 @@
                         <TextBlock Text="{Binding ErrorText}"
                                    FontSize="12"
                                    TextWrapping="Wrap"
-                                   Foreground="#F4A9A9" />
+                                   Foreground="{DynamicResource TwErrorTextBrush}" />
                     </Border>
                 </StackPanel>
 
@@ -83,9 +83,9 @@
                         Classes="toolbar-button"
                         Content="{loc:Str Common.New}"
                         Command="{Binding BeginCreateCommand}"
-                        Background="#2196F3"
-                        BorderBrush="#2196F3"
-                        Foreground="White" />
+                        Background="{DynamicResource TwAccentBrush}"
+                        BorderBrush="{DynamicResource TwAccentBrush}"
+                        Foreground="{DynamicResource TwOnAccentBrush}" />
             </Grid>
         </Border>
 
@@ -105,12 +105,15 @@
                       ColumnDefinitions="160,*,150"
                       ColumnSpacing="10">
                     <TextBox Grid.Column="0"
+                             AutomationProperties.Name="{loc:Str Snippets.TriggerPlaceholder}"
                              Text="{Binding NewTrigger}"
                              PlaceholderText="{loc:Str Snippets.TriggerPlaceholder}" />
                     <TextBox Grid.Column="1"
+                             AutomationProperties.Name="{loc:Str Snippets.ReplacementPlaceholder}"
                              Text="{Binding NewReplacement}"
                              PlaceholderText="{loc:Str Snippets.ReplacementPlaceholder}" />
                     <ComboBox Grid.Column="2"
+                              AutomationProperties.Name="{loc:Str Snippets.TriggerModeLabel}"
                               ItemsSource="{Binding TriggerModeOptions}"
                               SelectedValue="{Binding SelectedTriggerMode}"
                               SelectedValueBinding="{Binding Value}">
@@ -127,9 +130,11 @@
                       ColumnSpacing="10"
                       Margin="0,10,0,0">
                     <TextBox Grid.Column="0"
+                             AutomationProperties.Name="{loc:Str Snippets.TagsPlaceholder}"
                              Text="{Binding NewTags}"
                              PlaceholderText="{loc:Str Snippets.TagsPlaceholder}" />
                     <TextBox Grid.Column="1"
+                             AutomationProperties.Name="{loc:Str Snippets.ProfileIdsPlaceholder}"
                              Text="{Binding NewProfileIds}"
                              PlaceholderText="{loc:Str Snippets.ProfileIdsPlaceholder}" />
                     <CheckBox Grid.Column="2"
@@ -142,9 +147,9 @@
                                 HorizontalAlignment="Right">
                         <Button Content="{Binding EditorSaveText}"
                                 Command="{Binding SaveSnippetCommand}"
-                                Background="#2196F3"
-                                BorderBrush="#2196F3"
-                                Foreground="White"
+                                Background="{DynamicResource TwAccentBrush}"
+                                BorderBrush="{DynamicResource TwAccentBrush}"
+                                Foreground="{DynamicResource TwOnAccentBrush}"
                                 MinWidth="118"
                                 Padding="14,8" />
                         <Button Content="{loc:Str Common.Cancel}"
@@ -155,8 +160,8 @@
                 </Grid>
 
                 <Border Grid.Row="3"
-                        Background="#101820"
-                        BorderBrush="#223243"
+                        Background="{DynamicResource TwSurfaceSunkenBrush}"
+                        BorderBrush="{DynamicResource TwBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="8"
                         Padding="10"
@@ -166,17 +171,17 @@
                         <TextBlock Text="{loc:Str Snippets.Preview}"
                                    FontSize="11"
                                    FontWeight="SemiBold"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
                         <TextBlock Text="{Binding PreviewText}"
                                    FontSize="12.5"
                                    TextWrapping="Wrap"
-                                   Foreground="#D8E6F7" />
+                                   Foreground="{DynamicResource TwAccentSubtleTextBrush}" />
                     </StackPanel>
                 </Border>
 
                 <Border Grid.Row="4"
-                        Background="#241D12"
-                        BorderBrush="#6A4A1D"
+                        Background="{DynamicResource TwWarningSubtleBrush}"
+                        BorderBrush="{DynamicResource TwWarningBorderBrush}"
                         BorderThickness="1"
                         CornerRadius="8"
                         Padding="10"
@@ -185,7 +190,7 @@
                     <TextBlock Text="{Binding ConflictWarningText}"
                                FontSize="12"
                                TextWrapping="Wrap"
-                               Foreground="#F4C97D" />
+                               Foreground="{DynamicResource TwWarningTextBrush}" />
                 </Border>
             </Grid>
         </Border>
@@ -194,7 +199,7 @@
                 Classes="panel">
             <Grid RowDefinitions="Auto,*">
                 <Border Grid.Row="0"
-                        BorderBrush="#1AFFFFFF"
+                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                         BorderThickness="0,0,0,1"
                         Padding="16,12">
                     <Grid ColumnDefinitions="Auto,Auto,Auto,*"
@@ -202,12 +207,19 @@
                         <TextBlock Grid.Column="0"
                                    Text="{loc:Str Snippets.TagFilter}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    VerticalAlignment="Center" />
                         <ComboBox Grid.Column="1"
+                                  AutomationProperties.Name="{loc:Str Snippets.TagFilter}"
                                   Width="180"
                                   ItemsSource="{Binding AvailableTags}"
-                                  SelectedItem="{Binding SelectedTagFilter}" />
+                                  SelectedItem="{Binding SelectedTagFilter}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SnippetTagFilterOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                         <Button Grid.Column="2"
                                 Content="{loc:Str Snippets.AllTags}"
                                 Command="{Binding ClearTagFilterCommand}"
@@ -222,7 +234,7 @@
                                 IsVisible="{Binding ShowEmptyState}">
                         <TextBlock Text="♪"
                                    FontSize="38"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,12" />
                         <TextBlock Text="{loc:Str Snippets.EmptyTitle}"
@@ -233,7 +245,7 @@
                         <TextBlock
                             Text="{loc:Str Snippets.EmptySubtitle}"
                             FontSize="12.5"
-                            Foreground="#8A9AAE"
+                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                             TextAlignment="Center"
                             TextWrapping="Wrap"
                             Margin="0,0,0,18" />
@@ -241,9 +253,9 @@
                                 Command="{Binding BeginCreateCommand}"
                                 HorizontalAlignment="Center"
                                 Padding="16,8"
-                                Background="#2196F3"
-                                BorderBrush="#2196F3"
-                                Foreground="White" />
+                                Background="{DynamicResource TwAccentBrush}"
+                                BorderBrush="{DynamicResource TwAccentBrush}"
+                                Foreground="{DynamicResource TwOnAccentBrush}" />
                     </StackPanel>
 
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -253,13 +265,13 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="models:Snippet">
                                     <Border Padding="16,13"
-                                            BorderBrush="#1AFFFFFF"
+                                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                             BorderThickness="0,0,0,1">
                                         <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto"
                                               ColumnSpacing="14">
                                             <Border Grid.Column="0"
-                                                    Background="#14337FD8"
-                                                    BorderBrush="#225E9FF2"
+                                                    Background="{DynamicResource TwAccentSubtleBrush}"
+                                                    BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}"
                                                     BorderThickness="1"
                                                     CornerRadius="7"
                                                     Padding="9,4"
@@ -267,13 +279,13 @@
                                                 <TextBlock Text="{Binding Trigger}"
                                                            FontSize="12"
                                                            FontWeight="SemiBold"
-                                                           Foreground="#8FC0FF" />
+                                                           Foreground="{DynamicResource TwAccentTextBrush}" />
                                             </Border>
 
                                             <TextBlock Grid.Column="1"
                                                        Text="->"
                                                        FontSize="12"
-                                                       Foreground="#8A9AAE"
+                                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                        Margin="0,4,0,0" />
 
                                             <StackPanel Grid.Column="2"
@@ -286,23 +298,23 @@
                                                             IsVisible="{Binding CaseSensitive}">
                                                         <TextBlock Text="Aa"
                                                                    FontSize="10"
-                                                                   Foreground="#D6DEE9" />
+                                                                   Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                     </Border>
                                                     <Border Classes="badge">
                                                         <TextBlock Text="{Binding TriggerMode, Converter={x:Static loc:LocEnumConverter.Instance}, ConverterParameter=Snippets.TriggerMode}"
                                                                    FontSize="10"
-                                                                   Foreground="#D6DEE9" />
+                                                                   Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                     </Border>
                                                     <Border Classes="badge">
                                                         <TextBlock Text="{Binding UsageCount, StringFormat='{}{0}x'}"
                                                                    FontSize="10"
-                                                                   Foreground="#D6DEE9" />
+                                                                   Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                     </Border>
                                                     <Border Classes="badge"
                                                             IsVisible="{Binding Tags, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                                                         <TextBlock Text="{Binding Tags}"
                                                                    FontSize="10"
-                                                                   Foreground="#D6DEE9" />
+                                                                   Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                     </Border>
                                                 </WrapPanel>
                                             </StackPanel>
@@ -323,6 +335,7 @@
                                                     VerticalAlignment="Center" />
                                             <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                             <ToggleSwitch Grid.Column="5"
+                                                          AutomationProperties.Name="{Binding Trigger, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Snippets.EnabledToggleName}"
                                                           IsChecked="{Binding IsEnabled, Mode=OneWay}"
                                                           Command="{Binding $parent[ItemsControl].((vm:SnippetsSectionViewModel)DataContext).ToggleEnabledCommand}"
                                                           CommandParameter="{Binding}"

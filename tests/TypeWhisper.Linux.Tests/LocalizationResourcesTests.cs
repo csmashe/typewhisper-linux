@@ -588,6 +588,34 @@ public sealed class LocalizationResourcesTests
     }
 
     [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("ru")]
+    public void Catalogs_HaveProfileCardRuleStringsWithPlaceholders(string language)
+    {
+        var catalog = Load(language);
+        Assert.True(
+            catalog.TryGetValue("Profiles.AppRulesCount", out var appRules),
+            $"Missing {language} key: Profiles.AppRulesCount"
+        );
+        Assert.Contains("{0}", appRules, StringComparison.Ordinal);
+
+        Assert.True(
+            catalog.TryGetValue("Profiles.UrlRulesCount", out var urlRules),
+            $"Missing {language} key: Profiles.UrlRulesCount"
+        );
+        Assert.Contains("{0}", urlRules, StringComparison.Ordinal);
+
+        Assert.True(
+            catalog.TryGetValue("Profiles.RulesSummary", out var rulesSummary),
+            $"Missing {language} key: Profiles.RulesSummary"
+        );
+        Assert.Contains("{0}", rulesSummary, StringComparison.Ordinal);
+        Assert.Contains("{1}", rulesSummary, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [MemberData(nameof(NonCanonicalLanguages))]
     public void TranslationValuesAreNonEmpty(string lang)
     {

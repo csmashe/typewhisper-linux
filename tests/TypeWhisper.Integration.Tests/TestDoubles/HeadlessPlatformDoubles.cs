@@ -1,3 +1,5 @@
+// ReSharper disable UnusedType.Global
+// Linked into TypeWhisper.UiTests, which registers only some of these doubles.
 // The counters and flags on these doubles are the assertion surface, not internal state:
 // each is written by the boundary being faked and read by whichever test needs that signal.
 // Paired members (duck/restore, pause/resume, start/stop) stay symmetric and public so a test

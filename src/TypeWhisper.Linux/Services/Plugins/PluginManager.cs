@@ -33,6 +33,9 @@ public sealed class PluginManager : IDisposable
     private readonly ISettingsService _settings;
     private readonly TimeSpan _pluginShutdownTimeout;
     private readonly IErrorLogService? _errorLog;
+    private readonly TaskCompletionSource _initialization = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private readonly string _secretProtectionKeyFilePath;
     private readonly IProcessRunner _processRunner;
     private readonly TranscriptionIsolation? _transcriptionIsolation;
@@ -447,7 +450,22 @@ public sealed class PluginManager : IDisposable
         }
     }
 
+    /// <summary>Completes once <see cref="InitializeAsync" /> has finished, whether or not it failed.</summary>
+    public Task Initialization => _initialization.Task;
+
     public async Task InitializeAsync()
+    {
+        try
+        {
+            await InitializeCoreAsync();
+        }
+        finally
+        {
+            _initialization.TrySetResult();
+        }
+    }
+
+    private async Task InitializeCoreAsync()
     {
         var discovered = _loader.DiscoverAndLoad(_searchDirectories);
 

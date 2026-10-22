@@ -80,7 +80,25 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
         // Stale or manually edited blocks read as not-installed so the
         // checklist re-registers them.
         var expected = BuildManagedLines(spec).Select(l => l.TrimEnd()).ToList();
-        return inner is not null && inner.SequenceEqual(expected);
+        return inner is not null
+               && inner.Count == expected.Count
+               && inner.Zip(expected).All(p => ManagedLineMatches(p.First, p.Second));
+    }
+
+    // Hyprland resolves key names case-insensitively, and blocks written before the keysym
+    // mapping spelled keys upper-case ("SPACE"); only the exec command must match verbatim.
+    private static bool ManagedLineMatches(string actual, string expected)
+    {
+        const string marker = ", exec, ";
+        var a = actual.IndexOf(marker, StringComparison.Ordinal);
+        var e = expected.IndexOf(marker, StringComparison.Ordinal);
+        if (a < 0 || e < 0)
+        {
+            return string.Equals(actual, expected, StringComparison.Ordinal);
+        }
+
+        return string.Equals(actual[..a], expected[..e], StringComparison.OrdinalIgnoreCase)
+               && string.Equals(actual[a..], expected[e..], StringComparison.Ordinal);
     }
 
     // hyprland.conf holds one managed sentinel block carrying no shortcut id, so this answers
@@ -252,8 +270,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     }
 
     /// <summary>
-    ///     Converts "Ctrl+Shift+Space" into Hyprland's ("CTRL SHIFT", "SPACE")
-    ///     form. Modifiers are space-separated; key is uppercased for readability.
+    ///     Converts "Ctrl+Shift+Space" into Hyprland's ("CTRL SHIFT", "space")
+    ///     form. Modifiers are space-separated; keys use canonical XKB names.
     /// </summary>
     public static (string mods, string key) ToHyprlandBind(string trigger)
     {
@@ -287,7 +305,7 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
             );
         }
 
-        var key = parts[^1].ToUpperInvariant();
+        var key = DesktopShortcutKey.ToKeysym(parts[^1]);
         return (string.Join(' ', mods), key);
     }
 

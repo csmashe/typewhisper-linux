@@ -34,6 +34,7 @@ internal static class HttpApiRoutes
             ("GET", "/v1/dictionary/corrections", "List dictionary corrections."),
             ("PUT", "/v1/dictionary/corrections", "Add or update a dictionary correction."),
             ("DELETE", "/v1/dictionary/corrections", "Delete a dictionary correction."),
+            ("POST", "/v1/text/process", "Run raw transcript text through the final dictation pipeline without inserting it."),
         ]);
 
     public static IReadOnlyList<(string Method, string Path)> All { get; } =

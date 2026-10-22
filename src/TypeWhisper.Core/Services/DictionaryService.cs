@@ -172,6 +172,38 @@ public sealed partial class DictionaryService : IDictionaryService
         return stale ? DictionaryImportCommitResult.Stale : DictionaryImportCommitResult.Imported;
     }
 
+    /// <summary>Plans inside the store update so a concurrent edit cannot slip between check and write.</summary>
+    public DictionaryAliasSavePlan SaveSuggestedAliases(string term, IReadOnlyList<string> aliases)
+    {
+        if (!TryGetEntries(out _))
+        {
+            return new DictionaryAliasSavePlan(DictionaryAliasSaveStatus.StoreUnavailable, null, []);
+        }
+
+        var plan = new DictionaryAliasSavePlan(DictionaryAliasSaveStatus.StoreUnavailable, null, []);
+        try
+        {
+            Commit(entries =>
+            {
+                plan = DictionaryAliasSuggestions.PlanSave(entries, term, aliases);
+                if (plan.Status != DictionaryAliasSaveStatus.Saved || plan.Additions.Count == 0)
+                {
+                    return false;
+                }
+
+                entries.AddRange(plan.Additions);
+                return true;
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Trace.WriteLine($"[DictionaryService] Could not save suggested aliases: {ex.Message}");
+            return new DictionaryAliasSavePlan(DictionaryAliasSaveStatus.StoreUnavailable, null, []);
+        }
+
+        return plan;
+    }
+
     public void UpdateEntry(DictionaryEntry entry)
     {
         Commit(entries =>

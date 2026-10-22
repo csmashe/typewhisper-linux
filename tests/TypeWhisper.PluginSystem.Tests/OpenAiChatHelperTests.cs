@@ -153,6 +153,7 @@ public sealed class OpenAiChatHelperTests
     [InlineData("MAX_TOKENS")]
     [InlineData("max_output_tokens")]
     [InlineData("model_context_window_exceeded")]
+    [InlineData("model_length")]
     public async Task SendChatCompletionAsync_RejectsTokenLimitedPartialResponse(string reason)
     {
         var ex = await Assert.ThrowsAsync<PluginRequestException>(() => SendChatResponseAsync(

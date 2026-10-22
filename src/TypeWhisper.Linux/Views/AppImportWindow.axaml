@@ -7,7 +7,6 @@
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
         x:Class="TypeWhisper.Linux.Views.AppImportWindow"
         x:DataType="vm:AppImportViewModel"
-        RequestedThemeVariant="Dark"
         Width="560"
         Height="520"
         MinWidth="420"

@@ -32,12 +32,17 @@ public sealed class XaiPlugin
     private const string TtsTextNormalizationSettingName = "ttsTextNormalization";
 
     internal const string DefaultLlmModelId = "grok-4.3";
+    // The catalog ID predates xAI's model slugs and stays so saved selections keep resolving.
     internal const string DefaultSttModelId = "grok-stt";
+    internal const string SttApiModelId = "grok-voice-transcribe-2.0";
 
     private static readonly IReadOnlyList<PluginModelInfo> s_sttModels =
     [
-        new(DefaultSttModelId, "Grok Speech to Text"),
+        new(DefaultSttModelId, "Grok Voice Transcribe 2.0"),
     ];
+
+    private static readonly DictionaryTermsBudget s_keytermBudget = new(MaxTerms: 100, MaxCharsPerTerm: 50);
+    internal const int MaxStreamingKeytermsQueryLength = 6000;
 
     private static readonly IReadOnlyList<PluginModelInfo> s_fallbackLlmModels =
     [
@@ -111,6 +116,8 @@ public sealed class XaiPlugin
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_keytermBudget;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
@@ -134,7 +141,12 @@ public sealed class XaiPlugin
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
+        var keyterms = ParseKeyterms(prompt);
         using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(SttApiModelId), "model");
+        foreach (var keyterm in keyterms)
+            form.Add(new StringContent(keyterm), "keyterm");
+
         var normalizedLanguage = NormalizeLanguage(language);
         if (normalizedLanguage is not null)
         {
@@ -155,12 +167,47 @@ public sealed class XaiPlugin
         return ParseSttResponse(json, normalizedLanguage);
     }
 
-    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        StartStreamingAsync(language, [], ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct) =>
+        StartStreamingAsync(
+            languageHints.FirstOrDefault(static hint => !string.IsNullOrWhiteSpace(hint))?.Trim(),
+            StreamingKeyterms(ParseKeyterms(prompt)),
+            ct);
+
+    private async Task<IStreamingSession> StartStreamingAsync(
+        string? language,
+        IReadOnlyList<string> keyterms,
+        CancellationToken ct)
     {
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
-        return await XaiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), ct);
+        return await XaiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), keyterms, ct);
+    }
+
+    // xAI has no free-text prompt, so only the dictionary terms are used.
+    internal static IReadOnlyList<string> ParseKeyterms(string? prompt) =>
+        PluginDictionaryTerms.Clip(PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms, s_keytermBudget);
+
+    // Live keyterms go in the WebSocket URL; this keeps it inside common request-line limits.
+    internal static IReadOnlyList<string> StreamingKeyterms(IReadOnlyList<string> keyterms)
+    {
+        var limited = new List<string>(keyterms.Count);
+        var length = 0;
+        foreach (var keyterm in keyterms)
+        {
+            length += "&keyterm=".Length + Uri.EscapeDataString(keyterm).Length;
+            if (length > MaxStreamingKeytermsQueryLength)
+                break;
+            limited.Add(keyterm);
+        }
+
+        return limited;
     }
 
     // ILlmProviderPlugin

@@ -1,4 +1,5 @@
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Core.Services.AppImport;
 
 namespace TypeWhisper.Core.Interfaces;
@@ -93,6 +94,26 @@ public interface IDictionaryService
 
     /// <summary>Removes correction entries by id (used to undo a learned batch); safe if some no longer exist.</summary>
     void UndoLearnedCorrections(IEnumerable<LearnedDictionaryCorrection> learnedCorrections);
+
+    /// <summary>
+    ///     Saves reviewed aliases as corrections to <paramref name="term" /> (and the term itself when
+    ///     missing) in one write, or writes nothing. See <see cref="DictionaryAliasSuggestions.PlanSave" />.
+    /// </summary>
+    DictionaryAliasSavePlan SaveSuggestedAliases(string term, IReadOnlyList<string> aliases)
+    {
+        if (!TryGetEntries(out var entries))
+        {
+            return new DictionaryAliasSavePlan(DictionaryAliasSaveStatus.StoreUnavailable, null, []);
+        }
+
+        var plan = DictionaryAliasSuggestions.PlanSave(entries, term, aliases);
+        if (plan.Status == DictionaryAliasSaveStatus.Saved)
+        {
+            AddEntries(plan.Additions);
+        }
+
+        return plan;
+    }
 
     /// <summary>Adds the term pack's entries; idempotent, so re-activating an active pack is a no-op.</summary>
     void ActivatePack(TermPack pack);

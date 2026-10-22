@@ -1,0 +1,21 @@
+[
+  {
+    "name": "spoken-hit",
+    "draft_calls": 1,
+    "final_calls": 0,
+    "reused": true,
+    "timings_ms": {
+      "transcription_and_precleanup_upper_bound": 576.0,
+      "cleanup_to_final_event_upper_bound": 10.0,
+      "delivery_observed_upper_bound": 390.24,
+      "stop_to_clipboard_readback": 1199.22
+    },
+    "acceleration": {
+      "preference": "cpu",
+      "active_backend": "cpu",
+      "display_text": "Using CPU",
+      "detail": null,
+      "requires_restart": false
+    }
+  }
+]
