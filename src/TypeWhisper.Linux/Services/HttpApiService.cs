@@ -3025,6 +3025,9 @@ public sealed partial class HttpApiService : IDisposable
     [GeneratedRegex("^[0-9A-Fa-f]{64}$")]
     private static partial Regex LegacyPlaintextTokenRegex();
 
+    /// <summary>A bearer token stored as plaintext hex by pre-encryption builds; it must be kept, not rotated.</summary>
+    internal static bool IsLegacyPlaintextToken(string value) => LegacyPlaintextTokenRegex().IsMatch(value);
+
     private sealed record TranscriptionRunOptions(
         string? Language,
         IReadOnlyList<string> LanguageHints,
