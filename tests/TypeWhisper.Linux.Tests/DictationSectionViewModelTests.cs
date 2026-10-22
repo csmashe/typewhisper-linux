@@ -17,6 +17,68 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class DictationSectionViewModelTests
 {
     [Fact]
+    public void LiveCleanupAvailability_DefaultFillerProcessorBlocksWithoutChangingPreference()
+    {
+        var filler = new Mock<IPostProcessorPlugin>();
+        filler.SetupGet(plugin => plugin.Priority).Returns(70);
+        filler.SetupGet(plugin => plugin.ProcessorName).Returns("Filler Words");
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { LiveCleanupEnabled = true },
+            new FakeAudioDeviceEnumerator(), processors: [filler.Object]);
+
+        Assert.False(context.Sut.CanUseLiveCleanup);
+        Assert.True(context.Sut.ShowLiveCleanupUnavailableReason);
+        Assert.Contains("Filler Words", context.Sut.LiveCleanupUnavailableReason);
+        Assert.Contains("Plugins", context.Sut.LiveCleanupUnavailableReason);
+        Assert.True(context.Sut.LiveCleanupEnabled);
+        Assert.True(context.Settings.Object.Current.LiveCleanupEnabled);
+    }
+
+    [Fact]
+    public void LiveCleanupAvailability_PluginAndProviderUpdatesNotifyWithoutSaving()
+    {
+        var pending = new Queue<Action>();
+        var processor = new Mock<IPostProcessorPlugin>();
+        processor.SetupGet(plugin => plugin.Priority).Returns(250);
+        processor.SetupGet(plugin => plugin.ProcessorName).Returns("Early processor");
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { LiveCleanupEnabled = true },
+            new FakeAudioDeviceEnumerator(), dispatchNotification: pending.Enqueue,
+            processors: [processor.Object]);
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+
+        // A provider-only change must leave the blocking processor and preference intact.
+        context.NotifyPluginStateChanged();
+        Assert.Empty(notifications);
+        while (pending.TryDequeue(out var notify)) notify();
+        Assert.Contains(nameof(context.Sut.CanUseLiveCleanup), notifications);
+        Assert.Contains(nameof(context.Sut.LiveCleanupUnavailableReason), notifications);
+        Assert.False(context.Sut.CanUseLiveCleanup);
+
+        // Disabling the blocker leaves later processors active and restores the control.
+        var laterProcessor = new Mock<IPostProcessorPlugin>();
+        laterProcessor.SetupGet(plugin => plugin.Priority).Returns(251);
+        context.SetPostProcessors([laterProcessor.Object]);
+        context.NotifyPluginStateChanged();
+        while (pending.TryDequeue(out var notify)) notify();
+        Assert.True(context.Sut.CanUseLiveCleanup);
+        Assert.False(context.Sut.ShowLiveCleanupUnavailableReason);
+        Assert.Empty(context.Sut.LiveCleanupUnavailableReason);
+        Assert.True(context.Sut.LiveCleanupEnabled);
+        Assert.True(context.Settings.Object.Current.LiveCleanupEnabled);
+        context.Settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+
+        context.Sut.LiveCleanupEnabled = false;
+        Assert.False(context.Settings.Object.Current.LiveCleanupEnabled);
+        context.SetPostProcessors([processor.Object]);
+        context.NotifyPluginStateChanged();
+        while (pending.TryDequeue(out var notify)) notify();
+        Assert.False(context.Sut.CanUseLiveCleanup);
+        Assert.False(context.Sut.LiveCleanupEnabled);
+    }
+
+    [Fact]
     public void VulkanPreference_OnUnsupportedPlugin_RevertsToCpu()
     {
         var plugin = new ModelDependentLanguagePlugin();
@@ -769,11 +831,16 @@ public sealed class DictationSectionViewModelTests
             IReadOnlyList<ITranscriptionEngineRole>? engines = null,
             IAtSpiEventClient? atSpiClient = null,
             Action<Action>? dispatchNotification = null,
-            TimeProvider? timeProvider = null
+            TimeProvider? timeProvider = null,
+            IReadOnlyList<IPostProcessorPlugin>? processors = null
         )
         {
             Settings = TestPluginManagerFactory.CreateSettings(initialSettings);
             PluginManager = TestPluginManagerFactory.Create();
+            if (processors is not null)
+            {
+                SetPostProcessors(processors);
+            }
             if (engines is not null)
             {
                 SetTranscriptionEngines(PluginManager, engines);
@@ -821,6 +888,14 @@ public sealed class DictationSectionViewModelTests
         private ModelManagerService Models { get; }
         public AudioRecordingService Audio { get; }
         public List<int> OpenedDeviceIndices { get; } = [];
+
+        public void SetPostProcessors(IReadOnlyList<IPostProcessorPlugin> processors) =>
+            typeof(PluginManager).GetField("_postProcessors", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(PluginManager, processors.ToList());
+
+        public void NotifyPluginStateChanged() =>
+            ((EventHandler?)typeof(PluginManager).GetField("PluginStateChanged", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(PluginManager))?.Invoke(PluginManager, EventArgs.Empty);
 
         public void Dispose()
         {

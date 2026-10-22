@@ -751,21 +751,32 @@
 
                     <Border Grid.Row="10"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
-                                       Classes="row-label" />
-                            <ComboBox Grid.Column="1"
-                                      AutomationProperties.Name="{loc:Str Dictation.AutoCleanup}"
-                                      ItemsSource="{Binding CleanupLevelOptions}"
-                                      SelectedItem="{Binding SelectedCleanupLevelOption}"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:CleanupLevelOption">
-                                        <TextBlock Text="{Binding DisplayName}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </Grid>
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,240">
+                                <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
+                                           Classes="row-label" />
+                                <ComboBox Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoCleanup}"
+                                          ItemsSource="{Binding CleanupLevelOptions}"
+                                          SelectedItem="{Binding SelectedCleanupLevelOption}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:CleanupLevelOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <CheckBox IsChecked="{Binding LiveCleanupEnabled}"
+                                      IsEnabled="{Binding CanUseLiveCleanup}"
+                                      AutomationProperties.Name="{loc:Str Dictation.LiveCleanup}"
+                                      Content="{loc:Str Dictation.LiveCleanup}" />
+                            <TextBlock Text="{Binding LiveCleanupUnavailableReason}"
+                                       IsVisible="{Binding ShowLiveCleanupUnavailableReason}"
+                                       FontSize="12" Foreground="#E7D8A6" TextWrapping="Wrap" />
+                            <TextBlock Text="{loc:Str Dictation.LiveCleanupHint}"
+                                       FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="11"

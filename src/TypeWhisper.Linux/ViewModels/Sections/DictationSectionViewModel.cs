@@ -116,6 +116,33 @@ public partial class DictationSectionViewModel : ObservableObject
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
 
     [ObservableProperty]
+    private bool _liveCleanupEnabled;
+
+    // Match the scheduler's conservative guard: plugin processors have no safe preview contract.
+    public bool CanUseLiveCleanup => !_pluginManager.PostProcessors.Any(processor => processor.Priority <= 250);
+    public bool ShowLiveCleanupUnavailableReason => !CanUseLiveCleanup;
+    public string LiveCleanupUnavailableReason
+    {
+        get
+        {
+            var blockers = _pluginManager.PostProcessors
+                .Where(processor => processor.Priority <= 250)
+                .Select(processor => processor.ProcessorName)
+                .Distinct()
+                .ToArray();
+            return blockers.Length == 0 ? "" : Loc.Instance.GetString(
+                "Dictation.LiveCleanupBlockedByPlugins", string.Join(", ", blockers));
+        }
+    }
+
+    private void RefreshLiveCleanupAvailability()
+    {
+        OnPropertyChanged(nameof(CanUseLiveCleanup));
+        OnPropertyChanged(nameof(ShowLiveCleanupUnavailableReason));
+        OnPropertyChanged(nameof(LiveCleanupUnavailableReason));
+    }
+
+    [ObservableProperty]
     private SpokenFormattingStrategy _spokenFormattingStrategy = SpokenFormattingStrategy.Automatic;
 
     [ObservableProperty]
@@ -356,6 +383,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _audio.LevelChanged += OnLevelChanged;
         _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(OnModelStatusChanged);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModels);
+        _pluginManager.PluginStateChanged += (_, _) => dispatchNotification(RefreshLiveCleanupAvailability);
         _settings.SettingsChanged += settingsValue =>
             Dispatcher.UIThread.Post(() => RefreshFromSettings(settingsValue));
 
@@ -1009,6 +1037,7 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshAvailableAdditionalLanguages();
         TranslationTargetLanguage = settings.TranslationTargetLanguage;
         CleanupLevel = settings.CleanupLevel;
+        LiveCleanupEnabled = settings.LiveCleanupEnabled;
         EnglishOutputVariant = settings.EnglishOutputVariant;
         GermanOutputVariant = settings.GermanOutputVariant;
         SpokenFormattingStrategy = settings.SpokenFormattingStrategy;
@@ -1134,6 +1163,7 @@ public partial class DictationSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(AudioDuckingUnavailableReason));
             OnPropertyChanged(nameof(MediaPauseUnavailableReason));
             OnPropertyChanged(nameof(SoundFeedbackUnavailableReason));
+            OnPropertyChanged(nameof(LiveCleanupUnavailableReason));
             OnPropertyChanged(nameof(CudaLibraryPathActionText));
             OnPropertyChanged(nameof(DownloadCudaRuntimeText));
             OnPropertyChanged(nameof(ClearGpuRuntimeText));
@@ -2068,6 +2098,9 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.Update(current => current with { CleanupLevel = value });
         OnPropertyChanged(nameof(SelectedCleanupLevelOption));
     }
+
+    partial void OnLiveCleanupEnabledChanged(bool value) =>
+        _settings.Update(current => current with { LiveCleanupEnabled = value });
 
     partial void OnEnglishOutputVariantChanged(EnglishOutputVariant value)
     {

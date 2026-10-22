@@ -1,0 +1,28 @@
+{
+  "created_at": "2026-10-20T22:45:40+00:00",
+  "commit": "f2c93c3e9cbf669f33dc73c77a034aa869fa5637",
+  "branch": "t3/fix-live-cleanup-pr141",
+  "dirty_files": [],
+  "app_version": "0.18.0",
+  "host": {
+    "system": "Linux",
+    "release": "7.2.9-1-cachyos",
+    "machine": "x86_64",
+    "node": "beelink"
+  },
+  "run": {
+    "kind": "pr141-live",
+    "configuration": "Release",
+    "enabled": true,
+    "miss": false,
+    "backend": {
+      "preference": "cpu",
+      "active_backend": "cpu",
+      "display_text": "Using CPU",
+      "detail": null,
+      "requires_restart": false
+    },
+    "audio": "/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/artifacts/verification/2026-10-20-maintainer-pr-141/availability-audio-clean/spoken-poll-fixture.wav",
+    "provider": "controlled local HTTP echo through bundled OpenAI-compatible plugin"
+  }
+}
