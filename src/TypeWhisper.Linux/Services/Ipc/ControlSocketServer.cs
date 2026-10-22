@@ -78,6 +78,12 @@ internal sealed class ControlSocketServer : IDisposable
         SocketPath = SocketPathResolver.ResolveControlSocketPath();
     }
 
+    /// <summary>
+    ///     A second launch asked for a settings page. Raised on a socket thread; subscribe
+    ///     before <see cref="Start" />.
+    /// </summary>
+    public event Action<SettingsPage>? SettingsPageRequested;
+
     /// <summary>Absolute path of the socket file once <see cref="Start" /> succeeds.</summary>
     private string SocketPath { get; }
 
@@ -583,6 +589,7 @@ internal sealed class ControlSocketServer : IDisposable
                 JsonControlProtocol.CmdRecordCancel => await HandleCancelAsync()
                     .ConfigureAwait(false),
                 JsonControlProtocol.CmdStatus => HandleStatus(),
+                JsonControlProtocol.CmdSettingsOpen => HandleSettingsOpen(req.Page),
                 _ => JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownCommand),
             };
 
@@ -595,6 +602,24 @@ internal sealed class ControlSocketServer : IDisposable
                 .WriteLineAsync(JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal))
                 .ConfigureAwait(false);
         }
+    }
+
+    private string HandleSettingsOpen(string? pageValue)
+    {
+        var page = SettingsPage.TryParse(pageValue);
+        if (page is null)
+        {
+            return JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownPage);
+        }
+
+        var handler = SettingsPageRequested;
+        if (handler is null)
+        {
+            return JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal);
+        }
+
+        handler(page);
+        return JsonControlProtocol.SerializeOk();
     }
 
     private Task<string> HandleStartAsync()

@@ -10,6 +10,7 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Integration.Tests.TestDoubles;
 using TypeWhisper.Linux;
+using TypeWhisper.Linux.Cli.Commands;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -148,6 +149,39 @@ public sealed class ServiceGraphLifecycleTests
                         controlJson.RootElement.GetProperty("state").GetString()
                     );
                 }
+
+                // A second `typewhisper --page` reaches the running instance's handler.
+                var requestedPages = new List<string>();
+                control.SettingsPageRequested += page => requestedPages.Add(page.Name);
+                var handOff = await BoundedTest.WaitAsync(Task.Run(() =>
+                {
+                    var handled = SettingsPageCommand.TryHandOff(
+                        controlPath,
+                        SettingsPage.TryParse("plugin:com.typewhisper.openai")!,
+                        out var exitCode
+                    );
+                    return (handled, exitCode);
+                }));
+                Assert.Equal((true, 0), handOff);
+                Assert.Equal(["plugin:com.typewhisper.openai"], requestedPages);
+
+                var unknownPageReply = await BoundedTest.WaitAsync(Task.Run(() =>
+                {
+                    ControlSocketClient.TrySendJson(
+                        controlPath,
+                        new JsonControlProtocol.Request
+                        {
+                            Version = JsonControlProtocol.CurrentVersion,
+                            Command = JsonControlProtocol.CmdSettingsOpen,
+                            Page = "nope",
+                        },
+                        out var response,
+                        out _
+                    );
+                    return response;
+                }));
+                Assert.Equal(JsonControlProtocol.ErrUnknownPage, SettingsPageCommand.ReadError(unknownPageReply));
+                Assert.Single(requestedPages);
 
                 var watchPath = Path.Join(
                     IntegrationEnvironment.Root,

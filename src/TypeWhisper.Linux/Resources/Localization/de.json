@@ -747,6 +747,8 @@
   "Plugins.NoEnabledPlugins": "Keine Plugins aktiv. Aktivieren Sie eines im Tab „Deaktiviert“, um es zu nutzen.",
   "Plugins.NoHostNeutralSettings": "Dieses Plugin stellt noch keine host-neutralen Einstellungen bereit.",
   "Plugins.NoValidationAvailable": "Keine Validierung verfügbar.",
+  "Plugins.PageNotFound": "Es ist kein Plugin mit der ID „{0}“ installiert. Prüfe die ID im Manifest des Plugins.",
+  "Plugins.PageNotFoundTitle": "Plugin nicht gefunden",
   "Plugins.SettingsSaved": "Einstellungen gespeichert.",
   "Plugins.SettingsSaveFailed": "Einstellungen konnten nicht gespeichert werden. Weitere Informationen finden Sie im Fehlerprotokoll.",
   "Plugins.SummaryFailed": " · {0} nicht geladen",
