@@ -47,8 +47,8 @@ public sealed class LlmCleanupServiceTests
                 isDraft: true, draftTimeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2)));
             var draftToken = provider.LastToken;
             provider.Process = _ => Task.FromResult("Final cleanup");
-            Assert.Equal("Final cleanup", await sut.CleanAsync("uh world", CleanupLevel.Medium)
-                .WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal("Final cleanup", await sut.CleanAsync("uh world", CleanupLevel.Medium, ct: CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             Assert.Equal(2, provider.ProcessCalls);
             Assert.True(draftToken.IsCancellationRequested);
         }
@@ -132,9 +132,10 @@ public sealed class LlmCleanupServiceTests
         {
             var cleanup = sut.CleanAsync("uh hello", CleanupLevel.Medium,
                 isDraft: true, draftTimeout: TimeSpan.FromSeconds(10), ct: caller.Token);
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
             await caller.CancelAsync();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cleanup.WaitAsync(TimeSpan.FromSeconds(2)));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                cleanup.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             Assert.True(provider.LastToken.IsCancellationRequested);
         }
         finally
@@ -173,6 +174,7 @@ public sealed class LlmCleanupServiceTests
         using var caller = new CancellationTokenSource();
         var provider = new FakeLlmProviderPlugin("must not be inserted")
         {
+            // ReSharper disable once AccessToDisposedClosure -- the provider runs inside the awaited CleanAsync, before the using disposes caller.
             BeforeProcess = _ => caller.Cancel(),
         };
         var sut = CreateService([provider]);

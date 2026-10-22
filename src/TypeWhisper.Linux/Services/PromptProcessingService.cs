@@ -36,7 +36,7 @@ public sealed class PromptProcessingService
 
     /// <summary>
     ///     Whether a request would find no provider at all. An explicit selection (prompt override,
-    ///     else the configured default) is resolved strictly by <see cref="ResolveProvider(string?)" />
+    ///     else the configured default) is resolved strictly by <see cref="ResolveProvider(string?, bool)" />
     ///     and reports its own specific failure, so callers must not pre-empt it with a generic
     ///     "no provider configured" message.
     /// </summary>
@@ -200,9 +200,9 @@ public sealed class PromptProcessingService
         string systemPrompt,
         string inputText,
         LlmCallCapture? capture = null,
-        CancellationToken ct = default,
         string? providerOverride = null,
-        bool reportProviderProblems = true
+        bool reportProviderProblems = true,
+        CancellationToken ct = default
     )
     {
         var (provider, modelId) = ResolveProvider(providerOverride, reportProviderProblems);

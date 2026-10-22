@@ -14,9 +14,10 @@ public sealed class LiveCleanupSessionTests
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var session = new LiveCleanupSession(async (_, token) =>
         {
-            using var registration = token.Register(() =>
+            await using var registration = token.Register(() =>
             {
                 callbackEntered.SetResult();
+                // ReSharper disable once AccessToDisposedClosure, MethodSupportsCancellation -- the finally sets the event before disposal; the token is already cancelled, so wait on the event alone.
                 releaseCallback.Wait();
             });
             entered.SetResult();
@@ -27,7 +28,7 @@ public sealed class LiveCleanupSessionTests
             session.Submit("draft");
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
             session.StopScheduling();
-            Assert.Null(await session.ReuseAsync("different final", default).WaitAsync(TimeSpan.FromSeconds(1)));
+            Assert.Null(await session.ReuseAsync("different final", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1)));
             await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
         }
         finally { releaseCallback.Set(); release.TrySetResult(null); }
@@ -41,6 +42,7 @@ public sealed class LiveCleanupSessionTests
         var published = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var session = new LiveCleanupSession(async (input, token) =>
         {
+            // ReSharper disable once InvertIf -- inverting would duplicate the shared return below.
             if (input == "first")
             {
                 entered.SetResult();
@@ -57,7 +59,7 @@ public sealed class LiveCleanupSessionTests
 
         Assert.Equal("REVISED", await published.Task.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Equal(timersBeforeRevision, clock.TimerCount);
-        Assert.Equal("REVISED", await session.ReuseAsync("revised", default));
+        Assert.Equal("REVISED", await session.ReuseAsync("revised", CancellationToken.None));
     }
 
     [Fact]
@@ -71,10 +73,10 @@ public sealed class LiveCleanupSessionTests
             return null;
         }, (_, _) => { }, TimeSpan.Zero);
         session.Submit("old hypothesis");
-        var token = await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var token = await entered.Task.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
         session.StopScheduling();
 
-        Assert.Null(await session.ReuseAsync("corrected final text", default));
+        Assert.Null(await session.ReuseAsync("corrected final text", CancellationToken.None));
         Assert.True(token.IsCancellationRequested);
     }
 
@@ -116,10 +118,11 @@ public sealed class LiveCleanupSessionTests
         release.SetResult("Send on Monday.");
         await latest.Task.WaitAsync(TimeSpan.FromSeconds(2));
         session.StopScheduling();
-        Assert.Equal("SEND ON TUESDAY MORNING", await session.ReuseAsync("send on Tuesday morning", default));
-        Assert.Equal(new[] { "send on Monday", "send on Tuesday morning" }, inputs);
+        Assert.Equal("SEND ON TUESDAY MORNING", await session.ReuseAsync("send on Tuesday morning", CancellationToken.None));
+        string[] expectedInputs = ["send on Monday", "send on Tuesday morning"];
+        Assert.Equal(expectedInputs, inputs);
         Assert.DoesNotContain("Send on Monday.", outputs);
-        Assert.Null(await session.ReuseAsync("send on Tuesday evening", default));
+        Assert.Null(await session.ReuseAsync("send on Tuesday evening", CancellationToken.None));
     }
 
     [Fact]
@@ -137,8 +140,8 @@ public sealed class LiveCleanupSessionTests
         session.StopScheduling();
         session.Submit("ignored");
         release.SetResult("Draft.");
-        Assert.Equal("Draft.", await session.ReuseAsync("draft", default));
-        Assert.Null(await session.ReuseAsync("ignored", default));
+        Assert.Equal("Draft.", await session.ReuseAsync("draft", CancellationToken.None));
+        Assert.Null(await session.ReuseAsync("ignored", CancellationToken.None));
     }
 
     [Fact]
@@ -152,9 +155,9 @@ public sealed class LiveCleanupSessionTests
             return null;
         }, (_, _) => { }, TimeSpan.Zero);
         session.Submit("draft");
-        var token = await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var token = await entered.Task.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
         session.Dispose();
         Assert.True(token.IsCancellationRequested);
-        Assert.Null(await session.ReuseAsync("draft", default));
+        Assert.Null(await session.ReuseAsync("draft", CancellationToken.None));
     }
 }

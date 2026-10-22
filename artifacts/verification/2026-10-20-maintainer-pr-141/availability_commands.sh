@@ -16,4 +16,5 @@ just --justfile "$recipes" --working-directory "$PWD" test tests/TypeWhisper.Lin
 uv run --no-project python -m unittest discover -s "$evidence/tools/tests/verification"
 out="$evidence/availability-repeat-$(date +%s)"
 uv run --no-project "$evidence/availability_ui.py" --out "$out/ui"
+dotnet build "$evidence/observer" -c Release
 uv run --no-project "$evidence/live_verify.py" --cases spoken-hit --out "$out/audio"

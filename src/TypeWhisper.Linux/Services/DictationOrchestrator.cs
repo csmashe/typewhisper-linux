@@ -5360,14 +5360,17 @@ public sealed partial class DictationOrchestrator : IDisposable
             : profile.CleanupLevelOverride ?? ProfileStylePresetService.Resolve(profile.StylePreset).CleanupLevel;
         var language = LanguageSelectionResolver.ResolveOrAutomatic(profile?.InputLanguage, settings.Language).LanguageTag;
         if (rawText.Length > 8192 || level < CleanupLevel.Medium || action is not null
+            || (settings.CommandModeEnabled
+                && SpokenCommandKeyphrase.TryStrip(rawText, settings.CommandKeyphrase, out _))
             || _models.PluginManager.PostProcessors.Any(processor => processor.Priority <= 250)
             || string.Equals(profile?.SelectedTask ?? settings.TranscriptionTask, "translate", StringComparison.OrdinalIgnoreCase)
             || !string.IsNullOrWhiteSpace(profile?.TranslationTarget ?? settings.TranslationTargetLanguage))
         {
             lock (_liveCleanupLock)
             {
-                if (_liveCleanupSessionVersion == sessionVersion)
-                { _liveCleanupDraft?.Dispose(); _liveCleanupDraft = null; }
+                if (_liveCleanupSessionVersion != sessionVersion) return;
+                _liveCleanupDraft?.Dispose();
+                _liveCleanupDraft = null;
             }
             return;
         }
@@ -5388,7 +5391,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         LanguageSelectionResolver.ResolvePrimary(hints), hints);
                     var context = new RecordingContext(sessionVersion, default, _recordingAppProcess,
                         _recordingAppTitle, _recordingAppUrl, null, profile, "", null, false,
-                        null, null, selection, effectiveHints, default);
+                        null, null, selection, effectiveHints, CancellationToken.None);
                     var options = BuildPreCleanupOptions(context, language, selection.LanguageTag,
                         effectiveHints, false, engine.SupportsTranslation, engine.ProviderId, engine.SelectedModelId);
                     LiveCleanupDraft? newDraft = null;
@@ -5401,6 +5404,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         },
                         (_, output) =>
                         {
+                            // ReSharper disable once AccessToModifiedClosure -- newDraft is assigned once, before Submit starts work that publishes.
                             if (ReferenceEquals(_liveCleanupDraft, newDraft) && _settings.Current.LiveCleanupEnabled
                                 && _liveCleanupSessionVersion == sessionVersion && _audio.IsRecordingOwnedBy(captureSession))
                                 SetOverlayState(state => state with { PartialText = output });

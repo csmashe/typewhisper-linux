@@ -12,9 +12,10 @@ public sealed partial class DictationOrchestrator
 {
     internal static async Task<string> CompleteCleanupAsync(
         LlmCleanupService cleanup, PromptProcessingService prompts, LiveCleanupDraft? draft,
-        string text, CleanupLevel level, string? language, LlmCallCapture? capture,
+        string text, CleanupLevel level, LlmCallCapture? capture,
         Func<string, Task>? status, CancellationToken token)
     {
+        // ReSharper disable once InvertIf -- inverting would duplicate the final cleanup call below.
         if (draft is not null)
         {
             try
@@ -30,7 +31,7 @@ public sealed partial class DictationOrchestrator
                     budget.CancelAfter(TimeSpan.FromSeconds(5));
                     try
                     {
-                        var reused = await draft.ReuseAsync(text.Trim(), language, capture, budget.Token);
+                        var reused = await draft.ReuseAsync(text.Trim(), capture, budget.Token);
                         if (reused is not null)
                         {
                             Trace.WriteLine("[LiveCleanup] Reused matching draft for final cleanup.");
@@ -110,7 +111,7 @@ public sealed partial class DictationOrchestrator
                     ? null
                     : (text, token) => CompleteCleanupAsync(
                         _cleanup, _promptProcessing, context.LiveCleanup, text, cleanupLevel,
-                        postProcessingLanguage, context.Capture, message =>
+                        context.Capture, message =>
                         {
                             ReportStatus(context, message);
                             return Task.CompletedTask;

@@ -64,7 +64,7 @@ internal sealed class LiveCleanupSession : IDisposable
                         {
                             input = _latest;
                             _activeInput = input;
-                            completion = _active = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                            completion = _active = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
                             break;
                         }
                     }
@@ -94,11 +94,9 @@ internal sealed class LiveCleanupSession : IDisposable
                 }
                 lock (_gate)
                 {
-                    if (_stopped || _latest == input)
-                    {
-                        _worker = null;
-                        return;
-                    }
+                    if (!_stopped && _latest != input) continue;
+                    _worker = null;
+                    return;
                 }
             }
         }

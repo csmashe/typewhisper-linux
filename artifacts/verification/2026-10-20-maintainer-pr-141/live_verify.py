@@ -227,11 +227,13 @@ def main():
     suffix = args.out / "suffix.wav"
     synthesize(synth, "Can you send twenty three files question mark")
     synthesize(suffix, "Please send it next Tuesday instead.")
-    public_fixture = with_poll_energy(PUBLIC, args.out / "public-poll-fixture.wav")
+    cases = [name.strip() for name in args.cases.split(",") if name.strip()]
+    public_fixture = (with_poll_energy(PUBLIC, args.out / "public-poll-fixture.wav")
+                      if any(name.startswith("public") for name in cases) else None)
     spoken_fixture = with_poll_energy(synth, args.out / "spoken-poll-fixture.wav")
     results = []
     with hidden_desktop.HiddenDesktop(args.out / "desktop") as desktop:
-        for name in args.cases.split(","):
+        for name in cases:
             results.append(run_case(desktop, name, not name.endswith("off"), name.endswith("miss"),
                                     public_fixture if name.startswith("public") else spoken_fixture, suffix, args.out))
     isolated_app.write_json(args.out / "summary.json", [{k: r[k] for k in

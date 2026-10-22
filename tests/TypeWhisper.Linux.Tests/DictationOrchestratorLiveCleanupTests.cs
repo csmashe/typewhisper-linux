@@ -42,6 +42,58 @@ public sealed class DictationOrchestratorLiveCleanupTests
     }
 
     [Theory]
+    [InlineData(true, "TypeWhisper rewrite this", true)]
+    [InlineData(true, "please rewrite this", false)]
+    [InlineData(false, "TypeWhisper rewrite this", false)]
+    public void Scheduling_SpokenCommand_DisposesDraftOnlyInCommandMode(bool commandMode, string raw, bool skipped)
+    {
+        // _models stays null, so reaching the plugin post-processor check throws; only the
+        // command gate can return before it.
+        var sut = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(typeof(DictationOrchestrator));
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(s => s.Current).Returns(new AppSettings
+        {
+            LiveCleanupEnabled = true, CleanupLevel = CleanupLevel.Medium, CommandModeEnabled = commandMode,
+        });
+        var actions = new Mock<IPromptActionService>();
+        actions.SetupGet(a => a.EnabledActions).Returns([]);
+        var audio = new AudioRecordingService();
+        var capture = new AudioRecordingService.AudioCaptureSession(1);
+        typeof(AudioRecordingService).GetField("_activeCaptureSession", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(audio, capture);
+        var draft = new LiveCleanupDraft(new LlmCleanupService(new CleanupService(), null!), CleanupLevel.Medium, "en",
+            null!, (text, _) => Task.FromResult(text), (_, _) => { }, TimeSpan.Zero);
+        Set("_settings", settings.Object);
+        Set("_recordingSnapshotTask", Task.CompletedTask);
+        Set("_audio", audio);
+        Set("_promptActions", actions.Object);
+        // The non-generic overload returns object, so the Lock is never converted for monitor locking (CS9216).
+#pragma warning disable CA2263
+        Set("_liveCleanupLock", Activator.CreateInstance(typeof(Lock)));
+#pragma warning restore CA2263
+        Set("_liveCleanupDraft", draft);
+
+        if (skipped)
+        {
+            Schedule();
+            Assert.Null(typeof(DictationOrchestrator)
+                .GetField("_liveCleanupDraft", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sut));
+        }
+        else
+        {
+            Assert.IsType<NullReferenceException>(
+                Assert.Throws<TargetInvocationException>(Schedule).InnerException);
+        }
+        return;
+
+        void Set(string field, object? value) => typeof(DictationOrchestrator)
+            .GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(sut, value);
+        void Schedule() => typeof(DictationOrchestrator)
+            .GetMethod("ScheduleLiveCleanup", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(sut, [0, capture, raw]);
+    }
+
+    [Theory]
     [InlineData(false, true)]
     [InlineData(true, true)]
     [InlineData(true, false)]
@@ -75,8 +127,9 @@ public sealed class DictationOrchestratorLiveCleanupTests
         }
         var finalOptions = options with
         {
+            // ReSharper disable once AccessToDisposedClosure -- the handler only runs inside the awaited ProcessAsync below, before draft is disposed.
             CleanupHandler = (text, token) => DictationOrchestrator.CompleteCleanupAsync(
-                cleanup, prompts, draft, text, CleanupLevel.Medium, "en", null, null, token),
+                cleanup, prompts, draft, text, CleanupLevel.Medium, null, null, token),
         };
         var final = await pipeline.ProcessAsync(match ? raw : raw + " morning", finalOptions)
             .WaitAsync(TimeSpan.FromSeconds(2));
@@ -99,13 +152,11 @@ public sealed class DictationOrchestratorLiveCleanupTests
         {
             Process = async (text, token) =>
             {
-                if (text.Contains("obsolete", StringComparison.OrdinalIgnoreCase))
-                {
-                    using var registration = token.Register(() => releaseCallback.Wait());
-                    entered.SetResult(token);
-                    return await release.Task;
-                }
-                return "Final result";
+                if (!text.Contains("obsolete", StringComparison.OrdinalIgnoreCase)) return "Final result";
+                // ReSharper disable once AccessToDisposedClosure, MethodSupportsCancellation -- the finally sets the event before disposal; the token is already cancelled, so wait on the event alone.
+                await using var registration = token.Register(releaseCallback.Wait);
+                entered.SetResult(token);
+                return await release.Task;
             },
         };
         var manager = TestPluginManagerFactory.Create([provider]);
@@ -118,11 +169,11 @@ public sealed class DictationOrchestratorLiveCleanupTests
         try
         {
             draft.Submit("obsolete");
-            var draftToken = await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var draftToken = await entered.Task.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
             draft.StopScheduling();
             Assert.Equal("Final result", await DictationOrchestrator.CompleteCleanupAsync(
-                cleanup, prompts, draft, "corrected final", CleanupLevel.Medium, "en", null, null, default)
-                .WaitAsync(TimeSpan.FromSeconds(1)));
+                cleanup, prompts, draft, "corrected final", CleanupLevel.Medium, null, null, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None));
             Assert.True(draftToken.IsCancellationRequested);
             Assert.Equal(2, provider.Calls);
         }

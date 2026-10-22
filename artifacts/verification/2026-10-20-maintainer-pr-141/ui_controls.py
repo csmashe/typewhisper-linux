@@ -13,6 +13,7 @@ out.mkdir(parents=True, exist_ok=True)
 with hidden_desktop.HiddenDesktop(out / "desktop") as desktop, isolated_app.FakeLlm() as llm:
     settings, plugin = llm.plugin_overrides()
     settings.update(cleanupLevel=2, liveCleanupEnabled=False)
+    settings["pluginEnabledState"]["com.typewhisper.filler-words"] = False
     env = private_x11_env(desktop.app_env())
     env["DBUS_SYSTEM_BUS_ADDRESS"] = desktop.bus_address
     with isolated_app.IsolatedApp(out, configuration="Release", settings=settings, minimized=False,
