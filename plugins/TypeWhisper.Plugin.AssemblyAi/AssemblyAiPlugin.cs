@@ -440,7 +440,7 @@ public sealed class AssemblyAiPlugin
         request.Headers.Add("Authorization", apiKey);
         try
         {
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
         catch

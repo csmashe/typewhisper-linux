@@ -78,11 +78,19 @@
                 <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,Auto">
                     <Border Grid.Row="0"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,320,Auto"
-                              ColumnSpacing="10">
+                        <!-- The model list shrinks before the label in narrow windows and with long
+                             translations of the delete button; it never grows past 320. -->
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" MinWidth="150" />
+                                <ColumnDefinition Width="2*" MaxWidth="320" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
                             <TextBlock Text="{loc:Str Dictation.DefaultModel}"
-                                       Classes="row-label" />
+                                       Classes="row-label"
+                                       TextWrapping="Wrap" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.DefaultModel}"
                                       ItemsSource="{Binding ModelOptions}"
                                       SelectedItem="{Binding SelectedModel}"
                                       DropDownOpened="OnModelDropDownOpened"
@@ -166,6 +174,7 @@
                             <TextBlock Text="{loc:Str Dictation.LocalModelAcceleration}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.LocalModelAcceleration}"
                                       ItemsSource="{Binding AccelerationOptions}"
                                       SelectedItem="{Binding SelectedAccelerationOption}"
                                       HorizontalAlignment="Stretch">
@@ -261,6 +270,7 @@
                             <TextBlock Text="{loc:Str Dictation.InputDevice}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.InputDevice}"
                                       ItemsSource="{Binding Devices}"
                                       SelectedItem="{Binding SelectedDevice}"
                                       HorizontalAlignment="Stretch">
@@ -341,6 +351,7 @@
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
                                       Grid.Row="0"
+                                      AutomationProperties.Name="{loc:Str Dictation.SpokenLanguage}"
                                       ItemsSource="{Binding LanguageChoices}"
                                       SelectedItem="{Binding SelectedLanguageOption}"
                                       HorizontalAlignment="Stretch">
@@ -385,7 +396,7 @@
                                         <DataTemplate x:DataType="vm:SpokenLanguageOption">
                                             <Border Classes="chip">
                                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <TextBlock Text="{Binding DisplayName}" FontSize="11" />
+                                                    <TextBlock Text="{Binding DisplayName}" FontSize="11" TextWrapping="Wrap" />
                                                     <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                     <Button Content="‹"
                                                             Classes="chip-remove"
@@ -415,6 +426,7 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="6">
                                 <ComboBox ItemsSource="{Binding AvailableAdditionalLanguages}"
+                                          AutomationProperties.Name="{loc:Str Dictation.AdditionalLanguages}"
                                           SelectedItem="{Binding SelectedAdditionalLanguage}"
                                           HorizontalAlignment="Stretch">
                                     <ComboBox.ItemTemplate>
@@ -439,6 +451,7 @@
                             <TextBlock Grid.Column="0" Text="{loc:Str Dictation.TargetLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.TargetLanguage}"
                                       ItemsSource="{Binding TranslationTargetOptions}"
                                       SelectedItem="{Binding SelectedTranslationTargetOption}"
                                       HorizontalAlignment="Stretch">
@@ -465,6 +478,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.EnglishOutputVariant}"
                                       ItemsSource="{Binding EnglishOutputVariantOptions}"
                                       SelectedItem="{Binding SelectedEnglishOutputVariantOption}"
                                       HorizontalAlignment="Stretch">
@@ -491,6 +505,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Dictation.GermanOutputVariant}"
                                       ItemsSource="{Binding GermanOutputVariantOptions}"
                                       SelectedItem="{Binding SelectedGermanOutputVariantOption}"
                                       HorizontalAlignment="Stretch">
@@ -512,6 +527,7 @@
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                             </StackPanel>
                             <ComboBox Grid.Column="1" ItemsSource="{Binding SpokenFormattingStrategyOptions}"
+                                      AutomationProperties.Name="{loc:Str Dictation.SpokenFormatting}"
                                       SelectedItem="{Binding SelectedSpokenFormattingStrategyOption}" HorizontalAlignment="Stretch">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:SpokenFormattingStrategyOption">
@@ -561,6 +577,7 @@
                             <TextBlock Text="{loc:Str Dictation.AutoPaste}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoPaste}"
                                           IsChecked="{Binding AutoPaste}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -582,6 +599,7 @@
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.LockPasteToFocusedField}"
                                           IsChecked="{Binding LockPasteToFocusedField}"
                                           IsEnabled="{Binding AutoPaste}"
                                           HorizontalAlignment="Right" />
@@ -597,12 +615,14 @@
                             <TextBlock Text="{loc:Str Dictation.AppInsertionStrategies}"
                                        Classes="row-label" />
 
-                            <Grid ColumnDefinitions="*,180,Auto"
+                            <Grid ColumnDefinitions="*,150,Auto"
                                   ColumnSpacing="10">
                                 <TextBox Grid.Column="0"
+                                         AutomationProperties.Name="{loc:Str Dictation.ProcessNamePlaceholder}"
                                          PlaceholderText="{loc:Str Dictation.ProcessNamePlaceholder}"
                                          Text="{Binding NewInsertionAppProcess}" />
                                 <ComboBox Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.InsertionStrategy}"
                                           ItemsSource="{Binding InsertionStrategyOptions}"
                                           SelectedItem="{Binding SelectedNewInsertionStrategyOption}">
                                     <ComboBox.ItemTemplate>
@@ -619,12 +639,14 @@
                             <ItemsControl ItemsSource="{Binding AppInsertionStrategies}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:AppInsertionStrategyRow">
-                                        <Grid ColumnDefinitions="*,180,Auto"
+                                        <Grid ColumnDefinitions="*,150,Auto"
                                               ColumnSpacing="10"
                                               Margin="0,2,0,0">
                                             <TextBox Grid.Column="0"
+                                                     AutomationProperties.Name="{loc:Str Dictation.ProcessNamePlaceholder}"
                                                      Text="{Binding ProcessName}" />
                                             <ComboBox Grid.Column="1"
+                                                      AutomationProperties.Name="{loc:Str Dictation.InsertionStrategy}"
                                                       ItemsSource="{Binding StrategyOptions}"
                                                       SelectedItem="{Binding SelectedStrategyOption}">
                                                 <ComboBox.ItemTemplate>
@@ -657,9 +679,11 @@
                                 <TextBlock
                                     Text="{loc:Str Dictation.AutoLearnCorrectionsHint}"
                                     FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoLearnCorrections}"
                                           IsChecked="{Binding AutoAddDictionaryCorrections}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -682,6 +706,7 @@
                                         TextWrapping="Wrap" />
                                 </StackPanel>
                                 <ToggleSwitch Grid.Column="1"
+                                              AutomationProperties.Name="{loc:Str Dictation.TargetAppCorrectionLearning}"
                                               IsChecked="{Binding TargetAppCorrectionLearningEnabled}"
                                               HorizontalAlignment="Right" />
                             </Grid>
@@ -738,20 +763,32 @@
 
                     <Border Grid.Row="10"
                             Classes="row">
-                        <Grid ColumnDefinitions="*,240">
-                            <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
-                                       Classes="row-label" />
-                            <ComboBox Grid.Column="1"
-                                      ItemsSource="{Binding CleanupLevelOptions}"
-                                      SelectedItem="{Binding SelectedCleanupLevelOption}"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:CleanupLevelOption">
-                                        <TextBlock Text="{Binding DisplayName}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </Grid>
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,240">
+                                <TextBlock Text="{loc:Str Dictation.AutoCleanup}"
+                                           Classes="row-label" />
+                                <ComboBox Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoCleanup}"
+                                          ItemsSource="{Binding CleanupLevelOptions}"
+                                          SelectedItem="{Binding SelectedCleanupLevelOption}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:CleanupLevelOption">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <CheckBox IsChecked="{Binding LiveCleanupEnabled}"
+                                      IsEnabled="{Binding CanUseLiveCleanup}"
+                                      AutomationProperties.Name="{loc:Str Dictation.LiveCleanup}"
+                                      Content="{loc:Str Dictation.LiveCleanup}" />
+                            <TextBlock Text="{Binding LiveCleanupUnavailableReason}"
+                                       IsVisible="{Binding ShowLiveCleanupUnavailableReason}"
+                                       FontSize="12" Foreground="{DynamicResource TwWarningTextBrush}" TextWrapping="Wrap" />
+                            <TextBlock Text="{loc:Str Dictation.LiveCleanupHint}"
+                                       FontSize="12" Foreground="{DynamicResource TwTextSecondaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="11"
@@ -763,6 +800,7 @@
                             <TextBlock Text="{loc:Str Common.WhisperMode}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Common.WhisperMode}"
                                           IsChecked="{Binding WhisperModeEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -780,9 +818,11 @@
                                 <TextBlock Text="{Binding SoundFeedbackUnavailableReason}"
                                            FontSize="11"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           IsVisible="{Binding ShowSoundFeedbackUnavailableReason}" />
+                                           IsVisible="{Binding ShowSoundFeedbackUnavailableReason}"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.SoundFeedback}"
                                           IsChecked="{Binding SoundFeedbackEnabled}"
                                           IsEnabled="{Binding CanUseSoundFeedback}"
                                           ToolTip.Tip="{Binding SoundFeedbackUnavailableReason}"
@@ -799,6 +839,7 @@
                             <TextBlock Text="{loc:Str Dictation.TranscribeShortQuietClips}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.TranscribeShortQuietClips}"
                                           IsChecked="{Binding TranscribeShortQuietClipsAggressively}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -813,6 +854,7 @@
                             <TextBlock Text="{loc:Str Dictation.AutoStopOnSilence}"
                                        Classes="row-label" />
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.AutoStopOnSilence}"
                                           IsChecked="{Binding SilenceAutoStopEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -827,6 +869,7 @@
                             <TextBlock Text="{loc:Str Dictation.SilenceTimeoutSeconds}"
                                        Classes="row-label" />
                             <TextBox Grid.Column="1"
+                                     AutomationProperties.Name="{loc:Str Dictation.SilenceTimeoutSeconds}"
                                      Width="120"
                                      Text="{Binding SilenceAutoStopSeconds}"
                                      HorizontalAlignment="Right" />
@@ -845,9 +888,11 @@
                                 <TextBlock
                                     Text="{loc:Str Dictation.LiveTranscriptionPreviewHint}"
                                     FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.LiveTranscriptionPreview}"
                                           IsChecked="{Binding LiveTranscriptionEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -865,9 +910,11 @@
                                 <TextBlock
                                     Text="{loc:Str Dictation.OnlineBatchLivePreviewHint}"
                                     FontSize="11"
-                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.OnlineBatchLivePreview}"
                                           IsChecked="{Binding OnlineAsrBatchLiveTranscriptionEnabled}"
                                           IsEnabled="{Binding LiveTranscriptionEnabled}"
                                           HorizontalAlignment="Right" />
@@ -890,6 +937,7 @@
                                     TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.RealtimeStreamingLivePreview}"
                                           IsChecked="{Binding LiveTranscriptionStreamingEnabled}"
                                           IsEnabled="{Binding LiveTranscriptionEnabled}"
                                           HorizontalAlignment="Right" />
@@ -911,6 +959,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.NormalizeNumbers}"
                                           IsChecked="{Binding TranscriptionNumberNormalizationEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -930,6 +979,7 @@
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.ShortUtterancePunctuation}"
                                           IsChecked="{Binding ShortUtterancePunctuationEnabled}"
                                           HorizontalAlignment="Right" />
                         </Grid>
@@ -951,9 +1001,11 @@
                                 <TextBlock Text="{Binding AudioDuckingUnavailableReason}"
                                            FontSize="11"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           IsVisible="{Binding ShowAudioDuckingUnavailableReason}" />
+                                           IsVisible="{Binding ShowAudioDuckingUnavailableReason}"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.ReduceOtherAudio}"
                                           IsChecked="{Binding AudioDuckingEnabled}"
                                           IsEnabled="{Binding CanUseAudioDucking}"
                                           ToolTip.Tip="{Binding AudioDuckingUnavailableReason}"
@@ -975,6 +1027,7 @@
                                 <Run Text="{Binding AudioDuckingReductionPercent, StringFormat='{}{0:0}%'}" />
                             </TextBlock>
                             <Slider Minimum="20"
+                                    AutomationProperties.Name="{loc:Str Dictation.DuckingLevel}"
                                     Maximum="90"
                                     TickFrequency="5"
                                     IsSnapToTickEnabled="True"
@@ -995,9 +1048,11 @@
                                 <TextBlock Text="{Binding MediaPauseUnavailableReason}"
                                            FontSize="11"
                                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                           IsVisible="{Binding ShowMediaPauseUnavailableReason}" />
+                                           IsVisible="{Binding ShowMediaPauseUnavailableReason}"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Dictation.PauseMediaPlayback}"
                                           IsChecked="{Binding PauseMediaDuringRecording}"
                                           IsEnabled="{Binding CanUseMediaPause}"
                                           ToolTip.Tip="{Binding MediaPauseUnavailableReason}"
@@ -1016,6 +1071,7 @@
                                        FontSize="11" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                         <TextBox Grid.Column="1" Width="80" VerticalAlignment="Center"
+                                 AutomationProperties.Name="{loc:Str Dictation.RecoveryRetention}"
                                  Text="{Binding DictationRecoveryRetentionDays}" />
                     </Grid>
                 </Border>

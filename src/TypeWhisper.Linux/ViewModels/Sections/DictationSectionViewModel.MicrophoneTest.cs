@@ -20,6 +20,8 @@ public partial class DictationSectionViewModel
     [ObservableProperty]
     private string _microphoneTestStatus = Loc.Instance["Dictation.MicTestIdle"];
 
+    private string _microphoneTestIdleStatus = Loc.Instance["Dictation.MicTestIdle"];
+
     [ObservableProperty]
     private string _microphoneTestDetail = "";
 

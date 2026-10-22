@@ -276,6 +276,7 @@
 
                     <Border Classes="section-row">
                         <TextBox Text="{Binding ResultText}"
+                                 AutomationProperties.Name="{loc:Str FileTranscription.Result}"
                                  IsReadOnly="True"
                                  TextWrapping="Wrap"
                                  AcceptsReturn="True"
@@ -324,6 +325,7 @@
                               ColumnSpacing="12"
                               RowSpacing="10">
                             <TextBox Grid.Column="0"
+                                     AutomationProperties.Name="{loc:Str FileTranscription.FolderToWatch}"
                                      Text="{Binding WatchFolderPath}"
                                      PlaceholderText="{loc:Str FileTranscription.FolderToWatch}" />
                             <Button Grid.Row="0"
@@ -333,6 +335,7 @@
 
                             <TextBox Grid.Row="1"
                                      Grid.Column="0"
+                                     AutomationProperties.Name="{loc:Str FileTranscription.OutputFolderOptional}"
                                      Text="{Binding WatchFolderOutputPath}"
                                      PlaceholderText="{loc:Str FileTranscription.OutputFolderOptional}" />
                             <StackPanel Grid.Row="1"
@@ -347,10 +350,12 @@
 
                             <TextBox Grid.Row="2"
                                      Grid.Column="0"
+                                     AutomationProperties.Name="{loc:Str FileTranscription.OutputFormatHint}"
                                      Text="{Binding WatchFolderOutputFormat}"
                                      PlaceholderText="{loc:Str FileTranscription.OutputFormatHint}" />
                             <TextBox Grid.Row="2"
                                      Grid.Column="1"
+                                     AutomationProperties.Name="{loc:Str FileTranscription.LanguagePlaceholder}"
                                      Text="{Binding WatchFolderLanguage}"
                                      PlaceholderText="{loc:Str FileTranscription.LanguagePlaceholder}" />
 

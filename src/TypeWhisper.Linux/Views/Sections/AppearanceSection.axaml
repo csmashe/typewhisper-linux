@@ -112,6 +112,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Appearance.Position}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayPositions}"
                                       SelectedItem="{Binding SelectedOverlayPosition}">
@@ -133,6 +134,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Appearance.LeftContent}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayWidgets}"
                                       SelectedItem="{Binding SelectedLeftWidget}">
@@ -154,6 +156,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str Appearance.RightContent}"
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding OverlayWidgets}"
                                       SelectedItem="{Binding SelectedRightWidget}">
@@ -187,6 +190,7 @@
                                            FontSize="12"
                                            HorizontalAlignment="Right" />
                                 <Slider Minimum="0"
+                                        AutomationProperties.Name="{loc:Str Appearance.AutoHideDelay}"
                                         Maximum="5"
                                         SmallChange="0.25"
                                         LargeChange="0.5"

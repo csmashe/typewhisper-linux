@@ -115,7 +115,8 @@ public sealed partial class SnippetService : ISnippetService
     public string ApplySnippets(
         string text,
         Func<string>? clipboardProvider = null,
-        string? profileId = null
+        string? profileId = null,
+        bool recordUsage = true
     )
     {
         var activeSnippets = _store.Current
@@ -170,7 +171,10 @@ public sealed partial class SnippetService : ISnippetService
         }
 
         result.Append(text, copiedThrough, text.Length - copiedThrough);
-        IncrementUsageCounts(usageIncrements);
+        if (recordUsage)
+        {
+            IncrementUsageCounts(usageIncrements);
+        }
         return result.ToString();
     }
 

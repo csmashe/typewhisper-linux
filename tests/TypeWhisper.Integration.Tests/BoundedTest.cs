@@ -1,3 +1,5 @@
+// ReSharper disable UnusedMember.Global
+// Linked into TypeWhisper.UiTests, where only GatedCueProcessRunner calls it.
 using System.Collections.Concurrent;
 
 namespace TypeWhisper.Integration.Tests;

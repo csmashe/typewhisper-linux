@@ -137,6 +137,32 @@ public partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    ///     Shows the section for a <c>--page</c> destination; a plugin page also opens that
+    ///     plugin's settings once plugins have loaded (see <see cref="PluginsSectionViewModel.RevealPluginAsync" />).
+    /// </summary>
+    internal Task<PluginRevealResult> OpenPageAsync(
+        SettingsPage page,
+        Task pluginsReady,
+        Task pluginsSettled
+    )
+    {
+        var target = NavItems.FirstOrDefault(i => i.Content?.GetType() == page.Section);
+        if (target is not null)
+        {
+            SelectedItem = target;
+        }
+
+        if (page.PluginId is { } pluginId)
+        {
+            return Plugins.RevealPluginAsync(pluginId, pluginsReady, pluginsSettled);
+        }
+
+        // The section may already be showing, which raises no selection change.
+        Plugins.CancelPendingReveal();
+        return Task.FromResult(PluginRevealResult.Revealed);
+    }
+
     [RelayCommand]
     public void OpenWizard()
     {
@@ -166,6 +192,9 @@ public partial class MainWindowViewModel : ObservableObject
         {
             CurrentSection = value.Content;
         }
+
+        // Going anywhere else retires a plugin page still waiting for plugins to load.
+        Plugins.CancelPendingReveal();
     }
 
     [RelayCommand]

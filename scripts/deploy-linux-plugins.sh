@@ -62,6 +62,7 @@ RID="linux-x64"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/src/TypeWhisper.Linux/bin/$CONFIG/net10.0/Plugins"
 JOBS="${TYPEWHISPER_PLUGIN_PUBLISH_JOBS:-4}"
+DOTNET="${DOTNET:-dotnet}"
 TMP_DIR="$(mktemp -d)"
 
 # Only pass -p:Version when explicitly given. Empty string would override the
@@ -119,7 +120,7 @@ mkdir -p "$OUT"
 # builds otherwise race and corrupt PluginSDK's obj/ intermediates. The RID is
 # deliberately omitted: it does not propagate to this project reference, so the
 # plugin publishes resolve the non-RID ref assembly under obj/$CONFIG/net10.0/.
-dotnet build "$ROOT/src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" \
+"$DOTNET" build "$ROOT/src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" \
   -c "$CONFIG" -f net10.0 "${VERSION_ARG[@]}" --nologo -v quiet > /dev/null
 
 # Sequentially restore each plugin up front. -p:BuildProjectReferences=false
@@ -131,7 +132,7 @@ dotnet build "$ROOT/src/TypeWhisper.PluginSDK/TypeWhisper.PluginSDK.csproj" \
 # parallel phase is restore-free.
 for id in "${PLUGIN_IDS[@]}"; do
   project_path="${PLUGINS[$id]}"
-  dotnet restore "$ROOT/$project_path" \
+  "$DOTNET" restore "$ROOT/$project_path" \
     -r "$RID" "${VERSION_ARG[@]}" --nologo -v quiet > /dev/null
 done
 
@@ -152,7 +153,7 @@ publish_plugin() {
     # survive in the publish dir and get copied into the final bundle.
     # dotnet publish copies new outputs over the old but does not prune.
     rm -rf "$pub_dir"
-    dotnet publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" \
+    "$DOTNET" publish "$proj_dir/$project.csproj" -c "$CONFIG" -f net10.0 -r "$RID" \
       --self-contained false -p:BuildProjectReferences=false --no-restore \
       "${VERSION_ARG[@]}" --nologo -v quiet
 

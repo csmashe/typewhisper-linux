@@ -11,7 +11,7 @@ namespace TypeWhisper.Linux.Services;
 ///     Applies rule-based and optional LLM cleanup to transcribed text.
 ///     Light cleanup is always local (no LLM). Medium / High first run the
 ///     local pass, then send the lightened text to the configured LLM
-///     provider — falling back to Light if no provider is available.
+///     provider, falling back to Light when unavailable or failed. Only drafts have a deadline.
 /// </summary>
 public sealed class LlmCleanupService
 {
@@ -39,9 +39,14 @@ public sealed class LlmCleanupService
         CleanupLevel level,
         Func<string, Task>? statusCallback = null,
         LlmCallCapture? capture = null,
+        string? providerOverride = null,
+        bool preparedLightText = false,
+        bool isDraft = false,
+        TimeSpan? draftTimeout = null,
         CancellationToken ct = default
     )
     {
+        ct.ThrowIfCancellationRequested();
         // Medium/High intentionally fall through to the LLM cleanup path below.
         // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
         switch (level)
@@ -52,8 +57,8 @@ public sealed class LlmCleanupService
                 return _cleanup.Clean(text, CleanupLevel.Light);
         }
 
-        var lightText = _cleanup.Clean(text, CleanupLevel.Light);
-        if (_promptProcessing.HasNoProviderForRequest())
+        var lightText = preparedLightText ? text : PrepareLiveInput(text);
+        if (_promptProcessing.HasNoProviderForRequest(providerOverride))
         {
             await NotifyStatusAsync(
                 statusCallback,
@@ -70,14 +75,18 @@ public sealed class LlmCleanupService
         try
         {
             var prompt = CleanupService.GetLlmSystemPrompt(level);
-            var cleaned = await _promptProcessing.ProcessSystemPromptAsync(
+            var cleaned = await ProcessWithinBudgetAsync(
                 prompt,
                 lightText,
                 capture,
+                isDraft ? draftTimeout ?? TimeSpan.FromSeconds(5) : Timeout.InfiniteTimeSpan,
+                providerOverride,
+                isDraft,
                 ct
             );
+            ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
-            _lastLoggedFailure = null;
+            if (!isDraft) _lastLoggedFailure = null;
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -90,6 +99,7 @@ public sealed class LlmCleanupService
         }
         catch (Exception ex)
         {
+            if (isDraft) return lightText;
             var safeMessage =
                 FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level))
                 ?? Loc.Instance["Common.UnknownError"];
@@ -112,6 +122,50 @@ public sealed class LlmCleanupService
             return lightText;
         }
     }
+
+    internal string PrepareLiveInput(string text) =>
+        _cleanup.Clean(text, CleanupLevel.Light);
+
+    // Only drafts pass a deadline. Final cleanup waits for its provider or caller cancellation.
+    private async Task<string> ProcessWithinBudgetAsync(
+        string prompt, string text, LlmCallCapture? capture, TimeSpan timeout,
+        string? providerOverride, bool isDraft, CancellationToken ct)
+    {
+        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timerCts = new CancellationTokenSource();
+        var completed = false;
+        var request = Task.Run(async () =>
+        {
+            requestCts.Token.ThrowIfCancellationRequested();
+            return await _promptProcessing.ProcessSystemPromptAsync(
+                prompt, text, capture, providerOverride,
+                reportProviderProblems: !isDraft, ct: requestCts.Token).ConfigureAwait(false);
+        }, requestCts.Token);
+        try
+        {
+            var deadline = Task.Delay(timeout > TimeSpan.Zero ? timeout : Timeout.InfiniteTimeSpan, timerCts.Token);
+            var winner = await Task.WhenAny(request, deadline).WaitAsync(ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            if (winner != request)
+                throw new CleanupDeadlineExceededException();
+            var result = await request.ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            completed = true;
+            return result;
+        }
+        finally
+        {
+            await timerCts.CancelAsync().ConfigureAwait(false);
+            var cancellation = completed ? Task.CompletedTask : requestCts.CancelAsync();
+            // A cancellation callback can also stall. Observe it and dispose the source only
+            // after both tasks finish; never let late provider work mutate an inserted result.
+            _ = Task.WhenAll(request, cancellation).ContinueWith(
+                task => { _ = task.Exception; requestCts.Dispose(); },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
+    private sealed class CleanupDeadlineExceededException : TimeoutException;
 
     private static async Task NotifyStatusAsync(Func<string, Task>? statusCallback, string message)
     {

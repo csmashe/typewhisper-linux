@@ -1,0 +1,119 @@
+{
+  "source_commit": "aa27dc55bc52a0963291ffe6aa9eb31b68fd187d",
+  "original_lease": "415e91d3f988657180f705b7459f49135b06c78d",
+  "upstream_base": "e6be760bce3399e3541f897fe0c27ef09731eeb5",
+  "git_status_porcelain": "",
+  "release_sha256": {
+    "src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper.dll": "5079b35f324fe1746bd6b3ec5e651808b1bc71ca26f51442e0570f0fc36b6fd8",
+    "src/TypeWhisper.Core/bin/Release/net10.0/TypeWhisper.Core.dll": "b3acbe68f27710024480c0381bcfb54059f1581122642904d2b3f02f16910354",
+    "src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai-compatible/TypeWhisper.Plugin.OpenAiCompatible.dll": "a849649c4533c1e2f46028104a3c92d01c5412ead1a8d79a6585f93a03dc742b"
+  },
+  "runs": [
+    {
+      "name": "public-hit",
+      "draft_calls": 1,
+      "final_calls": 0,
+      "reused": true,
+      "timings_ms": {
+        "transcription_and_precleanup_upper_bound": 606.0,
+        "cleanup_to_final_event_upper_bound": 11.0,
+        "delivery_observed_upper_bound": 387.03,
+        "stop_to_clipboard_readback": 1211.46
+      },
+      "acceleration": {
+        "preference": "cpu",
+        "active_backend": "cpu",
+        "display_text": "Using CPU",
+        "detail": null,
+        "requires_restart": false
+      }
+    },
+    {
+      "name": "public-miss",
+      "draft_calls": 1,
+      "final_calls": 1,
+      "reused": false,
+      "timings_ms": {
+        "transcription_and_precleanup_upper_bound": 438.5,
+        "cleanup_to_final_event_upper_bound": 261.5,
+        "delivery_observed_upper_bound": 397.05,
+        "stop_to_clipboard_readback": 1310.43
+      },
+      "acceleration": {
+        "preference": "cpu",
+        "active_backend": "cpu",
+        "display_text": "Using CPU",
+        "detail": null,
+        "requires_restart": false
+      }
+    },
+    {
+      "name": "public-ui-off",
+      "draft_calls": 0,
+      "final_calls": 1,
+      "reused": false,
+      "timings_ms": {
+        "transcription_and_precleanup_upper_bound": 718.8,
+        "cleanup_to_final_event_upper_bound": 267.2,
+        "delivery_observed_upper_bound": 386.81,
+        "stop_to_clipboard_readback": 1577.65
+      },
+      "acceleration": {
+        "preference": "cpu",
+        "active_backend": "cpu",
+        "display_text": "Using CPU",
+        "detail": null,
+        "requires_restart": false
+      }
+    },
+    {
+      "name": "spoken-hit",
+      "draft_calls": 1,
+      "final_calls": 0,
+      "reused": true,
+      "timings_ms": {
+        "transcription_and_precleanup_upper_bound": 563.0,
+        "cleanup_to_final_event_upper_bound": 10.0,
+        "delivery_observed_upper_bound": 394.38,
+        "stop_to_clipboard_readback": 1217.41
+      },
+      "acceleration": {
+        "preference": "cpu",
+        "active_backend": "cpu",
+        "display_text": "Using CPU",
+        "detail": null,
+        "requires_restart": false
+      }
+    },
+    {
+      "name": "spoken-miss",
+      "draft_calls": 1,
+      "final_calls": 1,
+      "reused": false,
+      "timings_ms": {
+        "transcription_and_precleanup_upper_bound": 430.43,
+        "cleanup_to_final_event_upper_bound": 260.57,
+        "delivery_observed_upper_bound": 394.9,
+        "stop_to_clipboard_readback": 1302.87
+      },
+      "acceleration": {
+        "preference": "cpu",
+        "active_backend": "cpu",
+        "display_text": "Using CPU",
+        "detail": null,
+        "requires_restart": false
+      }
+    }
+  ],
+  "ui": {
+    "persisted_states": [
+      true,
+      false
+    ],
+    "llm_calls": 0,
+    "timeout_control_absent": true,
+    "private_x11": true
+  },
+  "tooling_source_commit": "4f3aa26dc1d0a1c955f7347b9d5dd97c00f7e5ec",
+  "tooling_sha256": "394d75ba4fc4edfa645fa0aaf4f606d3d336e0a2c6c1faff10f856322e17f141"
+}

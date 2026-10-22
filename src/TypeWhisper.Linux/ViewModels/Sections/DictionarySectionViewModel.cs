@@ -60,13 +60,20 @@ public partial class DictionarySectionViewModel : ObservableObject
         IDictionaryService dict,
         ISettingsService settings,
         ModelManagerService models,
-        IVocabularyRescoringService rescoring
+        IVocabularyRescoringService rescoring,
+        DictionaryAliasSuggestionService aliasSuggestions
     )
     {
         _dict = dict;
         _settings = settings;
         _models = models;
         _rescoring = rescoring;
+        AliasSuggestions = new DictionaryAliasSuggestionsViewModel(dict, aliasSuggestions, settings);
+        AliasSuggestions.Saved += term =>
+        {
+            SelectedTab = 2;
+            SearchText = term;
+        };
         _acousticVocabularyBoostingEnabled = settings.Current.AcousticVocabularyBoostingEnabled;
         _vocabularyBoostingEnabled = settings.Current.VocabularyBoostingEnabled;
 
@@ -83,10 +90,19 @@ public partial class DictionarySectionViewModel : ObservableObject
             });
         _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(RefreshAcousticStatus);
         _models.PluginManager.PluginStateChanged += (_, _) =>
-            Dispatcher.UIThread.Post(RefreshAcousticStatus);
+            Dispatcher.UIThread.Post(() =>
+            {
+                RefreshAcousticStatus();
+                if (AliasSuggestions.IsOpen)
+                {
+                    AliasSuggestions.RefreshModels();
+                }
+            });
         InitializePacks();
         Refresh();
     }
+
+    public DictionaryAliasSuggestionsViewModel AliasSuggestions { get; }
 
     public ObservableCollection<DictionaryEntry> FilteredEntries { get; } = [];
     public ObservableCollection<TermPackItemViewModel> Packs { get; } = [];
@@ -367,6 +383,29 @@ public partial class DictionarySectionViewModel : ObservableObject
             error = Loc.Instance.GetString("Dictionary.InvalidRegexFormat", ex.Message);
             return false;
         }
+    }
+
+    /// <summary>
+    ///     Whether an entry names a spelling to suggest aliases for: a term, or a literal correction's
+    ///     replacement. Regex rules and escape-expanded commands (e.g. "\n") are not spellings.
+    /// </summary>
+    public static bool CanSuggestAliasesFor(DictionaryEntry entry) =>
+        entry.EntryType == DictionaryEntryType.Term
+        || entry is { IsRegex: false, Replacement: { Length: > 0 } replacement }
+           && !(entry.ExpandEscapes && replacement.Contains('\\'));
+
+    /// <summary>Opens alias suggestions for a term, or for the spelling a correction produces.</summary>
+    [RelayCommand]
+    private void SuggestAliasesFor(DictionaryEntry entry)
+    {
+        if (!CanSuggestAliasesFor(entry))
+        {
+            return;
+        }
+
+        AliasSuggestions.OpenCommand.Execute(
+            entry.EntryType == DictionaryEntryType.Term ? entry.Original : entry.Replacement
+        );
     }
 
     [RelayCommand]
