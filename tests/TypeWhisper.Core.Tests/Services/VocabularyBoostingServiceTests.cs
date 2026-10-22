@@ -1,6 +1,7 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.AppImport;
 
 namespace TypeWhisper.Core.Tests.Services;
 
@@ -348,6 +349,11 @@ public class VocabularyBoostingServiceTests
         }
 
         public int ImportFromCsv(string csv)
+        {
+            throw new NotSupportedException();
+        }
+
+        public DictionaryImportCommitResult CommitReviewedImport(DictionaryImportReview review)
         {
             throw new NotSupportedException();
         }

@@ -63,6 +63,29 @@ public sealed class VoiceCommandParserTests
         Assert.True(result.CancelInsertion);
     }
 
+    [Theory]
+    [InlineData("hello cancel cancel", "hello", false)]
+    [InlineData("new line cancel press enter cancel", "", true)]
+    public void Parse_StackedCancels_KeepContentOrCancel(string input, string expected, bool cancels)
+    {
+        var result = VoiceCommandParser.Parse(input);
+
+        Assert.Equal(expected, result.Text);
+        Assert.Equal(cancels, result.CancelInsertion);
+    }
+
+    [Fact]
+    public void Parse_ManyStackedCancels_FinishesQuickly()
+    {
+        var input = "hello" + string.Concat(Enumerable.Repeat(" cancel", 200));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = VoiceCommandParser.Parse(input);
+
+        Assert.Equal("hello", result.Text);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
+    }
+
     [Fact]
     public void Parse_NonSuffixPhrasesRemainNormalText()
     {

@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-10-20T22:32:49+00:00",
+  "commit": "aa27dc55bc52a0963291ffe6aa9eb31b68fd187d",
+  "branch": "t3/fix-live-cleanup-pr141",
+  "dirty_files": [],
+  "app_version": "0.18.0",
+  "host": {
+    "system": "Linux",
+    "release": "7.2.9-1-cachyos",
+    "machine": "x86_64",
+    "node": "beelink"
+  },
+  "run": {
+    "kind": "pr141-settings",
+    "configuration": "Release",
+    "private_x11": true
+  }
+}

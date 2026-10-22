@@ -1,0 +1,76 @@
+{
+  "source": {
+    "root": "/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28",
+    "commit": "bb38d2ee",
+    "version": "0.18.0",
+    "sdk_requested": "10.0.100",
+    "sdk_installed": "10.0.401"
+  },
+  "host": {
+    "system": "Linux",
+    "release": "7.2.9-1-cachyos",
+    "architecture": "x86_64"
+  },
+  "app": {
+    "processes": [
+      {
+        "pid": 1628450,
+        "process": "typewhisper"
+      }
+    ],
+    "control_status": {
+      "v": 1,
+      "ok": true,
+      "state": "idle",
+      "backend": "linux-evdev",
+      "supports_press_release": true,
+      "active_binding": "Shift+Meta+F23",
+      "mode": "Hybrid"
+    },
+    "status_error": null
+  },
+  "api": {
+    "discovery_file": "/home/jshah/.config/typewhisper/api-discovery.json",
+    "discovery_present": false,
+    "discovery_version": null,
+    "port": 9876,
+    "port_source": "settings",
+    "tcp_port_connectable": false,
+    "token_present": false,
+    "enabled_in_settings": false,
+    "token_configured_in_settings": false,
+    "unix_socket_path": "/run/user/1000/typewhisper/api.sock",
+    "unix_socket_exists": true,
+    "unix_socket_connectable": false
+  },
+  "data": {
+    "root": "/home/jshah/.local/share/TypeWhisper",
+    "settings_exists": true,
+    "plugin_models": [
+      {
+        "plugin": "com.typewhisper.needle-whistle",
+        "model_files": 2,
+        "bytes": 18467887
+      },
+      {
+        "plugin": "com.typewhisper.parakeet-ctc",
+        "model_files": 1,
+        "bytes": 131652171
+      },
+      {
+        "plugin": "com.typewhisper.sherpa-onnx",
+        "model_files": 3,
+        "bytes": 670384833
+      },
+      {
+        "plugin": "com.typewhisper.whisper-cpp",
+        "model_files": 1,
+        "bytes": 147951465
+      }
+    ],
+    "model_file_count": 7,
+    "logs_exists": true,
+    "audio_exists": true,
+    "audio_directory_mode": "0o700"
+  }
+}

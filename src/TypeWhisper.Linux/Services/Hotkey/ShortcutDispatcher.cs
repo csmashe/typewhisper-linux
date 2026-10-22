@@ -39,6 +39,24 @@ internal sealed class ShortcutDispatcher
     private bool _recentKeyDown;
 
     private GlobalShortcutSet? _shortcuts;
+    private bool _captureSuspended;
+    private readonly HashSet<KeyCode> _pressedKeys = [];
+
+    // Keys still held when capture ended. A held modifier suppresses every start until it is
+    // released; a held ordinary key only suppresses its own repeats, so a release lost to focus
+    // loss cannot wedge shortcuts.
+    private readonly HashSet<KeyCode> _drainingKeys = [];
+
+    public void SetCaptureSuspended(bool suspended)
+    {
+        lock (_lock)
+        {
+            _captureSuspended = suspended;
+            _drainingKeys.Clear();
+            _drainingKeys.UnionWith(_pressedKeys);
+            _pendingSelectionWorkflows.Clear();
+        }
+    }
 
     internal ShortcutDispatcher(TimeProvider? timeProvider = null)
     {
@@ -66,6 +84,8 @@ internal sealed class ShortcutDispatcher
             _readLastKeyDown = false;
             _mainDictationHeld = null;
             _recentKeyDown = false;
+            _pressedKeys.Clear();
+            _drainingKeys.Clear();
         }
     }
 
@@ -87,6 +107,8 @@ internal sealed class ShortcutDispatcher
             _readLastKeyDown = false;
             _mainDictationHeld = null;
             _recentKeyDown = false;
+            _pressedKeys.Clear();
+            _drainingKeys.Clear();
         }
 
         // Main and profile dictation share one recording session, so a single discard covers both.
@@ -105,8 +127,31 @@ internal sealed class ShortcutDispatcher
             return;
         }
 
+        bool suppress;
+        lock (_lock)
+        {
+            if (pressed) _pressedKeys.Add(key);
+            else _pressedKeys.Remove(key);
+            // A modifier release lost to focus loss would otherwise keep draining forever. Backends
+            // strip a modifier's own bit on its press, so the key being handled is never pruned.
+            _pressedKeys.RemoveWhere(held => held != key && ModifierBit(held) is var bit
+                && bit != ModifierMask.None && (mods & bit) == ModifierMask.None);
+            _drainingKeys.IntersectWith(_pressedKeys);
+            suppress = _captureSuspended || _drainingKeys.Contains(key) || HoldsModifier(_drainingKeys);
+            if (suppress) _pendingSelectionWorkflows.Clear();
+        }
+
         if (pressed)
         {
+            // Cancel remains available during capture. Releases still stop an existing PTT session.
+            if (suppress)
+            {
+                if (ShortcutMatcher.Match(key, mods, set) == ShortcutMatchKind.Cancel
+                    && set.IsCancelEnabled && !ShortcutMatcher.CancelCollidesWithAnyBinding(set)
+                    && TryClaimKeyDown(ref _cancelKeyDown))
+                    Raise(CancelRequested, nameof(CancelRequested));
+                return;
+            }
             HandlePress(key, mods, set);
         }
         else
@@ -483,6 +528,30 @@ internal sealed class ShortcutDispatcher
                 break;
         }
     }
+
+    private static bool HoldsModifier(HashSet<KeyCode> keys)
+    {
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- runs under _lock on every key event; the explicit loop keeps the non-boxing HashSet enumerator.
+        foreach (var key in keys)
+        {
+            if (ModifierBit(key) != ModifierMask.None) return true;
+        }
+
+        return false;
+    }
+
+    private static ModifierMask ModifierBit(KeyCode key) => key switch
+    {
+        KeyCode.VcLeftControl => ModifierMask.LeftCtrl,
+        KeyCode.VcRightControl => ModifierMask.RightCtrl,
+        KeyCode.VcLeftShift => ModifierMask.LeftShift,
+        KeyCode.VcRightShift => ModifierMask.RightShift,
+        KeyCode.VcLeftAlt => ModifierMask.LeftAlt,
+        KeyCode.VcRightAlt => ModifierMask.RightAlt,
+        KeyCode.VcLeftMeta => ModifierMask.LeftMeta,
+        KeyCode.VcRightMeta => ModifierMask.RightMeta,
+        _ => ModifierMask.None,
+    };
 
     private bool TryClaimKeyDown(ref bool flag)
     {

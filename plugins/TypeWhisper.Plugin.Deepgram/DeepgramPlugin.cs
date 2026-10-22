@@ -196,7 +196,7 @@ public sealed class DeepgramPlugin
         request.Headers.Authorization = new AuthenticationHeaderValue("Token", apiKey);
         try
         {
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
         catch

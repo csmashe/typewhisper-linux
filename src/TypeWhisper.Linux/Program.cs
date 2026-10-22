@@ -9,6 +9,7 @@ using TypeWhisper.Linux.Cli.Commands;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
+using TypeWhisper.Linux.Services.UserData;
 
 namespace TypeWhisper.Linux;
 
@@ -19,6 +20,9 @@ public static class Program
     public static readonly Stopwatch BootStopwatch = Stopwatch.StartNew();
     public static ServiceProvider Services { get; private set; } = null!;
     public static bool StartMinimized { get; private set; }
+
+    /// <summary>The <c>--page</c> destination for this launch, when it starts the GUI itself.</summary>
+    internal static SettingsPage? StartPage { get; private set; }
 
     public static int Main(string[] args)
     {
@@ -34,6 +38,7 @@ public static class Program
         // visible when the app runs from a terminal.
         Trace.Listeners.Add(new ConsoleTraceListener());
         BootTrace.Stage("Main entered");
+        AppRelauncher.WaitForPreviousInstance();
 
         TypeWhisperEnvironment.EnsureDirectories();
         BootTrace.Initialize();
@@ -56,6 +61,7 @@ public static class Program
 
         var action = CommandLineParser.Parse(args);
         StartMinimized = action.StartMinimized;
+        StartPage = action.Page;
 
         // ReSharper disable once SwitchStatementHandlesSomeKnownEnumValuesWithDefault
         switch (action.Kind)
@@ -81,8 +87,9 @@ public static class Program
         }
 
         // Single-instance handling. Bare `typewhisper` sends `toggle` to a running instance
-        // and exits. Argument-bearing GUI launches (--minimized etc.) use a side-effect-free
-        // probe and bail if an instance is found — they must NOT trigger a toggle just to check.
+        // and exits. `--page` hands its page to a running instance. Other argument-bearing GUI
+        // launches (--minimized etc.) use a side-effect-free probe and bail if an instance is
+        // found — they must NOT trigger a toggle just to check.
         // The bind in App startup is the authoritative guard for the probe-then-bind race window.
         BootTrace.Stage($"CommandLineParser.Parse (kind={action.Kind})");
         try
@@ -107,6 +114,19 @@ public static class Program
 
                 BootTrace.Stage("ControlSocketClient.TrySendToggle (no live peer)");
             }
+            else if (action.Page is { } page)
+            {
+                if (SettingsPageCommand.TryHandOff(socketPath, page, out var handOffExitCode))
+                {
+                    // The running instance raises its own window; clear the launcher's busy cursor.
+                    LinuxStartupNotification.NotifyComplete();
+                    return handOffExitCode;
+                }
+
+                // No peer answered. One that binds from here on is handed the page by App when
+                // this launch loses the bind, so skip the probe below that would exit without it.
+                BootTrace.Stage("SettingsPageCommand.TryHandOff (no live peer)");
+            }
             else if (ControlSocketClient.IsLivePeer(socketPath))
             {
                 Console.Error.WriteLine("TypeWhisper is already running.");
@@ -128,6 +148,12 @@ public static class Program
             Trace.WriteLine($"[Program] Control socket probe failed: {ex.Message}");
             BootTrace.Stage($"control socket probe threw: {ex.GetType().Name}");
             StartupCancellation.NotifyUnverifiedInstance();
+            return 1;
+        }
+
+        if (!ApplyPendingReset())
+        {
+            LinuxStartupNotification.NotifyComplete();
             return 1;
         }
 
@@ -202,13 +228,75 @@ public static class Program
         {
             // A timed-out HTTP handler may still be using DI-owned services. The process is
             // exiting, so skipping provider disposal here cannot leak anything beyond its life.
-            if (!App.SkipProviderDisposal)
+            try
             {
-                // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
-                // sync Dispose() throws InvalidOperationException for those.
-                Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                if (!App.SkipProviderDisposal)
+                {
+                    // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
+                    // sync Dispose() throws InvalidOperationException for those.
+                    Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+            }
+            finally
+            {
+                // The user asked to restart; a failed disposal must not leave the app closed.
+                if (App.RestartRequested)
+                {
+                    AppRelauncher.Relaunch();
+                }
             }
         }
+    }
+
+    // A reset requested in the previous session runs here: after the single-instance check, before
+    // a staged restore and before anything opens the data folder. False cancels startup.
+    private static bool ApplyPendingReset()
+    {
+        var result = LocalDataResetService.ApplyPendingResetAtStartup(TypeWhisperEnvironment.BasePath);
+        switch (result.Status)
+        {
+            case StartupResetStatus.None:
+                return true;
+
+            case StartupResetStatus.LockUnavailable:
+                Console.Error.WriteLine(
+                    "Another TypeWhisper startup is deleting its data. Startup was canceled."
+                );
+                Trace.WriteLine($"[Program] Reset lock unavailable: {result.Error?.GetType().Name}");
+                return false;
+
+            case StartupResetStatus.RequesterRunning:
+                Console.Error.WriteLine(
+                    "The TypeWhisper that asked to delete its data is still closing. Startup was canceled; try again in a moment."
+                );
+                return false;
+
+            case StartupResetStatus.Failed:
+                Console.Error.WriteLine(
+                    "TypeWhisper could not delete its data. Startup was canceled; it is retried at the next launch. "
+                    + $"To cancel the reset, delete {Path.Join(TypeWhisperEnvironment.BasePath, LocalDataResetService.PendingMarkerName)}"
+                );
+                Trace.WriteLine($"[Program] Reset failed: {result.Error}");
+                return false;
+
+            case StartupResetStatus.Incomplete:
+                Console.Error.WriteLine(
+                    $"Deleted all TypeWhisper data except {result.RemainingCount} item(s) in "
+                    + $"{TypeWhisperEnvironment.BasePath}: {string.Join(", ", result.Remaining)}"
+                );
+                break;
+
+            case StartupResetStatus.Completed:
+            default:
+                Console.WriteLine("Deleted all TypeWhisper data.");
+                break;
+        }
+
+        // The deletion took the standard folders and this launch's boot trace with it.
+        TypeWhisperEnvironment.EnsureDirectories();
+        BootTrace.Initialize();
+        BootTrace.Stage($"local data reset ({result.Status}, {result.RemainingCount} left)");
+        return true;
     }
 
     // Public so the Avalonia XAML previewer / design-time tooling can discover and invoke it reflectively.

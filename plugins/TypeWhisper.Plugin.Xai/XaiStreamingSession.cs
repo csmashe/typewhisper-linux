@@ -68,13 +68,14 @@ internal sealed class XaiStreamingSession : IStreamingSession
     public static async Task<XaiStreamingSession> ConnectAsync(
         string apiKey,
         string? language,
+        IReadOnlyList<string> keyterms,
         CancellationToken ct
     )
     {
         // The readiness deadline covers only the wait for transcript.created. The
         // handshake runs on the caller's token so a slow DNS/TLS connect is not
         // misreported as a missing readiness frame.
-        var adapter = new XaiWebSocketAdapter(apiKey, language);
+        var adapter = new XaiWebSocketAdapter(apiKey, language, keyterms);
         var transport = new ClientWebSocketTransport();
         var transportOwned = true;
         try
@@ -123,7 +124,7 @@ internal sealed class XaiStreamingSession : IStreamingSession
         // handshake the peer never answers -- hand it the token it needs to do that.
         var startupCts = new CancellationTokenSource();
         var pumpTask = WebSocketSessionPump.StartConnectedAsync(
-            new XaiWebSocketAdapter("", null),
+            new XaiWebSocketAdapter("", null, []),
             new ClientWebSocketTransport(ws),
             startupCts.Token
         );
@@ -143,7 +144,7 @@ internal sealed class XaiStreamingSession : IStreamingSession
         using var readinessCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         readinessCts.CancelAfter(readinessTimeout);
         var pumpTask = WebSocketSessionPump.StartConnectedAsync(
-            new XaiWebSocketAdapter("", null),
+            new XaiWebSocketAdapter("", null, []),
             transport,
             readinessCts.Token
         );
@@ -165,10 +166,15 @@ internal sealed class XaiStreamingSession : IStreamingSession
         }
     }
 
-    public static Uri BuildStreamingUri(string? language, bool interimResults)
+    public static Uri BuildStreamingUri(
+        string? language,
+        bool interimResults,
+        IReadOnlyList<string> keyterms
+    )
     {
         var query = new List<string>
         {
+            "model=" + Uri.EscapeDataString(XaiPlugin.SttApiModelId),
             "sample_rate=16000",
             "encoding=pcm",
             $"interim_results={(interimResults ? "true" : "false")}",
@@ -178,6 +184,8 @@ internal sealed class XaiStreamingSession : IStreamingSession
         {
             query.Add($"language={Uri.EscapeDataString(language)}");
         }
+
+        query.AddRange(keyterms.Select(keyterm => "keyterm=" + Uri.EscapeDataString(keyterm)));
 
         return new Uri("wss://api.x.ai/v1/stt?" + string.Join("&", query));
     }
@@ -256,7 +264,8 @@ internal sealed class XaiStreamingSession : IStreamingSession
 
 internal sealed class XaiWebSocketAdapter(
     string apiKey,
-    string? language
+    string? language,
+    IReadOnlyList<string> keyterms
 ) : IWebSocketSessionAdapter
 {
     private readonly XaiTranscriptCollector _collector = new();
@@ -276,7 +285,8 @@ internal sealed class XaiWebSocketAdapter(
             new WebSocketConnectionOptions(
                 XaiStreamingSession.BuildStreamingUri(
                     language,
-                    interimResults: true
+                    interimResults: true,
+                    keyterms
                 ),
                 XaiStreamingSession.CreateStreamingHeaders(apiKey)
             )

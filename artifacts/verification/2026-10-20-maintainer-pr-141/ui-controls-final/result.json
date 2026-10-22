@@ -1,0 +1,9 @@
+{
+  "persisted_states": [
+    true,
+    false
+  ],
+  "llm_calls": 0,
+  "timeout_control_absent": true,
+  "private_x11": true
+}

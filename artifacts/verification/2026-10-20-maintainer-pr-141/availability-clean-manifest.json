@@ -1,0 +1,148 @@
+{
+  "source_commit": "f2c93c3e9cbf669f33dc73c77a034aa869fa5637",
+  "original_lease": "415e91d3f988657180f705b7459f49135b06c78d",
+  "parent_commit": "bb38d2ee6fd59f48ca3cf50719792910af7be26d",
+  "prior_tested_source": "aa27dc55bc52a0963291ffe6aa9eb31b68fd187d",
+  "git_status_porcelain": "",
+  "followup_changed_files": [
+    "src/TypeWhisper.Linux/Resources/Localization/de.json",
+    "src/TypeWhisper.Linux/Resources/Localization/en.json",
+    "src/TypeWhisper.Linux/Resources/Localization/es.json",
+    "src/TypeWhisper.Linux/Resources/Localization/ru.json",
+    "src/TypeWhisper.Linux/ViewModels/Sections/DictationSectionViewModel.cs",
+    "src/TypeWhisper.Linux/Views/Sections/DictationSection.axaml",
+    "tests/TypeWhisper.Linux.Tests/DictationSectionViewModelTests.cs"
+  ],
+  "release_sha256": {
+    "src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper.dll": "ba38cfbce7f01401d0feafa1007731b766a6aa5d67457cb2480c28d5775a163a",
+    "src/TypeWhisper.Core/bin/Release/net10.0/TypeWhisper.Core.dll": "acf277e513c8dd5462dafea109f5f55b0543703551ee0ba7d09b911bf33d33f1",
+    "src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai-compatible/TypeWhisper.Plugin.OpenAiCompatible.dll": "3e0a324af91d147012cf1c36bcf20000840a43e51dab22af52afc6df3320e7d1",
+    "src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.filler-words/TypeWhisper.Plugin.FillerWords.dll": "379989cdfc653e0158b0f06512c5033536be274643e25244ceaade266d1baf53"
+  },
+  "assembly_informational_version": "[assembly: System.Reflection.AssemblyInformationalVersionAttribute(\"0.18.0+f2c93c3e9cbf669f33dc73c77a034aa869fa5637\")]",
+  "runs": {
+    "ui": {
+      "created_at": "2026-10-20T22:45:13+00:00",
+      "commit": "f2c93c3e9cbf669f33dc73c77a034aa869fa5637",
+      "branch": "t3/fix-live-cleanup-pr141",
+      "dirty_files": [],
+      "app_version": "0.18.0",
+      "host": {
+        "system": "Linux",
+        "release": "7.2.9-1-cachyos",
+        "machine": "x86_64",
+        "node": "beelink"
+      },
+      "run": {
+        "kind": "pr141-availability-ui",
+        "configuration": "Release",
+        "private_x11": true
+      }
+    },
+    "audio": {
+      "created_at": "2026-10-20T22:45:40+00:00",
+      "commit": "f2c93c3e9cbf669f33dc73c77a034aa869fa5637",
+      "branch": "t3/fix-live-cleanup-pr141",
+      "dirty_files": [],
+      "app_version": "0.18.0",
+      "host": {
+        "system": "Linux",
+        "release": "7.2.9-1-cachyos",
+        "machine": "x86_64",
+        "node": "beelink"
+      },
+      "run": {
+        "kind": "pr141-live",
+        "configuration": "Release",
+        "enabled": true,
+        "miss": false,
+        "backend": {
+          "preference": "cpu",
+          "active_backend": "cpu",
+          "display_text": "Using CPU",
+          "detail": null,
+          "requires_restart": false
+        },
+        "audio": "/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/artifacts/verification/2026-10-20-maintainer-pr-141/availability-audio-clean/spoken-poll-fixture.wav",
+        "provider": "controlled local HTTP echo through bundled OpenAI-compatible plugin"
+      }
+    }
+  },
+  "ui_result": {
+    "blocked": {
+      "name": "Clean drafts while recording",
+      "role": "check box",
+      "enabled": false,
+      "sensitive": false,
+      "checked": true
+    },
+    "reason": "Live cleanup is unavailable while these text processors are enabled: Filler Words. Disable them in Plugins to use live cleanup. Your live cleanup preference is kept. Final cleanup still runs after you stop.",
+    "plugin_toggle": {
+      "name": "ToggleSwitch",
+      "role": "toggle button",
+      "enabled": true,
+      "sensitive": true,
+      "checked": true,
+      "clicked": true
+    },
+    "available": {
+      "name": "Clean drafts while recording",
+      "role": "check box",
+      "enabled": true,
+      "sensitive": true,
+      "checked": true
+    },
+    "persisted_states": [
+      false,
+      true
+    ],
+    "preference_preserved_across_availability": true,
+    "llm_calls": 0
+  },
+  "audio_summary": [
+    {
+      "name": "spoken-hit",
+      "draft_calls": 1,
+      "final_calls": 0,
+      "reused": true,
+      "timings_ms": {
+        "transcription_and_precleanup_upper_bound": 576.0,
+        "cleanup_to_final_event_upper_bound": 10.0,
+        "delivery_observed_upper_bound": 390.24,
+        "stop_to_clipboard_readback": 1199.22
+      },
+      "acceleration": {
+        "preference": "cpu",
+        "active_backend": "cpu",
+        "display_text": "Using CPU",
+        "detail": null,
+        "requires_restart": false
+      }
+    }
+  ],
+  "cleanup": {
+    "null_sink_modules": [],
+    "verification_runtime_directories": [],
+    "user_processes_before": [
+      {
+        "pid": 1628450,
+        "process": "typewhisper"
+      }
+    ],
+    "user_processes_after": [
+      {
+        "pid": 1628450,
+        "process": "typewhisper"
+      }
+    ],
+    "user_control_status_after": {
+      "v": 1,
+      "ok": true,
+      "state": "idle",
+      "backend": "linux-evdev",
+      "supports_press_release": true,
+      "active_binding": "Shift+Meta+F23",
+      "mode": "Hybrid"
+    }
+  }
+}

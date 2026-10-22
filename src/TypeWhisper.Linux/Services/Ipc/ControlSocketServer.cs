@@ -78,6 +78,12 @@ internal sealed class ControlSocketServer : IDisposable
         SocketPath = SocketPathResolver.ResolveControlSocketPath();
     }
 
+    /// <summary>
+    ///     A second launch asked for a settings page. Raised on a socket thread; subscribe
+    ///     before <see cref="Start" />.
+    /// </summary>
+    public event Action<SettingsPage>? SettingsPageRequested;
+
     /// <summary>Absolute path of the socket file once <see cref="Start" /> succeeds.</summary>
     private string SocketPath { get; }
 
@@ -465,6 +471,12 @@ internal sealed class ControlSocketServer : IDisposable
             }
             else if (trimmed.Equals("toggle", StringComparison.Ordinal))
             {
+                if (_hotkey?.IsSuspended == true)
+                {
+                    await CaptureRefusal().ConfigureAwait(false);
+                    await writer.WriteLineAsync("err shortcut_capture_active").ConfigureAwait(false);
+                    return;
+                }
                 // Fire-and-forget: Phase 4 clients use a 2 s timeout that StopAsync can blow past.
                 DispatchOrchestratorAsync(() => _orchestrator.ToggleAsync(), "Legacy ToggleAsync");
                 await writer.WriteLineAsync("ok").ConfigureAwait(false);
@@ -577,6 +589,7 @@ internal sealed class ControlSocketServer : IDisposable
                 JsonControlProtocol.CmdRecordCancel => await HandleCancelAsync()
                     .ConfigureAwait(false),
                 JsonControlProtocol.CmdStatus => HandleStatus(),
+                JsonControlProtocol.CmdSettingsOpen => HandleSettingsOpen(req.Page),
                 _ => JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownCommand),
             };
 
@@ -591,9 +604,29 @@ internal sealed class ControlSocketServer : IDisposable
         }
     }
 
+    private string HandleSettingsOpen(string? pageValue)
+    {
+        var page = SettingsPage.TryParse(pageValue);
+        if (page is null)
+        {
+            return JsonControlProtocol.SerializeError(JsonControlProtocol.ErrUnknownPage);
+        }
+
+        var handler = SettingsPageRequested;
+        if (handler is null)
+        {
+            return JsonControlProtocol.SerializeError(JsonControlProtocol.ErrInternal);
+        }
+
+        handler(page);
+        return JsonControlProtocol.SerializeOk();
+    }
+
     private Task<string> HandleStartAsync()
     {
-        return _startCoordinator.DispatchStart(() => _orchestrator.StartAsync());
+        return _hotkey?.IsSuspended == true
+            ? CaptureRefusal()
+            : _startCoordinator.DispatchStart(() => _orchestrator.StartAsync());
     }
 
     private async Task<string> HandleStopAsync()
@@ -631,6 +664,7 @@ internal sealed class ControlSocketServer : IDisposable
 
     private Task<string> HandleToggleAsync()
     {
+        if (_hotkey?.IsSuspended == true) return CaptureRefusal();
         var prev = SnapshotState();
         // Fire-and-forget — toggle can route through StopAsync (pipeline-blocking like stop).
         DispatchOrchestratorAsync(() => _orchestrator.ToggleAsync(), "ToggleAsync");
@@ -649,6 +683,12 @@ internal sealed class ControlSocketServer : IDisposable
         return Task.FromResult(
             JsonControlProtocol.SerializeAction(prev, JsonControlProtocol.StateIdle)
         );
+    }
+
+    private static Task<string> CaptureRefusal()
+    {
+        Trace.WriteLine("[ControlSocketServer] Refused record.start/toggle while shortcut capture is active.");
+        return Task.FromResult(JsonControlProtocol.SerializeError("shortcut_capture_active"));
     }
 
     /// <summary>

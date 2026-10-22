@@ -15,6 +15,8 @@ public sealed class SharpHookGlobalShortcutBackend : IGlobalShortcutBackend
     private const string BackendId = "linux-sharphook";
     private readonly ShortcutDispatcher _dispatcher = new();
 
+    public void SetCaptureSuspended(bool suspended) => _dispatcher.SetCaptureSuspended(suspended);
+
     private readonly TaskPoolGlobalHook _hook = new();
     private readonly Lock _lock = new();
     private int _disposed;
