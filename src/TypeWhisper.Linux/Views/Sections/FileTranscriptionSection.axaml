@@ -7,8 +7,8 @@
              x:DataType="vm:FileTranscriptionSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.section-panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Margin" Value="0,0,0,18" />
@@ -23,13 +23,13 @@
         </Style>
         <Style Selector="TextBlock.page-subtitle">
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="TextBlock.section-label">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextTertiaryBrush}" />
             <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
         <Style Selector="TextBlock.row-title">
@@ -38,19 +38,19 @@
         </Style>
         <Style Selector="TextBlock.row-hint">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="0,4,0,0" />
         </Style>
         <Style Selector="Border.drop-zone">
-            <Setter Property="Background" Value="#111822" />
-            <Setter Property="BorderBrush" Value="#2B3B4B" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceAltBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1.5" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
         <Style Selector="Border.drop-zone.drag-over">
-            <Setter Property="Background" Value="#162539" />
-            <Setter Property="BorderBrush" Value="#2E8FFF" />
+            <Setter Property="Background" Value="{DynamicResource TwAccentSubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwAccentBrush}" />
         </Style>
     </UserControl.Styles>
 
@@ -90,7 +90,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -112,7 +112,7 @@
                                     MaxWidth="460" />
                                 <TextBlock Text="{Binding ImporterUnavailableReason}"
                                            FontSize="12"
-                                           Foreground="#AFC0D3"
+                                           Foreground="{DynamicResource TwTextBodyBrush}"
                                            IsVisible="{Binding ShowImporterUnavailableReason}"
                                            TextAlignment="Center"
                                            HorizontalAlignment="Center" />
@@ -121,7 +121,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -143,7 +143,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0"
                             IsVisible="{Binding IsProcessing}" />
 
@@ -183,7 +183,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -191,8 +191,8 @@
                                  SelectedItem="{Binding SelectedItem}"
                                  MinHeight="120"
                                  MaxHeight="260"
-                                 Background="#111822"
-                                 BorderBrush="#243244"
+                                 Background="{DynamicResource TwSurfaceAltBrush}"
+                                 BorderBrush="{DynamicResource TwBorderBrush}"
                                  BorderThickness="1">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:FileTranscriptionQueueItemViewModel">
@@ -204,7 +204,7 @@
                                                        FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding StatusText}"
                                                        FontSize="12"
-                                                       Foreground="#8A9AAE"
+                                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                        TextWrapping="Wrap" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1"
@@ -271,7 +271,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -281,8 +281,8 @@
                                  TextWrapping="Wrap"
                                  AcceptsReturn="True"
                                  MinHeight="260"
-                                 Background="#111822"
-                                 BorderBrush="#243244"
+                                 Background="{DynamicResource TwSurfaceAltBrush}"
+                                 BorderBrush="{DynamicResource TwBorderBrush}"
                                  BorderThickness="1" />
                     </Border>
                 </StackPanel>
@@ -316,7 +316,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -373,7 +373,7 @@
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -395,11 +395,11 @@
                                                        FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding OutputPath}"
                                                        FontSize="12"
-                                                       Foreground="#8A9AAE"
+                                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                        TextWrapping="Wrap" />
                                             <TextBlock Text="{Binding ErrorMessage}"
                                                        FontSize="12"
-                                                       Foreground="#FF8A8A"
+                                                       Foreground="{DynamicResource TwErrorTextBrush}"
                                                        TextWrapping="Wrap"
                                                        IsVisible="{Binding ShowsFailure}" />
                                             <!-- A succeeded run can still carry a warning (e.g. the
@@ -407,7 +407,7 @@
                                                  would hide it. -->
                                             <TextBlock Text="{Binding ErrorMessage}"
                                                        FontSize="12"
-                                                       Foreground="#F4C97D"
+                                                       Foreground="{DynamicResource TwWarningTextBrush}"
                                                        TextWrapping="Wrap"
                                                        IsVisible="{Binding ShowsWarning}" />
                                         </StackPanel>

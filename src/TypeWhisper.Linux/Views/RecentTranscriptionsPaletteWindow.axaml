@@ -4,7 +4,6 @@
         xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
         x:Class="TypeWhisper.Linux.Views.RecentTranscriptionsPaletteWindow"
         x:DataType="vm:RecentTranscriptionsPaletteViewModel"
-        RequestedThemeVariant="Dark"
         Width="520"
         Height="360"
         WindowStartupLocation="CenterScreen"
@@ -14,8 +13,8 @@
         ShowInTaskbar="False"
         Background="Transparent">
     <Border CornerRadius="8"
-            Background="#F0141D29"
-            BorderBrush="#35FFFFFF"
+            Background="{DynamicResource TwPaletteBackgroundBrush}"
+            BorderBrush="{DynamicResource TwBorderStrongBrush}"
             BorderThickness="1"
             Padding="14">
         <Grid RowDefinitions="Auto,Auto,*">
@@ -43,13 +42,13 @@
                                     PointerReleased="Entry_PointerReleased">
                                 <StackPanel>
                                     <TextBlock Text="{Binding FinalText}"
-                                               Foreground="#F2F6FA"
+                                               Foreground="{DynamicResource TwTextStrongBrush}"
                                                FontSize="13"
                                                FontWeight="SemiBold"
                                                TextWrapping="Wrap"
                                                MaxHeight="42" />
                                     <TextBlock Text="{Binding Subtitle}"
-                                               Foreground="#8A9AAE"
+                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                FontSize="11"
                                                Margin="0,3,0,0" />
                                 </StackPanel>
@@ -59,7 +58,7 @@
                 </ListBox>
 
                 <TextBlock Text="{loc:Str RecentTranscriptions.Empty}"
-                           Foreground="#8A9AAE"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                            FontSize="13"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"

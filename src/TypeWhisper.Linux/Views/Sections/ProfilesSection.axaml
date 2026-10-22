@@ -14,30 +14,30 @@
             <Setter Property="Margin" Value="0,0,0,4" />
         </Style>
         <Style Selector="TextBlock.page-subtitle">
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="FontSize" Value="12.5" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="TextBlock.field-label">
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextTertiaryBrush}" />
             <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
         <Style Selector="TextBlock.row-label">
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="#D6DEE9" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextPrimaryBrush}" />
         </Style>
         <Style Selector="Border.section-panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
         <Style Selector="Border.chip">
-            <Setter Property="Background" Value="#1B2430" />
-            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Padding" Value="8,4" />
@@ -52,11 +52,11 @@
             <Setter Property="Height" Value="18" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
         </Style>
         <Style Selector="Border.profile-tile">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#223243" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="12" />
             <Setter Property="Padding" Value="14,12" />
@@ -72,8 +72,8 @@
             <Setter Property="Padding" Value="0" />
         </Style>
         <Style Selector="ListBox.profile-list ListBoxItem:selected Border.profile-tile">
-            <Setter Property="Background" Value="#203347" />
-            <Setter Property="BorderBrush" Value="#305478" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceStrongBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderAccentSubtleBrush}" />
         </Style>
     </UserControl.Styles>
 
@@ -99,7 +99,7 @@
                             <Grid ColumnDefinitions="4,*,Auto"
                                   ColumnSpacing="10">
                                 <Border Grid.Column="0"
-                                        Background="#2196F3"
+                                        Background="{DynamicResource TwAccentBrush}"
                                         CornerRadius="2"
                                         Margin="0,2,0,2" />
                                 <StackPanel Grid.Column="1"
@@ -335,7 +335,7 @@
                                                   SelectedItem="{Binding EditLanguage}" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="1" Background="#16FFFFFF" />
+                                <Border Grid.Row="1" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="2" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -355,7 +355,7 @@
                                                   VerticalAlignment="Center" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="3" Background="#16FFFFFF" />
+                                <Border Grid.Row="3" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="4" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -381,7 +381,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="5" Background="#16FFFFFF" />
+                                <Border Grid.Row="5" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="6" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -406,7 +406,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="7" Background="#16FFFFFF" />
+                                <Border Grid.Row="7" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="8" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -430,7 +430,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="9" Background="#16FFFFFF" />
+                                <Border Grid.Row="9" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="10" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -453,7 +453,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="11" Background="#16FFFFFF" />
+                                <Border Grid.Row="11" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="12" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -478,7 +478,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="13" Background="#16FFFFFF" />
+                                <Border Grid.Row="13" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="14" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -504,7 +504,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="15" Background="#16FFFFFF" />
+                                <Border Grid.Row="15" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="16" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -529,7 +529,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="17" Background="#16FFFFFF" />
+                                <Border Grid.Row="17" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="18" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -557,7 +557,7 @@
                                         </ComboBox>
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="19" Background="#16FFFFFF" />
+                                <Border Grid.Row="19" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="20" Padding="18,14">
                                     <Grid ColumnDefinitions="*,150"
@@ -576,7 +576,7 @@
                                                        Value="{Binding EditPriority}" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="21" Background="#16FFFFFF" />
+                                <Border Grid.Row="21" Background="{DynamicResource TwFillSubtleBrush}" />
 
                                 <Border Grid.Row="22" Padding="18,14">
                                     <Grid ColumnDefinitions="*,320"
@@ -605,7 +605,7 @@
                                             </ComboBox>
                                             <TextBlock Text="{Binding HotkeyValidationMessage}"
                                                        IsVisible="{Binding HotkeyValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                                                       Foreground="#F3E1AF"
+                                                       Foreground="{DynamicResource TwWarningTextBrush}"
                                                        FontSize="12"
                                                        TextWrapping="Wrap" />
                                         </StackPanel>
@@ -643,8 +643,8 @@
                 </ScrollViewer>
 
                 <Border Grid.Row="1"
-                        Background="#141D26"
-                        BorderBrush="#1AFFFFFF"
+                        Background="{DynamicResource TwSurfaceBrush}"
+                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                         BorderThickness="1,0,0,0"
                         Padding="18,16">
                     <Grid ColumnDefinitions="*,Auto,Auto,Auto"
@@ -664,9 +664,9 @@
                                 Content="{loc:Str Common.Save}"
                                 Command="{Binding SaveProfileCommand}"
                                 Padding="16,8"
-                                Background="#2196F3"
-                                BorderBrush="#2196F3"
-                                Foreground="White" />
+                                Background="{DynamicResource TwAccentBrush}"
+                                BorderBrush="{DynamicResource TwAccentBrush}"
+                                Foreground="{DynamicResource TwOnAccentBrush}" />
                     </Grid>
                 </Border>
             </Grid>
@@ -676,8 +676,8 @@
                 Classes="section-panel"
                 IsVisible="{Binding HasSelectedProfile, Converter={x:Static local:InverseBoolConverter.Instance}}">
             <Grid>
-                <Border Background="#16202B"
-                        BorderBrush="#1AFFFFFF"
+                <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                         BorderThickness="1"
                         CornerRadius="14"
                         Padding="20,18"

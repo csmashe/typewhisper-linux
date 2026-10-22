@@ -220,6 +220,9 @@ public record AppSettings
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }
 
+    // Dark keeps the look of releases that had no theme choice.
+    public InterfaceTheme InterfaceTheme { get; init; } = InterfaceTheme.Dark;
+
     // Dashboard
     public int DashboardSelectedPeriod { get; init; }
 

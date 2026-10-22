@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         x:Class="TypeWhisper.Linux.Views.LearnedCorrectionToastWindow"
+        RequestedThemeVariant="Dark"
         Background="Transparent"
         TransparencyLevelHint="Transparent"
         WindowDecorations="None"

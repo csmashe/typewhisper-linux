@@ -3,7 +3,6 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
-        xmlns:local="using:TypeWhisper.Linux"
         xmlns:icons="using:FluentIcons.Avalonia"
         xmlns:fluent="using:FluentIcons.Common"
         xmlns:vms="using:TypeWhisper.Linux.ViewModels.Sections"
@@ -15,8 +14,18 @@
         Title="TypeWhisper"
         Icon="avares://typewhisper/Resources/typewhisper.ico"
         Width="1200" Height="780"
-        RequestedThemeVariant="Dark"
-        Background="#0E131B">
+        Background="{DynamicResource TwWindowBackgroundBrush}">
+    <Window.Styles>
+        <Style Selector="Border.nav-item">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Border.nav-item.selected">
+            <Setter Property="Background" Value="{DynamicResource TwNavSelectedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderAccentSubtleBrush}" />
+        </Style>
+    </Window.Styles>
+
     <Window.Resources>
         <!-- Named template kept as a stable hook for the Avalonia previewer,
              which cannot resolve DataType-only templates in a ContentControl
@@ -51,7 +60,7 @@
                                 <TextBlock Text="{Binding Label}"
                                            FontSize="11"
                                            FontWeight="SemiBold"
-                                           Foreground="#7D8796"
+                                           Foreground="{DynamicResource TwTextTertiaryBrush}"
                                            Margin="2,14,0,8"
                                            IsVisible="{Binding IsHeader}" />
 
@@ -66,16 +75,16 @@
                                         MinHeight="0">
                                     <Button.Styles>
                                         <Style Selector="Button">
-                                            <Setter Property="Foreground" Value="#D7DEE8" />
+                                            <Setter Property="Foreground" Value="{DynamicResource TwTextPrimaryBrush}" />
                                         </Style>
                                         <Style Selector="Button:pointerover">
-                                            <Setter Property="Foreground" Value="White" />
+                                            <Setter Property="Foreground" Value="{DynamicResource TwTextStrongBrush}" />
                                         </Style>
                                     </Button.Styles>
                                     <Border CornerRadius="6"
                                             Padding="12,9"
-                                            Background="{Binding IsSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#1C2735|False=Transparent'}"
-                                            BorderBrush="{Binding IsSelected, Converter={x:Static local:BoolBrushConverter.Instance}, ConverterParameter='True=#2A3C55|False=Transparent'}"
+                                            Classes="nav-item"
+                                            Classes.selected="{Binding IsSelected}"
                                             BorderThickness="1">
                                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                             <icons:SymbolIcon
@@ -96,7 +105,7 @@
             </ScrollViewer>
         </Grid>
 
-        <Border Grid.Column="1" Background="#283644" Margin="0,18,0,18" />
+        <Border Grid.Column="1" Background="{DynamicResource TwSurfaceStrongBrush}" Margin="0,18,0,18" />
 
         <Grid Grid.Column="2" Margin="0,18,18,18" RowDefinitions="52,1,*">
             <Grid Grid.Row="0" Margin="28,0,28,0" ColumnDefinitions="*,Auto">
@@ -104,8 +113,8 @@
                         IsVisible="{Binding UpdateBannerVisible}"
                         HorizontalAlignment="Left"
                         VerticalAlignment="Center"
-                        Background="#16263A"
-                        BorderBrush="#2A3C55"
+                        Background="{DynamicResource TwAccentSubtleBrush}"
+                        BorderBrush="{DynamicResource TwBorderAccentSubtleBrush}"
                         BorderThickness="1"
                         CornerRadius="6"
                         Padding="2">
@@ -124,11 +133,11 @@
                                 <TextBlock Text="↓"
                                            FontSize="14"
                                            FontWeight="Bold"
-                                           Foreground="#8FB7FF"
+                                           Foreground="{DynamicResource TwAccentTextBrush}"
                                            VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding UpdateBannerText}"
                                            FontSize="12"
-                                           Foreground="#CFE0F5"
+                                           Foreground="{DynamicResource TwAccentSubtleTextBrush}"
                                            VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
@@ -140,7 +149,7 @@
                                 BorderThickness="0"
                                 Padding="6,4"
                                 MinHeight="0"
-                                Foreground="#8A9AAE"
+                                Foreground="{DynamicResource TwTextSecondaryBrush}"
                                 ToolTip.Tip="{loc:Str Common.Dismiss}" />
                     </StackPanel>
                 </Border>
@@ -153,7 +162,7 @@
                 </StackPanel>
             </Grid>
 
-            <Border Grid.Row="1" Background="#283644" />
+            <Border Grid.Row="1" Background="{DynamicResource TwSurfaceStrongBrush}" />
 
             <!-- Content area — bind CurrentSection to the right view via DataTemplates -->
             <ContentControl Grid.Row="2" Content="{Binding CurrentSection}">

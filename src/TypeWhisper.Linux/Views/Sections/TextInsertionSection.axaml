@@ -6,8 +6,8 @@
              x:DataType="vm:TextInsertionSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.section-panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Margin" Value="0,0,0,18" />
@@ -22,13 +22,13 @@
         </Style>
         <Style Selector="TextBlock.page-subtitle">
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="TextBlock.section-label">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextTertiaryBrush}" />
             <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
         <Style Selector="TextBlock.row-title">
@@ -37,7 +37,7 @@
         </Style>
         <Style Selector="TextBlock.row-hint">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="0,4,0,0" />
         </Style>
@@ -87,7 +87,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0" />
 
                     <Border Classes="section-row">
                         <StackPanel>
@@ -97,7 +97,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0" />
 
                     <Border Classes="section-row">
                         <StackPanel>
@@ -107,7 +107,7 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="#16FFFFFF" Margin="18,0" />
+                    <Border Height="1" Background="{DynamicResource TwFillSubtleBrush}" Margin="18,0" />
 
                     <Border Classes="section-row">
                         <Button Content="{loc:Str TextInsertion.RefreshStatus}"
@@ -130,8 +130,8 @@
                                            TextWrapping="Wrap"
                                            Text="{loc:Str TextInsertion.InstallYdotoolFirstHint}" />
 
-                                <Border Background="#0E1620"
-                                        BorderBrush="#1AFFFFFF"
+                                <Border Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Padding="10,6"
@@ -150,8 +150,8 @@
                                            TextWrapping="Wrap"
                                            Text="{loc:Str TextInsertion.SetUpAutomaticallyHint}" />
 
-                                <Border Background="#0E1620"
-                                        BorderBrush="#1AFFFFFF"
+                                <Border Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                        BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Padding="10,6"
@@ -189,8 +189,8 @@
                                 </StackPanel>
                             </StackPanel>
 
-                            <Border Background="#111822"
-                                    BorderBrush="#1AFFFFFF"
+                            <Border Background="{DynamicResource TwSurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                     BorderThickness="1"
                                     CornerRadius="8"
                                     Padding="10,6"
@@ -198,7 +198,7 @@
                                     IsVisible="{Binding IntegrationStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                                 <TextBlock Text="{Binding IntegrationStatusMessage}"
                                            FontSize="12"
-                                           Foreground="#AFC0D3"
+                                           Foreground="{DynamicResource TwTextBodyBrush}"
                                            TextWrapping="Wrap" />
                             </Border>
                         </StackPanel>
@@ -206,15 +206,15 @@
                 </Border>
             </StackPanel>
 
-            <Border Background="#111822"
-                    BorderBrush="#1AFFFFFF"
+            <Border Background="{DynamicResource TwSurfaceAltBrush}"
+                    BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
                     Padding="16,12"
                     IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                 <TextBlock Text="{Binding StatusMessage}"
                            FontSize="12"
-                           Foreground="#AFC0D3"
+                           Foreground="{DynamicResource TwTextBodyBrush}"
                            TextWrapping="Wrap" />
             </Border>
         </StackPanel>

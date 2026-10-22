@@ -7,8 +7,8 @@
              x:DataType="vm:AboutSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
@@ -28,11 +28,11 @@
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{loc:Str About.Tagline}"
                            FontSize="13.5"
-                           Foreground="#9BAABC"
+                           Foreground="{DynamicResource TwTextMutedBrush}"
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{Binding Version, StringFormat='Version {0}'}"
                            FontSize="12"
-                           Foreground="#9BAABC"
+                           Foreground="{DynamicResource TwTextMutedBrush}"
                            HorizontalAlignment="Center" />
                 <StackPanel Orientation="Horizontal"
                             Spacing="8"
@@ -47,21 +47,21 @@
                 </StackPanel>
                 <TextBlock Text="{Binding UpdateStatusText}"
                            FontSize="12"
-                           Foreground="#8A9AAE"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                            HorizontalAlignment="Center"
                            TextWrapping="Wrap"
                            Margin="0,6,0,18" />
                 <TextBlock Text="{loc:Str About.EnginesNote}"
                            FontSize="13"
-                           Foreground="#B7C4D3"
+                           Foreground="{DynamicResource TwTextBodyBrush}"
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{loc:Str About.License}"
                            FontSize="13"
-                           Foreground="#B7C4D3"
+                           Foreground="{DynamicResource TwTextBodyBrush}"
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{Binding Copyright}"
                            FontSize="12"
-                           Foreground="#8A9AAE"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                            HorizontalAlignment="Center"
                            TextAlignment="Center"
                            TextWrapping="Wrap"
@@ -92,13 +92,13 @@
                           RowSpacing="8">
                         <TextBlock Text="{loc:Str About.InstallLocation}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap"
                                    VerticalAlignment="Center" />
                         <Border Grid.Row="0"
                                 Grid.Column="1"
-                                Background="#0E1620"
-                                BorderBrush="#1AFFFFFF"
+                                Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                 BorderThickness="1"
                                 CornerRadius="6"
                                 Padding="10,6">
@@ -110,13 +110,13 @@
                                    Grid.Column="0"
                                    Text="{loc:Str About.DataLocation}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap"
                                    VerticalAlignment="Center" />
                         <Border Grid.Row="1"
                                 Grid.Column="1"
-                                Background="#0E1620"
-                                BorderBrush="#1AFFFFFF"
+                                Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                 BorderThickness="1"
                                 CornerRadius="6"
                                 Padding="10,6">
@@ -146,7 +146,7 @@
                         </StackPanel>
                         <TextBlock Text="{Binding BackupStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                     <Button Grid.Row="0"
@@ -166,7 +166,7 @@
                             Grid.ColumnSpan="3"
                             Margin="0,14,0,0"
                             Padding="0,14,0,0"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="10">
@@ -175,7 +175,7 @@
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{loc:Str About.AllDataDescription}"
                                            FontSize="12"
-                                           Foreground="#8A9AAE"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                            TextWrapping="Wrap" />
                                 <CheckBox Content="{loc:Str About.IncludeRecordings}"
                                           IsChecked="{Binding IncludeRecordingsInExport}"
@@ -200,7 +200,7 @@
                             Grid.ColumnSpan="3"
                             Margin="0,14,0,0"
                             Padding="0,14,0,0"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0">
                         <Grid ColumnDefinitions="*,Auto"
                               ColumnSpacing="10">
@@ -209,7 +209,7 @@
                                            FontWeight="SemiBold" />
                                 <TextBlock Text="{loc:Str About.ResetDataDescription}"
                                            FontSize="12"
-                                           Foreground="#8A9AAE"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                            TextWrapping="Wrap" />
                                 <CheckBox Content="{loc:Str About.ResetDeleteModels}"
                                           IsChecked="{Binding DeleteModelsOnReset}"
@@ -217,7 +217,7 @@
                             </StackPanel>
                             <Button Grid.Column="1"
                                     Content="{loc:Str About.DeleteAllData}"
-                                    Foreground="#FF8A80"
+                                    Foreground="{DynamicResource TwErrorTextBrush}"
                                     IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
                                     VerticalAlignment="Center"
                                     Click="OnDeleteAllData" />
@@ -243,11 +243,11 @@
                         </StackPanel>
                         <TextBlock Text="{Binding SupportReportStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                         <TextBlock Text="{loc:Str About.SupportReportPrivacy}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                     <Button Grid.Column="1"
@@ -262,7 +262,7 @@
                     Height="386">
                 <Grid RowDefinitions="Auto,*">
                     <Border Padding="16,12"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,0,0,1">
                         <Grid ColumnDefinitions="*,Auto,Auto,Auto"
                               ColumnSpacing="10">
@@ -292,17 +292,17 @@
                                     IsVisible="{Binding HasErrors, Converter={x:Static local:InverseBoolConverter.Instance}}">
                             <TextBlock Text="✓"
                                        FontSize="42"
-                                       Foreground="#8DA0B8"
+                                       Foreground="{DynamicResource TwTextMutedBrush}"
                                        HorizontalAlignment="Center" />
                             <TextBlock Text="{loc:Str About.NoErrors}"
                                        FontSize="13"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
                         <TextBlock Text="{loc:Str About.NoErrorsInCategory}"
                                    FontSize="13"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    IsVisible="{Binding ShowEmptyCategoryNotice}" />
@@ -314,21 +314,21 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:ErrorLogEntryRow">
                                         <Border Padding="16,12"
-                                                BorderBrush="#1AFFFFFF"
+                                                BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                                 BorderThickness="0,0,0,1">
                                             <StackPanel Spacing="4">
                                                 <StackPanel Orientation="Horizontal"
                                                             Spacing="10">
                                                     <TextBlock Text="{Binding Category}"
                                                                FontSize="11"
-                                                               Foreground="#D6E7FF" />
+                                                               Foreground="{DynamicResource TwAccentSubtleTextBrush}" />
                                                     <TextBlock Text="{Binding LocalTimestamp, StringFormat='{}{0:g}'}"
                                                                FontSize="11"
-                                                               Foreground="#8A9AAE" />
+                                                               Foreground="{DynamicResource TwTextSecondaryBrush}" />
                                                 </StackPanel>
                                                 <TextBlock Text="{Binding Message}"
                                                            TextWrapping="Wrap"
-                                                           Foreground="#D7DEE8" />
+                                                           Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                             </StackPanel>
                                         </Border>
                                     </DataTemplate>

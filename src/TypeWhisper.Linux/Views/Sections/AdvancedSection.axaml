@@ -7,8 +7,8 @@
              x:DataType="vm:AdvancedSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
@@ -44,12 +44,12 @@
                         </Grid>
                     </Border>
                     <Border Grid.Row="1"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <TextBlock Text="{Binding MemoryHint}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </Border>
                 </Grid>
@@ -81,7 +81,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="1" Background="#1AFFFFFF" />
+                    <Border Grid.Row="1" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="2" Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
@@ -98,7 +98,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3" Background="#1AFFFFFF" />
+                    <Border Grid.Row="3" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="4" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -122,7 +122,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5" Background="#1AFFFFFF" />
+                    <Border Grid.Row="5" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="6" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -147,12 +147,12 @@
                     </Border>
 
                     <Border Grid.Row="7"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <TextBlock Text="{Binding SpokenFeedbackHint}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
                     </Border>
                 </Grid>
             </Border>
@@ -176,7 +176,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="1" Background="#1AFFFFFF" />
+                    <Border Grid.Row="1" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="2" Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto"
@@ -188,7 +188,7 @@
                                            TextWrapping="Wrap" />
                                 <TextBlock Text="{loc:Str Advanced.CaptureProvenanceHint}"
                                            FontSize="12"
-                                           Foreground="#8A9AAE"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                                            TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
@@ -199,7 +199,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="3" Background="#1AFFFFFF" />
+                    <Border Grid.Row="3" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="4" Padding="18,14">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
@@ -208,7 +208,7 @@
                                            FontWeight="SemiBold" VerticalAlignment="Center"
                                            TextWrapping="Wrap" />
                                 <TextBlock Text="{loc:Str Advanced.CrashReportingHint}"
-                                           FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
+                                           FontSize="12" Foreground="{DynamicResource TwTextSecondaryBrush}" TextWrapping="Wrap" />
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1" IsChecked="{Binding CrashReportingEnabled}"
                                           AutomationProperties.Name="{loc:Str Advanced.CrashReporting}"
@@ -216,7 +216,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="5" Background="#1AFFFFFF" />
+                    <Border Grid.Row="5" Background="{DynamicResource TwFillStrongBrush}" />
 
                     <Border Grid.Row="6" Padding="18,14" IsVisible="{Binding CanUseDiagnosticLog}">
                         <StackPanel Spacing="10">
@@ -225,7 +225,7 @@
                                     <TextBlock Text="{loc:Str Advanced.DiagnosticLog}"
                                                FontWeight="SemiBold" VerticalAlignment="Center" />
                                     <TextBlock Text="{loc:Str Advanced.DiagnosticLogHint}"
-                                               FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap" />
+                                               FontSize="12" Foreground="{DynamicResource TwTextSecondaryBrush}" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiagnosticLogEnabled}"
                                               AutomationProperties.Name="{loc:Str Advanced.DiagnosticLog}"
@@ -254,12 +254,12 @@
                                         Click="OnDeleteDiagnosticLog" />
                             </StackPanel>
                             <TextBlock Text="{Binding DiagnosticLogStatus}"
-                                       FontSize="12" Foreground="#8A9AAE" TextWrapping="Wrap"
+                                       FontSize="12" Foreground="{DynamicResource TwTextSecondaryBrush}" TextWrapping="Wrap"
                                        IsVisible="{Binding DiagnosticLogStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
                     </Border>
 
-                    <Border Grid.Row="7" Background="#1AFFFFFF" IsVisible="{Binding CanUseDiagnosticLog}" />
+                    <Border Grid.Row="7" Background="{DynamicResource TwFillStrongBrush}" IsVisible="{Binding CanUseDiagnosticLog}" />
 
                     <Border Grid.Row="8" Padding="18,14">
                         <Grid ColumnDefinitions="*,320"
@@ -283,12 +283,12 @@
                     </Border>
 
                     <Border Grid.Row="9"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="18,12">
                         <TextBlock Text="{loc:Str Advanced.HistoryDisabledHint}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE" />
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}" />
                     </Border>
                 </Grid>
             </Border>
