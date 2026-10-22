@@ -1,0 +1,12 @@
+{
+  "id": "com.typewhisper.github-copilot",
+  "name": "GitHub Copilot",
+  "version": "1.0.0",
+  "minHostVersion": "0.18.0",
+  "author": "TypeWhisper",
+  "description": "Use your GitHub Copilot subscription as an LLM provider, with a separate profile per signed-in account",
+  "networkAccess": "network",
+  "categories": ["llm"],
+  "assemblyName": "TypeWhisper.Plugin.GitHubCopilot.dll",
+  "pluginClass": "TypeWhisper.Plugin.GitHubCopilot.GitHubCopilotPlugin"
+}

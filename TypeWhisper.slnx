@@ -31,6 +31,7 @@
         <Project Path="plugins/TypeWhisper.Plugin.Gemini/TypeWhisper.Plugin.Gemini.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.GemmaLocal/TypeWhisper.Plugin.GemmaLocal.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Gladia/TypeWhisper.Plugin.Gladia.csproj"/>
+        <Project Path="plugins/TypeWhisper.Plugin.GitHubCopilot/TypeWhisper.Plugin.GitHubCopilot.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.GoogleCloudStt/TypeWhisper.Plugin.GoogleCloudStt.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Groq/TypeWhisper.Plugin.Groq.csproj"/>
         <Project Path="plugins/TypeWhisper.Plugin.Linear/TypeWhisper.Plugin.Linear.csproj"/>

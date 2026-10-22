@@ -30,6 +30,7 @@
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Gemini\TypeWhisper.Plugin.Gemini.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.GemmaLocal\TypeWhisper.Plugin.GemmaLocal.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Gladia\TypeWhisper.Plugin.Gladia.csproj"/>
+        <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.GitHubCopilot\TypeWhisper.Plugin.GitHubCopilot.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.GoogleCloudStt\TypeWhisper.Plugin.GoogleCloudStt.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Groq\TypeWhisper.Plugin.Groq.csproj"/>
         <ProjectReference Include="..\..\plugins\TypeWhisper.Plugin.Linear\TypeWhisper.Plugin.Linear.csproj"/>
