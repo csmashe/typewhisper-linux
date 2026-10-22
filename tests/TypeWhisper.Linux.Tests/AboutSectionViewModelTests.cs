@@ -161,6 +161,57 @@ public sealed class AboutSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ResetAllData_RecordsTheResetAndRestartsTheApp()
+    {
+        var dataDir = Path.Join(_tempDir, "data");
+        var restarts = 0;
+        var reset = new LocalDataResetService(dataDir);
+        var sut = CreateViewModel(new FakeProcessRunner(), dataReset: reset, requestRestart: () => ++restarts > 0);
+        sut.DeleteModelsOnReset = true;
+
+        await sut.ResetAllDataAsync();
+
+        Assert.True(reset.IsResetPending);
+        Assert.Equal(1, restarts);
+        Assert.Contains("\"deleteModels\": true", await File.ReadAllTextAsync(Path.Join(dataDir, LocalDataResetService.PendingMarkerName)));
+        // The card stays busy until the app exits.
+        Assert.True(sut.IsBackupBusy);
+    }
+
+    [Fact]
+    public async Task ResetAllData_WhenItCannotBeRecorded_DoesNotRestart()
+    {
+        var blocker = Path.Join(_tempDir, "not-a-folder");
+        await File.WriteAllTextAsync(blocker, "");
+        var restarts = 0;
+        var sut = CreateViewModel(
+            new FakeProcessRunner(),
+            dataReset: new LocalDataResetService(Path.Join(blocker, "data")),
+            requestRestart: () => ++restarts > 0
+        );
+
+        await Assert.ThrowsAnyAsync<IOException>(sut.ResetAllDataAsync);
+
+        Assert.Equal(0, restarts);
+        Assert.False(sut.IsBackupBusy);
+        Assert.Equal(Loc.Instance["About.ResetFailed"], sut.BackupStatusText);
+    }
+
+    [Fact]
+    public async Task ResetAllData_WhileQuitting_RunsAtTheNextLaunch()
+    {
+        var sut = CreateViewModel(
+            new FakeProcessRunner(),
+            dataReset: new LocalDataResetService(Path.Join(_tempDir, "data")),
+            requestRestart: () => false
+        );
+
+        await sut.ResetAllDataAsync();
+
+        Assert.Equal(Loc.Instance["About.ResetAtNextLaunch"], sut.BackupStatusText);
+    }
+
+    [Fact]
     public async Task CancelDataExport_StopsTheExportWithoutWritingAFile()
     {
         var dataDir = Path.Join(_tempDir, "data");
@@ -249,6 +300,8 @@ public sealed class AboutSectionViewModelTests : IDisposable
         FakeProcessRunner runner,
         LocalDataExportService? dataExport = null,
         SupportReportService? supportReport = null,
+        LocalDataResetService? dataReset = null,
+        Func<bool>? requestRestart = null,
         IReadOnlyList<ErrorLogEntry>? entries = null
     )
     {
@@ -264,7 +317,9 @@ public sealed class AboutSectionViewModelTests : IDisposable
             new UrlLauncher(runner),
             TimeZoneInfo.Utc,
             dataExport,
-            supportReport
+            supportReport,
+            dataReset ?? new LocalDataResetService(Path.Join(_tempDir, "reset-data")),
+            requestRestart ?? (() => true)
         );
     }
 }

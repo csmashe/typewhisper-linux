@@ -131,7 +131,7 @@
             <Border Classes="panel"
                     Padding="16">
                 <Grid ColumnDefinitions="*,Auto,Auto"
-                      RowDefinitions="Auto,Auto"
+                      RowDefinitions="Auto,Auto,Auto"
                       ColumnSpacing="10">
                     <StackPanel Spacing="4">
                         <StackPanel Orientation="Horizontal"
@@ -193,6 +193,34 @@
                                         IsVisible="{Binding IsExportingData}"
                                         Command="{Binding CancelDataExportCommand}" />
                             </StackPanel>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="2"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Margin="0,14,0,0"
+                            Padding="0,14,0,0"
+                            BorderBrush="#1AFFFFFF"
+                            BorderThickness="0,1,0,0">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="10">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="{loc:Str About.ResetData}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{loc:Str About.ResetDataDescription}"
+                                           FontSize="12"
+                                           Foreground="#8A9AAE"
+                                           TextWrapping="Wrap" />
+                                <CheckBox Content="{loc:Str About.ResetDeleteModels}"
+                                          IsChecked="{Binding DeleteModelsOnReset}"
+                                          IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="{loc:Str About.DeleteAllData}"
+                                    Foreground="#FF8A80"
+                                    IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
+                                    VerticalAlignment="Center"
+                                    Click="OnDeleteAllData" />
                         </Grid>
                     </Border>
                 </Grid>

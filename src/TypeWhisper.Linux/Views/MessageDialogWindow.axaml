@@ -22,6 +22,9 @@
                        TextWrapping="Wrap"
                        MaxWidth="380"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            <CheckBox x:Name="AcknowledgementCheckBox"
+                      IsVisible="False"
+                      IsCheckedChanged="AcknowledgementCheckBox_OnIsCheckedChanged" />
         </StackPanel>
 
         <StackPanel Grid.Row="1"

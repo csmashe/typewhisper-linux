@@ -220,7 +220,7 @@ public sealed class LocalDataExportService
         || path.StartsWith(root + "/", StringComparison.Ordinal);
 
     // Resolves every existing link along the path, so a link to the data folder is recognized.
-    private static string ResolveLinks(string path)
+    internal static string ResolveLinks(string path)
     {
         var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         var current = "/";
@@ -242,6 +242,53 @@ public sealed class LocalDataExportService
         }
 
         return current;
+    }
+
+    /// <summary>
+    ///     The custom model folder when it lies inside the data folder <paramref name="root" />, so its
+    ///     models stay out of an export like any other.
+    /// </summary>
+    private static string? ResolveModelStorageInside(string root)
+    {
+        var resolved = ResolveCustomModelRootInside(root);
+        // Plugins keep models in its PluginData folder. The data folder already leaves plugin
+        // subfolders out; a top-level folder shares it with user data, so only that subfolder stays out.
+        return resolved is null || Path.GetDirectoryName(resolved) != root
+            ? resolved
+            : Path.Join(resolved, LocalModelStoragePaths.PluginDataFolderName);
+    }
+
+    /// <summary>The configured custom model folder when it lies strictly inside <paramref name="root" />.</summary>
+    internal static string? ResolveCustomModelRootInside(string root)
+    {
+        try
+        {
+            // Opened like every exported file: no link, no pipe or device, and bounded.
+            using var source = SettingsBackupService.NativeFile.OpenRegularFile(
+                Path.Join(root, "settings.json"),
+                "settings.json",
+                []
+            );
+            if (source.Length > MaxSettingsBytes)
+            {
+                return null;
+            }
+
+            var settings = JsonNode.Parse(source) as JsonObject;
+            var configured = AppSettings.NormalizeLocalModelStoragePath(
+                settings?["localModelStoragePath"] is JsonValue value && value.TryGetValue<string>(out var path)
+                    ? path
+                    : null
+            );
+            var resolved = configured is null ? null : ResolveLinks(configured);
+            return resolved is not null && resolved.StartsWith(root + "/", StringComparison.Ordinal)
+                ? resolved
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
     }
 
     private static string Describe(LocalDataCategory category) =>
@@ -360,51 +407,6 @@ public sealed class LocalDataExportService
             WriteText(ManifestEntryName, Manifest(result));
             WriteText(ReadMeEntryName, ReadMe(result));
             return result;
-        }
-
-        // A custom model folder may sit inside an exported folder; its models stay out like any other.
-        private static string? ResolveModelStorageInside(string root)
-        {
-            try
-            {
-                // Opened like every exported file: no link, no pipe or device, and bounded.
-                using var source = SettingsBackupService.NativeFile.OpenRegularFile(
-                    Path.Join(root, "settings.json"),
-                    "settings.json",
-                    []
-                );
-                if (source.Length > MaxSettingsBytes)
-                {
-                    return null;
-                }
-
-                var settings = JsonNode.Parse(source) as JsonObject;
-                var configured = AppSettings.NormalizeLocalModelStoragePath(
-                    settings?["localModelStoragePath"] is JsonValue value && value.TryGetValue<string>(out var path)
-                        ? path
-                        : null
-                );
-                var resolved = configured is null ? null : ResolveLinks(configured);
-                if (resolved is null || resolved != root && !resolved.StartsWith(root + "/", StringComparison.Ordinal))
-                {
-                    return null;
-                }
-
-                // Plugins keep models in its PluginData folder. The data folder already leaves plugin
-                // subfolders out; a top-level folder shares it with user data, so only that subfolder stays out.
-                if (resolved == root)
-                {
-                    return null;
-                }
-
-                return Path.GetDirectoryName(resolved) == root
-                    ? Path.Join(resolved, LocalModelStoragePaths.PluginDataFolderName)
-                    : resolved;
-            }
-            catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException or JsonException)
-            {
-                return null;
-            }
         }
 
         private static LocalDataCategory ClassifyTopLevel(string name, SettingsBackupService.BackupEntryKind kind)

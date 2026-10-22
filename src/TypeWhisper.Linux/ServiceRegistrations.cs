@@ -246,6 +246,7 @@ internal static class ServiceRegistrations
             )
         );
         services.AddSingleton<LocalDataExportService>();
+        services.AddSingleton<LocalDataResetService>();
         services.AddSingleton<ApiDiscoveryFile>();
         services.AddSingleton<DictationSessionResultStore>();
         services.AddSingleton<HttpApiService>();

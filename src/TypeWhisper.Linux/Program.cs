@@ -9,6 +9,7 @@ using TypeWhisper.Linux.Cli.Commands;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Plugins.TranscriptionWorkers;
+using TypeWhisper.Linux.Services.UserData;
 
 namespace TypeWhisper.Linux;
 
@@ -34,6 +35,7 @@ public static class Program
         // visible when the app runs from a terminal.
         Trace.Listeners.Add(new ConsoleTraceListener());
         BootTrace.Stage("Main entered");
+        AppRelauncher.WaitForPreviousInstance();
 
         TypeWhisperEnvironment.EnsureDirectories();
         BootTrace.Initialize();
@@ -131,6 +133,12 @@ public static class Program
             return 1;
         }
 
+        if (!ApplyPendingReset())
+        {
+            LinuxStartupNotification.NotifyComplete();
+            return 1;
+        }
+
         var restoreResult = SettingsBackupService.ApplyPendingRestoreAtStartup(
             TypeWhisperEnvironment.BasePath
         );
@@ -202,13 +210,75 @@ public static class Program
         {
             // A timed-out HTTP handler may still be using DI-owned services. The process is
             // exiting, so skipping provider disposal here cannot leak anything beyond its life.
-            if (!App.SkipProviderDisposal)
+            try
             {
-                // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
-                // sync Dispose() throws InvalidOperationException for those.
-                Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                if (!App.SkipProviderDisposal)
+                {
+                    // DisposeAsync: some DI services are IAsyncDisposable-only (e.g. XdgPortalGlobalShortcutsBackend);
+                    // sync Dispose() throws InvalidOperationException for those.
+                    Services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+            }
+            finally
+            {
+                // The user asked to restart; a failed disposal must not leave the app closed.
+                if (App.RestartRequested)
+                {
+                    AppRelauncher.Relaunch();
+                }
             }
         }
+    }
+
+    // A reset requested in the previous session runs here: after the single-instance check, before
+    // a staged restore and before anything opens the data folder. False cancels startup.
+    private static bool ApplyPendingReset()
+    {
+        var result = LocalDataResetService.ApplyPendingResetAtStartup(TypeWhisperEnvironment.BasePath);
+        switch (result.Status)
+        {
+            case StartupResetStatus.None:
+                return true;
+
+            case StartupResetStatus.LockUnavailable:
+                Console.Error.WriteLine(
+                    "Another TypeWhisper startup is deleting its data. Startup was canceled."
+                );
+                Trace.WriteLine($"[Program] Reset lock unavailable: {result.Error?.GetType().Name}");
+                return false;
+
+            case StartupResetStatus.RequesterRunning:
+                Console.Error.WriteLine(
+                    "The TypeWhisper that asked to delete its data is still closing. Startup was canceled; try again in a moment."
+                );
+                return false;
+
+            case StartupResetStatus.Failed:
+                Console.Error.WriteLine(
+                    "TypeWhisper could not delete its data. Startup was canceled; it is retried at the next launch. "
+                    + $"To cancel the reset, delete {Path.Join(TypeWhisperEnvironment.BasePath, LocalDataResetService.PendingMarkerName)}"
+                );
+                Trace.WriteLine($"[Program] Reset failed: {result.Error}");
+                return false;
+
+            case StartupResetStatus.Incomplete:
+                Console.Error.WriteLine(
+                    $"Deleted all TypeWhisper data except {result.RemainingCount} item(s) in "
+                    + $"{TypeWhisperEnvironment.BasePath}: {string.Join(", ", result.Remaining)}"
+                );
+                break;
+
+            case StartupResetStatus.Completed:
+            default:
+                Console.WriteLine("Deleted all TypeWhisper data.");
+                break;
+        }
+
+        // The deletion took the standard folders and this launch's boot trace with it.
+        TypeWhisperEnvironment.EnsureDirectories();
+        BootTrace.Initialize();
+        BootTrace.Stage($"local data reset ({result.Status}, {result.RemainingCount} left)");
+        return true;
     }
 
     // Public so the Avalonia XAML previewer / design-time tooling can discover and invoke it reflectively.
