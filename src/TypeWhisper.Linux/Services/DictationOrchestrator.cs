@@ -52,6 +52,9 @@ internal sealed record RecordingContext(
     ///     pipeline records nothing and pays no cost.
     /// </summary>
     public LlmCallCapture? Capture { get; init; }
+
+    /// <summary>Keeps a run that is not a live dictation (text API) out of the Dictation status.</summary>
+    public bool SuppressStatus { get; init; }
 }
 
 internal enum ToggleGateCloseOutcome
@@ -4399,6 +4402,11 @@ public sealed partial class DictationOrchestrator : IDisposable
     /// </summary>
     private void ReportStatus(RecordingContext context, string message)
     {
+        if (context.SuppressStatus)
+        {
+            return;
+        }
+
         StatusMessage?.Invoke(this, message);
         if (!IsContextStillOwningOverlay(context))
         {

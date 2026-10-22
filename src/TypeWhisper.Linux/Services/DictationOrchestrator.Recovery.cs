@@ -26,7 +26,8 @@ public sealed partial class DictationOrchestrator
         bool skipVocabularyBooster,
         string engineProviderId,
         string? engineModelId,
-        List<(string Name, TimeSpan Elapsed)>? stepTimings = null
+        List<(string Name, TimeSpan Elapsed)>? stepTimings = null,
+        bool recordUsage = true
     )
     {
         var pipelineContext = new PostProcessingContext
@@ -73,7 +74,7 @@ public sealed partial class DictationOrchestrator
             TargetProcessName = context.AppProcess,
             DictionaryCorrector = SelectFinalDictionaryCorrector(
                 usedPreviewFallback,
-                _dictionary.ApplyCorrections
+                recordUsage ? _dictionary.ApplyCorrections : _dictionary.PreviewCorrections
             ),
             VocabularyBooster = !skipVocabularyBooster && _settings.Current.VocabularyBoostingEnabled
                 ? _vocabularyBoosting.Apply
@@ -94,7 +95,7 @@ public sealed partial class DictationOrchestrator
                             token
                         ),
             SnippetExpander = text =>
-                _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
+                _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null
                 ? (text, token) => RunPromptActionAsync(context, promptAction, text, token)
                 : null,
