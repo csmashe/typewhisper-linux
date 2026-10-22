@@ -127,7 +127,7 @@
                               MaxHeight="120"
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
-                              IsVisible="{Binding PartialText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                              IsVisible="{Binding ShowInlinePartialText}">
                     <TextBlock Text="{Binding PartialText}"
                                TextWrapping="Wrap"
                                MaxWidth="420"

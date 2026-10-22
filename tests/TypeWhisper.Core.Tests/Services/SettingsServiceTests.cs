@@ -116,6 +116,36 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.Equal(14, new SettingsService(_filePath).Current.DiagnosticLogRetentionDays);
     }
 
+    [Fact]
+    public void LiveTextWindow_DefaultsAttached_AndLoadClampsSizeAndRoundTripsPosition()
+    {
+        var defaults = new SettingsService(_filePath).Current;
+        Assert.False(defaults.LiveTextFloating);
+        Assert.Null(defaults.LiveTextWindowLeft);
+        Assert.Equal(AppSettings.DefaultLiveTextWindowWidth, defaults.LiveTextWindowWidth);
+
+        File.WriteAllText(_filePath,
+            "{\"liveTextFloating\":true,\"liveTextWindowLeft\":-50.5,\"liveTextWindowTop\":30,"
+            + "\"liveTextWindowWidth\":10,\"liveTextWindowHeight\":99999}");
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.True(loaded.LiveTextFloating);
+        Assert.Equal(-50.5, loaded.LiveTextWindowLeft);
+        Assert.Equal(30, loaded.LiveTextWindowTop);
+        Assert.Equal(AppSettings.MinLiveTextWindowWidth, loaded.LiveTextWindowWidth);
+        Assert.Equal(AppSettings.MaxLiveTextWindowHeight, loaded.LiveTextWindowHeight);
+    }
+
+    [Fact]
+    public void Save_DropsNonFiniteLiveTextWindowPosition()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { LiveTextWindowLeft = double.NaN, LiveTextWindowTop = double.PositiveInfinity });
+
+        Assert.Null(sut.Current.LiveTextWindowLeft);
+        Assert.Null(sut.Current.LiveTextWindowTop);
+    }
+
     [Theory]
     [InlineData("null")]
     [InlineData("[]")]
