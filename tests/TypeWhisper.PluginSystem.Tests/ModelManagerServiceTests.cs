@@ -1533,6 +1533,93 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task DownloadAndLoadModelAsync_Downloading_LeavesTheLoadedModelUsable()
+    {
+        using var sut = CreateServiceForModelSwitch(out var oldModelId, out var newModelId, out var newPlugin);
+        await sut.LoadModelAsync(oldModelId, CancellationToken.None);
+        newPlugin.ModelDownloaded = false;
+        newPlugin.DownloadGate = new TaskCompletionSource();
+
+        var switching = sut.DownloadAndLoadModelAsync(newModelId, CancellationToken.None);
+        await newPlugin.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await using (await sut.AcquireTranscriptionAsync(oldModelId, cancellationToken: CancellationToken.None)
+                         .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None))
+        {
+            Assert.Equal(oldModelId, sut.ActiveModelId);
+        }
+
+        Assert.True(await sut.TryLoadModelAsync(oldModelId, CancellationToken.None));
+        newPlugin.DownloadGate.SetResult();
+        await switching.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.Equal(newModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task DownloadModelAsync_StorageCheckFails_ReleasesTheModelForARetry()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.StorageFault = new IOException("storage unavailable");
+
+        await Assert.ThrowsAsync<IOException>(() => sut.DownloadModelAsync(fullModelId, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+        Assert.False(sut.IsDownloading(fullModelId));
+        Assert.False(sut.IsAnyModelDownloading);
+
+        fake.StorageFault = null;
+        await sut.DownloadModelAsync(fullModelId, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.True(fake.ModelDownloaded);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_LoadedModel_WorksWhenItsStorageIsGone()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        await sut.LoadModelAsync(fullModelId, CancellationToken.None);
+        fake.StorageFault = new IOException("storage unavailable");
+
+        await using (await sut.AcquireTranscriptionAsync(fullModelId, cancellationToken: CancellationToken.None)
+                         .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None))
+        {
+            Assert.Equal(fullModelId, sut.ActiveModelId);
+        }
+
+        Assert.True(await sut.EnsureModelLoadedAsync(fullModelId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_DownloadStartedWhileWaitingForLock_DoesNotHoldTheLock()
+    {
+        using var sut = CreateServiceForModelSwitch(out var oldModelId, out var newModelId, out var newPlugin);
+        await sut.LoadModelAsync(oldModelId, CancellationToken.None);
+        newPlugin.ModelDownloaded = false;
+        newPlugin.DownloadGate = new TaskCompletionSource();
+
+        var lease = await sut.AcquireTranscriptionAsync(oldModelId, cancellationToken: CancellationToken.None);
+        var load = sut.LoadModelAsync(newModelId, CancellationToken.None);
+        var download = sut.DownloadModelAsync(newModelId, CancellationToken.None);
+        await newPlugin.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await lease.DisposeAsync();
+
+        Assert.False(await sut.TryLoadModelAsync(newModelId, CancellationToken.None));
+        await using (await sut.AcquireTranscriptionAsync(oldModelId, cancellationToken: CancellationToken.None)
+                         .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None))
+        {
+            Assert.Equal(oldModelId, sut.ActiveModelId);
+        }
+
+        Assert.False(load.IsCompleted);
+        newPlugin.DownloadGate.SetResult();
+        await download.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await load.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.Equal(newModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
     public async Task TryLoadModelAsync_WhileDownloading_ReportsBusy()
     {
         using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
@@ -1793,9 +1880,12 @@ public class ModelManagerServiceTests
             SelectedModelId = modelId;
         }
 
+        /// <summary>When set, <see cref="IsModelDownloaded" /> throws it, like unavailable storage.</summary>
+        public Exception? StorageFault { get; set; }
+
         public bool IsModelDownloaded(string modelId)
         {
-            return ModelDownloaded;
+            return StorageFault is null ? ModelDownloaded : throw StorageFault;
         }
 
         public async Task DownloadModelAsync(

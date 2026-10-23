@@ -395,16 +395,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 continue;
             }
 
-            // Checked inside the slot, so a download that just finished is not repeated.
-            if (plugin.IsModelDownloaded(pluginModelId))
-            {
-                EndFileOperation(modelId, completion, ModelFileOperationOutcome.Ended);
-                return;
-            }
-
             var outcome = ModelFileOperationOutcome.Ended;
             try
             {
+                // Checked inside the slot, so a download that just finished is not repeated.
+                if (plugin.IsModelDownloaded(pluginModelId))
+                {
+                    return;
+                }
+
                 // The generation captured here gates this download's progress callbacks
                 // (see _statusGate): every authoritative transition after this point — the
                 // load's LoadingModel/Ready, Failed, or the cancel path's ClearStatus —
@@ -456,9 +455,40 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     Waits for a download or delete of <paramref name="modelId" />. Public entry points call it
-    ///     before taking <c>_modelLock</c>, so the loaded model stays usable while they wait; the
-    ///     load path repeats it under the lock for a download that started in between.
+    ///     Downloads <paramref name="modelId" />'s files, or waits for a running download or delete of
+    ///     them, before the caller takes <c>_modelLock</c>, so the loaded model stays usable meanwhile.
+    /// </summary>
+    private async Task PrepareModelFilesAsync(string? modelId, CancellationToken cancellationToken)
+    {
+        // A loaded model needs no files checked, which also keeps dictation working when its
+        // storage has gone away since the load.
+        if (modelId is null
+            || modelId == ActiveModelId
+            || GetTranscriptionPlugin(modelId) is not { SupportsModelDownload: true } plugin)
+        {
+            return;
+        }
+
+        var (_, pluginModelId) = ParsePluginModelId(modelId!);
+        // Every dictation passes here; skip the slot when nothing is pending.
+        if (plugin.IsModelDownloaded(pluginModelId) && !HasFileOperation(modelId!))
+        {
+            return;
+        }
+
+        await RunDownloadAsync(plugin, modelId!, pluginModelId, clearStatusWhenDone: true, cancellationToken);
+    }
+
+    private bool HasFileOperation(string modelId)
+    {
+        lock (_fileOperationGate)
+        {
+            return _fileOperations.ContainsKey(modelId);
+        }
+    }
+
+    /// <summary>
+    ///     Waits for a download, load or delete of <paramref name="modelId" /> to end.
     /// </summary>
     private async Task WaitForFileOperationAsync(string? modelId, CancellationToken cancellationToken)
     {
@@ -527,7 +557,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
-        await WaitForFileOperationAsync(modelId, cancellationToken);
+        await PrepareModelFilesAsync(modelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -548,40 +578,71 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     public async Task LoadModelAsync(string modelId, CancellationToken cancellationToken = default)
     {
-        await WaitForFileOperationAsync(modelId, cancellationToken);
-        await _modelLock.WaitAsync(cancellationToken);
-        try
+        while (true)
         {
-            await LoadModelCoreAsync(modelId, cancellationToken);
-        }
-        finally
-        {
+            await WaitForFileOperationAsync(modelId, cancellationToken);
+            await _modelLock.WaitAsync(cancellationToken);
+            // A download that started while this waited for the lock is waited out without it.
+            if (!TryBeginLoad(modelId, out var slot))
+            {
+                _modelLock.Release();
+                continue;
+            }
+
             try
             {
-                ScheduleAutoUnload();
+                await LoadModelFilesAsync(modelId, cancellationToken);
+                return;
             }
             finally
             {
-                _modelLock.Release();
+                EndFileOperation(modelId, slot, ModelFileOperationOutcome.Ended);
+                try
+                {
+                    ScheduleAutoUnload();
+                }
+                finally
+                {
+                    _modelLock.Release();
+                }
             }
         }
+    }
+
+    private bool TryBeginLoad(string modelId, out TaskCompletionSource<ModelFileOperationOutcome> slot)
+    {
+        slot = new TaskCompletionSource<ModelFileOperationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        return TryBeginFileOperation(modelId, new ModelFileOperation(null, slot.Task), out _);
     }
 
     /// <summary>Loads a model without waiting for another operation; returns false when busy.</summary>
     public async Task<bool> TryLoadModelAsync(string modelId, CancellationToken ct)
     {
-        if (IsDownloading(modelId) || !await _modelLock.WaitAsync(0, ct))
+        if (!await _modelLock.WaitAsync(0, ct))
         {
             return false;
         }
 
+        TaskCompletionSource<ModelFileOperationOutcome>? slot = null;
         try
         {
-            await LoadModelCoreAsync(modelId, ct);
+            // Claimed under the lock, so a download of this model makes it busy instead of waited for.
+            if (!TryBeginLoad(modelId, out var claimed))
+            {
+                return false;
+            }
+
+            slot = claimed;
+            await LoadModelFilesAsync(modelId, ct);
             return true;
         }
         finally
         {
+            if (slot is not null)
+            {
+                EndFileOperation(modelId, slot, ModelFileOperationOutcome.Ended);
+            }
+
             try
             {
                 ScheduleAutoUnload();
@@ -616,16 +677,30 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    /// <summary>Downloads (if needed) and loads a model without waiting; returns false when busy.</summary>
+    /// <summary>
+    ///     Downloads the model if needed, then loads it without waiting for the model lock; returns
+    ///     false when another download of it is running or the lock is busy.
+    /// </summary>
     public async Task<bool> TryDownloadAndLoadModelAsync(string modelId, CancellationToken ct)
     {
-        if (IsDownloading(modelId) || !await _modelLock.WaitAsync(0, ct))
+        if (IsDownloading(modelId))
+        {
+            return false;
+        }
+
+        await PrepareModelFilesAsync(modelId, ct);
+        if (!await _modelLock.WaitAsync(0, ct))
         {
             return false;
         }
 
         try
         {
+            if (IsDownloading(modelId))
+            {
+                return false;
+            }
+
             await DownloadAndLoadModelCoreAsync(modelId, ct);
             return true;
         }
@@ -757,12 +832,11 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 return ModelDeleteOutcome.Loaded;
             }
 
-            if (IsDownloading(modelId))
+            if (!await TryDeleteModelCoreAsync(modelId, ct))
             {
                 return ModelDeleteOutcome.Busy;
             }
 
-            await DeleteModelCoreAsync(modelId, ct);
             if (!IsDownloaded(modelId))
             {
                 return ModelDeleteOutcome.Deleted;
@@ -850,7 +924,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
-        await WaitForFileOperationAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
+        await PrepareModelFilesAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -880,7 +954,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
-        await WaitForFileOperationAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
+        await PrepareModelFilesAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -1118,7 +1192,30 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>
+    ///     Loads under <c>_modelLock</c> while holding the model's slot, so no download or delete of its
+    ///     files runs meanwhile. Callers have downloaded the files first, so a download that claims the
+    ///     slot in between only finds them on disk and releases it at once.
+    /// </summary>
     private async Task LoadModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
+        TaskCompletionSource<ModelFileOperationOutcome> slot;
+        while (!TryBeginLoad(modelId, out slot))
+        {
+            await WaitForFileOperationAsync(modelId, cancellationToken);
+        }
+
+        try
+        {
+            await LoadModelFilesAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            EndFileOperation(modelId, slot, ModelFileOperationOutcome.Ended);
+        }
+    }
+
+    private async Task LoadModelFilesAsync(string modelId, CancellationToken cancellationToken)
     {
         if (!IsPluginModel(modelId))
         {
@@ -1136,9 +1233,6 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 $"{plugin.ProviderDisplayName}: not configured (missing API key or model)."
             );
         }
-
-        // A download of this model that started after the caller's wait; its status is not ours.
-        await WaitForFileOperationAsync(modelId, cancellationToken);
 
         CancelAutoUnload();
         // The generation gates this load's progress callbacks; see _statusGate.
@@ -1330,16 +1424,26 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     private async Task DeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
     {
+        if (!await TryDeleteModelCoreAsync(modelId, cancellationToken))
+        {
+            throw new InvalidOperationException("The model is downloading. Cancel the download first.");
+        }
+    }
+
+    /// <summary>Deletes the model's files, or returns false when a download of them holds the slot.</summary>
+    private async Task<bool> TryDeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
         var completion = new TaskCompletionSource<ModelFileOperationOutcome>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         if (!TryBeginFileOperation(modelId, new ModelFileOperation(null, completion.Task), out _))
         {
-            throw new InvalidOperationException("The model is downloading. Cancel the download first.");
+            return false;
         }
 
         try
         {
             await DeleteModelFilesAsync(modelId, cancellationToken);
+            return true;
         }
         finally
         {
