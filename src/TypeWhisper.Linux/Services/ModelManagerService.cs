@@ -429,6 +429,25 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private async Task WaitForFileOperationAsync(string modelId, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            Task<bool> running;
+            lock (_fileOperationGate)
+            {
+                if (!_fileOperations.TryGetValue(modelId, out var operation))
+                {
+                    return;
+                }
+
+                running = operation.Completion;
+            }
+
+            await running.WaitAsync(cancellationToken);
+        }
+    }
+
     private bool TryBeginFileOperation(string modelId, ModelFileOperation operation, out Task<bool> running)
     {
         bool begun;
@@ -1066,6 +1085,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 $"{plugin.ProviderDisplayName}: not configured (missing API key or model)."
             );
         }
+
+        // A card download of this model may be running; its status is not ours to replace.
+        await WaitForFileOperationAsync(modelId, cancellationToken);
 
         CancelAutoUnload();
         // The generation gates this load's progress callbacks; see _statusGate.

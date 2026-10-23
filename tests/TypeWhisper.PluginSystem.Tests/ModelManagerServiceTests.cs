@@ -1417,6 +1417,29 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task LoadModelAsync_WhileDownloading_WaitsAndKeepsTheDownloadsStatus()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+
+        var download = sut.DownloadModelAsync(fullModelId, CancellationToken.None);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        var load = sut.LoadModelAsync(fullModelId, CancellationToken.None);
+
+        Assert.False(load.IsCompleted);
+        Assert.Equal(ModelStatusType.Downloading, sut.GetStatus(fullModelId).Type);
+        Assert.Equal(0, fake.LoadCallCount);
+
+        fake.DownloadGate.SetResult();
+        await download.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await load.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.Equal(1, fake.LoadCallCount);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
     public async Task DeleteModel_WhileDownloading_IsRefused()
     {
         using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
