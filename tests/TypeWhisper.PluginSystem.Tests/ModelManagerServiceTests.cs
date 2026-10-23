@@ -1440,6 +1440,72 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task LoadModelAsync_WaitingOnDownload_LeavesTheLoadedModelUsable()
+    {
+        using var sut = CreateServiceForModelSwitch(out var oldModelId, out var newModelId, out var newPlugin);
+        await sut.LoadModelAsync(oldModelId, CancellationToken.None);
+        newPlugin.ModelDownloaded = false;
+        newPlugin.DownloadGate = new TaskCompletionSource();
+
+        var download = sut.DownloadModelAsync(newModelId, CancellationToken.None);
+        await newPlugin.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        var load = sut.LoadModelAsync(newModelId, CancellationToken.None);
+
+        await using (var lease = await sut.AcquireTranscriptionAsync(oldModelId, cancellationToken: CancellationToken.None)
+                         .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None))
+        {
+            Assert.Equal(oldModelId, sut.ActiveModelId);
+            Assert.NotNull(lease.Plugin);
+        }
+
+        Assert.False(load.IsCompleted);
+        newPlugin.DownloadGate.SetResult();
+        await download.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await load.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        Assert.Equal(newModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task LoadModelAsync_WaitingOnCanceledDownload_StopsWithoutLoading()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+
+        var download = sut.DownloadModelAsync(fullModelId, CancellationToken.None);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        var load = sut.LoadModelAsync(fullModelId, CancellationToken.None);
+        sut.CancelDownload(fullModelId);
+
+        await Assert.ThrowsAsync<ModelDownloadCanceledException>(() =>
+            download.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+        await Assert.ThrowsAsync<ModelDownloadCanceledException>(() =>
+            load.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+        Assert.Equal(0, fake.LoadCallCount);
+        Assert.Equal(ModelStatusType.NotDownloaded, sut.GetStatus(fullModelId).Type);
+    }
+
+    [Fact]
+    public async Task TryLoadModelAsync_WhileDownloading_ReportsBusy()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+
+        var download = sut.DownloadModelAsync(fullModelId, CancellationToken.None);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        Assert.False(await sut.TryLoadModelAsync(fullModelId, CancellationToken.None));
+        Assert.False(await sut.TryDownloadAndLoadModelAsync(fullModelId, CancellationToken.None));
+        Assert.Equal(ModelStatusType.Downloading, sut.GetStatus(fullModelId).Type);
+
+        fake.DownloadGate.SetResult();
+        await download.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+    }
+
+    [Fact]
     public async Task DeleteModel_WhileDownloading_IsRefused()
     {
         using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);

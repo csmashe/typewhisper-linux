@@ -429,8 +429,18 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private async Task WaitForFileOperationAsync(string modelId, CancellationToken cancellationToken)
+    /// <summary>
+    ///     Waits for a download or delete of <paramref name="modelId" />. Public entry points call it
+    ///     before taking <c>_modelLock</c>, so the loaded model stays usable while they wait; the
+    ///     load path repeats it under the lock for a download that started in between.
+    /// </summary>
+    private async Task WaitForFileOperationAsync(string? modelId, CancellationToken cancellationToken)
     {
+        if (modelId is null)
+        {
+            return;
+        }
+
         while (true)
         {
             Task<bool> running;
@@ -444,7 +454,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 running = operation.Completion;
             }
 
-            await running.WaitAsync(cancellationToken);
+            if (await running.WaitAsync(cancellationToken))
+            {
+                throw new ModelDownloadCanceledException(null);
+            }
         }
     }
 
@@ -485,6 +498,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
+        await WaitForFileOperationAsync(modelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -505,6 +519,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     public async Task LoadModelAsync(string modelId, CancellationToken cancellationToken = default)
     {
+        await WaitForFileOperationAsync(modelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -526,7 +541,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// <summary>Loads a model without waiting for another operation; returns false when busy.</summary>
     public async Task<bool> TryLoadModelAsync(string modelId, CancellationToken ct)
     {
-        if (!await _modelLock.WaitAsync(0, ct))
+        if (IsDownloading(modelId) || !await _modelLock.WaitAsync(0, ct))
         {
             return false;
         }
@@ -575,7 +590,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// <summary>Downloads (if needed) and loads a model without waiting; returns false when busy.</summary>
     public async Task<bool> TryDownloadAndLoadModelAsync(string modelId, CancellationToken ct)
     {
-        if (!await _modelLock.WaitAsync(0, ct))
+        if (IsDownloading(modelId) || !await _modelLock.WaitAsync(0, ct))
         {
             return false;
         }
@@ -806,6 +821,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
+        await WaitForFileOperationAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -835,6 +851,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
+        await WaitForFileOperationAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -1049,6 +1066,11 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             await LoadModelCoreAsync(modelId, cancellationToken);
         }
+        catch (ModelDownloadCanceledException)
+        {
+            // The canceled download already recorded its end state.
+            throw;
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Caller-requested cancellation: drop this operation's transient entry so
@@ -1086,7 +1108,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             );
         }
 
-        // A card download of this model may be running; its status is not ours to replace.
+        // A download of this model that started after the caller's wait; its status is not ours.
         await WaitForFileOperationAsync(modelId, cancellationToken);
 
         CancelAutoUnload();
