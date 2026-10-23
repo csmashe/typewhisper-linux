@@ -45,9 +45,25 @@ public partial class DictationSection : UserControl
             return;
         }
 
-        // Only the confirmation dialog is uncontained here; DeleteSelectedModelAsync
-        // catches its own file-system failures internally, so Window alone is correct.
-        await UiOperations.RunAsync(
+        await ConfirmAndDeleteModelAsync(selected.DisplayLabel, viewModel.DeleteSelectedModelAsync);
+    }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnRemoveLocalModel(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not DictationSectionViewModel viewModel
+            || (sender as Control)?.DataContext is not LocalModelCard card)
+        {
+            return;
+        }
+
+        await ConfirmAndDeleteModelAsync(card.DisplayName, () => viewModel.DeleteLocalModelAsync(card));
+    }
+
+    // Only the confirmation dialog is uncontained here; the view model catches its own
+    // file-system failures, so Window alone is correct.
+    private static Task<bool> ConfirmAndDeleteModelAsync(string label, Func<Task> delete) =>
+        UiOperations.RunAsync(
             "confirm and delete model",
             Loc.Instance["Common.Delete"],
             UiFailureKind.Window,
@@ -55,18 +71,17 @@ public partial class DictationSection : UserControl
             {
                 var dialog = new MessageDialogWindow();
                 var confirmed = await dialog.ShowConfirmationAsync(
-                    "Delete model files?",
-                    $"Delete {selected.DisplayLabel} from your hard drive? It can be downloaded again later.",
-                    "Delete"
+                    Loc.Instance["Dictation.DeleteModelTitle"],
+                    Loc.Instance.GetString("Dictation.DeleteModelMessage", label),
+                    Loc.Instance["Common.Delete"]
                 );
 
                 if (confirmed)
                 {
-                    await viewModel.DeleteSelectedModelAsync();
+                    await delete();
                 }
             }
         );
-    }
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnChangeModelStorage(object? sender, RoutedEventArgs e)

@@ -49,6 +49,61 @@ public sealed class LocalModelDownloadSpaceTests : IDisposable
     }
 
     [Fact]
+    public async Task WhisperDownload_InProgress_DoesNotBlockBackendChange()
+    {
+        using var plugin = new WhisperCppPlugin();
+        await plugin.ActivateAsync(Host().Object);
+        using var downloading = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        // ReSharper disable AccessToDisposedClosure -- the probe runs inside the download, which the test awaits before the using scope ends.
+        plugin.SpaceProbe = _ =>
+        {
+            downloading.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            return 0;
+        };
+
+        var download = Task.Run(() => plugin.DownloadModelAsync("tiny", null, CancellationToken.None));
+        // ReSharper restore AccessToDisposedClosure
+        Assert.True(downloading.Wait(TimeSpan.FromSeconds(5)));
+
+        // The host changes the backend under its model lock while another model downloads.
+        await plugin.ConfigureComputeBackendAsync("cpu").WaitAsync(TimeSpan.FromSeconds(5));
+
+        release.Set();
+        await DownloadSpaceAssert.ThrowsInsufficientSpaceAsync(() => download);
+    }
+
+    [Fact]
+    public async Task WhisperDeactivation_CancelsAndDrainsRunningDownload()
+    {
+        using var plugin = new WhisperCppPlugin();
+        await plugin.ActivateAsync(Host().Object);
+        using var downloading = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        // ReSharper disable AccessToDisposedClosure -- the probe runs inside the download, which the test awaits before the using scope ends.
+        plugin.SpaceProbe = _ =>
+        {
+            downloading.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            return long.MaxValue;
+        };
+
+        var download = Task.Run(() => plugin.DownloadModelAsync("tiny", null, CancellationToken.None));
+        // ReSharper restore AccessToDisposedClosure
+        Assert.True(downloading.Wait(TimeSpan.FromSeconds(5)));
+        var deactivate = plugin.DeactivateAsync();
+        await Task.Delay(50);
+        Assert.False(deactivate.IsCompleted);
+
+        release.Set();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download.WaitAsync(TimeSpan.FromSeconds(5)));
+        await deactivate.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Empty(Directory.EnumerateFiles(Path.Join(_root, "Models")));
+    }
+
+    [Fact]
     public async Task GemmaDownload_InsufficientSpace_FailsBeforeRequest()
     {
         using var plugin = new GemmaLocalPlugin();

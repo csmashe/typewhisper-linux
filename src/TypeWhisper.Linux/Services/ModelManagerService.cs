@@ -16,6 +16,10 @@ public enum ModelDeleteOutcome { Deleted, Busy, Loaded, Failed }
 
 public enum ModelUnloadOutcome { Unloaded, NothingLoaded, OtherEngine, Busy, Failed }
 
+/// <summary>A download stopped through <see cref="ModelManagerService.CancelDownload" />.</summary>
+public sealed class ModelDownloadCanceledException(Exception? innerException)
+    : OperationCanceledException("The model download was canceled.", innerException);
+
 public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
     private readonly SystemCommandAvailabilityService? _commands;
@@ -40,6 +44,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     // same lock as the progress write, closing that check-then-write gap.
     private readonly Lock _statusGate = new();
     private long _statusGeneration;
+    // Per model, so a download running beside another model's load keeps its progress.
+    private readonly Dictionary<string, long> _statusGenerations = [];
+
+    // A download started without loading runs outside _modelLock so dictation keeps working.
+    // Every download and delete registers here, so two of them never touch one model's files.
+    private readonly Lock _fileOperationGate = new();
+    private readonly Dictionary<string, ModelFileOperation> _fileOperations = [];
+
+    // Completion is true when CancelDownload stopped the download.
+    private sealed record ModelFileOperation(CancellationTokenSource? Download, Task<bool> Completion);
 
     public ModelManagerService(
         PluginManager pluginManager,
@@ -239,6 +253,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return plugin.IsConfigured ? ModelStatus.Ready : ModelStatus.NotDownloaded;
     }
 
+    /// <summary>The status an operation recorded, without <see cref="GetStatus" />'s disk check.</summary>
+    public ModelStatus? GetTrackedStatus(string modelId) => _modelStatuses.GetValueOrDefault(modelId);
+
     internal (string EngineId, string? ModelId)? ResolveTranscriptionIdentity(string? selectedModelId)
     {
         if (selectedModelId is null || !IsPluginModel(selectedModelId))
@@ -270,6 +287,178 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return plugin.SupportsModelDownload
             ? plugin.IsModelDownloaded(pluginModelId)
             : plugin.IsConfigured;
+    }
+
+    public bool IsDownloading(string modelId)
+    {
+        lock (_fileOperationGate)
+        {
+            return _fileOperations.TryGetValue(modelId, out var operation) && operation.Download is not null;
+        }
+    }
+
+    /// <summary>
+    ///     Downloads a model without loading it or taking the model lock, so the loaded model
+    ///     keeps transcribing. Waits for a download or delete of the same model already running.
+    /// </summary>
+    public async Task DownloadModelAsync(string modelId, CancellationToken cancellationToken = default)
+    {
+        if (GetTranscriptionPlugin(modelId) is not { SupportsModelDownload: true } plugin)
+        {
+            throw new ArgumentException($"Model cannot be downloaded: {modelId}");
+        }
+
+        var (_, pluginModelId) = ParsePluginModelId(modelId);
+        await RunDownloadAsync(plugin, modelId, pluginModelId, clearStatusWhenDone: true, cancellationToken);
+    }
+
+    public bool IsAnyModelDownloading
+    {
+        get
+        {
+            lock (_fileOperationGate)
+            {
+                return _fileOperations.Values.Any(operation => operation.Download is not null);
+            }
+        }
+    }
+
+    /// <summary>Stops the running download of <paramref name="modelId" />, whoever started it.</summary>
+    public bool CancelDownload(string modelId)
+    {
+        CancellationTokenSource? download;
+        lock (_fileOperationGate)
+        {
+            download = _fileOperations.GetValueOrDefault(modelId)?.Download;
+        }
+
+        if (download is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            download.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The download finished first.
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Downloads <paramref name="modelId" /> unless it is already on disk. The download that owns
+    ///     the model's slot records its own end state before releasing it; a caller that only waited
+    ///     for another download never writes status, so it cannot overwrite a newer download's.
+    /// </summary>
+    private async Task RunDownloadAsync(
+        ITranscriptionEngineRole plugin,
+        string modelId,
+        string pluginModelId,
+        bool clearStatusWhenDone,
+        CancellationToken cancellationToken)
+    {
+        while (!plugin.IsModelDownloaded(pluginModelId))
+        {
+            using var download = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!TryBeginFileOperation(modelId, new ModelFileOperation(download, completion.Task), out var running))
+            {
+                // Canceling a download also stops whoever was waiting for it.
+                if (await running.WaitAsync(cancellationToken))
+                {
+                    throw new ModelDownloadCanceledException(null);
+                }
+
+                continue;
+            }
+
+            var canceled = false;
+            try
+            {
+                // The generation captured here gates this download's progress callbacks
+                // (see _statusGate): every authoritative transition after this point — the
+                // load's LoadingModel/Ready, Failed, or the cancel path's ClearStatus —
+                // retires stragglers that would otherwise re-stick DownloadingModel.
+                var generation = SetStatus(modelId, ModelStatus.DownloadingModel(0));
+                var progress = new Progress<double>(p =>
+                    SetStatusFromProgress(modelId, generation, ModelStatus.DownloadingModel(p))
+                );
+                await plugin.DownloadModelAsync(pluginModelId, progress, download.Token);
+
+                // A cancellation-ignoring plugin may have finished writing its artifact;
+                // that work is uninterruptible here, so checkpoint before the service
+                // transitions to loading and leave the artifact in place for GetStatus.
+                download.Token.ThrowIfCancellationRequested();
+                // Before the operation ends, so a load waiting on it keeps its own status.
+                if (clearStatusWhenDone)
+                {
+                    ClearStatus(modelId);
+                }
+
+                return;
+            }
+            catch (OperationCanceledException ex)
+                when (download.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                canceled = true;
+                ClearStatus(modelId);
+                throw new ModelDownloadCanceledException(ex);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Caller-requested cancellation: GetStatus re-derives from the artifact state.
+                ClearStatus(modelId);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Includes an OperationCanceledException nobody requested: per the SDK
+                // cancellation-origin contract that is a dependency fault and records Failed.
+                SetStatus(modelId, ModelStatus.Failed(ex.Message));
+                throw;
+            }
+            finally
+            {
+                EndFileOperation(modelId, completion, canceled);
+            }
+        }
+    }
+
+    private bool TryBeginFileOperation(string modelId, ModelFileOperation operation, out Task<bool> running)
+    {
+        bool begun;
+        lock (_fileOperationGate)
+        {
+            begun = _fileOperations.TryAdd(modelId, operation);
+            running = begun ? Task.FromResult(false) : _fileOperations[modelId].Completion;
+        }
+
+        if (begun && operation.Download is not null)
+        {
+            OnPropertyChanged(nameof(IsDownloading));
+        }
+
+        return begun;
+    }
+
+    private void EndFileOperation(string modelId, TaskCompletionSource<bool> completion, bool canceled = false)
+    {
+        bool wasDownload;
+        lock (_fileOperationGate)
+        {
+            wasDownload = _fileOperations.Remove(modelId, out var operation) && operation.Download is not null;
+        }
+
+        completion.SetResult(canceled);
+        if (wasDownload)
+        {
+            OnPropertyChanged(nameof(IsDownloading));
+        }
     }
 
     public async Task DownloadAndLoadModelAsync(
@@ -503,6 +692,11 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             if (ActiveModelId == modelId)
             {
                 return ModelDeleteOutcome.Loaded;
+            }
+
+            if (IsDownloading(modelId))
+            {
+                return ModelDeleteOutcome.Busy;
             }
 
             await DeleteModelCoreAsync(modelId, ct);
@@ -826,26 +1020,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId)
             ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
 
+        if (plugin.SupportsModelDownload)
+        {
+            // Records its own end state; see RunDownloadAsync.
+            await RunDownloadAsync(plugin, modelId, pluginModelId, clearStatusWhenDone: false, cancellationToken);
+        }
+
         try
         {
-            if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
-            {
-                // The generation captured here gates this download's progress callbacks
-                // (see _statusGate): every authoritative transition after this point — the
-                // load's LoadingModel/Ready, Failed, or the cancel path's ClearStatus —
-                // retires stragglers that would otherwise re-stick DownloadingModel.
-                var generation = SetStatus(modelId, ModelStatus.DownloadingModel(0));
-                var progress = new Progress<double>(p =>
-                    SetStatusFromProgress(modelId, generation, ModelStatus.DownloadingModel(p))
-                );
-                await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
-
-                // A cancellation-ignoring plugin may have finished writing its artifact;
-                // that work is uninterruptible here, so checkpoint before the service
-                // transitions to loading and leave the artifact in place for GetStatus.
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-
             await LoadModelCoreAsync(modelId, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1075,6 +1257,24 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     private async Task DeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
     {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!TryBeginFileOperation(modelId, new ModelFileOperation(null, completion.Task), out _))
+        {
+            throw new InvalidOperationException("The model is downloading. Cancel the download first.");
+        }
+
+        try
+        {
+            await DeleteModelFilesAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            EndFileOperation(modelId, completion);
+        }
+    }
+
+    private async Task DeleteModelFilesAsync(string modelId, CancellationToken cancellationToken)
+    {
         if (ActiveModelId == modelId)
         {
             var plugin = ActiveTranscriptionPlugin;
@@ -1140,10 +1340,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    ///     Authoritative status write from an operation flow (all flows are serialized under
-    ///     <c>_modelLock</c>). Advances the progress generation so every progress callback
-    ///     still in flight from before this transition becomes a no-op; returns the new
-    ///     generation for a progress scope opened by this write to capture.
+    ///     Authoritative status write from an operation flow (serialized under <c>_modelLock</c>,
+    ///     or per model for downloads). Advances the model's progress generation so every progress
+    ///     callback for it still in flight from before this transition becomes a no-op; returns
+    ///     the new generation for a progress scope opened by this write to capture.
     /// </summary>
     private long SetStatus(string modelId, ModelStatus status)
     {
@@ -1151,6 +1351,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         lock (_statusGate)
         {
             generation = ++_statusGeneration;
+            _statusGenerations[modelId] = generation;
             _modelStatuses[modelId] = status;
         }
 
@@ -1165,7 +1366,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             // Advance even when there is no entry to remove: a straggling progress
             // callback must not re-insert a status after this terminal transition.
-            _statusGeneration++;
+            _statusGenerations[modelId] = ++_statusGeneration;
             removed = _modelStatuses.TryRemove(modelId, out _);
         }
 
@@ -1185,7 +1386,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     {
         lock (_statusGate)
         {
-            if (generation != _statusGeneration)
+            if (_statusGenerations.GetValueOrDefault(modelId) != generation)
             {
                 return;
             }

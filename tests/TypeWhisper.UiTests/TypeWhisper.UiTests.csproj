@@ -27,5 +27,6 @@
         <Compile Include="../TypeWhisper.Integration.Tests/TestDoubles/RecordingTextInsertionPlatform.cs" Link="TestDoubles/RecordingTextInsertionPlatform.cs"/>
         <Compile Include="../TypeWhisper.Integration.Tests/BoundedTest.cs" Link="TestDoubles/BoundedTest.cs"/>
         <Compile Include="../TestPaths.cs" Link="TestPaths.cs"/>
+        <Compile Include="../PluginManagerTestAccess.cs" Link="PluginManagerTestAccess.cs"/>
     </ItemGroup>
 </Project>

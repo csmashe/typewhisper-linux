@@ -1,6 +1,5 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using Avalonia.Styling;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using Xunit;
