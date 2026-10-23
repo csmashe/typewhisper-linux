@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using TypeWhisper.Core.Audio;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -52,8 +53,29 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private readonly Lock _fileOperationGate = new();
     private readonly Dictionary<string, ModelFileOperation> _fileOperations = [];
 
-    // Completion is true when CancelDownload stopped the download.
-    private sealed record ModelFileOperation(CancellationTokenSource? Download, Task<bool> Completion);
+    private sealed record ModelFileOperation(
+        CancellationTokenSource? Download,
+        Task<ModelFileOperationOutcome> Completion);
+
+    // What waiters inherit: a CancelDownload or a failed download stops them too. A download whose
+    // own caller gave up ends with neither, so a waiter that still needs the files downloads them.
+    private sealed record ModelFileOperationOutcome(bool Canceled, Exception? Failure)
+    {
+        public static readonly ModelFileOperationOutcome Ended = new(false, null);
+
+        public void ThrowIfStopped()
+        {
+            if (Canceled)
+            {
+                throw new ModelDownloadCanceledException(null);
+            }
+
+            if (Failure is not null)
+            {
+                ExceptionDispatchInfo.Throw(Failure);
+            }
+        }
+    }
 
     public ModelManagerService(
         PluginManager pluginManager,
@@ -365,19 +387,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         while (!plugin.IsModelDownloaded(pluginModelId))
         {
             using var download = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completion = new TaskCompletionSource<ModelFileOperationOutcome>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             if (!TryBeginFileOperation(modelId, new ModelFileOperation(download, completion.Task), out var running))
             {
-                // Canceling a download also stops whoever was waiting for it.
-                if (await running.WaitAsync(cancellationToken))
-                {
-                    throw new ModelDownloadCanceledException(null);
-                }
-
+                (await running.WaitAsync(cancellationToken)).ThrowIfStopped();
                 continue;
             }
 
-            var canceled = false;
+            var outcome = ModelFileOperationOutcome.Ended;
             try
             {
                 // The generation captured here gates this download's progress callbacks
@@ -405,7 +423,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             catch (OperationCanceledException ex)
                 when (download.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                canceled = true;
+                outcome = new ModelFileOperationOutcome(true, null);
                 ClearStatus(modelId);
                 throw new ModelDownloadCanceledException(ex);
             }
@@ -419,12 +437,13 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             {
                 // Includes an OperationCanceledException nobody requested: per the SDK
                 // cancellation-origin contract that is a dependency fault and records Failed.
+                outcome = new ModelFileOperationOutcome(false, ex);
                 SetStatus(modelId, ModelStatus.Failed(ex.Message));
                 throw;
             }
             finally
             {
-                EndFileOperation(modelId, completion, canceled);
+                EndFileOperation(modelId, completion, outcome);
             }
         }
     }
@@ -443,7 +462,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         while (true)
         {
-            Task<bool> running;
+            Task<ModelFileOperationOutcome> running;
             lock (_fileOperationGate)
             {
                 if (!_fileOperations.TryGetValue(modelId, out var operation))
@@ -454,20 +473,20 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 running = operation.Completion;
             }
 
-            if (await running.WaitAsync(cancellationToken))
-            {
-                throw new ModelDownloadCanceledException(null);
-            }
+            (await running.WaitAsync(cancellationToken)).ThrowIfStopped();
         }
     }
 
-    private bool TryBeginFileOperation(string modelId, ModelFileOperation operation, out Task<bool> running)
+    private bool TryBeginFileOperation(
+        string modelId,
+        ModelFileOperation operation,
+        out Task<ModelFileOperationOutcome> running)
     {
         bool begun;
         lock (_fileOperationGate)
         {
             begun = _fileOperations.TryAdd(modelId, operation);
-            running = begun ? Task.FromResult(false) : _fileOperations[modelId].Completion;
+            running = begun ? Task.FromResult(ModelFileOperationOutcome.Ended) : _fileOperations[modelId].Completion;
         }
 
         if (begun && operation.Download is not null)
@@ -478,7 +497,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return begun;
     }
 
-    private void EndFileOperation(string modelId, TaskCompletionSource<bool> completion, bool canceled = false)
+    private void EndFileOperation(
+        string modelId,
+        TaskCompletionSource<ModelFileOperationOutcome> completion,
+        ModelFileOperationOutcome outcome)
     {
         bool wasDownload;
         lock (_fileOperationGate)
@@ -486,7 +508,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             wasDownload = _fileOperations.Remove(modelId, out var operation) && operation.Download is not null;
         }
 
-        completion.SetResult(canceled);
+        completion.SetResult(outcome);
         if (wasDownload)
         {
             OnPropertyChanged(nameof(IsDownloading));
@@ -1301,7 +1323,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
     private async Task DeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
     {
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<ModelFileOperationOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         if (!TryBeginFileOperation(modelId, new ModelFileOperation(null, completion.Task), out _))
         {
             throw new InvalidOperationException("The model is downloading. Cancel the download first.");
@@ -1313,7 +1336,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
         finally
         {
-            EndFileOperation(modelId, completion);
+            EndFileOperation(modelId, completion, ModelFileOperationOutcome.Ended);
         }
     }
 

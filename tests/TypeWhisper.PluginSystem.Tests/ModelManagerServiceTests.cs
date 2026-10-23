@@ -1487,6 +1487,32 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task FailedDownload_StopsWaitingLoadsWithItsError()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+        fake.DownloadFault = new IOException("connection reset");
+
+        var download = sut.DownloadModelAsync(fullModelId, CancellationToken.None);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        var load = sut.LoadModelAsync(fullModelId, CancellationToken.None);
+        var downloadAndLoad = sut.DownloadAndLoadModelAsync(fullModelId, CancellationToken.None);
+        fake.DownloadGate.SetResult();
+
+        await Assert.ThrowsAsync<IOException>(() => download.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+        var loadError = await Assert.ThrowsAsync<IOException>(() =>
+            load.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() =>
+            downloadAndLoad.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+        Assert.Equal("connection reset", loadError.Message);
+        Assert.Equal(1, fake.DownloadCallCount);
+        Assert.Equal(0, fake.LoadCallCount);
+        Assert.Equal("connection reset", sut.GetStatus(fullModelId).ErrorMessage);
+    }
+
+    [Fact]
     public async Task TryLoadModelAsync_WhileDownloading_ReportsBusy()
     {
         using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
