@@ -4,6 +4,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
@@ -1064,7 +1065,7 @@ public partial class DictationSectionViewModel : ObservableObject
         AutoPaste = settings.AutoPaste;
         LockPasteToFocusedField = settings.LockPasteToFocusedField;
         OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
-        DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays.ToString(CultureInfo.InvariantCulture);
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
         TargetAppCorrectionLearningEnabled = settings.TargetAppCorrectionLearningEnabled;
         LiveTranscriptionEnabled = settings.LiveTranscriptionEnabled;
@@ -1194,35 +1195,70 @@ public partial class DictationSectionViewModel : ObservableObject
         ];
     }
 
-    internal static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices()
+    // Offered when no engine is active or the engine accepts any language.
+    private static readonly string[] s_defaultLanguageCodes =
+        ["de", "en", "fr", "es", "it", "pt", "nl", "pl", "cs", "sv", "da", "fi", "el", "ar", "ja", "ko", "zh", "vi"];
+
+    // Tags engines use that .NET has no culture for.
+    private static readonly Dictionary<string, string> s_uncataloguedLanguageNames =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ht"] = "Kreyòl ayisyen",
+            ["jw"] = "Basa Jawa",
+            ["la"] = "Latina",
+            ["vo"] = "Volapük",
+        };
+
+    private static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices() =>
+        CreateLanguageChoices(s_defaultLanguageCodes);
+
+    // Unnamed tags such as Deepgram's "multi" are modes, not spoken languages, so they are dropped.
+    private static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices(IEnumerable<string> codes)
     {
+        var options = codes
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(code => !string.Equals(code, "auto", StringComparison.OrdinalIgnoreCase))
+            .Select(code => (Code: code, Name: GetLanguageDisplayName(code)))
+            .Where(option => option.Name is not null)
+            .ToList();
+        // Tags sharing a name (iw and he) also show their code.
+        var duplicateNames = options
+            .GroupBy(option => option.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.CurrentCultureIgnoreCase);
         return
         [
             new("auto", Loc.Instance["Dictation.LanguageAutoDetect"]),
-            new("de", "Deutsch"),
-            new("en", "English"),
-            new("fr", "Français"),
-            new("es", "Español"),
-            new("it", "Italiano"),
-            new("pt", "Português"),
-            new("nl", "Nederlands"),
-            new("pl", "Polski"),
-            new("cs", "Čeština"),
-            new("sv", "Svenska"),
-            new("da", "Dansk"),
-            new("fi", "Suomi"),
-            new("el", "Ελληνικά"),
-            new("ar", "العربية"),
-            new("ja", "日本語"),
-            new("ko", "한국어"),
-            new("zh", "中文"),
-            new("vi", "Tiếng Việt"),
+            .. options
+                .Select(option => new SpokenLanguageOption(
+                    option.Code,
+                    duplicateNames.Contains(option.Name!) ? $"{option.Name} ({option.Code})" : option.Name!))
+                .OrderBy(option => option.DisplayName, StringComparer.CurrentCultureIgnoreCase),
         ];
+    }
+
+    internal static string? GetLanguageDisplayName(string code)
+    {
+        if (s_uncataloguedLanguageNames.TryGetValue(code, out var name))
+            return name;
+        try
+        {
+            var culture = CultureInfo.GetCultureInfo(code, predefinedOnly: true);
+            var nativeName = culture.NativeName;
+            // "" and "und" resolve to the invariant culture, which is not a language.
+            return nativeName.Length == 0 || culture.Equals(CultureInfo.InvariantCulture)
+                ? null
+                : culture.TextInfo.ToUpper(nativeName[0]) + nativeName[1..];
+        }
+        catch (CultureNotFoundException)
+        {
+            return null;
+        }
     }
 
     private void RefreshLanguageChoices()
     {
-        var choices = CreateLanguageChoices();
         var selectedModelIsActive =
             SelectedModel is { } selected
             && ModelReady
@@ -1231,9 +1267,11 @@ public partial class DictationSectionViewModel : ObservableObject
                 _models.ActiveModelId,
                 StringComparison.Ordinal
             );
+        // With no engine, or one accepting any language, the saved choice stays selectable.
+        string[] unrestrictedCodes = [.. s_defaultLanguageCodes, Language];
         if (!selectedModelIsActive || _models.ActiveTranscriptionPlugin is not { } engine)
         {
-            ReplaceCollection(LanguageChoices, choices);
+            ReplaceCollection(LanguageChoices, CreateLanguageChoices(unrestrictedCodes));
             LanguageSelectionRequired = false;
             OnPropertyChanged(nameof(SelectedLanguageOption));
             RefreshAvailableAdditionalLanguages();
@@ -1246,21 +1284,12 @@ public partial class DictationSectionViewModel : ObservableObject
         var explicitSupported =
             capabilities?.ExplicitSelectionSupport != LanguageSelectionSupport.Unsupported;
         var supportedLanguages = engine.SupportedLanguages;
+        var choices = CreateLanguageChoices(
+            supportedLanguages.Count == 0 ? unrestrictedCodes : supportedLanguages);
 
         ReplaceCollection(
             LanguageChoices,
-            choices.Where(option =>
-                option.Code == "auto"
-                    ? automaticSupported
-                    : explicitSupported
-                        && (
-                            supportedLanguages.Count == 0
-                            || supportedLanguages.Contains(
-                                option.Code,
-                                StringComparer.OrdinalIgnoreCase
-                            )
-                        )
-            )
+            choices.Where(option => option.Code == "auto" ? automaticSupported : explicitSupported)
         );
         OnPropertyChanged(nameof(SelectedLanguageOption));
         // Parakeet-style engines reject every explicit language: telling the user to
@@ -1272,11 +1301,9 @@ public partial class DictationSectionViewModel : ObservableObject
         RefreshAvailableAdditionalLanguages();
     }
 
-    // Labels come from the full catalog, not the engine-filtered choices: a chip the current
-    // engine cannot offer still shows its name rather than its code.
+    // A chip the current engine cannot offer still shows its name rather than its code.
     private static SpokenLanguageOption ResolveLanguageOption(string code) =>
-        CreateLanguageChoices().FirstOrDefault(option =>
-            string.Equals(option.Code, code, StringComparison.OrdinalIgnoreCase)) ?? new(code, code);
+        new(code, GetLanguageDisplayName(code) ?? code);
 
     private void RefreshAvailableAdditionalLanguages()
     {
@@ -2173,13 +2200,13 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnDictationRecoveryRetentionDaysChanged(string value)
     {
-        if (!int.TryParse(value, System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var days))
+        if (!int.TryParse(value, NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var days))
             return;
         days = days == -1 ? -1 : Math.Clamp(days, 1, 365);
         _settings.Update(current => current with { DictationRecoveryRetentionDays = days });
         // The binding commits per keystroke, so show what was persisted rather than what was typed.
-        DictationRecoveryRetentionDays = days.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        DictationRecoveryRetentionDays = days.ToString(CultureInfo.InvariantCulture);
     }
 
     partial void OnAutoPasteChanged(bool value)

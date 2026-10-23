@@ -588,6 +588,100 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public async Task EngineDeclaringLanguagesOutsideDefaults_OffersEachByNativeName()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { Language = "yue", SelectedModelId = null },
+            devices,
+            [plugin]
+        );
+
+        context.Sut.SelectedModel = Assert.Single(
+            context.Sut.ModelOptions,
+            option => option.ModelId == plugin.FifthFullModelId
+        );
+        await WaitUntilAsync(() => context.Sut.LanguageChoices.Any(option => option.Code == "haw"));
+
+        Assert.Equal(
+            ["auto", "en", "en-US", "haw", "he", "iw", "jw", "uk", "yue"],
+            context.Sut.LanguageChoices.Select(option => option.Code).Order(StringComparer.Ordinal)
+        );
+        Assert.Equal("auto", context.Sut.LanguageChoices[0].Code);
+        var names = context.Sut.LanguageChoices.ToDictionary(option => option.Code, option => option.DisplayName);
+        Assert.Equal("English (United States)", names["en-US"]);
+        Assert.Equal("Українська", names["uk"]);
+        Assert.Equal("Basa Jawa", names["jw"]);
+        Assert.Equal("עברית (he)", names["he"]);
+        Assert.Equal("עברית (iw)", names["iw"]);
+        Assert.Equal("yue", context.Sut.SelectedLanguageOption?.Code);
+        Assert.False(context.Sut.LanguageSelectionRequired);
+    }
+
+    [Fact]
+    public async Task SwitchToAnyLanguageEngine_KeepsSavedLanguageOutsideDefaultsSelectable()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { Language = "uk", SelectedModelId = null },
+            devices,
+            [plugin]
+        );
+
+        context.Sut.SelectedModel = Assert.Single(
+            context.Sut.ModelOptions,
+            option => option.ModelId == plugin.FifthFullModelId
+        );
+        await WaitUntilAsync(() => context.Sut.LanguageChoices.Any(option => option.Code == "haw"));
+        Assert.Equal("uk", context.Sut.SelectedLanguageOption?.Code);
+
+        context.Sut.SelectedModel = Assert.Single(
+            context.Sut.ModelOptions,
+            option => option.ModelId == plugin.SixthFullModelId
+        );
+        await WaitUntilAsync(() => context.Sut.LanguageChoices.All(option => option.Code != "haw"));
+
+        Assert.Contains(context.Sut.LanguageChoices, option => option.Code == "de");
+        Assert.Equal("uk", context.Sut.SelectedLanguageOption?.Code);
+        Assert.False(context.Sut.LanguageSelectionRequired);
+    }
+
+    [Fact]
+    public void NoActiveEngine_KeepsSavedLanguageOutsideDefaultsSelectable()
+    {
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { Language = "uk", SelectedModelId = null },
+            devices
+        );
+
+        Assert.Equal("uk", context.Sut.SelectedLanguageOption?.Code);
+        Assert.Equal("Українська", context.Sut.SelectedLanguageOption?.DisplayName);
+    }
+
+    [Theory]
+    [InlineData("fr", "Français")]
+    [InlineData("cs", "Čeština")]
+    [InlineData("ht", "Kreyòl ayisyen")]
+    [InlineData("multi", null)]
+    [InlineData("multi-eu", null)]
+    [InlineData("vo", "Volapük")]
+    [InlineData("und", null)]
+    [InlineData("", null)]
+    public void GetLanguageDisplayName_UsesCapitalizedNativeNameOrNothing(string code, string? expected)
+    {
+        Assert.Equal(expected, DictationSectionViewModel.GetLanguageDisplayName(code));
+    }
+
+    [Fact]
     public async Task AutoOnlyEngine_InvalidSavedChoice_ShowsSwitchToAutoWarning()
     {
         var plugin = new ModelDependentLanguagePlugin();
@@ -973,10 +1067,16 @@ public sealed class DictationSectionViewModelTests
         private const string SecondModelId = "english-only";
         private const string ThirdModelId = "auto-only";
         private const string FourthModelId = "explicit-only";
+        private const string FifthModelId = "wide";
+        private const string SixthModelId = "any-language";
 
         // Cohere Transcribe's languages.
         internal static string[] ExplicitOnlyLanguages { get; } =
             ["ar", "de", "el", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "vi", "zh"];
+
+        // Outside the default list, a regional tag, a duplicate name (he/iw) and a non-language mode.
+        private static string[] WideLanguages { get; } =
+            ["en", "en-US", "yue", "haw", "he", "iw", "uk", "jw", "multi"];
 
         public string FirstFullModelId =>
             ModelManagerService.GetPluginModelId(PluginId, FirstModelId);
@@ -986,6 +1086,10 @@ public sealed class DictationSectionViewModelTests
             ModelManagerService.GetPluginModelId(PluginId, ThirdModelId);
         public string FourthFullModelId =>
             ModelManagerService.GetPluginModelId(PluginId, FourthModelId);
+        public string FifthFullModelId =>
+            ModelManagerService.GetPluginModelId(PluginId, FifthModelId);
+        public string SixthFullModelId =>
+            ModelManagerService.GetPluginModelId(PluginId, SixthModelId);
         public string PluginId => "com.test.language-picker";
         public string PluginName => "Language picker fake";
         public string PluginVersion => "1.0.0";
@@ -998,6 +1102,8 @@ public sealed class DictationSectionViewModelTests
             new(SecondModelId, "English only"),
             new(ThirdModelId, "Auto only"),
             new(FourthModelId, "Explicit only"),
+            new(FifthModelId, "Wide"),
+            new(SixthModelId, "Any language"),
         ];
         public string? SelectedModelId { get; private set; }
         public bool SupportsTranslation { get; init; }
@@ -1014,6 +1120,8 @@ public sealed class DictationSectionViewModelTests
             {
                 SecondModelId => ["en"],
                 FourthModelId => ExplicitOnlyLanguages,
+                FifthModelId => WideLanguages,
+                SixthModelId => [],
                 _ => ["de", "fr"],
             };
 
