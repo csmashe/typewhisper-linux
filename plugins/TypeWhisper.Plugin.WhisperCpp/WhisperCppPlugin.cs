@@ -317,6 +317,13 @@ public sealed class WhisperCppPlugin
 
     public Task ActivateAsync(IPluginHostServices host)
     {
+        // Disabling and re-enabling a plugin activates the same instance again.
+        if (_downloadLifetime.IsCancellationRequested)
+        {
+            _downloadLifetime.Dispose();
+            _downloadLifetime = new CancellationTokenSource();
+        }
+
         _host = host;
         SelectedModelId = host.GetSetting<string>("selectedModel");
         _noSpeechThreshold = ReadNoSpeechThreshold(host);
@@ -379,11 +386,10 @@ public sealed class WhisperCppPlugin
     public async Task DeactivateAsync()
     {
         // Stop and drain a running download, which holds no other gate the unload would wait for.
+        // The token stays canceled until the next activation, so no download starts meanwhile.
         await _downloadLifetime.CancelAsync();
         await _downloadGate.WaitAsync();
         _downloadGate.Release();
-        _downloadLifetime.Dispose();
-        _downloadLifetime = new CancellationTokenSource();
 
         await UnloadModelAsync();
         _host = null;

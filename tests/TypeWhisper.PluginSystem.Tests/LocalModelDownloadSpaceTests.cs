@@ -104,6 +104,22 @@ public sealed class LocalModelDownloadSpaceTests : IDisposable
     }
 
     [Fact]
+    public async Task WhisperDownload_AfterDeactivation_IsCanceledUntilReactivated()
+    {
+        using var plugin = new WhisperCppPlugin();
+        await plugin.ActivateAsync(Host().Object);
+        await plugin.DeactivateAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            plugin.DownloadModelAsync("tiny", null, CancellationToken.None));
+
+        await plugin.ActivateAsync(Host().Object);
+        plugin.SpaceProbe = _ => 0;
+        await DownloadSpaceAssert.ThrowsInsufficientSpaceAsync(() =>
+            plugin.DownloadModelAsync("tiny", null, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task GemmaDownload_InsufficientSpace_FailsBeforeRequest()
     {
         using var plugin = new GemmaLocalPlugin();
