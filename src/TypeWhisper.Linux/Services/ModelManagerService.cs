@@ -469,14 +469,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        var (_, pluginModelId) = ParsePluginModelId(modelId!);
+        var (_, pluginModelId) = ParsePluginModelId(modelId);
         // Every dictation passes here; skip the slot when nothing is pending.
-        if (plugin.IsModelDownloaded(pluginModelId) && !HasFileOperation(modelId!))
+        if (plugin.IsModelDownloaded(pluginModelId) && !HasFileOperation(modelId))
         {
             return;
         }
 
-        await RunDownloadAsync(plugin, modelId!, pluginModelId, clearStatusWhenDone: true, cancellationToken);
+        await RunDownloadAsync(plugin, modelId, pluginModelId, clearStatusWhenDone: true, cancellationToken);
     }
 
     private bool HasFileOperation(string modelId)

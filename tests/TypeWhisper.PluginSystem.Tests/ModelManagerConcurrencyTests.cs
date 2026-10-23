@@ -19,7 +19,7 @@ namespace TypeWhisper.PluginSystem.Tests;
 /// </summary>
 public sealed class ModelManagerConcurrencyTests
 {
-    private const string PluginId = "com.test.stress";
+    private const string StressPluginId = "com.test.stress";
     private static readonly string[] s_models = ["a", "b"];
 
     [Theory]
@@ -53,10 +53,8 @@ public sealed class ModelManagerConcurrencyTests
             []);
         typeof(PluginManager).GetField("_transcriptionEngines", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(pluginManager, new List<ITranscriptionEngineRole> { engine });
-        using var sut = new ModelManagerService(pluginManager, settings.Object)
-        {
-            CudaRuntimePreflight = () => (false, "CUDA not available in test"),
-        };
+        using var sut = new ModelManagerService(pluginManager, settings.Object);
+        sut.CudaRuntimePreflight = () => (false, "CUDA not available in test");
         var unexpected = new ConcurrentQueue<Exception>();
 
         for (var round = 0; round < 60; round++)
@@ -83,7 +81,7 @@ public sealed class ModelManagerConcurrencyTests
         }
     }
 
-    private static string FullId(string model) => ModelManagerService.GetPluginModelId(PluginId, model);
+    private static string FullId(string model) => ModelManagerService.GetPluginModelId(StressPluginId, model);
 
     private static async Task RunRandomOperation(ModelManagerService sut, int kind, string modelId, int delayMs)
     {
@@ -156,7 +154,7 @@ public sealed class ModelManagerConcurrencyTests
 
         public ConcurrentQueue<string> Violations { get; } = new();
 
-        public string PluginId => ModelManagerConcurrencyTests.PluginId;
+        public string PluginId => StressPluginId;
         public string ProviderId => "stress";
         public string ProviderDisplayName => "Stress";
         public bool IsConfigured => true;
@@ -172,12 +170,9 @@ public sealed class ModelManagerConcurrencyTests
             lock (_gate)
             {
                 // Storage can become unavailable at any moment.
-                if (_random.Next(25) == 0)
-                {
-                    throw new IOException("injected storage failure");
-                }
-
-                return _downloaded.Contains(modelId);
+                return _random.Next(25) == 0
+                    ? throw new IOException("injected storage failure")
+                    : _downloaded.Contains(modelId);
             }
         }
 
