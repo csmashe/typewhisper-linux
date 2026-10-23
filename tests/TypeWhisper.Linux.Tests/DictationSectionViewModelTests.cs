@@ -668,6 +668,25 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Theory]
+    [InlineData("DE", "de")]
+    [InlineData("cmn", "cmn")]
+    public void NoActiveEngine_SelectsSavedLanguageRegardlessOfCaseOrName(string saved, string expectedCode)
+    {
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { Language = saved, SelectedModelId = null },
+            devices
+        );
+
+        Assert.Equal(expectedCode, context.Sut.SelectedLanguageOption?.Code);
+        Assert.Single(context.Sut.LanguageChoices, option =>
+            string.Equals(option.Code, saved, StringComparison.OrdinalIgnoreCase));
+        Assert.False(context.Sut.LanguageSelectionRequired);
+    }
+
+    [Theory]
     [InlineData("fr", "Français")]
     [InlineData("cs", "Čeština")]
     [InlineData("ht", "Kreyòl ayisyen")]

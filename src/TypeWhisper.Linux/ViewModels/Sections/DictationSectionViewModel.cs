@@ -647,7 +647,7 @@ public partial class DictationSectionViewModel : ObservableObject
     {
         get =>
             LanguageChoices.FirstOrDefault(option =>
-                string.Equals(option.Code, Language, StringComparison.Ordinal)
+                string.Equals(option.Code, Language, StringComparison.OrdinalIgnoreCase)
             );
         set
         {
@@ -657,7 +657,7 @@ public partial class DictationSectionViewModel : ObservableObject
             }
 
             var code = value.Code;
-            if (string.Equals(code, Language, StringComparison.Ordinal))
+            if (string.Equals(code, Language, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
@@ -1267,11 +1267,9 @@ public partial class DictationSectionViewModel : ObservableObject
                 _models.ActiveModelId,
                 StringComparison.Ordinal
             );
-        // With no engine, or one accepting any language, the saved choice stays selectable.
-        string[] unrestrictedCodes = [.. s_defaultLanguageCodes, Language];
         if (!selectedModelIsActive || _models.ActiveTranscriptionPlugin is not { } engine)
         {
-            ReplaceCollection(LanguageChoices, CreateLanguageChoices(unrestrictedCodes));
+            ReplaceCollection(LanguageChoices, CreateUnrestrictedLanguageChoices());
             LanguageSelectionRequired = false;
             OnPropertyChanged(nameof(SelectedLanguageOption));
             RefreshAvailableAdditionalLanguages();
@@ -1284,8 +1282,9 @@ public partial class DictationSectionViewModel : ObservableObject
         var explicitSupported =
             capabilities?.ExplicitSelectionSupport != LanguageSelectionSupport.Unsupported;
         var supportedLanguages = engine.SupportedLanguages;
-        var choices = CreateLanguageChoices(
-            supportedLanguages.Count == 0 ? unrestrictedCodes : supportedLanguages);
+        var choices = supportedLanguages.Count == 0
+            ? CreateUnrestrictedLanguageChoices()
+            : CreateLanguageChoices(supportedLanguages);
 
         ReplaceCollection(
             LanguageChoices,
@@ -1299,6 +1298,17 @@ public partial class DictationSectionViewModel : ObservableObject
         LanguageSelectionRequired = SelectedLanguageOption is null;
         OnPropertyChanged(nameof(LanguageSelectionWarning));
         RefreshAvailableAdditionalLanguages();
+    }
+
+    // With no engine, or one accepting any language, the saved choice stays selectable, by its
+    // code when it has no name.
+    private IReadOnlyList<SpokenLanguageOption> CreateUnrestrictedLanguageChoices()
+    {
+        var choices = CreateLanguageChoices([.. s_defaultLanguageCodes, Language]);
+        return string.IsNullOrWhiteSpace(Language)
+            || choices.Any(option => string.Equals(option.Code, Language, StringComparison.OrdinalIgnoreCase))
+                ? choices
+                : [.. choices, new SpokenLanguageOption(Language, Language)];
     }
 
     // A chip the current engine cannot offer still shows its name rather than its code.
