@@ -1513,6 +1513,26 @@ public class ModelManagerServiceTests
     }
 
     [Fact]
+    public async Task DownloadModelAsync_QueuedBehindFinishedDownload_DoesNotDownloadAgain()
+    {
+        using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.ModelDownloaded = false;
+        fake.DownloadGate = new TaskCompletionSource();
+
+        var first = sut.DownloadModelAsync(fullModelId, CancellationToken.None);
+        await fake.DownloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        var second = sut.DownloadModelAsync(fullModelId, CancellationToken.None);
+        fake.DownloadGate.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+        await second.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        Assert.Equal(1, fake.DownloadCallCount);
+        Assert.False(sut.IsDownloading(fullModelId));
+        Assert.Null(sut.GetTrackedStatus(fullModelId));
+    }
+
+    [Fact]
     public async Task TryLoadModelAsync_WhileDownloading_ReportsBusy()
     {
         using var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);

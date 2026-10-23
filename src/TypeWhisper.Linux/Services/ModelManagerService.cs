@@ -384,7 +384,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         bool clearStatusWhenDone,
         CancellationToken cancellationToken)
     {
-        while (!plugin.IsModelDownloaded(pluginModelId))
+        while (true)
         {
             using var download = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var completion = new TaskCompletionSource<ModelFileOperationOutcome>(
@@ -393,6 +393,13 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             {
                 (await running.WaitAsync(cancellationToken)).ThrowIfStopped();
                 continue;
+            }
+
+            // Checked inside the slot, so a download that just finished is not repeated.
+            if (plugin.IsModelDownloaded(pluginModelId))
+            {
+                EndFileOperation(modelId, completion, ModelFileOperationOutcome.Ended);
+                return;
             }
 
             var outcome = ModelFileOperationOutcome.Ended;
