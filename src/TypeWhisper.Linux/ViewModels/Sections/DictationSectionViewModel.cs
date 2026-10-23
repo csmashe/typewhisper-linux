@@ -381,7 +381,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _dictation.StatusMessage += (_, msg) => Dispatcher.UIThread.Post(() => StatusText = msg);
 
         _audio.LevelChanged += OnLevelChanged;
-        _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(OnModelStatusChanged);
+        _models.PropertyChanged += (_, _) => dispatchNotification(OnModelStatusChanged);
         _pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(RefreshModels);
         _pluginManager.PluginStateChanged += (_, _) => dispatchNotification(RefreshLiveCleanupAvailability);
         _settings.SettingsChanged += settingsValue =>
@@ -478,7 +478,7 @@ public partial class DictationSectionViewModel : ObservableObject
         AccessibilityBridgeActivated && _settings.Current.AccessibilityBridgeEnabledByApp;
 
     public bool CanDeleteSelectedModel =>
-        SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId);
+        SelectedModel is { } selected && _models.CanDeleteModel(selected.ModelId) && !_models.IsDownloading(selected.ModelId);
 
     // The loader-path fix only applies when the system CUDA libraries exist on disk but
     // aren't currently loadable. Once they are loadable (HasCudaRuntimeLibraries) there is
@@ -866,31 +866,35 @@ public partial class DictationSectionViewModel : ObservableObject
         PreviewLevel = 0;
     }
 
-    public async Task DeleteSelectedModelAsync()
-    {
-        var selected = SelectedModel;
-        if (selected is null || !CanDeleteSelectedModel)
-        {
-            return;
-        }
+    public Task DeleteSelectedModelAsync() =>
+        SelectedModel is { } selected && CanDeleteSelectedModel
+            ? DeleteModelFilesAsync(selected.ModelId, selected.DisplayLabel)
+            : Task.CompletedTask;
 
-        if (_modelSelectionCts is not null)
+    private async Task DeleteModelFilesAsync(string modelId, string label)
+    {
+        var isSelected = SelectedModel?.ModelId == modelId;
+        if (isSelected && _modelSelectionCts is not null)
         {
             await _modelSelectionCts.CancelAsync();
         }
 
-        StatusText = Loc.Instance.GetString("Dictation.DeletingModel", selected.DisplayLabel);
+        StatusText = Loc.Instance.GetString("Dictation.DeletingModel", label);
 
         try
         {
-            await _models.DeleteModelAsync(selected.ModelId);
-            if (_settings.Current.SelectedModelId == selected.ModelId)
+            await _models.DeleteModelAsync(modelId);
+            if (_settings.Current.SelectedModelId == modelId)
             {
                 _settings.Update(current => current with { SelectedModelId = null });
             }
 
-            SelectedModel = null;
-            StatusText = Loc.Instance.GetString("Dictation.ModelDeleted", selected.DisplayLabel);
+            if (isSelected)
+            {
+                SelectedModel = null;
+            }
+
+            StatusText = Loc.Instance.GetString("Dictation.ModelDeleted", label);
         }
         catch (Exception ex)
         {
@@ -898,6 +902,7 @@ public partial class DictationSectionViewModel : ObservableObject
         }
         finally
         {
+            RefreshLocalModelCards(checkDisk: true);
             RefreshModelState();
         }
     }
@@ -1015,6 +1020,7 @@ public partial class DictationSectionViewModel : ObservableObject
         }
 
         SelectedModel = ModelOptions.FirstOrDefault(option => option.ModelId == previousSelectedId);
+        RebuildLocalModelCards();
         RefreshModelState();
     }
 
@@ -1458,11 +1464,34 @@ public partial class DictationSectionViewModel : ObservableObject
     private void OnModelStatusChanged()
     {
         UpdateDownloadProgress();
+        RefreshLocalModelCards(checkDisk: false);
 
-        if (!IsModelDownloading)
+        // Another card's download ticks leave the selected model unchanged.
+        var snapshot = CaptureModelStateSnapshot();
+        if (!IsModelDownloading && snapshot != _lastModelStateSnapshot)
         {
             RefreshModelState();
         }
+    }
+
+    private ModelStateSnapshot? _lastModelStateSnapshot;
+
+    private sealed record ModelStateSnapshot(
+        string? SelectedModelId,
+        ModelStatusType? SelectedType,
+        string? SelectedError,
+        string? ActiveModelId,
+        string BusyCards);
+
+    private ModelStateSnapshot CaptureModelStateSnapshot()
+    {
+        var selected = SelectedModel is { } model ? _models.GetStatus(model.ModelId) : null;
+        return new ModelStateSnapshot(
+            SelectedModel?.ModelId,
+            selected?.Type,
+            selected?.ErrorMessage,
+            _models.ActiveModelId,
+            string.Join('\n', LocalModelCards.Where(card => card.WasBusy).Select(card => card.ModelId)));
     }
 
     private void UpdateDownloadProgress()
@@ -1488,6 +1517,8 @@ public partial class DictationSectionViewModel : ObservableObject
 
     private void RefreshModelState()
     {
+        RefreshLocalModelCards(checkDisk: false);
+        _lastModelStateSnapshot = CaptureModelStateSnapshot();
         RefreshSpokenFormattingVerification();
         var active = _models.ActiveModelId;
         ActiveModelLabel = string.IsNullOrEmpty(active)
@@ -1637,7 +1668,7 @@ public partial class DictationSectionViewModel : ObservableObject
     // the folder path picked via the platform folder picker.
     public async Task ChangeModelStorageAsync(string? folderPath)
     {
-        if (string.IsNullOrWhiteSpace(folderPath) || IsMigratingModelStorage)
+        if (string.IsNullOrWhiteSpace(folderPath) || !CanChangeModelStorage)
         {
             return;
         }
@@ -1676,13 +1707,14 @@ public partial class DictationSectionViewModel : ObservableObject
             IsUsingCustomModelStorage =
                 AppSettings.NormalizeLocalModelStoragePath(_settings.Current.LocalModelStoragePath)
                 is not null;
+            RefreshLocalModelCards(checkDisk: true);
         }
     }
 
     [RelayCommand]
     private void ResetModelStorage()
     {
-        if (!IsUsingCustomModelStorage || IsMigratingModelStorage)
+        if (!IsUsingCustomModelStorage || !CanChangeModelStorage)
         {
             return;
         }
@@ -1691,6 +1723,7 @@ public partial class DictationSectionViewModel : ObservableObject
         // at the default app-data location.
         _modelStorage.ResetToDefault();
         ModelStorageStatusText = Loc.Instance["Dictation.ModelStorageResetStatus"];
+        RefreshLocalModelCards(checkDisk: true);
     }
 
     private async Task ReloadActiveModelForAccelerationChangeAsync(DictationModelOption selected)

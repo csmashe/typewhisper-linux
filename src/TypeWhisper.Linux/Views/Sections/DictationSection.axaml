@@ -66,6 +66,36 @@
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
         </Style>
+        <Style Selector="Border.model-card">
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="18,14" />
+        </Style>
+        <Style Selector="Border.model-card.active">
+            <Setter Property="BorderBrush" Value="{DynamicResource TwAccentBrush}" />
+        </Style>
+        <Style Selector="Border.model-card-badge">
+            <Setter Property="Background" Value="{DynamicResource TwFillSubtleBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="9,3" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+        </Style>
+        <Style Selector="Border.model-card-badge.active">
+            <Setter Property="Background" Value="{DynamicResource TwSuccessSubtleBrush}" />
+        </Style>
+        <Style Selector="TextBlock.model-card-badge-text">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextStrongBrush}" />
+        </Style>
+        <Style Selector="TextBlock.model-card-badge-text.active">
+            <Setter Property="Foreground" Value="{DynamicResource TwSuccessTextBrush}" />
+        </Style>
+        <Style Selector="TextBlock.model-card-badge-text.failed">
+            <Setter Property="Foreground" Value="{DynamicResource TwWarningTextBrush}" />
+        </Style>
     </UserControl.Styles>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -218,6 +248,111 @@
                 </Grid>
             </Border>
 
+            <TextBlock Text="{loc:Str Dictation.LocalModels}"
+                       Classes="group-title"
+                       IsVisible="{Binding HasLocalModelCards}" />
+            <StackPanel Spacing="10"
+                        Margin="0,0,0,18"
+                        IsVisible="{Binding HasLocalModelCards}">
+                <TextBlock Text="{loc:Str Dictation.LocalModelsDescription}"
+                           FontSize="12"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
+                           TextWrapping="Wrap" />
+                <ItemsControl ItemsSource="{Binding LocalModelCards}">
+                    <!-- Hide the item container, not the card, so unlisted cards leave no spacing. -->
+                    <ItemsControl.Styles>
+                        <Style Selector="ContentPresenter"
+                               x:DataType="vm:LocalModelCard">
+                            <Setter Property="IsVisible" Value="{Binding IsListed}" />
+                        </Style>
+                    </ItemsControl.Styles>
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="10" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:LocalModelCard">
+                            <Border Classes="model-card"
+                                    Classes.active="{Binding IsActive}">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnDefinitions="*,Auto"
+                                          ColumnSpacing="12">
+                                        <StackPanel Spacing="2">
+                                            <TextBlock Text="{Binding DisplayName}"
+                                                       FontSize="15"
+                                                       FontWeight="SemiBold"
+                                                       TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding DetailText}"
+                                                       FontSize="12"
+                                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <Border Grid.Column="1"
+                                                Classes="model-card-badge"
+                                                Classes.active="{Binding IsActive}">
+                                            <TextBlock Text="{Binding BadgeText}"
+                                                       Classes="model-card-badge-text"
+                                                       Classes.active="{Binding IsActive}"
+                                                       Classes.failed="{Binding IsFailed}" />
+                                        </Border>
+                                    </Grid>
+                                    <TextBlock Text="{Binding StateText}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                               TextWrapping="Wrap" />
+                                    <Grid ColumnDefinitions="*,Auto"
+                                          ColumnSpacing="12"
+                                          IsVisible="{Binding ShowProgress}">
+                                        <ProgressBar Height="6"
+                                                     Minimum="0"
+                                                     Maximum="1"
+                                                     Value="{Binding Progress}"
+                                                     IsIndeterminate="{Binding IsProgressIndeterminate}"
+                                                     VerticalAlignment="Center"
+                                                     AutomationProperties.Name="{loc:Str Dictation.ModelCardProgressName}" />
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding PercentText}"
+                                                   FontSize="12"
+                                                   MinWidth="36"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <WrapPanel Orientation="Horizontal"
+                                               ItemSpacing="8"
+                                               LineSpacing="8">
+                                        <!-- ReSharper disable once Xaml.StyleClassNotFound, Xaml.PossibleNullReferenceException — 'accent' comes from FluentTheme, which the analyzer cannot see; the compiled-binding path is null-safe at runtime -->
+                                        <Button Content="{loc:Str Dictation.ModelCardDownload}"
+                                                Classes="accent"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).DownloadLocalModelCommand}"
+                                                CommandParameter="{Binding}"
+                                                IsVisible="{Binding ShowDownload}"
+                                                IsEnabled="{Binding CanDownload}" />
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
+                                        <Button Content="{Binding UseText}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).UseLocalModelCommand}"
+                                                CommandParameter="{Binding}"
+                                                IsVisible="{Binding ShowUse}"
+                                                IsEnabled="{Binding CanUse}" />
+                                        <Button Content="{loc:Str Dictation.ModelCardRemove}"
+                                                Click="OnRemoveLocalModel"
+                                                IsVisible="{Binding ShowRemove}"
+                                                IsEnabled="{Binding CanRemove}" />
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
+                                        <Button Content="{loc:Str Dictation.ModelCardCancel}"
+                                                Command="{Binding $parent[ItemsControl].((vm:DictationSectionViewModel)DataContext).CancelLocalModelDownloadCommand}"
+                                                CommandParameter="{Binding}"
+                                                IsVisible="{Binding ShowCancel}" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button Content="{Binding LocalModelsToggleText}"
+                        Command="{Binding ToggleLocalModelsCommand}"
+                        IsVisible="{Binding ShowLocalModelsToggle}" />
+            </StackPanel>
+
             <TextBlock Text="{loc:Str Dictation.ModelStorage}"
                        Classes="group-title" />
             <Border Classes="settings-panel">
@@ -237,12 +372,12 @@
                             <Button Grid.Column="1"
                                     Content="{loc:Str Dictation.ModelStorageChange}"
                                     Click="OnChangeModelStorage"
-                                    IsEnabled="{Binding !IsMigratingModelStorage}" />
+                                    IsEnabled="{Binding CanChangeModelStorage}" />
                             <Button Grid.Column="2"
                                     Content="{loc:Str Dictation.ModelStorageReset}"
                                     Command="{Binding ResetModelStorageCommand}"
                                     IsVisible="{Binding IsUsingCustomModelStorage}"
-                                    IsEnabled="{Binding !IsMigratingModelStorage}" />
+                                    IsEnabled="{Binding CanChangeModelStorage}" />
                         </Grid>
                     </Border>
 

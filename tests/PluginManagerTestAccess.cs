@@ -24,6 +24,7 @@ internal static class PluginManagerTestAccess
         field.SetValue(pluginManager, engines.ToList());
     }
 
+    // ReSharper disable once UnusedMember.Global -- used from the Linux tests; the UI tests link this file only for SetTranscriptionEngines.
     public static void SetVocabularyRescorers(
         PluginManager pluginManager,
         IReadOnlyList<IVocabularyRescorerPlugin> engines

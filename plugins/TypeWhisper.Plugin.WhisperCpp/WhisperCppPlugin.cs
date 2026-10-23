@@ -213,6 +213,9 @@ public sealed class WhisperCppPlugin
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    // Downloads touch only their own files, so another model can load or transcribe meanwhile.
+    private readonly SemaphoreSlim _downloadGate = new(1, 1);
+    private CancellationTokenSource _downloadLifetime = new();
 
     // Drives the on-demand CUDA runtime downloads (cudart/cuBLAS wheels + the ~167 MB
     // whisper CUDA nupkg). HttpClient.Timeout bounds the WHOLE request including the
@@ -314,6 +317,13 @@ public sealed class WhisperCppPlugin
 
     public Task ActivateAsync(IPluginHostServices host)
     {
+        // Disabling and re-enabling a plugin activates the same instance again.
+        if (_downloadLifetime.IsCancellationRequested)
+        {
+            _downloadLifetime.Dispose();
+            _downloadLifetime = new CancellationTokenSource();
+        }
+
         _host = host;
         SelectedModelId = host.GetSetting<string>("selectedModel");
         _noSpeechThreshold = ReadNoSpeechThreshold(host);
@@ -375,6 +385,12 @@ public sealed class WhisperCppPlugin
 
     public async Task DeactivateAsync()
     {
+        // Stop and drain a running download, which holds no other gate the unload would wait for.
+        // The token stays canceled until the next activation, so no download starts meanwhile.
+        await _downloadLifetime.CancelAsync();
+        await _downloadGate.WaitAsync();
+        _downloadGate.Release();
+
         await UnloadModelAsync();
         _host = null;
     }
@@ -470,7 +486,9 @@ public sealed class WhisperCppPlugin
         CancellationToken ct
     )
     {
-        await _gate.WaitAsync(ct);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadLifetime.Token);
+        ct = lifetime.Token;
+        await _downloadGate.WaitAsync(ct);
         try
         {
             var model = GetModel(modelId);
@@ -563,7 +581,7 @@ public sealed class WhisperCppPlugin
         }
         finally
         {
-            _gate.Release();
+            _downloadGate.Release();
         }
     }
 
@@ -975,6 +993,8 @@ public sealed class WhisperCppPlugin
     {
         DisposeFactoryUnsafe();
         _gate.Dispose();
+        _downloadGate.Dispose();
+        _downloadLifetime.Dispose();
         _httpClient.Dispose();
     }
 
