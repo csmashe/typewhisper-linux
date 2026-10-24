@@ -424,6 +424,27 @@ public sealed class WelcomeWizardViewModelTests
     }
 
     [Fact]
+    public async Task CatalogRefreshDuringTheModelLoad_KeepsTheModelBeingLoaded()
+    {
+        var releaseDownload = NewCompletionSource();
+        var plugin = new FakeTranscriptionPlugin { DownloadImplementation = _ => releaseDownload.Task };
+        using var harness = CreateHarness(plugin);
+        Assert.Equal(plugin.FullModelId, harness.ViewModel.SelectedModel?.ModelId);
+
+        var nextTask = harness.ViewModel.NextCommand.ExecuteAsync(null);
+        await plugin.DownloadStarted.Task.WaitAsync(s_testTimeout);
+        SetTranscriptionEngines(
+            harness.PluginManager,
+            [plugin, new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-ultra-0.6b", true))]);
+        harness.ViewModel.RefreshPluginState();
+        releaseDownload.SetResult();
+        await nextTask.WaitAsync(s_testTimeout);
+
+        Assert.Equal(plugin.FullModelId, harness.ViewModel.SelectedModel?.ModelId);
+        Assert.Equal(plugin.FullModelId, harness.Settings.Object.Current.SelectedModelId);
+    }
+
+    [Fact]
     public void UserPick_SurvivesACatalogRefresh()
     {
         using var harness = CreateHarness(

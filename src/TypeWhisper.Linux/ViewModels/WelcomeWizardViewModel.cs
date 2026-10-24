@@ -658,6 +658,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
+            // Advancing commits the pick, so a catalog refresh during the load keeps it shown.
+            _userSelectedModelId = row.ModelId;
             var needsDownload = !_models.IsDownloaded(row.ModelId);
             ModelStatus = needsDownload
                 ? Loc.Instance.GetString("Wizard.Downloading", row.DisplayName)
