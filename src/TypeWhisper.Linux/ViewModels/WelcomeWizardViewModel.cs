@@ -383,6 +383,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         var previousSelectedId = SelectedModel?.ModelId ?? _settings.Current.SelectedModelId;
 
         AvailableModels.Clear();
+        var localModelIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var engine in _pluginManager.TranscriptionEngines)
         {
             foreach (var model in engine.TranscriptionModels)
@@ -400,13 +401,39 @@ public partial class WelcomeWizardViewModel : ObservableObject
                         model.IsRecommended
                     )
                 );
+                if (engine.SupportsModelDownload)
+                    localModelIds.Add(modelId);
             }
         }
 
-        SelectedModel =
-            AvailableModels.FirstOrDefault(m => m.ModelId == previousSelectedId)
-            ?? AvailableModels.FirstOrDefault(m => m.IsRecommended)
-            ?? AvailableModels.FirstOrDefault();
+        SelectedModel = ChooseDefaultModel(AvailableModels, localModelIds, previousSelectedId, Loc.Instance.CurrentLanguage);
+    }
+
+    internal const string DefaultLocalModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet-ultra-0.6b";
+
+    // Parakeet Ultra's 25 European languages; it cannot transcribe the others (ja, zh).
+    private static readonly HashSet<string> s_defaultLocalModelLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it",
+        "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+    };
+
+    // Explicit, because engines arrive in undefined plugin-folder order and cloud plugins mark recommended models too.
+    internal static WizardModelRow? ChooseDefaultModel(
+        IReadOnlyList<WizardModelRow> models,
+        IReadOnlySet<string> localModelIds,
+        string? previousSelectedId,
+        string interfaceLanguage
+    )
+    {
+        var ultraFits = s_defaultLocalModelLanguages.Contains(interfaceLanguage);
+        return models.FirstOrDefault(m => m.ModelId == previousSelectedId)
+            ?? (ultraFits ? models.FirstOrDefault(m => m.ModelId == DefaultLocalModelId) : null)
+            ?? models.FirstOrDefault(m => m.IsRecommended && localModelIds.Contains(m.ModelId) && Fits(m))
+            ?? models.FirstOrDefault(m => m.IsRecommended && Fits(m))
+            ?? (models.Count > 0 ? models[0] : null);
+
+        bool Fits(WizardModelRow model) => ultraFits || model.ModelId != DefaultLocalModelId;
     }
 
     private void LoadExtensions()

@@ -96,7 +96,7 @@ public sealed class WhisperCppPlugin
             "~57 MB",
             57,
             99,
-            true
+            false
         ),
         new(
             "small",
