@@ -1,0 +1,16 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Claude LLM请求所必需。验证后可加载你的账户可用的模型。",
+  "Settings.StreamResponses": "流式响应",
+  "Settings.StreamResponsesDescription": "在生成时逐个token显示提示词操作的输出，而不是等待完整回复。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyFormatInvalid": "API密钥格式无效。",
+  "Settings.ApiKeyNotConfigured": "未配置API密钥",
+  "Settings.ApiKeyValidFetchedModels": "API密钥有效。已加载此账户可用的{0}个Claude模型。",
+  "Settings.ApiKeyRejected": "Anthropic拒绝了此API密钥。请检查密钥后重试。",
+  "Settings.ModelRefreshFailed": "无法加载Claude模型：{0}已保存的模型列表未更改。",
+  "Settings.ModelRefreshStale": "加载模型期间API密钥已更改。请重新验证。",
+  "Errors.ModelNotFound": "Claude找不到模型{0}。请在“扩展”中验证API密钥以刷新模型列表，然后选择可用的模型。",
+  "Manifest.Name": "Claude",
+  "Manifest.Description": "用于提示词处理的Anthropic Claude LLM"
+}

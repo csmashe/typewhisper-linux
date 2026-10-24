@@ -42,6 +42,32 @@ public sealed class Loc : INotifyPropertyChanged
     /// </summary>
     public static string SystemLanguage { get; set; } = FallbackLanguage;
 
+    /// <summary>
+    ///     The catalog code for a culture: its two-letter language, except Traditional Chinese, which
+    ///     maps to "zh-Hant" so it falls back to English rather than the Simplified "zh" catalog.
+    /// </summary>
+    public static string CatalogLanguageFor(CultureInfo culture)
+    {
+        // The tag is checked as well as the parents, in case a culture's parent chain skips zh-Hant.
+        var name = culture.Name;
+        if (name.StartsWith("zh-", StringComparison.OrdinalIgnoreCase)
+            && (name.Contains("-Hant", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("-TW", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("-HK", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("-MO", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "zh-Hant";
+        }
+
+        for (var current = culture; !Equals(current, CultureInfo.InvariantCulture); current = current.Parent)
+        {
+            if (string.Equals(current.Name, "zh-Hant", StringComparison.OrdinalIgnoreCase))
+                return "zh-Hant";
+        }
+
+        return culture.TwoLetterISOLanguageName;
+    }
+
     /// <summary>Indexer used by bindings/converters: Loc.Instance["Key"].</summary>
     public string this[string key] => GetString(key);
 
@@ -192,7 +218,7 @@ public sealed class Loc : INotifyPropertyChanged
             ["pl"] = "Polski",
             ["ru"] = "Русский",
             ["ja"] = "日本語",
-            ["zh"] = "中文",
+            ["zh"] = "简体中文",
             ["ko"] = "한국어",
         };
 

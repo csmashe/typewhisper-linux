@@ -1,0 +1,16 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "AssemblyAIの文字起こしとストリーミングに必要です。",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.ModelDescription": "AssemblyAIの音声モデルを選択します。Universal-3.5 Proは18言語、Universal-2は約100言語に対応しています。リアルタイム音声入力では、英語、スペイン語、ドイツ語、フランス語、ポルトガル語、イタリア語のいずれかを選択した場合、Universal-3.5 ProではUniversal-3.6 Pro Streaming、Universal-2ではUniversal-Streamingを使用します。自動検出またはその他の言語では、Universal-2が録音後に文字起こしします。",
+  "Settings.UseDictionaryTerms": "辞書の用語をキーワードとして送信",
+  "Settings.UseDictionaryTermsDescription": "辞書の用語に寄せて文字起こしします。各用語はそのまま（カンマを含めて）送信されます。録音済み音声、およびUniversal-2による英語のリアルタイム音声入力では、AssemblyAIはキーワードに追加料金を請求します。その他のリアルタイム音声入力では料金に含まれます。リアルタイム音声入力で送信されるのは最大100語、各50文字までです。オフの場合、AssemblyAIには辞書の用語は送信されません。",
+  "Settings.SpeakerLabels": "話者をラベル付け",
+  "Settings.SpeakerLabelsDescription": "各発話の先頭に話者を付け（「Speaker A: …」）、発話のタイムスタンプを保持します。AssemblyAIは追加料金を請求します。リアルタイム音声入力はオフになり、テキストは録音後に表示されます。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyValid": "APIキーは有効です。",
+  "Settings.ApiKeyInvalid": "APIキーが無効です。",
+  "Settings.NotConfiguredApiKeyRequired": "プラグインが設定されていません。APIキーが必要です。",
+  "Manifest.Name": "AssemblyAI",
+  "Manifest.Description": "AssemblyAI Universal-3.5 ProおよびUniversal-2の文字起こしエンジン"
+}

@@ -116,6 +116,10 @@ jobs:
           --blame-hang-timeout 2m
           --blame-hang-dump-type mini
 
+      # The ja and zh render checks measure real glyphs, so they need a CJK font.
+      - name: Install CJK fonts
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends fonts-noto-cjk
+
       # Renders every Settings section headlessly in each UI language and window size, and
       # fails on clipped text, raw or wrong-language strings, or controls without an accessible name.
       - name: UI render checks

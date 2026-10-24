@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services.Plugins;
@@ -23,7 +24,7 @@ public sealed class PluginLocalization : IPluginLocalization
         var localizationDir = Path.Join(pluginDirectory, LocalizationFolder);
         CurrentLanguage =
             languageOverride
-            ?? CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            ?? Loc.CatalogLanguageFor(CultureInfo.CurrentUICulture);
 
         var available = new List<string>();
 

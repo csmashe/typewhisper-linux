@@ -381,6 +381,7 @@ Maintainer: Excel on the Web <noreply@excelontheweb.com>
 Installed-Size: $INSTALLED_SIZE
 Depends: libc6 (>= $DEB_GLIBC_FLOOR), libgcc-s1, libstdc++6, libicu78 | libicu76 | libicu74 | libicu72 | libicu70, libfontconfig1, libx11-6, libxcursor1, libxext6, libxi6, libxrandr2, libice6, libsm6, libxtst6, libxt6t64 | libxt6, libxinerama1, libssl3t64 | libssl3, zlib1g, libgomp1, libgssapi-krb5-2, libsqlite3-0, ca-certificates, tzdata, libasound2t64 | libasound2, libjack-jackd2-0 | libjack0 | pipewire-jack
 Recommends: libgl1, libegl1, libpulse0, pulseaudio-utils, playerctl, xdotool, libdbus-1-3, dbus-x11, libglib2.0-bin, libxkbcommon0, libxkbcommon-x11-0
+Suggests: fonts-noto-cjk
 Description: Speech-to-text dictation for Linux desktop
  TypeWhisper provides global dictation, file transcription, recorder,
  dictionary/snippets, and pluggable speech and LLM providers for Linux.
@@ -507,6 +508,8 @@ Requires:       tzdata
 Requires:       libjack.so.0()(64bit)
 Requires:       libasound.so.2()(64bit)
 Recommends:     libglvnd-glx, libglvnd-egl, pulseaudio-libs, pulseaudio-utils, playerctl, xdotool, dbus-libs, dbus-daemon, glib2, libxkbcommon, libxkbcommon-x11
+# The Japanese and Chinese interface needs a CJK font.
+Suggests:       google-noto-sans-cjk-fonts
 
 %description
 TypeWhisper provides global dictation, file transcription, recorder,

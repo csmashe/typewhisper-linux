@@ -1,0 +1,23 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "Geminiの文字起こしとLLMリクエストに必要です。",
+  "Settings.StreamResponses": "応答をストリーミング",
+  "Settings.StreamResponsesDescription": "プロンプトアクションの出力を、完全な応答を待たずに生成されたトークンから順に表示します。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyValid": "APIキーは有効です。",
+  "Settings.ApiKeyInvalid": "APIキーが無効です。",
+  "Settings.ApiKeyNotConfigured": "APIキーが設定されていません",
+  "Manifest.Name": "Google Gemini",
+  "Manifest.Description": "Google Geminiの文字起こし、ライブ音声入力、およびモデルを動的に検出するGemini/Gemma LLMプロバイダー",
+  "Settings.ApiKeyValidFetched": "APIキーは有効です。取得したモデル: チャット{0}件、文字起こし{1}件。",
+  "Settings.LlmModelDescriptionFetched": "APIから読み込んだ互換性のあるGeminiおよびGemmaモデル: {0}。",
+  "Settings.LlmModelDescriptionDefault": "組み込みのGeminiエイリアスを使用しています。APIキーを検証すると、そのキーで利用できるGeminiおよびGemmaのチャットモデルを読み込みます。",
+  "Settings.LlmModel": "LLMモデル",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.TranscriptionModelsFetched": "APIから読み込んだ文字起こしモデル: {0}。",
+  "Settings.TranscriptionModelFallback": "組み込みのGemini文字起こしモデルを使用しています。APIキーを検証すると、そのキーで利用できる文字起こしモデルを読み込みます。",
+  "Settings.TranscriptionMode": "文字起こしのスタイル",
+  "Settings.TranscriptionModeHint": "「スマート」はフィラーを除去し、口頭での訂正を反映して、音声入力したテキストを整形します。「逐語」は話したとおりの言葉を保持します。",
+  "Settings.ModeSmart": "スマート",
+  "Settings.ModeVerbatim": "逐語"
+}

@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "Gladiaの文字起こしに必要です。",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.ModelDescription": "Gladiaのモデルを選択します。",
+  "Settings.NotConfiguredApiKeyRequired": "プラグインが設定されていません。APIキーが必要です。",
+  "Manifest.Name": "Gladia",
+  "Manifest.Description": "Gladia音声認識文字起こしエンジン"
+}

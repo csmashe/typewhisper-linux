@@ -1,0 +1,18 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "Speechmaticsの文字起こしに必要です。",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.ModelDescription": "Enhancedが最も高精度です。Standardは低コストです。",
+  "Settings.NotConfiguredApiKeyRequired": "プラグインが設定されていません。APIキーが必要です。",
+  "Settings.Region": "リージョン",
+  "Settings.RegionDescription": "録音済みとライブの両方の文字起こしで、Speechmaticsが音声を処理する場所です。",
+  "Settings.RegionEu": "欧州",
+  "Settings.RegionUs": "米国",
+  "Settings.RegionAu": "オーストラリア",
+  "Settings.LiveLanguage": "ライブ文字起こしの言語",
+  "Settings.LiveLanguageDescription": "ライブ文字起こしには固定の言語が必要です。話す言語が「自動」の場合にこの言語が使用されます。設定しない場合、「自動」の音声入力は録音を停止した後に文字起こしされます。",
+  "Settings.LiveLanguageNone": "なし（録音後に文字起こし）",
+  "Settings.LiveLanguageRequired": "Speechmaticsのライブ文字起こしには固定の言語が必要です。Speechmaticsの設定で、話す言語またはライブ文字起こしの言語を選択してください。",
+  "Manifest.Name": "Speechmatics",
+  "Manifest.Description": "Speechmaticsの音声認識による文字起こしエンジン"
+}
