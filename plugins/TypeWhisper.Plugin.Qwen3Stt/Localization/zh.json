@@ -1,0 +1,11 @@
+{
+  "Settings.BaseUrl": "基础URL",
+  "Settings.BaseUrlDescription": "OpenAI兼容服务器的基础URL。",
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "服务器的可选Bearer令牌。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.ModelDescription": "选择Qwen3 STT模型。",
+  "Settings.NotConfiguredBaseUrlRequired": "插件未配置。需要基础URL。",
+  "Manifest.Name": "Qwen3 STT",
+  "Manifest.Description": "通过OpenAI兼容端点进行Qwen3 ASR转录"
+}

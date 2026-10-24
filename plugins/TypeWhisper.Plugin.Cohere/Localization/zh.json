@@ -1,0 +1,13 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Cohere转录和Command请求所必需。",
+  "Settings.StreamResponses": "流式响应",
+  "Settings.StreamResponsesDescription": "在生成时逐个token显示提示词操作的输出，而不是等待完整回复。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyValid": "API密钥有效。",
+  "Settings.ApiKeyInvalid": "API密钥无效。",
+  "Settings.ApiKeyNotConfigured": "未配置API密钥",
+  "Errors.RecordingTooLarge": "录音对Cohere Transcribe来说过大（上限25 MB）。请使用较短的录音。",
+  "Manifest.Name": "Cohere",
+  "Manifest.Description": "Cohere Transcribe语音转文字，以及用于提示词处理的Command LLM"
+}

@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Headless;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,7 +44,7 @@ public sealed class UiCollection : ICollectionFixture<UiSession>;
 [Collection("ui")]
 public sealed class MainWindowRenderTests(UiSession ui)
 {
-    private static readonly string[] s_languages = ["en", "de", "es", "ru"];
+    private static readonly string[] s_languages = ["en", "de", "es", "ru", "ja", "zh"];
 
     public static TheoryData<string> Languages => new(s_languages);
 
@@ -56,6 +58,14 @@ public sealed class MainWindowRenderTests(UiSession ui)
     [MemberData(nameof(Languages))]
     public async Task EverySection_RendersReadableAndNamedInEveryThemeAndSize(string language)
     {
+        // Without a CJK font every glyph renders as a fallback box, so clipping is measured wrongly.
+        if (language is "ja" or "zh")
+        {
+            Assert.True(
+                await ui.Session.Dispatch(HasCjkFont, CancellationToken.None),
+                "Rendering ja/zh needs a CJK font, for example fonts-noto-cjk.");
+        }
+
         var findings = await ui.Session.Dispatch(() => RenderAll(language), CancellationToken.None);
 
         var outFile = Path.Join(UiEnvironment.SnapshotDir, $"findings-{language}.json");
@@ -110,6 +120,10 @@ public sealed class MainWindowRenderTests(UiSession ui)
             Loc.Instance.CurrentLanguage = "en";
         }
     }
+
+    private static bool HasCjkFont() =>
+        FontManager.Current.TryMatchCharacter('日', FontStyle.Normal, FontWeight.Normal, FontStretch.Normal,
+            null, CultureInfo.GetCultureInfo("ja"), out _);
 
     private static void Settle()
     {

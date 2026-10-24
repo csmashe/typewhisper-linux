@@ -3,7 +3,7 @@
   "Manifest.Description": "Use your signed-in Codex, Claude Code and OpenCode CLIs as LLM providers",
   "Settings.Checking": "Checking provider CLIs...",
   "Settings.Version": "Version: {0}",
-  "Settings.AutomaticInstallation": "Automatic (first installation found)",
+  "Settings.AutomaticInstallation": "Automatic (only installation found)",
   "Settings.PreferredModel": "Preferred OpenCode Zen model",
   "Settings.InstallHelp": "Install or sign in from a terminal, then run Validate to check the status again.",
   "Settings.OpenCodeFreeModelCount": "Currently free Zen models: {0}",

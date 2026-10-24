@@ -912,7 +912,7 @@ public sealed class GeminiPluginTests
         var directory = Path.Join(RepositoryRoot(), "plugins", "TypeWhisper.Plugin.Gemini", "Localization");
         var english = JsonSerializer.Deserialize<Dictionary<string, string>>(
             File.ReadAllText(Path.Join(directory, "en.json")))!;
-        string[] languages = ["de", "es", "ru"];
+        string[] languages = ["de", "es", "ru", "ja", "zh"];
         foreach (var language in languages)
         {
             var locale = JsonSerializer.Deserialize<Dictionary<string, string>>(

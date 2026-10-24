@@ -1,0 +1,18 @@
+{
+  "Manifest.Name": "ファイルメモリ",
+  "Manifest.Description": "事実をこのデバイスに保存し、一致するものをプロンプトアクションに提供します",
+  "Action.Name": "ファイルメモリに記憶",
+  "Action.Stored": "ファイルメモリに保存しました。",
+  "Action.AlreadyStored": "すでにファイルメモリにあります。",
+  "Action.Empty": "記憶する内容がありません。テキストが空です。",
+  "Collection.Label": "メモリ",
+  "Collection.Description": "このデバイスに保存される事実です。1件につき1つの事実またはトピックを記入します。詳細設定でメモリがオンになっているか、プロファイルでファイルメモリが選択されている場合、プロンプトアクションは一致するエントリを最大5件呼び出します。プロンプトアクションのテキストを保存するには、そのアクションの出力先を「ファイルメモリに記憶」に設定してください。",
+  "Collection.DisabledDescription": "メモリを表示・編集するには、ファイルメモリを有効にしてください。",
+  "Collection.Content": "メモリ",
+  "Collection.ContentPlaceholder": "例: プロジェクトAuroraではイギリス英語を使用する。",
+  "Collection.Add": "メモリを追加",
+  "Collection.Unknown": "不明なメモリコレクションです。",
+  "Memory.Empty": "メモリを空にすることはできません。",
+  "Memory.TooLong": "メモリは最大{0}文字までです。",
+  "Memory.Duplicate": "同じテキストのメモリが2つあります。どちらかを削除または変更してください。"
+}

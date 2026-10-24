@@ -1,0 +1,16 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "ClaudeのLLMリクエストに必要です。検証すると、アカウントで利用できるモデルを読み込みます。",
+  "Settings.StreamResponses": "応答をストリーミング",
+  "Settings.StreamResponsesDescription": "プロンプトアクションの出力を、完全な応答を待たずに生成されたトークンから順に表示します。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyFormatInvalid": "APIキーの形式が無効です。",
+  "Settings.ApiKeyNotConfigured": "APIキーが設定されていません",
+  "Settings.ApiKeyValidFetchedModels": "APIキーは有効です。このアカウントで利用できるClaudeモデルを{0}件読み込みました。",
+  "Settings.ApiKeyRejected": "AnthropicがこのAPIキーを拒否しました。キーを確認して、もう一度お試しください。",
+  "Settings.ModelRefreshFailed": "Claudeのモデルを読み込めませんでした: {0} 保存済みのモデル一覧は変更されていません。",
+  "Settings.ModelRefreshStale": "モデルの読み込み中にAPIキーが変更されました。もう一度検証してください。",
+  "Errors.ModelNotFound": "Claudeでモデル{0}が見つかりませんでした。拡張機能でAPIキーを検証してモデル一覧を更新し、利用可能なモデルを選択してください。",
+  "Manifest.Name": "Claude",
+  "Manifest.Description": "プロンプト処理用のAnthropic Claude LLM"
+}

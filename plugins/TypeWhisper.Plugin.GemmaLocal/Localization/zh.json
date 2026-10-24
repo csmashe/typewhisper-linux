@@ -1,0 +1,12 @@
+{
+  "Settings.Model": "模型",
+  "Settings.ModelDescription": "用于LLM处理的本地Gemma模型。选择模型后会（在需要时）下载并加载它；下载可能有数GB，进度会记录到插件日志中。",
+  "Settings.StreamResponses": "流式响应",
+  "Settings.StreamResponsesDescription": "在本地模型生成时逐个token显示提示词操作的输出，而不是等待完整回复。",
+  "Settings.SelectModel": "请先选择模型。",
+  "Settings.ModelReady": "模型已加载并就绪。",
+  "Settings.ModelReadyLoadsOnUse": "模型已就绪。目前未载入内存，将在下次使用时加载。",
+  "Settings.ModelSelectedNotLoaded": "已选择模型，但尚未加载。",
+  "Manifest.Name": "Gemma 4（本地）",
+  "Manifest.Description": "使用llama.cpp在CPU上本地运行Google Gemma 4"
+}

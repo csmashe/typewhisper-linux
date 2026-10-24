@@ -1,0 +1,11 @@
+{
+  "Settings.BaseUrl": "ベースURL",
+  "Settings.BaseUrlDescription": "OpenAI互換サーバーのベースURLです。",
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "サーバー用の任意のベアラートークンです。",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.ModelDescription": "Qwen3 STTモデルを選択します。",
+  "Settings.NotConfiguredBaseUrlRequired": "プラグインが設定されていません。ベースURLが必要です。",
+  "Manifest.Name": "Qwen3 STT",
+  "Manifest.Description": "OpenAI互換エンドポイント経由のQwen3 ASR文字起こし"
+}

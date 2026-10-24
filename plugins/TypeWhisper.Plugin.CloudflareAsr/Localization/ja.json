@@ -1,0 +1,19 @@
+{
+  "Settings.AccountId": "アカウントID",
+  "Settings.AccountIdDescription": "Cloudflareダッシュボードに表示される32文字のCloudflareアカウントIDです。",
+  "Settings.ApiToken": "APIトークン",
+  "Settings.ApiTokenDescription": "このアカウントのWorkers AIへのアクセス権を持つCloudflare APIトークンです。",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.ModelDescription": "Whisper Large V3 Turboは選択した話す言語と辞書の用語を受け付けます。Whisperは言語を自動検出します。",
+  "Settings.EnterAccountIdAndApiToken": "先にアカウントIDとAPIトークンの両方を入力してください。",
+  "Settings.InvalidAccountId": "CloudflareアカウントIDは32文字の16進数である必要があります。",
+  "Settings.CredentialsValid": "アカウントIDとAPIトークンはWorkers AIで有効です。",
+  "Settings.TokenRejected": "Cloudflareがこのアカウントに対するAPIトークンを拒否しました。このアカウントのWorkers AIへのアクセス権を持つトークンを使用してください。",
+  "Settings.ValidationFailedStatus": "CloudflareがHTTP {0}を返しました。アカウントIDとAPIトークンを確認してください。",
+  "Settings.InvalidValidationResponse": "Cloudflareから予期しない応答が返されました。もう一度お試しください。",
+  "Settings.CloudflareUnreachable": "Cloudflareに接続できませんでした。接続を確認して、もう一度お試しください。",
+  "Settings.SettingsChangedDuringValidation": "検証中に設定が変更されました。もう一度検証してください。",
+  "Errors.RecordingTooLarge": "録音がこのCloudflareモデルには大きすぎます。短い録音を使用してください。",
+  "Manifest.Name": "Cloudflare ASR",
+  "Manifest.Description": "Cloudflare Workers AI Whisper文字起こしエンジン"
+}

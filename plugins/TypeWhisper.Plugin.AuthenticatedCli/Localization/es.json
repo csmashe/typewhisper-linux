@@ -3,7 +3,7 @@
   "Manifest.Description": "Usa tus CLI de Codex, Claude Code y OpenCode con sesión iniciada como proveedores de LLM",
   "Settings.Checking": "Comprobando las CLI de los proveedores...",
   "Settings.Version": "Versión: {0}",
-  "Settings.AutomaticInstallation": "Automática (primera instalación encontrada)",
+  "Settings.AutomaticInstallation": "Automática (única instalación encontrada)",
   "Settings.PreferredModel": "Modelo preferido de OpenCode Zen",
   "Settings.InstallHelp": "Instala la CLI o inicia sesión desde un terminal y vuelve a comprobar el estado con «Validar».",
   "Settings.OpenCodeFreeModelCount": "Modelos Zen gratuitos actualmente: {0}",

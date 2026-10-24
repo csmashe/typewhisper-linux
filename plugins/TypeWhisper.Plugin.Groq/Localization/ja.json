@@ -1,0 +1,19 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "安全に保存され、Groqの文字起こしとLLMリクエストの両方に使用されます。",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.TranscriptionModelDescription": "Groqの文字起こしモデルを選択します。",
+  "Settings.LlmModel": "LLMモデル",
+  "Settings.LlmModelFetched": "APIから取得したGroq LLMモデルを{0}件表示しています。",
+  "Settings.LlmModelDefault": "既定のGroq LLM一覧を使用しています。「検証」をクリックすると、キーをテストして現在のモデルを更新します。",
+  "Settings.StreamResponses": "応答をストリーミング",
+  "Settings.StreamResponsesDescription": "プロンプトアクションの出力を、完全な応答を待たずに生成されたトークンから順に表示します。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyInvalid": "APIキーが無効です。",
+  "Settings.ApiKeyValidFetchedModels": "APIキーは有効です。Groq LLMモデルを{0}件取得しました。",
+  "Settings.ApiKeyValidSavedModels": "APIキーは有効です。保存済み/既定のLLMモデルを使用します。",
+  "Settings.ApiKeyNotConfigured": "APIキーが設定されていません",
+  "Settings.TranslationUnsupported": "{0}は翻訳に対応していません。",
+  "Manifest.Name": "Groq",
+  "Manifest.Description": "Groq Whisperによる文字起こしとLlamaによる翻訳"
+}
