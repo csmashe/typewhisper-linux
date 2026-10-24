@@ -523,6 +523,17 @@ public sealed class WelcomeWizardViewModelTests
             WelcomeWizardViewModel.ChooseDefaultModel(models, local, null, "ja")?.ModelId);
     }
 
+    [Fact]
+    public void WithoutRecommendedModels_JapaneseSkipsParakeetUltraUnlessItIsTheOnlyModel()
+    {
+        var ultra = new WizardModelRow(WelcomeWizardViewModel.DefaultLocalModelId, "Ultra", "", false, false);
+        var tiny = new WizardModelRow("plugin:com.typewhisper.whisper-cpp:tiny", "Tiny", "", false, false);
+        var local = new HashSet<string>(StringComparer.Ordinal) { ultra.ModelId, tiny.ModelId };
+
+        Assert.Equal(tiny.ModelId, WelcomeWizardViewModel.ChooseDefaultModel([ultra, tiny], local, null, "ja")?.ModelId);
+        Assert.Equal(ultra.ModelId, WelcomeWizardViewModel.ChooseDefaultModel([ultra], local, null, "ja")?.ModelId);
+    }
+
     private static FakeCatalogEngine CloudEngine() =>
         new("com.test.cloud", local: false, ("other", false), ("recommended", true));
 

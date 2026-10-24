@@ -449,6 +449,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             ?? (ultraFits ? models.FirstOrDefault(m => m.ModelId == DefaultLocalModelId) : null)
             ?? models.FirstOrDefault(m => m.IsRecommended && localModelIds.Contains(m.ModelId) && Fits(m))
             ?? models.FirstOrDefault(m => m.IsRecommended && Fits(m))
+            ?? models.FirstOrDefault(Fits)
             ?? (models.Count > 0 ? models[0] : null);
 
         bool Fits(WizardModelRow model) => ultraFits || model.ModelId != DefaultLocalModelId;
