@@ -693,6 +693,8 @@ public sealed class DictationSectionViewModelTests
     [InlineData("multi", null)]
     [InlineData("multi-eu", null)]
     [InlineData("vo", "Volapük")]
+    [InlineData("ba", "Башҡорт")]
+    [InlineData("oc", "Occitan")]
     [InlineData("und", null)]
     [InlineData("", null)]
     public void GetLanguageDisplayName_UsesCapitalizedNativeNameOrNothing(string code, string? expected)

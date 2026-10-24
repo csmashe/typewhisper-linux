@@ -1199,13 +1199,16 @@ public partial class DictationSectionViewModel : ObservableObject
     private static readonly string[] s_defaultLanguageCodes =
         ["de", "en", "fr", "es", "it", "pt", "nl", "pl", "cs", "sv", "da", "fi", "el", "ar", "ja", "ko", "zh", "vi"];
 
-    // Tags engines use that .NET has no culture for.
+    // Tags engines use that .NET has no culture for, on every ICU or only on older ones
+    // (ba before ICU 78, oc before 74).
     private static readonly Dictionary<string, string> s_uncataloguedLanguageNames =
         new(StringComparer.OrdinalIgnoreCase)
         {
+            ["ba"] = "Башҡорт",
             ["ht"] = "Kreyòl ayisyen",
             ["jw"] = "Basa Jawa",
             ["la"] = "Latina",
+            ["oc"] = "Occitan",
             ["vo"] = "Volapük",
         };
 
