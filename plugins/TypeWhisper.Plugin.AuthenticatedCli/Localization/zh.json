@@ -3,7 +3,7 @@
   "Manifest.Description": "将已登录的Codex、Claude Code和OpenCode CLI用作LLM提供商",
   "Settings.Checking": "正在检查提供商CLI...",
   "Settings.Version": "版本：{0}",
-  "Settings.AutomaticInstallation": "自动（找到的第一个安装）",
+  "Settings.AutomaticInstallation": "自动（找到的唯一安装）",
   "Settings.PreferredModel": "首选OpenCode Zen模型",
   "Settings.InstallHelp": "请在终端中安装或登录，然后运行“验证”再次检查状态。",
   "Settings.OpenCodeFreeModelCount": "当前免费的Zen模型：{0}",

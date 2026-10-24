@@ -3,7 +3,7 @@
   "Manifest.Description": "サインイン済みのCodex、Claude Code、OpenCodeのCLIをLLMプロバイダーとして使用します",
   "Settings.Checking": "プロバイダーのCLIを確認しています...",
   "Settings.Version": "バージョン: {0}",
-  "Settings.AutomaticInstallation": "自動（最初に見つかったインストール）",
+  "Settings.AutomaticInstallation": "自動（見つかった唯一のインストール）",
   "Settings.PreferredModel": "優先するOpenCode Zenモデル",
   "Settings.InstallHelp": "ターミナルからインストールまたはサインインし、「検証」を実行して状態を再確認してください。",
   "Settings.OpenCodeFreeModelCount": "現在無料のZenモデル: {0}",
