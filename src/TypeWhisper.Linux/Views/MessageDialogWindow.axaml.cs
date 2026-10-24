@@ -34,6 +34,10 @@ public partial class MessageDialogWindow : Window
         }
     }
 
+    /// <summary>
+    ///     Shows a confirm/cancel dialog and returns whether the user confirmed. With no main
+    ///     window to own it, the dialog opens non-modally and false returns at once, not a cancel.
+    /// </summary>
     /// <param name="title">The dialog title.</param>
     /// <param name="message">The question to confirm.</param>
     /// <param name="confirmText">The confirm button's text; OK when null.</param>

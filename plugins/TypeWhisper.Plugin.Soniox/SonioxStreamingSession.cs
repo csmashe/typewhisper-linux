@@ -367,6 +367,7 @@ internal sealed class SonioxTranscriptAggregator
 
     public string FinalText => _final.ToString().Trim();
 
+    /// <summary>Adds a message's final tokens to the transcript and returns the updated preview.</summary>
     /// <exception cref="FormatException">The message breaks Soniox's protocol or the transcript bound.</exception>
     public SonioxStreamingSession.SonioxAggregateUpdate Apply(
         SonioxStreamingSession.SonioxMessage message,
