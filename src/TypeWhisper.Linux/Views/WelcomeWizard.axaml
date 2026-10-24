@@ -80,6 +80,7 @@
                     <TextBlock Text="{loc:Str Wizard.AllModels}" FontWeight="SemiBold" />
                     <ComboBox ItemsSource="{Binding AvailableModels}"
                               SelectedItem="{Binding SelectedModel}"
+                              IsEnabled="{Binding !NextCommand.IsRunning}"
                               HorizontalAlignment="Stretch">
                         <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:WizardModelRow">
