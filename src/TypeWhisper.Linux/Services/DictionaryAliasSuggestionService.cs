@@ -6,7 +6,11 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>A ready model of a local LLM role that may generate alias suggestions.</summary>
-public sealed record LocalAliasModel(string ProviderId, string ModelId, string DisplayName);
+public sealed record LocalAliasModel(string ProviderId, string ModelId, string DisplayName)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayName;
+}
 
 /// <summary>
 ///     Generates alias suggestions with local LLMs only, never a cloud provider. The role is

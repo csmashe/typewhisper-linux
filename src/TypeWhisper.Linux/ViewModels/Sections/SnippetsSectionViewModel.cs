@@ -421,7 +421,14 @@ public partial class SnippetsSectionViewModel : ObservableObject, IDisposable
     }
 }
 
-public sealed record SnippetTriggerModeOption(SnippetTriggerMode Value, string Label);
+public sealed record SnippetTriggerModeOption(SnippetTriggerMode Value, string Label)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Label;
+}
 
 /// <summary>A tag filter entry; a null <see cref="Tag"/> is the "All tags" option.</summary>
-public sealed record SnippetTagFilterOption(string? Tag, string Label);
+public sealed record SnippetTagFilterOption(string? Tag, string Label)
+{
+    public override string ToString() => Label;
+}

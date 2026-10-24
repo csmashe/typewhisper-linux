@@ -225,9 +225,16 @@
                                                     <StackPanel>
                                                         <Grid ColumnDefinitions="Auto,*">
                                                             <CheckBox IsChecked="{Binding IsSelected}" IsVisible="{Binding IsSelecting}"
+                                                                      AutomationProperties.Name="{Binding Record.Preview, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=History.SelectEntryName}"
                                                                       VerticalAlignment="Center" Margin="0,0,8,0" />
                                                             <Button Grid.Column="1" Classes="card-toggle"
                                                                     Command="{Binding ToggleExpandCommand}">
+                                                                <AutomationProperties.Name>
+                                                                    <MultiBinding StringFormat="{}{0} {1}">
+                                                                        <Binding Path="TimeLabel" />
+                                                                        <Binding Path="Record.Preview" />
+                                                                    </MultiBinding>
+                                                                </AutomationProperties.Name>
                                                                 <Grid ColumnDefinitions="Auto,*,Auto">
                                                                     <TextBlock Grid.Column="0"
                                                                                Text="{Binding TimeLabel}"
@@ -360,6 +367,7 @@
                                                                                         Grid.Column="0"
                                                                                         Grid.RowSpan="2"
                                                                                         IsChecked="{Binding IsApproved}"
+                                                                                        AutomationProperties.Name="{Binding Original, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=History.ApproveSuggestionName}"
                                                                                         VerticalAlignment="Center" />
 
                                                                                     <TextBlock Grid.Row="0"

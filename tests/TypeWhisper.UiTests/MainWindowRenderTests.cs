@@ -71,7 +71,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
         var outFile = Path.Join(UiEnvironment.SnapshotDir, $"findings-{language}.json");
         await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(findings, s_indented));
         // Report every kind together so one category cannot hide another.
-        var report = string.Join("\n\n", new[] { UiInspector.RawKey, UiInspector.ClippedText, UiInspector.UnnamedControl, UiInspector.WrongLanguage }
+        var report = string.Join("\n\n", new[] { UiInspector.RawKey, UiInspector.ClippedText, UiInspector.UnnamedControl, UiInspector.CodeLikeName, UiInspector.WrongLanguage }
             .Select(kind => Describe(findings, kind, language, outFile))
             .Where(message => message is not null));
         Assert.True(report.Length == 0, report);
@@ -125,7 +125,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
         FontManager.Current.TryMatchCharacter('日', FontStyle.Normal, FontWeight.Normal, FontStretch.Normal,
             null, CultureInfo.GetCultureInfo("ja"), out _);
 
-    private static void Settle()
+    internal static void Settle()
     {
         for (var i = 0; i < 3; i++)
         {

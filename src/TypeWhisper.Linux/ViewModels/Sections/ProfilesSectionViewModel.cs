@@ -1589,18 +1589,43 @@ public partial class ProfilesSectionViewModel : ObservableObject
     }
 }
 
-public sealed record ProfileModelOption(string? Value, string Label);
+public sealed record ProfileModelOption(string? Value, string Label)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Label;
+}
 
-public sealed record PromptActionOption(string? Value, string Label);
+public sealed record PromptActionOption(string? Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record MemorySourceOption(string? Value, string Label);
+public sealed record MemorySourceOption(string? Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label);
+public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record ProfileContextMatchModeOption(ProfileContextMatchMode Value, string Label);
+public sealed record ProfileContextMatchModeOption(ProfileContextMatchMode Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label);
+public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record NullableBooleanOption(bool? Value, string Label);
+public sealed record NullableBooleanOption(bool? Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record NullableCleanupLevelOption(CleanupLevel? Value, string Label);
+public sealed record NullableCleanupLevelOption(CleanupLevel? Value, string Label)
+{
+    public override string ToString() => Label;
+}

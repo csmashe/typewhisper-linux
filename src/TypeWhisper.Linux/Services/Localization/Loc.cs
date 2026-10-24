@@ -9,7 +9,11 @@ namespace TypeWhisper.Linux.Services.Localization;
 ///     A selectable interface-language option for the settings dropdown.
 ///     <paramref name="Code" /> is null for "Auto (System)".
 /// </summary>
-public sealed record UiLanguageOption(string? Code, string DisplayName);
+public sealed record UiLanguageOption(string? Code, string DisplayName)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayName;
+}
 
 /// <summary>
 ///     Singleton localization service for the UI. Loads JSON translation files

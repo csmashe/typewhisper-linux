@@ -687,12 +687,22 @@ public partial class AdvancedSectionViewModel : ObservableObject
     }
 }
 
-public sealed record AutoUnloadOption(int Seconds, string DisplayName);
+public sealed record AutoUnloadOption(int Seconds, string DisplayName)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayName;
+}
 
-public sealed record DiagnosticLogRetentionOption(int Days, string DisplayName);
+public sealed record DiagnosticLogRetentionOption(int Days, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
 public sealed record HistoryRetentionOption(
     HistoryRetentionMode Mode,
     int? Minutes,
     string DisplayName
-);
+)
+{
+    public override string ToString() => DisplayName;
+}

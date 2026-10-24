@@ -27,6 +27,7 @@
 
                 <ComboBox ItemsSource="{Binding Options}"
                           SelectedItem="{Binding SelectedOption}"
+                          AutomationProperties.Name="{Binding Label}"
                           HorizontalAlignment="Stretch"
                           IsVisible="{Binding IsDropdownKind}"
                           DropDownOpened="OnSettingDropDownOpened">
@@ -39,12 +40,14 @@
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"
+                         AutomationProperties.Name="{Binding Label}"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsTextKind}" />
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"
                          PasswordChar="•"
+                         AutomationProperties.Name="{Binding Label}"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsSecretKind}" />
 
@@ -52,6 +55,7 @@
                          PlaceholderText="{Binding Placeholder}"
                          PasswordChar="{Binding MultilinePasswordChar}"
                          RevealPassword="{Binding RevealSecretMultiline, Mode=TwoWay}"
+                         AutomationProperties.Name="{Binding Label}"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          MinHeight="80"
@@ -144,6 +148,7 @@
                                                       Margin="0,0,2,0"
                                                       VerticalAlignment="Center"
                                                       IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                      AutomationProperties.Name="{Binding Name, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Plugins.EnabledToggleName}"
                                                       Command="{Binding Owner.ToggleEnabledCommand}"
                                                       CommandParameter="{Binding}" />
 
@@ -157,6 +162,7 @@
                                                 BorderThickness="0"
                                                 Command="{Binding Owner.ToggleExpandedCommand}"
                                                 CommandParameter="{Binding}"
+                                                AutomationProperties.Name="{Binding ExpanderAccessibleName}"
                                                 IsVisible="{Binding HasExpandableSettings}">
                                             <TextBlock Text="{Binding ExpansionGlyph}"
                                                        FontSize="14"
@@ -197,6 +203,7 @@
                                                             <TextBox
                                                                 Text="{Binding FilterText}"
                                                                 PlaceholderText="{loc:Str Plugins.CollectionSearchPlaceholder}"
+                                                                AutomationProperties.Name="{loc:Str Plugins.CollectionSearchPlaceholder}"
                                                                 IsVisible="{Binding IsSearchable}" />
                                                             <TextBlock
                                                                 Text="{loc:Str Plugins.CollectionNoMatches}"
@@ -261,6 +268,7 @@
                                                                                         Foreground="{DynamicResource TwTextSecondaryBrush}" />
                                                                                     <TextBox
                                                                                         Text="{Binding TestInput}"
+                                                                                        AutomationProperties.Name="{loc:Str Plugins.CollectionTestInput}"
                                                                                         AcceptsReturn="True"
                                                                                         TextWrapping="Wrap"
                                                                                         MinHeight="56" />

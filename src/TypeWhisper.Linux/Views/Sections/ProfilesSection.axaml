@@ -93,6 +93,11 @@
                      ItemsSource="{Binding Profiles}"
                      SelectedItem="{Binding SelectedProfile}"
                      Margin="0,6,0,0">
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem" x:DataType="models:Profile">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                    </Style>
+                </ListBox.Styles>
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="models:Profile">
                         <Border Classes="profile-tile">
@@ -228,6 +233,7 @@
                                                     <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                     <Button Content="×"
                                                             Classes="chip-remove"
+                                                            AutomationProperties.Name="{Binding Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.RemoveChipName}"
                                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveProcessNameChipCommand}"
                                                             CommandParameter="{Binding}" />
                                                 </StackPanel>
@@ -272,6 +278,7 @@
                                                         <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
                                                         <Button Content="×"
                                                                 Classes="chip-remove"
+                                                                AutomationProperties.Name="{Binding Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Profiles.RemoveChipName}"
                                                                 Command="{Binding $parent[ItemsControl].((vm:ProfilesSectionViewModel)DataContext).RemoveUrlPatternChipCommand}"
                                                                 CommandParameter="{Binding}" />
                                                     </StackPanel>
@@ -444,7 +451,8 @@
                                         </StackPanel>
                                         <ComboBox Grid.Column="1"
                                                   ItemsSource="{Binding MemorySourceOptions}"
-                                                  SelectedItem="{Binding SelectedMemorySourceOption}">
+                                                  SelectedItem="{Binding SelectedMemorySourceOption}"
+                                                  AutomationProperties.Name="{loc:Str Profiles.MemorySource}">
                                             <ComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:MemorySourceOption">
                                                     <TextBlock Text="{Binding Label}" />

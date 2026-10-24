@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Automation.Peers;
+using Avalonia.Automation.Provider;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
@@ -17,6 +18,18 @@ internal static partial class UiInspector
     internal const string ClippedText = "clipped-text";
     internal const string UnnamedControl = "unnamed-control";
     internal const string WrongLanguage = "wrong-language-text";
+    internal const string CodeLikeName = "code-like-accessible-text";
+
+    // Names a screen reader would read out as code: a type name, a record dump, or a bare glyph.
+    private static readonly HashSet<string> s_controlTypeNames =
+    [
+        "Border", "Button", "CheckBox", "ComboBox", "ContentPresenter", "Grid", "ListBoxItem", "NumericUpDown",
+        "PathIcon", "RepeatButton", "Slider", "StackPanel", "TextBlock", "TextBox", "Thumb",
+        "ToggleButton", "ToggleSwitch",
+    ];
+
+    [GeneratedRegex(@"^\w+ \{ .* = .*\}$")]
+    private static partial Regex RecordShape();
 
     [GeneratedRegex(@"^[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)+$")]
     private static partial Regex KeyShape();
@@ -55,15 +68,53 @@ internal static partial class UiInspector
                 }
             }
 
-            // Template parts (scrollbar buttons, a ComboBox's toggle) are named by their owner.
-            if (control.TemplatedParent is null && IsInteractive(control) && string.IsNullOrWhiteSpace(AccessibleName(control)))
+            if (!IsInteractive(control))
+                continue;
+
+            // A screen reader falls back to the class name for an unnamed control, template parts included.
+            var accessibleName = AccessibleName(control);
+            if (string.IsNullOrWhiteSpace(accessibleName))
+            {
                 findings.Add(new UiFinding(UnnamedControl, control.GetType().Name, Describe(control), Locate(control)));
+                continue;
+            }
+
+            if (IsCodeLike(accessibleName))
+                findings.Add(new UiFinding(CodeLikeName, control.GetType().Name, $"name \"{Shorten(accessibleName)}\"", Locate(control)));
+            if (AccessibleValue(control) is { } selectedValue && IsCodeLike(selectedValue))
+                findings.Add(new UiFinding(CodeLikeName, control.GetType().Name, $"value \"{Shorten(selectedValue)}\"", Locate(control)));
         }
         return findings;
     }
 
     private static bool IsInteractive(Control control) =>
-        control is Button or ToggleButton or ComboBox or TextBox or Slider or NumericUpDown or AutoCompleteBox;
+        control is Button or ToggleButton or ComboBox or TextBox or Slider or NumericUpDown or AutoCompleteBox
+            or Thumb or ListBoxItem;
+
+    internal static bool IsCodeLike(string text)
+    {
+        var trimmed = text.Trim();
+        return s_controlTypeNames.Contains(trimmed)
+               || trimmed.StartsWith("Avalonia.", StringComparison.Ordinal)
+               || trimmed.StartsWith("TypeWhisper.", StringComparison.Ordinal)
+               || RecordShape().IsMatch(trimmed)
+               || !trimmed.Any(char.IsLetterOrDigit);
+    }
+
+    // A collapsed ComboBox reads its selected item through the value pattern, which uses ToString().
+    private static string? AccessibleValue(Control control)
+    {
+        if (control is not ComboBox)
+            return null;
+        try
+        {
+            return ControlAutomationPeer.CreatePeerForElement(control) is IValueProvider provider ? provider.Value : null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     private static string AccessibleName(Control control)
     {

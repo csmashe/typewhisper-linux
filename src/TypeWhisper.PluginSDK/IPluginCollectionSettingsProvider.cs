@@ -91,7 +91,11 @@ public sealed record PluginCollectionTemplate(
     string Label,
     string? Description,
     IReadOnlyDictionary<string, string?> Values
-);
+)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Label;
+}
 
 /// <summary>Describes the per-item test the host offers for a collection.</summary>
 /// <param name="ButtonLabel">Text of the button that runs the test.</param>

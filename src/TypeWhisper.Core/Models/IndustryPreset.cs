@@ -8,6 +8,9 @@ namespace TypeWhisper.Core.Models;
 /// </summary>
 public sealed record IndustryPreset(string Id, string Name, string Description, string? TermPackId)
 {
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Name;
+
     public static readonly IndustryPreset[] All =
     [
         new(

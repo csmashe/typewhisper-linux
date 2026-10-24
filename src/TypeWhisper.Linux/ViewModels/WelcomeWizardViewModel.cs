@@ -1212,7 +1212,11 @@ public sealed record WizardModelRow(
     string SizeDescription,
     bool IsDownloaded,
     bool IsRecommended
-);
+)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayName;
+}
 
 /// <summary>
 ///     View-model wrapper around one <see cref="ISetupTask" /> for the setup checklist.

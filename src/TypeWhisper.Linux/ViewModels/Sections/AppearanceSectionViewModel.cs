@@ -475,6 +475,9 @@ public partial class AppearanceSectionViewModel : ObservableObject
 public sealed class InterfaceThemeOption(InterfaceTheme value, string displayNameKey)
     : ObservableObject
 {
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayName;
+
     public InterfaceTheme Value { get; } = value;
     public string DisplayName => Loc.Instance[displayNameKey];
 
@@ -484,6 +487,8 @@ public sealed class InterfaceThemeOption(InterfaceTheme value, string displayNam
 public sealed class OverlayPositionOption(OverlayPosition value, string displayNameKey)
     : ObservableObject
 {
+    public override string ToString() => DisplayName;
+
     public OverlayPosition Value { get; } = value;
     public string DisplayName => Loc.Instance[displayNameKey];
 
@@ -493,6 +498,8 @@ public sealed class OverlayPositionOption(OverlayPosition value, string displayN
 public sealed class OverlayWidgetOption(OverlayWidget value, string displayNameKey)
     : ObservableObject
 {
+    public override string ToString() => DisplayName;
+
     public OverlayWidget Value { get; } = value;
     public string DisplayName => Loc.Instance[displayNameKey];
 
@@ -502,6 +509,8 @@ public sealed class OverlayWidgetOption(OverlayWidget value, string displayNameK
 public sealed class LiveTextPlacementOption(bool isFloating, string displayNameKey)
     : ObservableObject
 {
+    public override string ToString() => DisplayName;
+
     public bool IsFloating { get; } = isFloating;
     public string DisplayName => Loc.Instance[displayNameKey];
 

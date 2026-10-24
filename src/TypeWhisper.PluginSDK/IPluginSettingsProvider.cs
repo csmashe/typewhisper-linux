@@ -83,7 +83,11 @@ public sealed record PluginSettingDefinition(
 
 /// <summary>A selectable option for a dropdown setting.</summary>
 // ReSharper disable once UnusedType.Global
-public sealed record PluginSettingOption(string Value, string Label);
+public sealed record PluginSettingOption(string Value, string Label)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Label;
+}
 
 /// <summary>Outcome of a plugin settings validation pass.</summary>
 // ReSharper disable once UnusedType.Global
