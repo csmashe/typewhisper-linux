@@ -1,0 +1,4 @@
+{
+  "Manifest.Name": "ローカルモデル（sherpa-onnx）",
+  "Manifest.Description": "sherpa-onnxによるオフライン文字起こし（NVIDIA NeMo Parakeet、Parakeet Ultra、Canary＋Qwen3-ASR）"
+}

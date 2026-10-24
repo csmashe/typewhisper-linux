@@ -1,0 +1,23 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Cerebras LLM请求所必需。",
+  "Settings.StreamResponses": "流式响应",
+  "Settings.StreamResponsesDescription": "在生成时逐个token显示提示词操作的输出，而不是等待完整回复。",
+  "Settings.TemperatureMode": "温度",
+  "Settings.TemperatureModeDescription": "提供商默认不发送温度值；自定义则发送下方的值。",
+  "Settings.TemperatureProviderDefault": "提供商默认",
+  "Settings.TemperatureCustom": "自定义",
+  "Settings.TemperatureValue": "温度值",
+  "Settings.TemperatureValueDescription": "范围为0到2。值越低，结果越稳定。仅在自定义温度模式下使用。",
+  "Settings.TemperatureInvalid": "请输入0到2之间的温度值，使用小数点作为小数分隔符。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyValidFetchedModels": "API密钥有效。已加载此账户可用的{0}个Cerebras模型。",
+  "Settings.ApiKeyRejected": "Cerebras拒绝了此API密钥。请检查密钥后重试。",
+  "Settings.ModelRefreshFailed": "无法加载Cerebras模型：{0}已保存的模型列表未更改。",
+  "Settings.ModelRefreshStale": "加载模型期间API密钥已更改。请重新验证。",
+  "Errors.ModelRefreshTimedOut": "加载超时。",
+  "Errors.ModelCatalogInvalid": "Cerebras返回的模型列表为空、无效或过大。",
+  "Settings.ApiKeyNotConfigured": "未配置API密钥",
+  "Manifest.Name": "Cerebras",
+  "Manifest.Description": "Cerebras快速LLM推理"
+}

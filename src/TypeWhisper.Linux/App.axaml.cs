@@ -104,7 +104,7 @@ public class App : Application
             // override (so "Auto (System)" can restore it), load the JSON
             // catalogs, then apply the saved preference. Must run before
             // MainWindow is built so the first render is in the right language.
-            Loc.SystemLanguage = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            Loc.SystemLanguage = Loc.CatalogLanguageFor(System.Globalization.CultureInfo.CurrentUICulture);
             Loc.Instance.Initialize();
             Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(settings.Current.UiLanguage);
             BootTrace.Stage("Loc.Initialize");

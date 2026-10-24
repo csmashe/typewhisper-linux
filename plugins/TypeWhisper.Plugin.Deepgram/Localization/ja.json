@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "Deepgramの文字起こしとストリーミングに必要です。",
+  "Settings.TranscriptionModel": "文字起こしモデル",
+  "Settings.ModelDescription": "Deepgramのモデルを選択します。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyValid": "APIキーは有効です。",
+  "Settings.ApiKeyInvalid": "APIキーが無効です。",
+  "Manifest.Name": "Deepgram",
+  "Manifest.Description": "Deepgram Nova文字起こしエンジン"
+}

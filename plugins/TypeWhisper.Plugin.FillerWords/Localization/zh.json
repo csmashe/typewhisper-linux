@@ -1,0 +1,7 @@
+{
+  "Settings.Title": "填充词",
+  "Settings.Hint": "每行一个词；逗号和分号也可分隔词语。在行首加上语言代码和冒号（de: äh, ähm），即可仅对该说话语言生效；其他行对所有语言生效。",
+  "Settings.WordCount": "列表中的词数：{0}",
+  "Manifest.Name": "填充词",
+  "Manifest.Description": "从转录中移除“嗯”“呃”等填充词"
+}

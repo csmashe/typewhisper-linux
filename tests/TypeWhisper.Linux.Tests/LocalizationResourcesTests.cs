@@ -1,17 +1,18 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
 ///     Guards the interface-language JSON catalogs. English is the canonical
-///     key set; other languages may be incomplete (missing keys fall back to
-///     English at runtime via <c>Loc</c>) but must never contain orphan keys
-///     that don't exist in English — those are typos or stale keys.
+///     key set; every other language must cover it with the same placeholders
+///     (a missing key would silently fall back to English via <c>Loc</c>) and
+///     must never contain orphan keys — those are typos or stale keys.
 ///     This replaces the compile-time safety a resx designer would have given.
 /// </summary>
-public sealed class LocalizationResourcesTests
+public sealed partial class LocalizationResourcesTests
 {
     private const string CanonicalLanguage = "en";
 
@@ -23,6 +24,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void RecoveryKeys_AreTranslatedWithMatchingPlaceholders(string language)
     {
         string[] keys = ["History.Retry", "History.Retrying", "History.RetryCopied",
@@ -44,6 +47,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void AppImportKeys_AreTranslatedWithMatchingPlaceholders(string language)
     {
         var english = Load("en");
@@ -102,6 +107,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveLanguageSelectionAndRecorderOutcomeStringsWithPlaceholders(
         string language
     )
@@ -153,6 +160,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveUiOperationFailureStringsWithRequiredPlaceholders(
         string language
     )
@@ -177,6 +186,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveSecretProtectionWarningsWithRequiredPlaceholder(
         string language
     )
@@ -230,6 +241,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveSelectedProviderFailureStringsWithRequiredPlaceholder(string language)
     {
         var catalog = Load(language);
@@ -267,6 +280,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveTerminalClipboardFallback(string language)
     {
         var catalog = Load(language);
@@ -286,6 +301,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveRecentTranscriptionFeedbackStringsWithRequiredPlaceholders(
         string language
     )
@@ -348,6 +365,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveNativeDictationHeuristicDisclosures(string language)
     {
         var catalog = Load(language);
@@ -392,6 +411,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveDynamicHotkeyRejectionStrings(string language)
     {
         var catalog = Load(language);
@@ -450,6 +471,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveGlobalHotkeyRevocationMessages(string language)
     {
         var catalog = Load(language);
@@ -592,6 +615,8 @@ public sealed class LocalizationResourcesTests
     [InlineData("de")]
     [InlineData("es")]
     [InlineData("ru")]
+    [InlineData("ja")]
+    [InlineData("zh")]
     public void Catalogs_HaveProfileCardRuleStringsWithPlaceholders(string language)
     {
         var catalog = Load(language);
@@ -614,6 +639,27 @@ public sealed class LocalizationResourcesTests
         Assert.Contains("{0}", rulesSummary, StringComparison.Ordinal);
         Assert.Contains("{1}", rulesSummary, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [MemberData(nameof(NonCanonicalLanguages))]
+    public void TranslationsCoverEveryKeyWithTheSamePlaceholders(string lang)
+    {
+        var en = Load(CanonicalLanguage);
+        var translation = Load(lang);
+
+        var missing = en.Keys.Where(key => !translation.ContainsKey(key)).ToList();
+        Assert.True(missing.Count == 0, $"{lang}.json is missing: {string.Join(", ", missing)}");
+        var mismatched = en.Where(pair => !Placeholders(pair.Value).SequenceEqual(Placeholders(translation[pair.Key])))
+            .Select(pair => pair.Key)
+            .ToList();
+        Assert.True(mismatched.Count == 0, $"{lang}.json placeholders differ from English: {string.Join(", ", mismatched)}");
+    }
+
+    private static IEnumerable<string> Placeholders(string text) =>
+        PlaceholderPattern().Matches(text).Select(match => match.Value).Order(StringComparer.Ordinal);
+
+    [GeneratedRegex(@"\{\d+(?:[:,][^}]*)?\}")]
+    private static partial Regex PlaceholderPattern();
 
     [Theory]
     [MemberData(nameof(NonCanonicalLanguages))]

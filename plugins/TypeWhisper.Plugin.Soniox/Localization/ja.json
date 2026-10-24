@@ -1,0 +1,18 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "Sonioxの文字起こしに必要です。",
+  "Settings.ApiKeyRequired": "APIキーが必要です。",
+  "Settings.ApiKeyInvalid": "SonioxのAPIキーを確認できませんでした。",
+  "Settings.Region": "データリージョン",
+  "Settings.RegionDescription": "Sonioxは、APIキーを発行したプロジェクトのリージョンに音声を保管します。キーをテストすると、そのキーを受け付けるリージョンに切り替わります。",
+  "Settings.RegionUs": "米国",
+  "Settings.RegionEu": "欧州連合",
+  "Settings.RegionJp": "日本",
+  "Settings.RegionIn": "インド",
+  "Settings.ApiKeyValidRegion": "SonioxのAPIキーは有効です（{0}）。",
+  "Settings.ApiKeyValidRegionSwitched": "SonioxのAPIキーは有効です。リージョンを{0}に切り替えました。",
+  "Settings.SettingsChangedDuringProbe": "キーのテスト中に設定が変更されました。もう一度検証してください。",
+  "Settings.NotConfiguredApiKeyRequired": "プラグインが設定されていません。APIキーが必要です。",
+  "Manifest.Name": "Soniox",
+  "Manifest.Description": "Sonioxの音声認識による文字起こしエンジン"
+}

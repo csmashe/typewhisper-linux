@@ -1,0 +1,4 @@
+{
+  "Manifest.Name": "本地模型（sherpa-onnx）",
+  "Manifest.Description": "通过sherpa-onnx离线转录（NVIDIA NeMo Parakeet、Parakeet Ultra、Canary + Qwen3-ASR）"
+}
