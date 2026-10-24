@@ -505,6 +505,7 @@ public sealed class AdvancedSectionViewModelTests
                 voice => voice.Id == SpeechFeedbackService.DefaultVoiceOptionId
             );
             var selectedVoiceIdBefore = harness.ViewModel.SelectedSpokenFeedbackVoiceId;
+            var selectedProviderIdBefore = harness.ViewModel.SelectedSpokenFeedbackProviderOption?.Id;
             HashSet<string?> expectedPropertyChanges =
             [
                 nameof(AdvancedSectionViewModel.SpokenFeedbackHint),
@@ -559,6 +560,7 @@ public sealed class AdvancedSectionViewModelTests
                 selectedVoiceIdBefore,
                 harness.ViewModel.SelectedSpokenFeedbackVoiceId
             );
+            Assert.Equal(selectedProviderIdBefore, harness.ViewModel.SelectedSpokenFeedbackProviderOption?.Id);
 
             harness.Settings.Verify(
                 service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),

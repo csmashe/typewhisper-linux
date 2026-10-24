@@ -1144,6 +1144,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedProfileDisplayName));
         OnPropertyChanged(nameof(MatchStatusText));
         OnPropertyChanged(nameof(EditIsEnabledStatusText));
+        if (_browserStatusIsState)
+        {
+            RefreshBrowserAccessibilityStatus();
+        }
     }
 
     private static IReadOnlyList<ProfileStylePresetOption> CreateStylePresetOptions()
@@ -1465,7 +1469,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         BrowserAccessibilityStatusMessage = result.Success
             ? Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message)
             : $"{result.Message} {result.Detail}";
+        _browserStatusIsState = false;
     }
+
+    // The computed browser status follows a language switch; a setup result keeps its wording.
+    private bool _browserStatusIsState;
 
     private void RefreshBrowserAccessibilityStatus()
     {
@@ -1501,6 +1509,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         // Offer Revert whenever anything was installed, including partial state.
         CanRevertBrowserAccessibility = hasAnyInstall;
+        _browserStatusIsState = true;
 
         OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
     }

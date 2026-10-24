@@ -8,7 +8,8 @@ namespace TypeWhisper.Linux.Services.Plugins;
 
 /// <summary>
 ///     loads localized strings from a plugin's Localization/ subdirectory.
-///     current language defaults to CultureInfo.CurrentUICulture unless overridden.
+///     Without an override the language follows the host interface language, live, so plugin
+///     text switches with it; outside the app (no host catalogs) it uses the UI culture.
 /// </summary>
 public sealed class PluginLocalization : IPluginLocalization
 {
@@ -18,13 +19,13 @@ public sealed class PluginLocalization : IPluginLocalization
     private static readonly JsonSerializerOptions s_jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private readonly Dictionary<string, Dictionary<string, string>> _strings = [];
+    // ReSharper disable once ReplaceWithFieldKeyword -- assigned in the constructor, where `field` is inaccessible; CurrentLanguage must stay computed to follow the host language.
+    private readonly string? _languageOverride;
 
     public PluginLocalization(string pluginDirectory, string? languageOverride = null)
     {
         var localizationDir = Path.Join(pluginDirectory, LocalizationFolder);
-        CurrentLanguage =
-            languageOverride
-            ?? Loc.CatalogLanguageFor(CultureInfo.CurrentUICulture);
+        _languageOverride = languageOverride;
 
         var available = new List<string>();
 
@@ -61,13 +62,19 @@ public sealed class PluginLocalization : IPluginLocalization
         AvailableLanguages = available;
     }
 
-    public string CurrentLanguage { get; }
+    // Loc resolves Auto (including Traditional Chinese to English) before it sets this.
+    public string CurrentLanguage =>
+        _languageOverride
+        ?? (Loc.Instance.AvailableLanguages.Count > 0
+            ? Loc.Instance.CurrentLanguage
+            : Loc.CatalogLanguageFor(CultureInfo.CurrentUICulture));
     public IReadOnlyList<string> AvailableLanguages { get; }
 
     public string GetString(string key)
     {
+        var language = CurrentLanguage;
         if (
-            _strings.TryGetValue(CurrentLanguage, out var currentDict)
+            _strings.TryGetValue(language, out var currentDict)
             && currentDict.TryGetValue(key, out var value)
         )
         {
@@ -75,7 +82,7 @@ public sealed class PluginLocalization : IPluginLocalization
         }
 
         if (
-            CurrentLanguage != FallbackLanguage
+            language != FallbackLanguage
             && _strings.TryGetValue(FallbackLanguage, out var fallbackDict)
             && fallbackDict.TryGetValue(key, out var fallbackValue)
         )

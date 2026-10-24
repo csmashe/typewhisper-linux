@@ -62,6 +62,45 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void LanguageChange_RecomputesBrowserStatusState()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        var originalSessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", "wayland");
+            var activeWindow = CreateActiveWindowService();
+            using var pluginManager = CreatePluginManager();
+            var sut = new ProfilesSectionViewModel(
+                CreateProfileService(),
+                activeWindow.Object,
+                pluginManager,
+                new PromptActionService(Path.Join(_tempDir, "browser-status-prompt-actions.json")),
+                _hotkeys,
+                Mock.Of<IDetectionFailureTracker>(),
+                new GnomeWindowCallsSetupHelper(),
+                new BrowserAccessibilitySetupHelper(),
+                _uiOperations
+            );
+            // The state depends on this machine's browser setup; any of the three must follow.
+            string[] keys = ["Profiles.BrowserStatusConfigured", "Profiles.BrowserStatusPartial", "Profiles.BrowserStatusDisabled"];
+            var english = sut.BrowserAccessibilityStatusMessage;
+            var key = Assert.Single(keys, k => Loc.Instance[k] == english);
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.Equal(Loc.Instance[key], sut.BrowserAccessibilityStatusMessage);
+            Assert.NotEqual(english, sut.BrowserAccessibilityStatusMessage);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("XDG_SESSION_TYPE", originalSessionType);
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void Constructor_DoesNotInspectActiveWindow()
     {
         var service = CreateProfileService();

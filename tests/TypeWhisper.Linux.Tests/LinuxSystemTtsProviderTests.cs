@@ -1,6 +1,7 @@
 using Moq;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK.Models;
 using Xunit;
 
@@ -10,6 +11,30 @@ public sealed class LinuxSystemTtsProviderTests
 {
     private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(2);
     private static readonly string[] s_audioPlaybackCommands = ["pw-play", "paplay", "aplay"];
+
+    [Fact]
+    public void Names_follow_the_interface_language()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var runner = ControlledProcessRunner.WithImmediateResult(Success());
+        using var provider = new LinuxSystemTtsProvider(settings.Object, runner, "espeak");
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            Assert.Equal("Linux system voice", provider.ProviderDisplayName);
+            Assert.Equal("System default voice", provider.SettingsSummary);
+
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal("Linux-Systemstimme", provider.ProviderDisplayName);
+            Assert.Equal("Linux-Systemstimme", provider.PluginName);
+            Assert.Equal("System-Standardstimme", provider.SettingsSummary);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
 
     [Fact]
     public void Constructor_hydrates_selected_voice_from_current_settings()

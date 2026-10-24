@@ -519,8 +519,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
                 ?? AutoUnloadOptions[0];
             SelectedHistoryRetention = MatchRetention(retentionMode, retentionMinutes);
 
-            // The voices list carries a localized "System default voice" entry, so it
-            // must be rebuilt too or the dropdown stays in the previous language.
+            // The provider and voice lists carry localized names ("Linux system voice",
+            // "System default voice"), so rebuild both or they stay in the previous language.
+            RefreshSpokenFeedbackProviders();
             RefreshSpokenFeedbackVoices();
 
             OnPropertyChanged(nameof(SpokenFeedbackHint));

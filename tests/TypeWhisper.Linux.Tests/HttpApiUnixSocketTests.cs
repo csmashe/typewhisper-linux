@@ -9,6 +9,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.Linux.Tests.Vocabulary;
 using TypeWhisper.PluginSDK.Processes;
@@ -1268,6 +1269,29 @@ public sealed class HttpApiUnixSocketTests
             fixture.Service.StatusText,
             StringComparison.Ordinal
         );
+    }
+
+    [Fact]
+    public void StatusText_FollowsALiveLanguageSwitch()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            using var fixture = new ApiFixture();
+            fixture.Start();
+
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.StartsWith("Die lokale API läuft unter http://localhost:", fixture.Service.StatusText, StringComparison.Ordinal);
+            Assert.Contains(fixture.SocketPath, fixture.Service.StatusText, StringComparison.Ordinal);
+
+            fixture.Disable();
+            Assert.Equal("Die lokale API ist deaktiviert.", fixture.Service.StatusText);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
     }
 
     [Fact]

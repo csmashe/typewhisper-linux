@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -50,13 +51,13 @@ public sealed class LinuxSystemTtsProvider : ITtsProviderPlugin
     }
 
     public string PluginId => "com.typewhisper.tts.linux-system";
-    public string PluginName => "Linux System Voice";
+    public string PluginName => Loc.Instance["Speech.LinuxSystemVoice"];
     public string PluginVersion => "1.0.0";
     public string ProviderId => BuiltInProviderId;
-    public string ProviderDisplayName => "Linux system voice";
+    public string ProviderDisplayName => Loc.Instance["Speech.LinuxSystemVoice"];
     public bool IsConfigured => _speechFeedbackCommand() is not null;
     public string? SelectedVoiceId { get; private set; }
-    public string SettingsSummary => SelectedVoiceId ?? "System default voice";
+    public string SettingsSummary => SelectedVoiceId ?? Loc.Instance["Speech.SystemDefaultVoice"];
 
     public IReadOnlyList<PluginVoiceInfo> AvailableVoices => [];
 

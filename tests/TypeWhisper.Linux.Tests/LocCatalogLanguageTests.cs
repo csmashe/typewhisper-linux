@@ -43,26 +43,79 @@ public sealed class LocCatalogLanguageTests
     }
 
     [Fact]
-    public void PluginOnTraditionalChinese_FallsBackToEnglish()
+    public void Plugin_FollowsALiveInterfaceLanguageSwitch()
     {
-        var directory = Directory.CreateTempSubdirectory("tw-plugin-loc-");
-        var previous = CultureInfo.CurrentUICulture;
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        var directory = CreatePluginCatalogs();
         try
         {
-            var localization = Directory.CreateDirectory(Path.Join(directory.FullName, "Localization"));
-            File.WriteAllText(Path.Join(localization.FullName, "en.json"), """{"Greeting": "Hello"}""");
-            File.WriteAllText(Path.Join(localization.FullName, "zh.json"), """{"Greeting": "你好"}""");
-            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("zh-TW");
+            var sut = new PluginLocalization(directory.FullName);
+
+            Loc.Instance.CurrentLanguage = "en";
+            Assert.Equal("Hello", sut.GetString("Greeting"));
+
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.Equal("de", sut.CurrentLanguage);
+            Assert.Equal("Hallo", sut.GetString("Greeting"));
+            Assert.Equal("Hallo Ada", sut.GetString("GreetingName", "Ada"));
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PluginOnTraditionalChineseAuto_FallsBackToEnglish()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        var originalSystem = Loc.SystemLanguage;
+        var directory = CreatePluginCatalogs();
+        try
+        {
+            Loc.SystemLanguage = Loc.CatalogLanguageFor(CultureInfo.GetCultureInfo("zh-TW"));
+            Loc.Instance.CurrentLanguage = Loc.Instance.ResolveLanguage(null);
 
             var sut = new PluginLocalization(directory.FullName);
 
-            Assert.Equal("zh-Hant", sut.CurrentLanguage);
+            Assert.Equal("en", sut.CurrentLanguage);
             Assert.Equal("Hello", sut.GetString("Greeting"));
         }
         finally
         {
-            CultureInfo.CurrentUICulture = previous;
+            Loc.SystemLanguage = originalSystem;
+            Loc.Instance.CurrentLanguage = originalLanguage;
             directory.Delete(recursive: true);
         }
+    }
+
+    [Fact]
+    public void Plugin_LanguageOverrideIgnoresTheInterfaceLanguage()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        var directory = CreatePluginCatalogs();
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = new PluginLocalization(directory.FullName, "zh");
+
+            Assert.Equal("你好", sut.GetString("Greeting"));
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+            directory.Delete(recursive: true);
+        }
+    }
+
+    private static DirectoryInfo CreatePluginCatalogs()
+    {
+        var directory = Directory.CreateTempSubdirectory("plugin-loc-");
+        var localization = Directory.CreateDirectory(Path.Join(directory.FullName, "Localization"));
+        File.WriteAllText(Path.Join(localization.FullName, "en.json"), """{"Greeting": "Hello", "GreetingName": "Hello {0}"}""");
+        File.WriteAllText(Path.Join(localization.FullName, "de.json"), """{"Greeting": "Hallo", "GreetingName": "Hallo {0}"}""");
+        File.WriteAllText(Path.Join(localization.FullName, "zh.json"), """{"Greeting": "你好", "GreetingName": "你好{0}"}""");
+        return directory;
     }
 }
