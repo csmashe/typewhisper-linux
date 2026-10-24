@@ -375,6 +375,168 @@ public sealed class WelcomeWizardViewModelTests
         Assert.Equal(1, firstDictationHarness.ViewModel.MicLevel);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NoSavedModel_PreselectsParakeetUltraWhateverTheEngineOrder(bool reversed)
+    {
+        IReadOnlyList<ITranscriptionEngineRole> engines =
+        [
+            CloudEngine(),
+            new FakeCatalogEngine("com.typewhisper.whisper-cpp", local: true, ("base", true)),
+            new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-tdt-0.6b", false), ("parakeet-ultra-0.6b", true)),
+        ];
+        using var harness = CreateHarness(engines: reversed ? [.. engines.Reverse()] : engines);
+
+        Assert.Equal(WelcomeWizardViewModel.DefaultLocalModelId, harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Fact]
+    public void SavedModel_WinsOverParakeetUltra()
+    {
+        var saved = ModelManagerService.GetPluginModelId("com.typewhisper.whisper-cpp", "base");
+        using var harness = CreateHarness(
+            engines:
+            [
+                new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-ultra-0.6b", true)),
+                new FakeCatalogEngine("com.typewhisper.whisper-cpp", local: true, ("base", true)),
+            ],
+            initialSettings: AppSettings.Default with { SelectedModelId = saved });
+
+        Assert.Equal(saved, harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Fact]
+    public void AutomaticPick_SwitchesToParakeetUltraWhenItsPluginLoadsLater()
+    {
+        var whisper = new FakeCatalogEngine("com.typewhisper.whisper-cpp", local: true, ("base", true));
+        using var harness = CreateHarness(engines: [whisper]);
+        Assert.Equal(
+            ModelManagerService.GetPluginModelId("com.typewhisper.whisper-cpp", "base"),
+            harness.ViewModel.SelectedModel?.ModelId);
+
+        SetTranscriptionEngines(
+            harness.PluginManager,
+            [whisper, new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-ultra-0.6b", true))]);
+        harness.ViewModel.RefreshPluginState();
+
+        Assert.Equal(WelcomeWizardViewModel.DefaultLocalModelId, harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Fact]
+    public async Task CatalogRefreshDuringTheModelLoad_KeepsTheModelBeingLoaded()
+    {
+        var releaseDownload = NewCompletionSource();
+        var plugin = new FakeTranscriptionPlugin { DownloadImplementation = _ => releaseDownload.Task };
+        using var harness = CreateHarness(plugin);
+        Assert.Equal(plugin.FullModelId, harness.ViewModel.SelectedModel?.ModelId);
+
+        var nextTask = harness.ViewModel.NextCommand.ExecuteAsync(null);
+        await plugin.DownloadStarted.Task.WaitAsync(s_testTimeout);
+        SetTranscriptionEngines(
+            harness.PluginManager,
+            [plugin, new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-ultra-0.6b", true))]);
+        harness.ViewModel.RefreshPluginState();
+        releaseDownload.SetResult();
+        await nextTask.WaitAsync(s_testTimeout);
+
+        Assert.Equal(plugin.FullModelId, harness.ViewModel.SelectedModel?.ModelId);
+        Assert.Equal(plugin.FullModelId, harness.Settings.Object.Current.SelectedModelId);
+    }
+
+    [Fact]
+    public void UserPick_SurvivesACatalogRefresh()
+    {
+        using var harness = CreateHarness(
+            engines:
+            [
+                new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-ultra-0.6b", true)),
+                new FakeCatalogEngine("com.typewhisper.whisper-cpp", local: true, ("base", true)),
+            ]);
+        var basePick = ModelManagerService.GetPluginModelId("com.typewhisper.whisper-cpp", "base");
+        harness.ViewModel.SelectedModel = harness.ViewModel.AvailableModels.Single(m => m.ModelId == basePick);
+
+        harness.ViewModel.RefreshPluginState();
+
+        Assert.Equal(basePick, harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Fact]
+    public void WithoutParakeetUltra_PrefersARecommendedLocalModelOverACloudOne()
+    {
+        using var harness = CreateHarness(
+            engines:
+            [
+                CloudEngine(),
+                new FakeCatalogEngine("com.typewhisper.whisper-cpp", local: true, ("tiny", false), ("base", true)),
+            ]);
+
+        Assert.Equal(
+            ModelManagerService.GetPluginModelId("com.typewhisper.whisper-cpp", "base"),
+            harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Fact]
+    public void WithoutLocalModels_FallsBackToTheRecommendedCloudModel()
+    {
+        using var harness = CreateHarness(engines: [CloudEngine()]);
+
+        Assert.Equal(
+            ModelManagerService.GetPluginModelId("com.test.cloud", "recommended"),
+            harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Theory]
+    [InlineData("en", "plugin:com.typewhisper.sherpa-onnx:parakeet-ultra-0.6b")]
+    [InlineData("de", "plugin:com.typewhisper.sherpa-onnx:parakeet-ultra-0.6b")]
+    [InlineData("ja", "plugin:com.typewhisper.whisper-cpp:base")]
+    [InlineData("zh", "plugin:com.typewhisper.whisper-cpp:base")]
+    public void DefaultModel_PrefersParakeetUltraOnlyForLanguagesItTranscribes(string language, string expected)
+    {
+        WizardModelRow[] models =
+        [
+            new(WelcomeWizardViewModel.DefaultLocalModelId, "Ultra", "", false, true),
+            new("plugin:com.test.cloud:recommended", "Cloud", "", false, true),
+            new("plugin:com.typewhisper.whisper-cpp:base", "Base", "", false, true),
+        ];
+        var local = new HashSet<string>(StringComparer.Ordinal)
+        {
+            WelcomeWizardViewModel.DefaultLocalModelId,
+            "plugin:com.typewhisper.whisper-cpp:base",
+        };
+
+        Assert.Equal(expected, WelcomeWizardViewModel.ChooseDefaultModel(models, local, null, language)?.ModelId);
+    }
+
+    [Fact]
+    public void DefaultModel_ForJapaneseWithoutAnotherLocalModel_SkipsParakeetUltraForARecommendedOne()
+    {
+        WizardModelRow[] models =
+        [
+            new(WelcomeWizardViewModel.DefaultLocalModelId, "Ultra", "", false, true),
+            new("plugin:com.test.cloud:recommended", "Cloud", "", false, true),
+        ];
+        var local = new HashSet<string>(StringComparer.Ordinal) { WelcomeWizardViewModel.DefaultLocalModelId };
+
+        Assert.Equal(
+            "plugin:com.test.cloud:recommended",
+            WelcomeWizardViewModel.ChooseDefaultModel(models, local, null, "ja")?.ModelId);
+    }
+
+    [Fact]
+    public void WithoutRecommendedModels_JapaneseSkipsParakeetUltraUnlessItIsTheOnlyModel()
+    {
+        var ultra = new WizardModelRow(WelcomeWizardViewModel.DefaultLocalModelId, "Ultra", "", false, false);
+        var tiny = new WizardModelRow("plugin:com.typewhisper.whisper-cpp:tiny", "Tiny", "", false, false);
+        var local = new HashSet<string>(StringComparer.Ordinal) { ultra.ModelId, tiny.ModelId };
+
+        Assert.Equal(tiny.ModelId, WelcomeWizardViewModel.ChooseDefaultModel([ultra, tiny], local, null, "ja")?.ModelId);
+        Assert.Equal(ultra.ModelId, WelcomeWizardViewModel.ChooseDefaultModel([ultra], local, null, "ja")?.ModelId);
+    }
+
+    private static FakeCatalogEngine CloudEngine() =>
+        new("com.test.cloud", local: false, ("other", false), ("recommended", true));
+
     private static Mock<ISetupTask> CreateSetupTask()
     {
         var setupTask = new Mock<ISetupTask>();
@@ -390,6 +552,8 @@ public sealed class WelcomeWizardViewModelTests
 
     private static TestHarness CreateHarness(
         FakeTranscriptionPlugin? plugin = null,
+        IReadOnlyList<ITranscriptionEngineRole>? engines = null,
+        AppSettings? initialSettings = null,
         IReadOnlyList<ISetupTask>? setupTasks = null,
         IReadOnlyList<LoadedPlugin>? loadedPlugins = null,
         TimeProvider? audioTimeProvider = null,
@@ -397,13 +561,13 @@ public sealed class WelcomeWizardViewModelTests
         AudioRecordingService? audio = null
     )
     {
-        var settings = TestPluginManagerFactory.CreateSettings(AppSettings.Default);
+        var settings = TestPluginManagerFactory.CreateSettings(initialSettings ?? AppSettings.Default);
         var pluginManager = TestPluginManagerFactory.Create(
             loadedPlugins: loadedPlugins
         );
-        if (plugin is not null)
+        if (plugin is not null || engines is not null)
         {
-            SetTranscriptionEngines(pluginManager, [plugin]);
+            SetTranscriptionEngines(pluginManager, engines ?? [plugin!]);
         }
 
         var models = new ModelManagerService(pluginManager, settings.Object);
@@ -534,7 +698,7 @@ public sealed class WelcomeWizardViewModelTests
         public WelcomeWizardViewModel ViewModel { get; }
         public Mock<ISettingsService> Settings { get; }
         private ModelManagerService Models { get; }
-        private PluginManager PluginManager { get; }
+        public PluginManager PluginManager { get; }
         private HotkeyService Hotkey { get; }
         public AudioRecordingService Audio { get; }
 
@@ -546,6 +710,41 @@ public sealed class WelcomeWizardViewModelTests
             Hotkey.Dispose();
             Audio.Dispose();
         }
+    }
+
+    private sealed class FakeCatalogEngine(
+        string pluginId,
+        bool local,
+        params (string Id, bool Recommended)[] models
+    ) : ITranscriptionEnginePlugin
+    {
+        public string PluginId => pluginId;
+        public string PluginName => pluginId;
+        public string PluginVersion => "1.0.0";
+        public string ProviderId => pluginId;
+        public string ProviderDisplayName => pluginId;
+        public bool IsConfigured => false;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
+            [.. models.Select(model => new PluginModelInfo(model.Id, model.Id) { IsRecommended = model.Recommended })];
+        public string? SelectedModelId => null;
+        public bool SupportsTranslation => false;
+        public bool SupportsModelDownload => local;
+
+        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
+        public Task DeactivateAsync() => Task.CompletedTask;
+        public void SelectModel(string modelId) { }
+        public bool IsModelDownloaded(string modelId) => false;
+        public Task LoadModelAsync(string modelId, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio,
+            string? language,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        ) => Task.FromResult(new PluginTranscriptionResult("", DetectedLanguage: null, 0));
+
+        public void Dispose() { }
     }
 
     private sealed class FakeTranscriptionPlugin : ITranscriptionEnginePlugin

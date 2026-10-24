@@ -378,11 +378,17 @@ public partial class WelcomeWizardViewModel : ObservableObject
             : "general";
     }
 
+    // Only a model the user picked survives a catalog refresh; an automatic pick is recomputed so
+    // Parakeet Ultra still wins when its plugin finishes loading after the first pick.
+    private string? _userSelectedModelId;
+    private bool _isSettingModelAutomatically;
+
     private void LoadModels()
     {
-        var previousSelectedId = SelectedModel?.ModelId ?? _settings.Current.SelectedModelId;
+        var previousSelectedId = _userSelectedModelId ?? _settings.Current.SelectedModelId;
 
         AvailableModels.Clear();
+        var localModelIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var engine in _pluginManager.TranscriptionEngines)
         {
             foreach (var model in engine.TranscriptionModels)
@@ -400,13 +406,53 @@ public partial class WelcomeWizardViewModel : ObservableObject
                         model.IsRecommended
                     )
                 );
+                if (engine.SupportsModelDownload)
+                    localModelIds.Add(modelId);
             }
         }
 
-        SelectedModel =
-            AvailableModels.FirstOrDefault(m => m.ModelId == previousSelectedId)
-            ?? AvailableModels.FirstOrDefault(m => m.IsRecommended)
-            ?? AvailableModels.FirstOrDefault();
+        SetModelAutomatically(ChooseDefaultModel(AvailableModels, localModelIds, previousSelectedId, Loc.Instance.CurrentLanguage));
+    }
+
+    private void SetModelAutomatically(WizardModelRow? model)
+    {
+        _isSettingModelAutomatically = true;
+        try
+        {
+            SelectedModel = model;
+        }
+        finally
+        {
+            _isSettingModelAutomatically = false;
+        }
+    }
+
+    internal const string DefaultLocalModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet-ultra-0.6b";
+
+    // Parakeet Ultra's 25 European languages; it cannot transcribe the others (ja, zh).
+    private static readonly HashSet<string> s_defaultLocalModelLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it",
+        "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+    };
+
+    // Explicit, because engines arrive in undefined plugin-folder order and cloud plugins mark recommended models too.
+    internal static WizardModelRow? ChooseDefaultModel(
+        IReadOnlyList<WizardModelRow> models,
+        IReadOnlySet<string> localModelIds,
+        string? previousSelectedId,
+        string interfaceLanguage
+    )
+    {
+        var ultraFits = s_defaultLocalModelLanguages.Contains(interfaceLanguage);
+        return models.FirstOrDefault(m => m.ModelId == previousSelectedId)
+            ?? (ultraFits ? models.FirstOrDefault(m => m.ModelId == DefaultLocalModelId) : null)
+            ?? models.FirstOrDefault(m => m.IsRecommended && localModelIds.Contains(m.ModelId) && Fits(m))
+            ?? models.FirstOrDefault(m => m.IsRecommended && Fits(m))
+            ?? models.FirstOrDefault(Fits)
+            ?? (models.Count > 0 ? models[0] : null);
+
+        bool Fits(WizardModelRow model) => ultraFits || model.ModelId != DefaultLocalModelId;
     }
 
     private void LoadExtensions()
@@ -443,7 +489,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         );
     }
 
-    private void RefreshPluginState()
+    internal void RefreshPluginState()
     {
         if (IsAbandoned)
         {
@@ -507,7 +553,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             AvailableModels[i] = existing with { IsDownloaded = downloaded };
             if (SelectedModel?.ModelId == existing.ModelId)
             {
-                SelectedModel = AvailableModels[i];
+                SetModelAutomatically(AvailableModels[i]);
             }
         }
     }
@@ -535,6 +581,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     partial void OnSelectedModelChanged(WizardModelRow? value)
     {
+        if (!_isSettingModelAutomatically && value is not null)
+            _userSelectedModelId = value.ModelId;
         UpdateDownloadProgress();
     }
 
@@ -611,6 +659,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
                 return;
             }
 
+            // Advancing commits the pick, so a catalog refresh during the load keeps it shown.
+            _userSelectedModelId = row.ModelId;
             var needsDownload = !_models.IsDownloaded(row.ModelId);
             ModelStatus = needsDownload
                 ? Loc.Instance.GetString("Wizard.Downloading", row.DisplayName)
