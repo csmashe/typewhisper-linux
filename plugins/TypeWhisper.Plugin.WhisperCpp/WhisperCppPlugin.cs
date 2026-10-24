@@ -172,7 +172,7 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3-turbo.bin",
             "~1.6 GB",
             1620,
-            99,
+            100,
             false
         ),
         new(
@@ -183,7 +183,7 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3-turbo-q5_0.bin",
             "~684 MB",
             684,
-            99,
+            100,
             false
         ),
         // Full large-v3 (32-layer decoder, not turbo's distilled 4-layer) garbles
@@ -196,7 +196,7 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3.bin",
             "~3.1 GB",
             3095,
-            99,
+            100,
             false
         ),
         new(
@@ -207,7 +207,7 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3-q5_0.bin",
             "~1.1 GB",
             1081,
-            99,
+            100,
             false
         ),
     ];
@@ -277,7 +277,7 @@ public sealed class WhisperCppPlugin
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public bool SupportsModelDownload => true;
-    public IReadOnlyList<string> SupportedLanguages => [];
+    public IReadOnlyList<string> SupportedLanguages => LanguagesFor(SelectedModelId);
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda,
@@ -309,6 +309,28 @@ public sealed class WhisperCppPlugin
                 SupportsTranslation = SupportsTranslationFor(model.Id),
             })
             .ToList();
+
+    // Whisper's languages in whisper.cpp's order ("jw" is its tag for Javanese); large-v3 adds Cantonese.
+    private static readonly IReadOnlyList<string> s_multilingualLanguages =
+    [
+        "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi",
+        "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la",
+        "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy",
+        "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be",
+        "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl",
+        "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su",
+    ];
+
+    private static readonly IReadOnlyList<string> s_largeV3Languages = [.. s_multilingualLanguages, "yue"];
+
+    // English-only models declare none: whisper.cpp ignores their language, so no saved choice fails validation.
+    internal static IReadOnlyList<string> LanguagesFor(string? modelId) =>
+        s_models.FirstOrDefault(model => model.Id == modelId) switch
+        {
+            { LanguageCount: 1 } => [],
+            { Type: GgmlType.LargeV3 or GgmlType.LargeV3Turbo } => s_largeV3Languages,
+            _ => s_multilingualLanguages,
+        };
 
     // English-only and Turbo weights were not trained to translate.
     internal static bool SupportsTranslationFor(string? modelId) =>
