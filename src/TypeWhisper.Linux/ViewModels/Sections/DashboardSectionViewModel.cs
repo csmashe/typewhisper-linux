@@ -353,8 +353,9 @@ public partial class DashboardSectionViewModel : ObservableObject, IDisposable
 
         BuildActivityDays(days, start, end);
         BuildBreakdown(Languages, days.Select(day => day.LanguageCounts), code =>
-            DictationSectionViewModel.CreateLanguageChoices().FirstOrDefault(option =>
-                string.Equals(option.Code, code, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? code.ToUpperInvariant());
+            string.Equals(code, "auto", StringComparison.OrdinalIgnoreCase)
+                ? Loc.Instance["Dictation.LanguageAutoDetect"]
+                : DictationSectionViewModel.GetLanguageDisplayName(code) ?? code.ToUpperInvariant());
         BuildBreakdown(Models, days.Select(day => day.ModelCounts), FormatModelLabel);
         BuildHours(days);
         OnPropertyChanged(nameof(HasActivity));
