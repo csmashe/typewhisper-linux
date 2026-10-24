@@ -378,9 +378,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
             : "general";
     }
 
+    // Only a model the user picked survives a catalog refresh; an automatic pick is recomputed so
+    // Parakeet Ultra still wins when its plugin finishes loading after the first pick.
+    private string? _userSelectedModelId;
+    private bool _isSettingModelAutomatically;
+
     private void LoadModels()
     {
-        var previousSelectedId = SelectedModel?.ModelId ?? _settings.Current.SelectedModelId;
+        var previousSelectedId = _userSelectedModelId ?? _settings.Current.SelectedModelId;
 
         AvailableModels.Clear();
         var localModelIds = new HashSet<string>(StringComparer.Ordinal);
@@ -406,7 +411,20 @@ public partial class WelcomeWizardViewModel : ObservableObject
             }
         }
 
-        SelectedModel = ChooseDefaultModel(AvailableModels, localModelIds, previousSelectedId, Loc.Instance.CurrentLanguage);
+        SetModelAutomatically(ChooseDefaultModel(AvailableModels, localModelIds, previousSelectedId, Loc.Instance.CurrentLanguage));
+    }
+
+    private void SetModelAutomatically(WizardModelRow? model)
+    {
+        _isSettingModelAutomatically = true;
+        try
+        {
+            SelectedModel = model;
+        }
+        finally
+        {
+            _isSettingModelAutomatically = false;
+        }
     }
 
     internal const string DefaultLocalModelId = "plugin:com.typewhisper.sherpa-onnx:parakeet-ultra-0.6b";
@@ -470,7 +488,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
         );
     }
 
-    private void RefreshPluginState()
+    internal void RefreshPluginState()
     {
         if (IsAbandoned)
         {
@@ -534,7 +552,7 @@ public partial class WelcomeWizardViewModel : ObservableObject
             AvailableModels[i] = existing with { IsDownloaded = downloaded };
             if (SelectedModel?.ModelId == existing.ModelId)
             {
-                SelectedModel = AvailableModels[i];
+                SetModelAutomatically(AvailableModels[i]);
             }
         }
     }
@@ -562,6 +580,8 @@ public partial class WelcomeWizardViewModel : ObservableObject
 
     partial void OnSelectedModelChanged(WizardModelRow? value)
     {
+        if (!_isSettingModelAutomatically && value is not null)
+            _userSelectedModelId = value.ModelId;
         UpdateDownloadProgress();
     }
 

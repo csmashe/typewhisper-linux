@@ -407,6 +407,40 @@ public sealed class WelcomeWizardViewModelTests
     }
 
     [Fact]
+    public void AutomaticPick_SwitchesToParakeetUltraWhenItsPluginLoadsLater()
+    {
+        var whisper = new FakeCatalogEngine("com.typewhisper.whisper-cpp", local: true, ("base", true));
+        using var harness = CreateHarness(engines: [whisper]);
+        Assert.Equal(
+            ModelManagerService.GetPluginModelId("com.typewhisper.whisper-cpp", "base"),
+            harness.ViewModel.SelectedModel?.ModelId);
+
+        SetTranscriptionEngines(
+            harness.PluginManager,
+            [whisper, new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-ultra-0.6b", true))]);
+        harness.ViewModel.RefreshPluginState();
+
+        Assert.Equal(WelcomeWizardViewModel.DefaultLocalModelId, harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Fact]
+    public void UserPick_SurvivesACatalogRefresh()
+    {
+        using var harness = CreateHarness(
+            engines:
+            [
+                new FakeCatalogEngine("com.typewhisper.sherpa-onnx", local: true, ("parakeet-ultra-0.6b", true)),
+                new FakeCatalogEngine("com.typewhisper.whisper-cpp", local: true, ("base", true)),
+            ]);
+        var basePick = ModelManagerService.GetPluginModelId("com.typewhisper.whisper-cpp", "base");
+        harness.ViewModel.SelectedModel = harness.ViewModel.AvailableModels.Single(m => m.ModelId == basePick);
+
+        harness.ViewModel.RefreshPluginState();
+
+        Assert.Equal(basePick, harness.ViewModel.SelectedModel?.ModelId);
+    }
+
+    [Fact]
     public void WithoutParakeetUltra_PrefersARecommendedLocalModelOverACloudOne()
     {
         using var harness = CreateHarness(
@@ -632,7 +666,7 @@ public sealed class WelcomeWizardViewModelTests
         public WelcomeWizardViewModel ViewModel { get; }
         public Mock<ISettingsService> Settings { get; }
         private ModelManagerService Models { get; }
-        private PluginManager PluginManager { get; }
+        public PluginManager PluginManager { get; }
         private HotkeyService Hotkey { get; }
         public AudioRecordingService Audio { get; }
 
