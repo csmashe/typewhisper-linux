@@ -222,7 +222,7 @@ public sealed class ServiceGraphLifecycleTests
                 for (var attempt = 0; ; attempt++)
                 {
                     await BoundedTest.WaitAsync(Task.Run(api.ApplySettings));
-                    if (api.StatusText.StartsWith("Local API is running", StringComparison.Ordinal))
+                    if (api.IsRunning)
                     {
                         break;
                     }

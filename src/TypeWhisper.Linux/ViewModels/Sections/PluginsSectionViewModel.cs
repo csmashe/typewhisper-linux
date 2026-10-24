@@ -83,6 +83,9 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
 
         _pluginManager.PluginStateChanged += (_, _) => _postToUi(Refresh);
+        // Cards, the summary and plugin settings come from catalogs; a card with unsaved edits
+        // is kept as is so its draft survives.
+        Loc.Instance.LanguageChanged += (_, _) => _postToUi(Refresh);
         RebuildPluginRows(PluginListRefreshKind.Initial);
     }
 

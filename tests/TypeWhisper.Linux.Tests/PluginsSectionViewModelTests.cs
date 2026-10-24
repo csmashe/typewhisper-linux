@@ -1,3 +1,4 @@
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using Xunit;
@@ -96,6 +97,41 @@ public sealed class PluginsSectionViewModelTests : IDisposable
         Assert.Equal(0, vm.SelectedTab);
         Assert.True(vm.IsEnabledTabSelected);
         Assert.False(vm.IsDisabledTabSelected);
+    }
+
+    [Fact]
+    public void LanguageChange_RebuildsCardsAndSummaryInTheNewLanguage()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var localization = Directory.CreateDirectory(Path.Join(_tempDir, "Localization"));
+            File.WriteAllText(Path.Join(localization.FullName, "en.json"), """{"Manifest.Description": "Says hello"}""");
+            File.WriteAllText(Path.Join(localization.FullName, "de.json"), """{"Manifest.Description": "Sagt hallo"}""");
+            var manager = TestPluginManagerFactory.Create(
+                loadedPlugins: [TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, "a", new FakePlugin("a"))],
+                activatedPluginIds: ["a"]
+            );
+            var vm = new PluginsSectionViewModel(
+                manager, null, TimeSpan.FromSeconds(5), postToUi: action => action());
+            var summary = vm.HeaderSummary;
+            Assert.Equal("Says hello", Row(vm).Description);
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.Equal("Sagt hallo", Row(vm).Description);
+            Assert.NotEqual(summary, vm.HeaderSummary);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+
+        return;
+
+        static PluginRow Row(PluginsSectionViewModel vm) =>
+            Assert.Single(vm.EnabledGroups.SelectMany(group => group.Plugins).DistinctBy(row => row.Id));
     }
 
     private PluginsSectionViewModel CreateVm(params (string Id, bool Enabled)[] plugins)

@@ -99,6 +99,22 @@ public partial class GeneralSectionViewModel : ObservableObject
             {
                 AutostartStatusText = Loc.Instance["General.AutostartHint"];
             }
+
+            // State text computed from the catalog follows the new language; an install error
+            // keeps its wording.
+            ApiStatusText = _api.StatusText;
+            // Re-read the last state rather than probing: a probe waits on a running install.
+            if (_cliState is not { } cliState)
+            {
+                return;
+            }
+
+            if (_cliStatusIsState)
+            {
+                CliStatusText = cliState.StatusText;
+            }
+
+            ApplyCliPathText(cliState);
         };
         _api.StateChanged += () =>
             Dispatcher.UIThread.Post(() => ApiStatusText = _api.StatusText);
@@ -193,6 +209,7 @@ public partial class GeneralSectionViewModel : ObservableObject
                 or TimeoutException)
         {
             CliStatusText = ex.Message;
+            _cliStatusIsState = false;
         }
     }
 
@@ -227,11 +244,22 @@ public partial class GeneralSectionViewModel : ObservableObject
         }
     }
 
+    // False while CliStatusText shows an install error rather than the computed state.
+    private bool _cliStatusIsState = true;
+    private CliInstallState? _cliState;
+
     private void ApplyCliState(CliInstallState state)
     {
+        _cliState = state;
         CliStatusText = state.StatusText;
+        _cliStatusIsState = true;
         CliBundledAvailable = state.BundledCliAvailable;
         CliInstalled = state.Installed;
+        ApplyCliPathText(state);
+    }
+
+    private void ApplyCliPathText(CliInstallState state)
+    {
         CliBundledPathText = state.BundledPath is null
             ? Loc.Instance.GetString("General.CliInstallerTarget", state.LauncherPath)
             : Loc.Instance.GetString(

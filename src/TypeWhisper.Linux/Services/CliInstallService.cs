@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using TypeWhisper.Core;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.ManagedArtifacts;
 using TypeWhisper.PluginSDK.Processes;
 
@@ -11,10 +12,15 @@ public sealed record CliInstallState(
     string? BundledPath,
     string InstallPath,
     string LauncherPath,
-    bool LauncherDirectoryInPath,
-    string StatusText
+    bool LauncherDirectoryInPath
 )
 {
+    internal string StatusKey { get; init; } = "General.CliStatusNotInstalled";
+    internal object?[] StatusArgs { get; init; } = [];
+
+    // Formatted when read, so a kept state follows a live language switch without a new probe.
+    public string StatusText => Loc.Instance.GetString(StatusKey, StatusArgs);
+
     // The launcher classification GetState already computed, so Install can reuse it for its
     // pre-copy foreign-entry check instead of re-reading the launcher file. Internal: an
     // implementation detail, not part of the public state contract.
@@ -412,17 +418,17 @@ public sealed class CliInstallService
         var installed = launcherOwned && binaryOwned;
         var inPath = IsDirectoryInPath(launcherDirectory);
 
-        var status = launcherExists && !launcherOwned
-            ? $"Left {launcherPath} untouched — it is not managed by TypeWhisper and will not be overwritten."
+        (string Key, object?[] Args) status = launcherExists && !launcherOwned
+            ? ("General.CliStatusForeignEntry", [launcherPath])
             : FileExistsWithExactName(installPath) && !binaryOwned
-                ? $"Left {installPath} untouched — it is not managed by TypeWhisper and will not be overwritten."
+                ? ("General.CliStatusForeignEntry", [installPath])
             : installed
                 ? inPath
-                    ? $"Installed at {launcherPath}"
-                    : $"Installed at {launcherPath}; add {launcherDirectory} to PATH or restart your shell"
+                    ? ("General.CliStatusInstalled", [launcherPath])
+                    : ("General.CliStatusInstalledNotInPath", [launcherPath, launcherDirectory])
                 : bundledPath is null
-                    ? "CLI binary not found in this build"
-                    : "Not installed";
+                    ? ("General.CliStatusBinaryMissing", [])
+                    : ("General.CliStatusNotInstalled", []);
 
         return new CliInstallState(
             bundledPath is not null,
@@ -430,10 +436,11 @@ public sealed class CliInstallService
             bundledPath,
             installPath,
             launcherPath,
-            inPath,
-            status
+            inPath
         )
         {
+            StatusKey = status.Key,
+            StatusArgs = status.Args,
             LauncherEntry = launcherEntry,
             BinaryOwned = binaryOwned,
         };
