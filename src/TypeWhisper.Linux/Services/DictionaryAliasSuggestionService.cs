@@ -43,6 +43,7 @@ public sealed class DictionaryAliasSuggestionService(PluginManager pluginManager
         return models;
     }
 
+    /// <summary>Asks the chosen local model for spoken variants of <paramref name="term"/>.</summary>
     /// <exception cref="InvalidOperationException">The model is no longer local, available and loaded.</exception>
     /// <exception cref="FormatException">The model did not return a usable list.</exception>
     public Task<IReadOnlyList<string>> SuggestAsync(
