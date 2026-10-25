@@ -38,9 +38,9 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
     private List<string> Render(string language)
     {
         Loc.Instance.CurrentLanguage = language;
-        Seed();
         try
         {
+            Seed();
             var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
             var window = new MainWindow(viewModel) { Width = 1200, Height = 780 };
             window.Show();
@@ -78,8 +78,15 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
         }
         finally
         {
-            Unseed();
-            Loc.Instance.CurrentLanguage = "en";
+            // Cleanup also covers a partial Seed, and the language is reset even if it fails.
+            try
+            {
+                Unseed();
+            }
+            finally
+            {
+                Loc.Instance.CurrentLanguage = "en";
+            }
         }
     }
 
