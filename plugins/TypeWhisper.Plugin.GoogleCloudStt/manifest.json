@@ -1,7 +1,8 @@
 {
   "id": "com.typewhisper.google-cloud-stt",
   "name": "Google Cloud STT",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Transcription with Google Cloud Speech-to-Text",
   "networkAccess": "network",

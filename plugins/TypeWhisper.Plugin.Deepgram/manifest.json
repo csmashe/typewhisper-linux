@@ -1,7 +1,8 @@
 {
   "id": "com.typewhisper.deepgram",
   "name": "Deepgram",
-  "version": "1.0.2",
+  "version": "1.0.3",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Deepgram Nova transcription engine",
   "networkAccess": "network",

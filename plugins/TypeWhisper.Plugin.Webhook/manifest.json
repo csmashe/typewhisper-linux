@@ -1,8 +1,8 @@
 {
   "id": "com.typewhisper.webhook",
   "name": "Webhook",
-  "version": "2.1.0",
-  "minHostVersion": "0.17.0",
+  "version": "2.1.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Sends event notifications to a webhook URL",
   "networkAccess": "userControlled",
