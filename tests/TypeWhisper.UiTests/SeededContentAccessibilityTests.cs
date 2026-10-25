@@ -139,6 +139,7 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
             Dispatcher.UIThread.RunJobs();
             Thread.Sleep(10);
         }
+        Assert.True(task.IsCompleted, "Timed out after 10 s waiting for the plugin reveal.");
         var result = task.GetAwaiter().GetResult();
         MainWindowRenderTests.Settle();
         return result;

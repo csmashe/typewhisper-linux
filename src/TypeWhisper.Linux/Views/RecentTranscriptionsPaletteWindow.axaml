@@ -37,7 +37,7 @@
                          BorderThickness="0">
                     <ListBox.Styles>
                         <Style Selector="ListBoxItem" x:DataType="vm:RecentTranscriptionPaletteItem">
-                            <Setter Property="AutomationProperties.Name" Value="{Binding FinalText}" />
+                            <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
                         </Style>
                     </ListBox.Styles>
                     <ListBox.ItemTemplate>

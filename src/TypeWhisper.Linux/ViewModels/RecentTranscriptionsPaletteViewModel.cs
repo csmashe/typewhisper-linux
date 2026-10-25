@@ -102,6 +102,9 @@ public sealed record RecentTranscriptionPaletteItem(RecentTranscriptionEntry Ent
 {
     public string FinalText => Entry.FinalText;
 
+    // The subtitle tells apart entries with the same text, which a screen reader hears only by name.
+    public string AccessibleName => $"{FinalText}, {Subtitle}";
+
     public bool Matches(string query)
     {
         return FinalText.Contains(query, StringComparison.OrdinalIgnoreCase)
