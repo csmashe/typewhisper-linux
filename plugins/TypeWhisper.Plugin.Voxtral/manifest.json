@@ -1,7 +1,8 @@
 {
   "id": "com.typewhisper.voxtral",
   "name": "Voxtral",
-  "version": "1.0.1",
+  "version": "1.1.0",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Voxtral (Mistral) audio transcription and Mistral text processing",
   "networkAccess": "network",
