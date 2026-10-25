@@ -1,5 +1,6 @@
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,7 +20,8 @@ namespace TypeWhisper.UiTests;
 /// <summary>
 ///     Rows only render when there is something to list, so this seeds a profile, a history entry
 ///     and a plugin with an expanded settings card, and checks every control a screen reader reaches.
-///     Clipping and stale text are left to <see cref="MainWindowRenderTests" />.
+///     It also checks the opened profile editor for clipped text at every window size; clipping
+///     elsewhere and stale text are left to <see cref="MainWindowRenderTests" />.
 /// </summary>
 [Collection("ui")]
 public sealed class SeededContentAccessibilityTests(UiSession ui)
@@ -33,6 +35,62 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
         var findings = await ui.Session.Dispatch(() => Render(language), CancellationToken.None);
 
         Assert.True(findings.Count == 0, string.Join("\n", findings.Distinct()));
+    }
+
+    [Theory]
+    [MemberData(nameof(Languages))]
+    public async Task ProfileEditor_FitsInEverySize(string language)
+    {
+        var findings = await ui.Session.Dispatch(() => RenderProfileEditor(language), CancellationToken.None);
+
+        Assert.True(findings.Count == 0, string.Join("\n", findings.Distinct()));
+    }
+
+    // Clipping is measured across the row, so the scrolled-out part of the editor is checked too.
+    private List<string> RenderProfileEditor(string language)
+    {
+        Loc.Instance.CurrentLanguage = language;
+        try
+        {
+            Seed();
+            var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
+            var findings = new List<string>();
+            foreach (var (sizeName, width, height) in MainWindowRenderTests.Sizes)
+            {
+                var window = new MainWindow(viewModel) { Width = width, Height = height };
+                window.Show();
+                try
+                {
+                    var profiles = viewModel.NavItems.Single(item => item.Content is ProfilesSectionViewModel);
+                    viewModel.SelectedItem = profiles;
+                    var section = (ProfilesSectionViewModel)profiles.Content!;
+                    section.SelectedProfile = section.Profiles.Single(profile => profile.Id == ProfileId);
+                    MainWindowRenderTests.Settle();
+                    window.CaptureRenderedFrame()?.Save(
+                        Path.Join(UiEnvironment.SnapshotDir, $"ProfileEditor-{language}-{sizeName}.png"));
+                    findings.AddRange(UiInspector.Inspect(window, new HashSet<string>())
+                        .Where(finding => finding.Kind == UiInspector.ClippedText)
+                        .Select(finding => $"{sizeName}: {finding.Control} {finding.Detail} at {finding.Location}"));
+                }
+                finally
+                {
+                    window.Close();
+                }
+            }
+
+            return findings;
+        }
+        finally
+        {
+            try
+            {
+                Unseed();
+            }
+            finally
+            {
+                Loc.Instance.CurrentLanguage = "en";
+            }
+        }
     }
 
     private List<string> Render(string language)
