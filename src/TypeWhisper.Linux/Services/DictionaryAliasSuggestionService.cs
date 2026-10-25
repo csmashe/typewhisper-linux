@@ -1,6 +1,7 @@
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
@@ -9,7 +10,8 @@ namespace TypeWhisper.Linux.Services;
 public sealed record LocalAliasModel(string ProviderId, string ModelId, string DisplayName);
 
 /// <summary>
-///     Generates alias suggestions with local LLMs only, never a cloud provider. The role is
+///     Generates alias suggestions with local LLMs only, never a cloud provider: a plugin that runs
+///     locally, or a configurable server whose endpoint is a loopback address. The role is
 ///     re-resolved and re-checked on every request.
 /// </summary>
 public sealed class DictionaryAliasSuggestionService(PluginManager pluginManager)
@@ -27,7 +29,7 @@ public sealed class DictionaryAliasSuggestionService(PluginManager pluginManager
                 }
 
                 var providerId = provider.GetLlmSelectionId();
-                models.AddRange(provider.SupportedModels.Select(model => new LocalAliasModel(
+                models.AddRange(LocalModels(provider).Select(model => new LocalAliasModel(
                     providerId,
                     model.Id,
                     $"{provider.ProviderName} · {model.DisplayName}")));
@@ -60,7 +62,7 @@ public sealed class DictionaryAliasSuggestionService(PluginManager pluginManager
             if (provider is null
                 || !IsLocal(provider)
                 || !provider.IsAvailable
-                || !provider.SupportedModels.Any(candidate =>
+                || !LocalModels(provider).Any(candidate =>
                     string.Equals(candidate.Id, model.ModelId, StringComparison.Ordinal)))
             {
                 throw new InvalidOperationException("The local model is no longer available.");
@@ -71,6 +73,21 @@ public sealed class DictionaryAliasSuggestionService(PluginManager pluginManager
     }
 
     // Locality comes from the owning plugin's normalized metadata; an unknown owner fails closed.
+    // A user-controlled server also counts when its endpoint is provably this computer.
     private bool IsLocal(ILlmProviderRole provider) =>
-        pluginManager.GetPlugin(provider.PluginId)?.Metadata.NetworkAccess == PluginNetworkAccess.Local;
+        pluginManager.GetPlugin(provider.PluginId)?.Metadata.NetworkAccess switch
+        {
+            PluginNetworkAccess.Local => true,
+            PluginNetworkAccess.UserControlled =>
+                provider is ILlmProviderEndpoint endpoint && LoopbackEndpoint.IsLoopback(endpoint.LlmEndpoint),
+            _ => false,
+        };
+
+    // A local server can list models that it runs remotely; Ollama names those "…:cloud" or "…-cloud".
+    private static IEnumerable<PluginModelInfo> LocalModels(ILlmProviderRole provider) =>
+        provider is ILlmProviderEndpoint
+            ? provider.SupportedModels.Where(model =>
+                !model.Id.EndsWith(":cloud", StringComparison.OrdinalIgnoreCase)
+                && !model.Id.EndsWith("-cloud", StringComparison.OrdinalIgnoreCase))
+            : provider.SupportedModels;
 }

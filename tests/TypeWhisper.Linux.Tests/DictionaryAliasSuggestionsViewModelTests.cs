@@ -5,6 +5,7 @@ using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Tests;
 using Xunit;
@@ -51,6 +52,93 @@ public sealed class DictionaryAliasSuggestionsViewModelTests : IDisposable
 
         _local.Available = false;
         Assert.Empty(service.GetLocalModels());
+    }
+
+    [Theory]
+    [InlineData("http://localhost:11434")]
+    [InlineData("http://LOCALHOST:11434/v1")]
+    [InlineData("https://127.0.0.1")]
+    [InlineData("http://127.5.6.7:8080")]
+    [InlineData("http://[::1]:11434")]
+    public void LoopbackEndpoints_CountAsLocal(string url)
+    {
+        Assert.True(LoopbackEndpoint.IsLoopback(new Uri(url)));
+    }
+
+    [Theory]
+    [InlineData("http://0.0.0.0:11434")]
+    [InlineData("http://192.168.1.10:11434")]
+    [InlineData("http://10.0.0.5")]
+    [InlineData("https://api.openai.com")]
+    [InlineData("http://localhost.example.com")]
+    [InlineData("http://mylaptop:11434")]
+    [InlineData("ftp://localhost")]
+    [InlineData("file:///run/ollama.sock")]
+    public void OtherEndpoints_DoNotCountAsLocal(string url)
+    {
+        Assert.False(LoopbackEndpoint.IsLoopback(new Uri(url)));
+    }
+
+    [Fact]
+    public void MissingOrRelativeEndpoint_DoesNotCountAsLocal()
+    {
+        Assert.False(LoopbackEndpoint.IsLoopback(null));
+        Assert.False(LoopbackEndpoint.IsLoopback(new Uri("/v1", UriKind.Relative)));
+    }
+
+    [Fact]
+    public void ConfigurableServers_AreOfferedOnlyForLoopbackEndpoints()
+    {
+        var local = new FakeEndpointLlm("ollama-local", "Ollama", "llama3", "http://localhost:11434");
+        var remote = new FakeEndpointLlm("ollama-office", "Office", "llama3", "http://192.168.1.10:11434");
+        using var plugins = CreateUserControlledPlugins(local, remote);
+        var service = new DictionaryAliasSuggestionService(plugins);
+
+        var model = Assert.Single(service.GetLocalModels());
+        Assert.Equal("ollama-local", model.ProviderId);
+    }
+
+    [Theory]
+    [InlineData(PluginNetworkAccess.Network)]
+    [InlineData(PluginNetworkAccess.Mixed)]
+    public void LoopbackEndpoint_OfAPluginNotDeclaredUserControlled_IsNotOffered(PluginNetworkAccess access)
+    {
+        var claimant = new FakeEndpointLlm("claimant", "Claimant", "model", "http://localhost:11434");
+        using var plugins = CreateEndpointPlugins(access, claimant);
+
+        Assert.Empty(new DictionaryAliasSuggestionService(plugins).GetLocalModels());
+    }
+
+    [Fact]
+    public void ConfigurableServer_HidesModelsItRunsInTheCloud()
+    {
+        var server = new FakeEndpointLlm("ollama-local", "Ollama", "llama3", "http://localhost:11434")
+        {
+            SupportedModels =
+            [
+                new PluginModelInfo("llama3", "llama3"),
+                new PluginModelInfo("gpt-oss:120b-cloud", "cloud"),
+                new PluginModelInfo("deepseek:cloud", "cloud"),
+            ],
+        };
+        using var plugins = CreateUserControlledPlugins(server);
+
+        Assert.Equal(["llama3"], new DictionaryAliasSuggestionService(plugins).GetLocalModels().Select(m => m.ModelId));
+    }
+
+    [Fact]
+    public async Task ConfigurableServer_MovedToARemoteEndpoint_IsRefusedAtRequestTime()
+    {
+        var server = new FakeEndpointLlm("ollama-local", "Ollama", "llama3", "http://localhost:11434");
+        using var plugins = CreateUserControlledPlugins(server);
+        var service = new DictionaryAliasSuggestionService(plugins);
+        var model = Assert.Single(service.GetLocalModels());
+
+        server.Endpoint = new Uri("https://api.example.com");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SuggestAsync("TypeWhisper", "English", model, CancellationToken.None));
+        Assert.Equal(0, server.Calls);
     }
 
     [Fact]
@@ -288,6 +376,41 @@ public sealed class DictionaryAliasSuggestionsViewModelTests : IDisposable
             _dictionary,
             new DictionaryAliasSuggestionService(_plugins),
             TestPluginManagerFactory.CreateSettings(new AppSettings()).Object);
+
+    private const string ConfigurableId = "com.typewhisper.openai-compatible";
+
+    private PluginManager CreateUserControlledPlugins(params FakeEndpointLlm[] roles) =>
+        CreateEndpointPlugins(PluginNetworkAccess.UserControlled, roles);
+
+    private PluginManager CreateEndpointPlugins(PluginNetworkAccess access, params FakeEndpointLlm[] roles) =>
+        TestPluginManagerFactory.Create(
+            llmProviders: roles,
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(
+                    _root, ConfigurableId, new FakeLlm(ConfigurableId, "OpenAI Compatible", "none"), access),
+            ]);
+
+    // One role per configured server, all owned by the same user-controlled plugin.
+    private sealed class FakeEndpointLlm(string selectionId, string name, string modelId, string endpoint)
+        : ILlmProviderRole, ILlmProviderSelectionIdentity, ILlmProviderEndpoint
+    {
+        public Uri? Endpoint { get; set; } = new(endpoint);
+        public int Calls { get; private set; }
+
+        public string PluginId => ConfigurableId;
+        public string LlmSelectionId => selectionId;
+        public string ProviderName => name;
+        public bool IsAvailable => true;
+        public IReadOnlyList<PluginModelInfo> SupportedModels { get; init; } = [new(modelId, modelId)];
+        public Uri? LlmEndpoint => Endpoint;
+
+        public Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult("[]");
+        }
+    }
 
     private sealed class FakeLlm(string pluginId, string name, string modelId) : ILlmProviderPlugin
     {

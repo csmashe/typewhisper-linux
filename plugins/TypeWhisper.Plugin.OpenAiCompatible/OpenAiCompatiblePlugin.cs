@@ -18,6 +18,7 @@ public sealed class OpenAiCompatiblePlugin
     : ITranscriptionEnginePlugin,
         ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
+        ILlmProviderEndpoint,
         IPluginSettingsProvider,
         IModelCatalogProvider,
         IPluginLocalizationAware,
@@ -60,6 +61,10 @@ public sealed class OpenAiCompatiblePlugin
     private const string ProfileIdPrefix = "openai-compatible-";
 
     private readonly HttpClient _httpClient;
+
+    // A server on this computer is trusted as local (alias suggestions rely on it), so its
+    // requests must not follow a redirect or go through a proxy to another machine.
+    private readonly HttpClient _loopbackHttpClient;
     private readonly IWebSocketTransportFactory? _transportFactory;
     private readonly TimeSpan _nonLlmTimeout;
     private IPluginHostServices? _host;
@@ -82,14 +87,21 @@ public sealed class OpenAiCompatiblePlugin
     private readonly Lock _profileRolesLock = new();
 
     public OpenAiCompatiblePlugin()
-        : this(new HttpClient { Timeout = Timeout.InfiniteTimeSpan })
+        : this(
+            new HttpClient { Timeout = Timeout.InfiniteTimeSpan },
+            loopbackHttpClient: new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false })
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            })
     {
     }
 
     internal OpenAiCompatiblePlugin(
-        HttpClient httpClient, TimeSpan? nonLlmTimeout = null, IWebSocketTransportFactory? transportFactory = null)
+        HttpClient httpClient, TimeSpan? nonLlmTimeout = null, IWebSocketTransportFactory? transportFactory = null,
+        HttpClient? loopbackHttpClient = null)
     {
         _httpClient = httpClient;
+        _loopbackHttpClient = loopbackHttpClient ?? httpClient;
         _transportFactory = transportFactory;
         _nonLlmTimeout = nonLlmTimeout ?? TimeSpan.FromMinutes(5);
     }
@@ -217,7 +229,7 @@ public sealed class OpenAiCompatiblePlugin
 
         var endpoint = BatchUri(BaseUrl!, _apiVersion, _batchEndpoint, SelectedModelId!, translate);
         return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient,
+            ClientFor(BaseUrl),
             BaseUrl!,
             ApiKey ?? "",
             SelectedModelId!,
@@ -296,6 +308,8 @@ public sealed class OpenAiCompatiblePlugin
 
     public bool IsAvailable => IsConfigured && !string.IsNullOrEmpty(SelectedLlmModelId);
 
+    public Uri? LlmEndpoint => EndpointUri(BaseUrl);
+
     public IReadOnlyList<PluginModelInfo> SupportedModels
     {
         get
@@ -332,7 +346,7 @@ public sealed class OpenAiCompatiblePlugin
                     _temperatureMode == "custom" && _reasoningEffort.Length == 0 ? _temperature : null));
 
             return await OpenAiChatHelper.SendChatCompletionAsync(
-                _httpClient,
+                ClientFor(BaseUrl),
                 BaseUrl!,
                 ApiKey ?? "",
                 modelId,
@@ -370,7 +384,7 @@ public sealed class OpenAiCompatiblePlugin
 
         using var timeout = CreateLlmTimeout(_llmRequestTimeoutSeconds, ct);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
-            _httpClient,
+            ClientFor(BaseUrl),
             BaseUrl!,
             ApiKey ?? "",
             modelId,
@@ -531,7 +545,7 @@ public sealed class OpenAiCompatiblePlugin
             foreach (var (name, value) in AuthenticationHeaders(endpoint, ApiKey))
                 request.Headers.TryAddWithoutValidation(name, value);
 
-            using var response = await _httpClient.SendAsync(request, timeout.Token);
+            using var response = await ClientFor(BaseUrl).SendAsync(request, timeout.Token);
             return response.IsSuccessStatusCode;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -552,7 +566,15 @@ public sealed class OpenAiCompatiblePlugin
         }
     }
 
-    public void Dispose() => _httpClient.Dispose();
+    public void Dispose()
+    {
+        _httpClient.Dispose();
+        if (!ReferenceEquals(_loopbackHttpClient, _httpClient))
+            _loopbackHttpClient.Dispose();
+    }
+
+    private HttpClient ClientFor(string? baseUrl) =>
+        LoopbackEndpoint.IsLoopback(EndpointUri(baseUrl)) ? _loopbackHttpClient : _httpClient;
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
@@ -860,7 +882,7 @@ public sealed class OpenAiCompatiblePlugin
     private OpenAiResponsesClient CreateResponsesClient(string baseUrl, string apiVersion, string? apiKey)
     {
         var endpoint = RequestUri(baseUrl, apiVersion, "/v1/responses");
-        return new OpenAiResponsesClient(_httpClient, endpoint, AuthenticationHeaders(endpoint, apiKey));
+        return new OpenAiResponsesClient(ClientFor(baseUrl), endpoint, AuthenticationHeaders(endpoint, apiKey));
     }
 
     private static string NormalizeBatchEndpoint(string? value) =>
@@ -1523,6 +1545,11 @@ public sealed class OpenAiCompatiblePlugin
 
     internal bool ProfileLlmAvailable(string id) => ProfileConfigured(id) && ProfileLlmModels(id).Count > 0;
 
+    internal Uri? ProfileLlmEndpoint(string id) => EndpointUri(FindAdditional(id)?.BaseUrl);
+
+    private static Uri? EndpointUri(string? baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) ? uri : null;
+
     internal string? ProfileSelectedModel(string id) => FindAdditional(id)?.SelectedModelId;
 
     internal IReadOnlyList<PluginModelInfo> ProfileTranscriptionModels(string id)
@@ -1611,7 +1638,7 @@ public sealed class OpenAiCompatiblePlugin
 
         var endpoint = BatchUri(profile.BaseUrl, profile.ApiVersion, profile.BatchEndpoint, profile.SelectedModelId!, translate);
         return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient,
+            ClientFor(profile.BaseUrl),
             profile.BaseUrl,
             GetProfileApiKey(id) ?? "",
             profile.SelectedModelId!,
@@ -1651,7 +1678,7 @@ public sealed class OpenAiCompatiblePlugin
                     profile is { TemperatureMode: "custom", ReasoningEffort.Length: 0 } ? profile.Temperature : null));
 
             return await OpenAiChatHelper.SendChatCompletionAsync(
-                _httpClient,
+                ClientFor(profile.BaseUrl),
                 profile.BaseUrl,
                 GetProfileApiKey(id) ?? "",
                 modelId,
@@ -1695,7 +1722,7 @@ public sealed class OpenAiCompatiblePlugin
 
         using var timeout = CreateLlmTimeout(profile.LlmRequestTimeoutSeconds, ct);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
-            _httpClient,
+            ClientFor(profile.BaseUrl),
             profile.BaseUrl,
             GetProfileApiKey(id) ?? "",
             modelId,
@@ -1943,7 +1970,7 @@ public sealed class OpenAiCompatiblePlugin
             foreach (var (name, value) in AuthenticationHeaders(endpoint, apiKey))
                 request.Headers.TryAddWithoutValidation(name, value);
 
-            using var response = await _httpClient.SendAsync(request, timeout.Token);
+            using var response = await ClientFor(baseUrl).SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode)
                 return null;
 
@@ -2123,6 +2150,7 @@ public sealed class OpenAiCompatiblePlugin
         : ITranscriptionEngineRole,
             ITranscriptionLanguageSelectionCapabilities,
             ILlmProviderRole,
+            ILlmProviderEndpoint,
             ITranscriptionEngineSelectionIdentity,
             ILlmProviderSelectionIdentity
     {
@@ -2152,6 +2180,7 @@ public sealed class OpenAiCompatiblePlugin
         public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
         public string ProviderName => owner.ProfileDisplayName(profileId);
         public bool IsAvailable => owner.ProfileLlmAvailable(profileId);
+        public Uri? LlmEndpoint => owner.ProfileLlmEndpoint(profileId);
         public IReadOnlyList<PluginModelInfo> SupportedModels => owner.ProfileLlmModels(profileId);
 
         public void SelectModel(string modelId) => owner.SelectProfileModel(profileId, modelId);

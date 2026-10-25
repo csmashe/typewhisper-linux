@@ -3597,4 +3597,59 @@ public sealed class OpenAiCompatiblePluginTests
     {
         public void Dispose() { }
     }
+    [Fact]
+    public async Task LlmEndpoint_ReportsEachConfiguredBaseUrl()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", "http://localhost:11434");
+        host.SetSetting("additionalProfiles", new List<OpenAiCompatibleProfile>
+        {
+            new() { Id = "office", BaseUrl = "http://192.168.1.10:11434" },
+            new() { Id = "unset", BaseUrl = "" },
+        });
+        using var sut = new OpenAiCompatiblePlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(new Uri("http://localhost:11434"), sut.LlmEndpoint);
+        var roles = sut.AdditionalLlmProviders.Cast<ILlmProviderEndpoint>().ToList();
+        Assert.Equal(new Uri("http://192.168.1.10:11434"), roles[0].LlmEndpoint);
+        Assert.Null(roles[1].LlmEndpoint);
+    }
+
+    [Fact]
+    public async Task LoopbackServer_RedirectIsNotFollowed()
+    {
+        using var server = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        server.Start();
+        var port = ((IPEndPoint)server.LocalEndpoint).Port;
+        var requests = new List<string>();
+        // ReSharper disable once FunctionNeverReturns -- the loop ends when server.Stop() makes AcceptTcpClientAsync throw.
+        var serverTask = Task.Run(async () =>
+        {
+            while (true)
+            {
+                // ReSharper disable once AccessToDisposedClosure -- disposing the listener is what ends this loop.
+                using var client = await server.AcceptTcpClientAsync();
+                var stream = client.GetStream();
+                var buffer = new byte[16384];
+                var read = await stream.ReadAsync(buffer);
+                lock (requests)
+                    requests.Add(Encoding.ASCII.GetString(buffer, 0, read).Split("\r\n")[0]);
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(
+                    $"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{port}/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+            }
+        });
+        var host = new TestPluginHostServices();
+        host.SetSetting("baseUrl", $"http://127.0.0.1:{port}");
+        using var sut = new OpenAiCompatiblePlugin();
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => sut.ProcessAsync("system", "term", "llama3", CancellationToken.None));
+        server.Stop();
+        _ = serverTask.ContinueWith(_ => { }, TaskScheduler.Default);
+
+        lock (requests)
+            Assert.Equal(["POST /v1/chat/completions HTTP/1.1"], requests);
+    }
+
 }
