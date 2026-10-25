@@ -66,6 +66,9 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
                     var section = (ProfilesSectionViewModel)profiles.Content!;
                     section.SelectedProfile = section.Profiles.Single(profile => profile.Id == ProfileId);
                     MainWindowRenderTests.Settle();
+                    Assert.Contains(window.GetVisualDescendants().OfType<ComboBox>(), combo =>
+                        combo.IsEffectivelyVisible
+                        && AutomationProperties.GetName(combo) == Loc.Instance["Profiles.Language"]);
                     window.CaptureRenderedFrame()?.Save(
                         Path.Join(UiEnvironment.SnapshotDir, $"ProfileEditor-{language}-{sizeName}.png"));
                     findings.AddRange(UiInspector.Inspect(window, new HashSet<string>())
