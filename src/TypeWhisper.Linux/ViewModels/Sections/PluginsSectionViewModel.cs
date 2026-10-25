@@ -1547,6 +1547,9 @@ public partial class PluginRow : ObservableObject
         );
 
     public string ExpansionGlyph => IsExpanded ? "⌃" : "⌄";
+
+    public string ExpanderAccessibleName =>
+        Loc.Instance.GetString(IsExpanded ? "Plugins.HideSettingsName" : "Plugins.ShowSettingsName", Name);
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
     public bool HasExpandableSettings { get; }
     public bool HasModelCatalogProvider => LoadedPlugin?.Instance is IModelCatalogProvider;
@@ -1692,6 +1695,7 @@ public partial class PluginRow : ObservableObject
     partial void OnIsExpandedChanged(bool value)
     {
         OnPropertyChanged(nameof(ExpansionGlyph));
+        OnPropertyChanged(nameof(ExpanderAccessibleName));
     }
 
     partial void OnIsEnabledChanged(bool value)

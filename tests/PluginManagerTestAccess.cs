@@ -24,7 +24,29 @@ internal static class PluginManagerTestAccess
         field.SetValue(pluginManager, engines.ToList());
     }
 
-    // ReSharper disable once UnusedMember.Global -- used from the Linux tests; the UI tests link this file only for SetTranscriptionEngines.
+    /// <summary>Seeds discovered plugins and marks <paramref name="activatedIds" /> as enabled.</summary>
+    // ReSharper disable once UnusedMember.Global -- used from the UI tests; the Linux tests seed through TestPluginManagerFactory.
+    public static void SetLoadedPlugins(
+        PluginManager pluginManager,
+        IReadOnlyList<LoadedPlugin> plugins,
+        IEnumerable<string> activatedIds
+    )
+    {
+        SetField(pluginManager, "_allPlugins", plugins.ToList());
+        SetField(pluginManager, "_activatedPlugins", new HashSet<string>(activatedIds));
+        // Tell listeners such as the Plugins page, without rebuilding the seeded capability lists.
+        var handler = (EventHandler?)typeof(PluginManager)
+            .GetField(nameof(PluginManager.PluginStateChanged), BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(pluginManager);
+        handler?.Invoke(pluginManager, EventArgs.Empty);
+    }
+
+    private static void SetField(PluginManager pluginManager, string name, object value) =>
+        (typeof(PluginManager).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(PluginManager).FullName, name))
+        .SetValue(pluginManager, value);
+
+    // ReSharper disable once UnusedMember.Global -- used from the Linux tests; the UI tests link this file only for SetTranscriptionEngines and SetLoadedPlugins.
     public static void SetVocabularyRescorers(
         PluginManager pluginManager,
         IReadOnlyList<IVocabularyRescorerPlugin> engines

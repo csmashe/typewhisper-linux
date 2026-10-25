@@ -109,4 +109,18 @@ public sealed class RecentTranscriptionStoreTests
         Assert.Single(sut.FilteredEntries);
         Assert.Equal("beta note", sut.FilteredEntries[0].FinalText);
     }
+
+    [Fact]
+    public void PaletteItems_WithTheSameText_HaveDistinctAccessibleNames()
+    {
+        var entries = new[]
+        {
+            new RecentTranscriptionEntry("1", "same note", DateTime.UtcNow, "Editor", "code", RecentTranscriptionSource.Session),
+            new RecentTranscriptionEntry("2", "same note", DateTime.UtcNow, "Browser", "firefox", RecentTranscriptionSource.Session),
+        };
+        var sut = new RecentTranscriptionsPaletteViewModel(entries, _ => { });
+
+        Assert.Equal(2, sut.FilteredEntries.Select(item => item.AccessibleName).Distinct().Count());
+        Assert.All(sut.FilteredEntries, item => Assert.StartsWith("same note, ", item.AccessibleName, StringComparison.Ordinal));
+    }
 }

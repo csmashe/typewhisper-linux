@@ -23,6 +23,20 @@
             <Setter Property="OffContent" Value="{loc:Str Common.Off}" />
         </Style>
 
+        <!-- Name the theme's template parts; a screen reader otherwise reads their class name. -->
+        <Style Selector="ButtonSpinner /template/ RepeatButton#PART_IncreaseButton, Slider /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="AutomationProperties.Name" Value="{loc:Str Common.Increase}" />
+        </Style>
+        <Style Selector="ButtonSpinner /template/ RepeatButton#PART_DecreaseButton, Slider /template/ RepeatButton#PART_DecreaseButton">
+            <Setter Property="AutomationProperties.Name" Value="{loc:Str Common.Decrease}" />
+        </Style>
+        <Style Selector="Slider /template/ Thumb">
+            <Setter Property="AutomationProperties.Name" Value="{Binding $parent[Slider].(AutomationProperties.Name)}" />
+        </Style>
+        <Style Selector="NumericUpDown /template/ TextBox#PART_TextBox">
+            <Setter Property="AutomationProperties.Name" Value="{Binding $parent[NumericUpDown].(AutomationProperties.Name)}" />
+        </Style>
+
         <!-- Segmented tab buttons (Dictionary, Plugins); the selected tab is accent-filled. -->
         <Style Selector="Button.tab">
             <Setter Property="Background" Value="Transparent" />

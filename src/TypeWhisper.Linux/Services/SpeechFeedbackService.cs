@@ -7,10 +7,17 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Linux.Services;
 
-public sealed record TtsProviderOption(string Id, string DisplayName);
+public sealed record TtsProviderOption(string Id, string DisplayName)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayName;
+}
 
 // ReSharper disable once NotAccessedPositionalProperty.Global  LocaleIdentifier carried in the voice-option record's data shape
-public sealed record TtsVoiceOption(string Id, string DisplayName, string? LocaleIdentifier = null);
+public sealed record TtsVoiceOption(string Id, string DisplayName, string? LocaleIdentifier = null)
+{
+    public override string ToString() => DisplayName;
+}
 
 public interface IManualReadback
 {

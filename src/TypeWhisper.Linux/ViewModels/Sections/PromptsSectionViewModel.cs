@@ -976,6 +976,13 @@ public partial class PromptsSectionViewModel : ObservableObject
 ///     One entry of the provider dropdown. IsUnavailable marks a provider that is listed but
 ///     cannot serve a request (signed out, missing key, no longer installed).
 /// </summary>
-public sealed record ProviderOption(string? Value, string Label, bool IsUnavailable = false);
+public sealed record ProviderOption(string? Value, string Label, bool IsUnavailable = false)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Label;
+}
 
-public sealed record ActionPluginOption(string? Value, string Label);
+public sealed record ActionPluginOption(string? Value, string Label)
+{
+    public override string ToString() => Label;
+}

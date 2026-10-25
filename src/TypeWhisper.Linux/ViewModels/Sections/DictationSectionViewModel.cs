@@ -2566,20 +2566,41 @@ public partial class DictationSectionViewModel : ObservableObject
 
 public sealed record DictationModelOption(string ModelId, string DisplayName, string EngineName)
 {
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayLabel;
+
     public string DisplayLabel => $"{EngineName} / {DisplayName}";
 }
 
-public sealed record AccelerationOption(string Value, string DisplayName);
+public sealed record AccelerationOption(string Value, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
-public sealed record SpokenLanguageOption(string Code, string DisplayName);
+public sealed record SpokenLanguageOption(string Code, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
-public sealed record CleanupLevelOption(CleanupLevel Value, string DisplayName);
+public sealed record CleanupLevelOption(CleanupLevel Value, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
-public sealed record EnglishOutputVariantOption(EnglishOutputVariant Value, string DisplayName);
+public sealed record EnglishOutputVariantOption(EnglishOutputVariant Value, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
-public sealed record GermanOutputVariantOption(GermanOutputVariant Value, string DisplayName);
+public sealed record GermanOutputVariantOption(GermanOutputVariant Value, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
-public sealed record InsertionStrategyOption(TextInsertionStrategy Value, string DisplayName);
+public sealed record InsertionStrategyOption(TextInsertionStrategy Value, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
 public sealed class AppInsertionStrategyRow : ObservableObject
 {
@@ -2656,6 +2677,9 @@ public sealed class AppInsertionStrategyRow : ObservableObject
     }
 }
 
-public sealed record SpokenFormattingStrategyOption(SpokenFormattingStrategy Value, string DisplayName);
+public sealed record SpokenFormattingStrategyOption(SpokenFormattingStrategy Value, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
 
 public sealed record SpokenFormattingScenarioRow(string Spoken, string Expected);

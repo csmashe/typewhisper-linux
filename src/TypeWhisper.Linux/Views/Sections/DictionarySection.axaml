@@ -545,11 +545,13 @@
                                       Padding="10,6" />
                         <CheckBox Grid.Column="2"
                                   Content="Aa"
+                                  AutomationProperties.Name="{loc:Str Dictionary.CaseSensitive}"
                                   IsChecked="{Binding CaseSensitive}"
                                   ToolTip.Tip="{loc:Str Dictionary.CaseSensitive}"
                                   VerticalAlignment="Center" />
                         <CheckBox Grid.Column="3"
                                   Content=".*"
+                                  AutomationProperties.Name="{loc:Str Dictionary.Regex}"
                                   IsChecked="{Binding NewIsRegex}"
                                   IsVisible="{Binding IsNewTypeCorrection}"
                                   ToolTip.Tip="{loc:Str Dictionary.Regex}"

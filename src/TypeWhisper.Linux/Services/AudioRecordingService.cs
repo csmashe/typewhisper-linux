@@ -1869,7 +1869,11 @@ public sealed record AudioInputDevice(
     int MaxInputChannels,
     bool IsDefault,
     string PersistentId
-);
+)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Name;
+}
 
 /// <summary>
 ///     Device-enumeration seam for <see cref="AudioRecordingService" />. Abstracts the
