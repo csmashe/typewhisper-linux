@@ -81,11 +81,13 @@ internal sealed partial class CliProviderDescriptor
     )]
     private static partial Regex VersionRegex();
 
+    // The `opencode` credential line of `auth list`: display name ("OpenCode", formerly
+    // "OpenCode Zen", or the raw ID offline) then credential type. "OpenCode Go" must not match.
     [GeneratedRegex(
-        @"(?<![0-9A-Za-z])OpenCode\s+Zen(?![0-9A-Za-z])",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+        @"^[^0-9A-Za-z\r\n]*OpenCode(?:[ \t]+Zen)?[ \t]+(?:api|oauth|wellknown)(?![0-9A-Za-z])",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant
     )]
-    private static partial Regex OpenCodeZenRegex();
+    private static partial Regex OpenCodeCredentialRegex();
 
     private CliProviderDescriptor(
         CliProviderKind kind,
@@ -344,7 +346,7 @@ internal sealed partial class CliProviderDescriptor
 
         if (Kind == CliProviderKind.OpenCode)
         {
-            return OpenCodeZenRegex().IsMatch(CliAnsi.Strip(output));
+            return OpenCodeCredentialRegex().IsMatch(CliAnsi.Strip(output));
         }
 
         if (Kind != CliProviderKind.Claude)

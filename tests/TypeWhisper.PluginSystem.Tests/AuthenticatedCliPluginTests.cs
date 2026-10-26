@@ -617,6 +617,19 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
         Assert.Null(CliExecutableDiscovery.ResolveRealPath(plainPath, "opencode"));
     }
 
+    [Theory]
+    [InlineData("Credentials ~/.local/share/opencode/auth.json\nOpenCode api\n1 credentials", true)]
+    [InlineData("●  OpenCode Zen oauth", true)]
+    [InlineData("│\n●  opencode wellknown\n│", true)]
+    [InlineData("●  OpenCode Go api", false)]
+    [InlineData("●  GitHub Copilot oauth\n└  1 credentials", false)]
+    [InlineData("Credentials ~/.local/share/opencode/auth.json\n0 credentials", false)]
+    [InlineData("●  OpenCode\napi", false)]
+    public void OpenCodeAuthentication_MatchesOnlyTheOpenCodeCredentialLine(string output, bool expected)
+    {
+        Assert.Equal(expected, Descriptor(CliProviderKind.OpenCode).IsAuthenticated(0, output));
+    }
+
     [Fact]
     public void AnsiStripping_SurvivesHostileEscapeInput()
     {
@@ -1781,11 +1794,13 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
     }
 
     [Theory]
+    [InlineData("opencode-auth-current", (int)CliAvailabilityState.Ready)]
+    [InlineData("opencode-auth-legacy", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-ansi", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-stderr", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-missing", (int)CliAvailabilityState.AuthenticationUnknown)]
     [InlineData("opencode-auth-error", (int)CliAvailabilityState.SignedOut)]
-    public async Task OpenCodeAuthentication_RequiresExplicitZenEntryFromCombinedAnsiStrippedOutput(
+    public async Task OpenCodeAuthentication_RequiresExplicitOpenCodeCredentialFromCombinedAnsiStrippedOutput(
         string scenario,
         int expected
     )
