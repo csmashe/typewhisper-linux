@@ -327,8 +327,6 @@ public partial class ProfilesSectionViewModel : ObservableObject
         !string.IsNullOrWhiteSpace(CurrentWindowTitle) && CurrentWindowTitle != "-";
 
     public string CurrentUrlPattern => TryExtractUrlPattern(CurrentUrl);
-    public string EditIsEnabledStatusText =>
-        EditIsEnabled ? Loc.Instance["Common.On"] : Loc.Instance["Common.Off"];
 
     public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; private set; } =
         CreateNullableBooleanOptions();
@@ -653,11 +651,6 @@ public partial class ProfilesSectionViewModel : ObservableObject
     partial void OnEditWhisperModeOverrideChanged(bool? value)
     {
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
-    }
-
-    partial void OnEditIsEnabledChanged(bool value)
-    {
-        OnPropertyChanged(nameof(EditIsEnabledStatusText));
     }
 
     [RelayCommand]
@@ -1143,7 +1136,6 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedProfileSummary));
         OnPropertyChanged(nameof(SelectedProfileDisplayName));
         OnPropertyChanged(nameof(MatchStatusText));
-        OnPropertyChanged(nameof(EditIsEnabledStatusText));
         if (_browserStatusIsState)
         {
             RefreshBrowserAccessibilityStatus();
@@ -1576,7 +1568,6 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowNoBrowserUrlHint));
         OnPropertyChanged(nameof(HasCurrentWindowTitle));
         OnPropertyChanged(nameof(CurrentUrlPattern));
-        OnPropertyChanged(nameof(EditIsEnabledStatusText));
     }
 
     private static string TryExtractUrlPattern(string? rawUrl)

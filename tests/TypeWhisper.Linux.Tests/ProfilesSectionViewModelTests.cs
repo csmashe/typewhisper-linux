@@ -172,7 +172,6 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 nameof(ProfilesSectionViewModel.SelectedProfileSummary),
                 nameof(ProfilesSectionViewModel.SelectedProfileDisplayName),
                 nameof(ProfilesSectionViewModel.MatchStatusText),
-                nameof(ProfilesSectionViewModel.EditIsEnabledStatusText),
             ];
             HashSet<string?> propertyChanges = [];
 
