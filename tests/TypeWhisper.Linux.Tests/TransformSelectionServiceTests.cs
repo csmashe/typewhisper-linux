@@ -307,8 +307,10 @@ public sealed class TransformSelectionServiceTests
         var activeWindow = new FakeActiveWindowService(null);
 
         var target = await TransformSelectionService.ResolveReplacementTargetAsync(
+            textInsertion,
             activeWindow,
             Snapshot("123", "xdotool"),
+            "selected text",
             CancellationToken.None
         );
         Assert.Null(target);
@@ -326,10 +328,135 @@ public sealed class TransformSelectionServiceTests
     }
 
     [Fact]
+    public async Task SameWindow_FocusMovedToAnotherField_AbortsWithoutPasting()
+    {
+        // The other field of the same window has nothing selected, so the re-probe copies nothing.
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var textInsertion = new TextInsertionService(platform);
+        var captured = Snapshot("wayland-window-1", "gnome");
+        var activeWindow = new FakeActiveWindowService(captured);
+
+        var target = await TransformSelectionService.ResolveReplacementTargetAsync(
+            textInsertion,
+            activeWindow,
+            captured,
+            "the cedar project ships friday.",
+            CancellationToken.None
+        );
+
+        Assert.Null(target);
+        Assert.Equal(1, platform.CopyCalls);
+        Assert.Equal(0, platform.PasteCalls);
+        Assert.Equal(0, platform.TypeCalls);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task SameWindow_DifferentTextSelected_Aborts()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "QA OTHER FIELD SENTINEL",
+        };
+        var textInsertion = new TextInsertionService(platform);
+        var captured = Snapshot("wayland-window-1", "gnome");
+        var activeWindow = new FakeActiveWindowService(captured);
+
+        var target = await TransformSelectionService.ResolveReplacementTargetAsync(
+            textInsertion,
+            activeWindow,
+            captured,
+            "the cedar project ships friday.",
+            CancellationToken.None
+        );
+
+        Assert.Null(target);
+    }
+
+    [Fact]
+    public async Task SameWindow_CapturedTextStillSelected_ReturnsCapturedTarget()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the cedar project ships friday.",
+        };
+        var textInsertion = new TextInsertionService(platform);
+        var captured = Snapshot("wayland-window-1", "gnome");
+        var activeWindow = new FakeActiveWindowService(Snapshot("wayland-window-1", "gnome"));
+
+        var target = await TransformSelectionService.ResolveReplacementTargetAsync(
+            textInsertion,
+            activeWindow,
+            captured,
+            "the cedar project ships friday.",
+            CancellationToken.None
+        );
+
+        Assert.Same(captured, target);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task SameTerminalWindow_SelectionReprobeUsesTerminalCopyShortcut()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "selected text",
+        };
+        var textInsertion = new TextInsertionService(platform);
+        var captured = new ActiveWindowSnapshot(
+            "konsole",
+            "Shell",
+            "wayland-window-7",
+            "org.kde.konsole",
+            "kwin"
+        );
+        var activeWindow = new FakeActiveWindowService(captured);
+
+        var target = await TransformSelectionService.ResolveReplacementTargetAsync(
+            textInsertion,
+            activeWindow,
+            captured,
+            "selected text",
+            CancellationToken.None
+        );
+
+        Assert.Same(captured, target);
+        Assert.True(platform.LastCopyUsedTerminalShortcut);
+    }
+
+    [Fact]
+    public async Task WindowChanged_AbortsWithoutSendingCopy()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "selected text",
+        };
+        var textInsertion = new TextInsertionService(platform);
+        var activeWindow = new FakeActiveWindowService(Snapshot("wayland-window-2", "gnome"));
+
+        var target = await TransformSelectionService.ResolveReplacementTargetAsync(
+            textInsertion,
+            activeWindow,
+            Snapshot("wayland-window-1", "gnome"),
+            "selected text",
+            CancellationToken.None
+        );
+
+        Assert.Null(target);
+        Assert.Equal(0, platform.CopyCalls);
+    }
+
+    [Fact]
     public async Task ExpiredDeadlineAtVerifyProbe_ReportsTimeoutNotFocusChange()
     {
         // The probe swallows per-provider cancellation and reports no snapshot, which the
         // focus check below reads as a focus change — so the deadline has to win first.
+        var textInsertion = new TextInsertionService(new FakeTextInsertionPlatform());
         var activeWindow = new FakeActiveWindowService(null);
         var captured = Snapshot("123", "xdotool");
         Assert.True(TransformSelectionService.HasSelectionTargetChanged(captured, null));
@@ -340,8 +467,10 @@ public sealed class TransformSelectionServiceTests
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () =>
                 TransformSelectionService.ResolveReplacementTargetAsync(
+                    textInsertion,
                     activeWindow,
                     captured,
+                    "selected text",
                     processingCts.Token
                 )
         );
@@ -445,6 +574,7 @@ public sealed class TransformSelectionServiceTests
         public string? Clipboard { get; set; }
         public string? SelectionText { get; init; }
         public bool LastCopyUsedTerminalShortcut { get; private set; }
+        public int CopyCalls { get; private set; }
         public int PasteCalls { get; private set; }
         public int ActivateCalls { get; private set; }
         public string? LastActivatedWindowId { get; private set; }
@@ -503,6 +633,7 @@ public sealed class TransformSelectionServiceTests
 
         public Task<bool> SendCopyAsync(bool useTerminalShortcut)
         {
+            CopyCalls++;
             LastCopyUsedTerminalShortcut = useTerminalShortcut;
             Clipboard = SelectionText;
             return Task.FromResult(true);

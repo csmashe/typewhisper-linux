@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Views;
@@ -122,12 +123,11 @@ public sealed class TransformSelectionService
         return new TransformSelectionCapture(selectedText, targetSnapshot);
     }
 
-    // Test seam: decides whether it's still safe to replace the captured selection. See audit §3 M6.
-    // Cannot detect caret/selection drift within the same window — that would need an
-    // AT-SPI selection-range or document-revision token.
+    // Test seam: decides whether the captured window is still the target. See audit §3 M6.
+    // Field or selection drift inside that window is caught by ResolveReplacementTargetAsync.
     internal static bool HasSelectionTargetChanged(
-        ActiveWindowSnapshot? captured,
-        ActiveWindowSnapshot? current
+        [NotNullWhen(false)] ActiveWindowSnapshot? captured,
+        [NotNullWhen(false)] ActiveWindowSnapshot? current
     )
     {
         // Missing identity now fails closed to clipboard. Process-name equality used to
@@ -157,21 +157,35 @@ public sealed class TransformSelectionService
                );
     }
 
-    // Test seam: re-checks that the captured window still holds focus. Returns the captured
-    // snapshot while replacement is still safe, null once the target changed. The probe swallows
-    // per-provider cancellation and reports a null snapshot, so an expired processing deadline is
-    // rethrown here into the timeout handling — otherwise it reads as a focus change.
+    // Test seam: re-checks that the captured window still holds focus and still has the captured
+    // text selected. Returns the captured snapshot while replacement is still safe, null once the
+    // target changed. The probe swallows per-provider cancellation and reports a null snapshot, so
+    // an expired processing deadline is rethrown here into the timeout handling — otherwise it
+    // reads as a focus change.
     internal static async Task<ActiveWindowSnapshot?> ResolveReplacementTargetAsync(
+        TextInsertionService textInsertion,
         IActiveWindowService activeWindow,
         ActiveWindowSnapshot? capturedSnapshot,
+        string capturedSelectedText,
         CancellationToken processingToken
     )
     {
         var currentSnapshot = await activeWindow.GetActiveWindowSnapshotAsync(processingToken);
         processingToken.ThrowIfCancellationRequested();
-        return HasSelectionTargetChanged(capturedSnapshot, currentSnapshot)
-            ? null
-            : capturedSnapshot;
+        if (HasSelectionTargetChanged(capturedSnapshot, currentSnapshot))
+        {
+            return null;
+        }
+
+        // The window identity can't tell two fields apart, so probe the selection again: another
+        // field or a moved selection no longer copies the captured text.
+        var currentSelectedText = await textInsertion.CaptureSelectedTextAsync(
+            TextInsertionService.IsTerminalApp(capturedSnapshot.ProcessName)
+        );
+        processingToken.ThrowIfCancellationRequested();
+        return string.Equals(currentSelectedText, capturedSelectedText, StringComparison.Ordinal)
+            ? capturedSnapshot
+            : null;
     }
 
     internal static Task<InsertionResult> DeliverValidatedTransformAsync(
@@ -390,8 +404,10 @@ public sealed class TransformSelectionService
             }
 
             var replacementTarget = await ResolveReplacementTargetAsync(
+                _textInsertion,
                 _activeWindow,
                 session.TargetSnapshot,
+                session.SelectedText,
                 processingCts.Token
             );
             if (replacementTarget is null)
@@ -454,11 +470,11 @@ public sealed class TransformSelectionService
         var message = insertion switch
         {
             InsertionResult.CopiedToClipboard =>
-                "Focus changed while transforming — the original selection was left alone. "
+                "Focus or the selection changed while transforming — the original selection was left alone. "
                 + "Transformed text copied; paste manually to replace it.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             _ =>
-                "Focus changed while transforming, and the transformed text could not be copied. "
+                "Focus or the selection changed while transforming, and the transformed text could not be copied. "
                 + "The original selection was left alone.",
         };
         await ShowWarningAsync(message);
