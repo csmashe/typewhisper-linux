@@ -41,6 +41,24 @@ public sealed class SubtitleExporterTests
     }
 
     [Fact]
+    public void Export_NegativeStart_ClampsToZero()
+    {
+        var segments = new List<TranscriptionSegment> { new("early cue", -1, 1.125) };
+
+        Assert.Contains("00:00:00,000 --> 00:00:01,125", SubtitleExporter.ToSrt(segments));
+        Assert.Contains("00:00:00.000 --> 00:00:01.125", SubtitleExporter.ToWebVtt(segments));
+    }
+
+    [Fact]
+    public void Export_EndBeforeStart_EndsAtStart()
+    {
+        var segments = new List<TranscriptionSegment> { new("reversed cue", 2, 1) };
+
+        Assert.Contains("00:00:02,000 --> 00:00:02,000", SubtitleExporter.ToSrt(segments));
+        Assert.Contains("00:00:02.000 --> 00:00:02.000", SubtitleExporter.ToWebVtt(segments));
+    }
+
+    [Fact]
     public void ToSrt_SegmentUnder24Hours_FormatsNormally()
     {
         var segments = new List<TranscriptionSegment>

@@ -14,10 +14,11 @@ public static class SubtitleExporter
         for (var i = 0; i < segments.Count; i++)
         {
             var seg = segments[i];
+            var (start, end) = CueTimes(seg);
             sb.AppendLine((i + 1).ToString());
-            sb.Append(FormatSrtTime(seg.Start));
+            sb.Append(FormatSrtTime(start));
             sb.Append(" --> ");
-            sb.AppendLine(FormatSrtTime(seg.End));
+            sb.AppendLine(FormatSrtTime(end));
             sb.AppendLine(seg.Text);
             sb.AppendLine();
         }
@@ -33,14 +34,22 @@ public static class SubtitleExporter
 
         foreach (var seg in segments)
         {
-            sb.Append(FormatVttTime(seg.Start));
+            var (start, end) = CueTimes(seg);
+            sb.Append(FormatVttTime(start));
             sb.Append(" --> ");
-            sb.AppendLine(FormatVttTime(seg.End));
+            sb.AppendLine(FormatVttTime(end));
             sb.AppendLine(seg.Text);
             sb.AppendLine();
         }
 
         return sb.ToString();
+    }
+
+    // Remote providers can return negative or reversed times.
+    private static (double Start, double End) CueTimes(TranscriptionSegment segment)
+    {
+        var start = Math.Max(0, segment.Start);
+        return (start, Math.Max(start, segment.End));
     }
 
     private static string FormatSrtTime(double seconds)
