@@ -342,8 +342,12 @@ internal sealed partial class CliProviderDescriptor
             return true;
         }
 
-        var numeric = version.Split('-', '+')[0];
-        return Version.TryParse(numeric, out var parsed) && parsed >= minimum;
+        // Build metadata never affects precedence, but a prerelease sorts below its own release.
+        var withoutBuild = version.Split('+')[0];
+        var prereleaseStart = withoutBuild.IndexOf('-');
+        var numeric = prereleaseStart < 0 ? withoutBuild : withoutBuild[..prereleaseStart];
+        return Version.TryParse(numeric, out var parsed)
+               && (parsed > minimum || (parsed == minimum && prereleaseStart < 0));
     }
 
     internal bool HasRequiredCapabilities(string helpOutput) =>
