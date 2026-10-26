@@ -55,7 +55,7 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
             Seed();
             var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
             var findings = new List<string>();
-            foreach (var (sizeName, width, height) in MainWindowRenderTests.Sizes)
+            foreach (var (sizeName, width, height) in MainWindowRenderTests.s_sizes)
             {
                 var window = new MainWindow(viewModel) { Width = width, Height = height };
                 window.Show();
