@@ -1544,10 +1544,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         var result = await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
+        // Refresh first so the state message doesn't overwrite the revert result.
+        RefreshBrowserAccessibilityStatus();
         BrowserAccessibilityStatusMessage = result.Success
             ? Loc.Instance.GetString("Profiles.BrowserRevertSuccess", result.Message)
             : $"{result.Message} {result.Detail}";
-        RefreshBrowserAccessibilityStatus();
+        _browserStatusIsState = false;
     }
 
     private void NotifyStateChanged()
