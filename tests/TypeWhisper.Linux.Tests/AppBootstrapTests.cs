@@ -273,6 +273,48 @@ public sealed class AppBootstrapTests
     }
 
     [Fact]
+    public async Task WaitForTrayHostAsync_ReturnsTrueAsSoonAsALateHostAppears()
+    {
+        var probes = 0;
+        var delays = 0;
+
+        var appeared = await App.WaitForTrayHostAsync(
+            () => Task.FromResult(++probes == 3),
+            10,
+            TimeSpan.FromSeconds(1),
+            _ =>
+            {
+                delays++;
+                return Task.CompletedTask;
+            }
+        );
+
+        Assert.True(appeared);
+        Assert.Equal(3, probes);
+        Assert.Equal(3, delays);
+    }
+
+    [Fact]
+    public async Task WaitForTrayHostAsync_GivesUpAfterTheLastAttempt()
+    {
+        var probes = 0;
+
+        var appeared = await App.WaitForTrayHostAsync(
+            () =>
+            {
+                probes++;
+                return Task.FromResult(false);
+            },
+            4,
+            TimeSpan.FromSeconds(1),
+            _ => Task.CompletedTask
+        );
+
+        Assert.False(appeared);
+        Assert.Equal(4, probes);
+    }
+
+    [Fact]
     public void RouteRecentTranscriptionFeedback_WhenIdle_PublishesThroughFeedbackStatePath()
     {
         var publications = new List<(string Message, bool IsError)>();

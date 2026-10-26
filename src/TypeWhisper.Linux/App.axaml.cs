@@ -718,10 +718,16 @@ public class App : Application
                 );
             hotkey.TransformSelectionRequested += (_, _) => _ = transformSelection.ToggleAsync();
 
-            // Launch hidden to the tray if --minimized was passed.
             if (Program.StartMinimized)
             {
-                main.Opened += (_, _) => HideToTray(main);
+                // One-shot: wlroots restores via Show(), which raises Opened again.
+                void HideOnFirstOpen(object? sender, EventArgs e)
+                {
+                    main.Opened -= HideOnFirstOpen;
+                    FireAndForget(ApplyMinimizedStartupAsync(main, tray));
+                }
+
+                main.Opened += HideOnFirstOpen;
             }
 
             BootTrace.Stage("synchronous init complete; starting BootstrapDeferredAsync");
@@ -905,6 +911,61 @@ public class App : Application
 
         window.WindowState = WindowState.Minimized;
         window.ShowInTaskbar = false;
+    }
+
+    /// <summary>
+    ///     Hide to the tray; without a tray host, wait briefly for one still starting at login
+    ///     before bringing the window back within reach.
+    /// </summary>
+    private static async Task ApplyMinimizedStartupAsync(MainWindow window, TrayIconService tray)
+    {
+        HideToTray(window);
+        if (tray.IsTrayAvailable)
+        {
+            return;
+        }
+
+        var hostAppeared = await WaitForTrayHostAsync(
+            () => Task.Run(tray.TryConfirmLateHost),
+            LateTrayHostAttempts,
+            s_lateTrayHostInterval,
+            Task.Delay
+        );
+        if (hostAppeared || ShuttingDown)
+        {
+            return;
+        }
+
+        if (TrayHideUsesWindowHide())
+        {
+            ShowMainWindow(window);
+            return;
+        }
+
+        // Stay minimized, but with a taskbar entry to reopen it from.
+        window.ShowInTaskbar = true;
+    }
+
+    private const int LateTrayHostAttempts = 10;
+    private static readonly TimeSpan s_lateTrayHostInterval = TimeSpan.FromSeconds(1);
+
+    internal static async Task<bool> WaitForTrayHostAsync(
+        Func<Task<bool>> probe,
+        int attempts,
+        TimeSpan interval,
+        Func<TimeSpan, Task> delay
+    )
+    {
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            await delay(interval);
+            if (await probe())
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ShowMainWindow(MainWindow window)

@@ -121,6 +121,12 @@ public partial class GeneralSectionViewModel : ObservableObject
         ApiStatusText = _api.StatusText;
         RefreshCliState();
         CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges();
+        _tray.AvailabilityChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                OnPropertyChanged(nameof(IsTrayAvailable));
+                OnPropertyChanged(nameof(IsTrayUnavailable));
+            });
         _cudaLibraryPathSetup.InstalledChangesChanged += (_, _) =>
             Dispatcher.UIThread.Post(() =>
                 CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges()
@@ -158,10 +164,10 @@ public partial class GeneralSectionViewModel : ObservableObject
         }
     }
 
-    // Read live (not cached): the tray probe is one-shot at startup and this
-    // VM can be constructed before or after it. Without a tray the close-to-
-    // tray toggle must be disabled — otherwise the window hides with no way
-    // to bring it back (backlog #18).
+    // Read live (not cached): the tray probe can finish before or after this VM
+    // is constructed, and a late host can be confirmed afterwards.
+    // Without a tray the close-to-tray toggle must be disabled — otherwise the
+    // window hides with no way to bring it back (backlog #18).
     public bool IsTrayAvailable => _tray.IsTrayAvailable;
 
     public bool IsTrayUnavailable => !_tray.IsTrayAvailable;
