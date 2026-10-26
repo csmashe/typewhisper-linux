@@ -38,6 +38,7 @@
   "Error.RateLimit": "{0} CLIのレート制限に達しました。",
   "Error.Permission": "{0}のアカウントには、このリクエストを処理する権限がありません。",
   "Error.InvalidRequest": "{0} CLIがリクエストの構成を拒否しました。",
+  "Error.IncompatibleCliVersion": "このバージョンの{0} CLIは、TypeWhisperが渡す設定を拒否しました。TypeWhisperを更新するか、以前のCLIリリースを使用してください。",
   "Error.NoResult": "{0} CLIが有効な結果を返さずに終了しました。",
   "Error.UnsupportedModel": "選択したモデルは、プロバイダーのCLIでサポートされていません。",
   "Error.ModelNotFree": "選択したOpenCodeモデルは、確認済みの現在の無料Zenカタログに含まれていません。",

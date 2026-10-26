@@ -38,6 +38,7 @@
   "Error.RateLimit": "Se alcanzó el límite de solicitudes de la CLI {0}.",
   "Error.Permission": "La cuenta de {0} no tiene permiso para procesar esta solicitud.",
   "Error.InvalidRequest": "La CLI {0} rechazó la configuración de la solicitud.",
+  "Error.IncompatibleCliVersion": "Esta versión de la CLI {0} rechazó los ajustes que le pasa TypeWhisper. Actualiza TypeWhisper o usa una versión anterior de la CLI.",
   "Error.NoResult": "La CLI {0} finalizó sin un resultado válido.",
   "Error.UnsupportedModel": "La CLI del proveedor no admite el modelo seleccionado.",
   "Error.ModelNotFree": "El modelo de OpenCode seleccionado no está en el catálogo actual verificado de modelos gratuitos de Zen.",

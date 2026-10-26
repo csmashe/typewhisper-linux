@@ -38,6 +38,7 @@
   "Error.RateLimit": "{0} CLI已达到速率限制。",
   "Error.Permission": "{0}账户无权处理此请求。",
   "Error.InvalidRequest": "{0} CLI拒绝了请求配置。",
+  "Error.IncompatibleCliVersion": "此版本的{0} CLI拒绝了TypeWhisper传递的设置。请更新TypeWhisper，或使用较早版本的CLI。",
   "Error.NoResult": "{0} CLI已退出，但未返回有效结果。",
   "Error.UnsupportedModel": "提供商CLI不支持所选模型。",
   "Error.ModelNotFree": "所选OpenCode模型不在当前已验证的免费Zen目录中。",
