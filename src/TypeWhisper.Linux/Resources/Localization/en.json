@@ -1290,7 +1290,7 @@
   "TextInsertion.YdotoolForeignModulesLoadDetail": "Review the existing file. If it does not already load the uinput module, move or rename it, then run setup again.",
   "TextInsertion.YdotoolForeignUdevRuleDetail": "Review the existing file. If it does not already grant the active user access to /dev/uinput, move or rename it, then run setup again.",
   "TextInsertion.YdotoolNotInstalled": "ydotool not installed. Install it via your package manager.",
-  "TextInsertion.YdotoolProbeFailed": "ydotoold socket reachable, but a test keystroke failed. Check that your user has read/write access to /dev/uinput (run `groups` — you should see `input`; if not, `sudo usermod -aG input $USER` then log out and back in).",
+  "TextInsertion.YdotoolProbeFailed": "ydotoold socket reachable, but a test keystroke failed — usually because ydotoold can't write to /dev/uinput. Click Set up ydotool: it grants your active session access to /dev/uinput through a udev rule if needed, then restarts ydotoold. If the keystroke still fails, the setup result shows the remaining fix.",
   "TextInsertion.YdotoolReady": "Ready. Socket: {0}",
   "TextInsertion.YdotoolSocketUnreachable": "ydotoold is active but its socket isn't reachable.",
   "TextInsertion.YdotoolSymlinkRefused": "TypeWhisper did not change {0} because it is a symbolic link.",
