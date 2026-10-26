@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Validate', 'ReleaseMatrix', 'DeployMap')]
+    [ValidateSet('Validate', 'DeployMap')]
     [string] $View = 'Validate',
     [string] $Platform,
     [string] $Rid,
@@ -274,31 +274,6 @@ if ($projectDifference.Count -gt 0) {
 switch ($View) {
     'Validate' {
         Write-Output "Validated $($plugins.Count) plugin catalog entries."
-    }
-    'ReleaseMatrix' {
-        $include = @(
-            $plugins |
-                Sort-Object releaseSlug |
-                ForEach-Object {
-                    $projectName = [System.IO.Path]::GetFileNameWithoutExtension(
-                        [string] $_.projectPath
-                    )
-                    [pscustomobject][ordered]@{
-                        id = [string] $_.id
-                        releaseSlug = [string] $_.releaseSlug
-                        projectPath = [string] $_.projectPath
-                        projectName = $projectName
-                        projectDirectory = [System.IO.Path]::GetDirectoryName(
-                            [string] $_.projectPath
-                        ).Replace('\', '/')
-                        platforms = @($_.platforms)
-                        rids = @($_.rids)
-                        sdkAbi = [string] $_.sdkAbi
-                    }
-                }
-        )
-        [pscustomobject][ordered]@{ include = $include } |
-            ConvertTo-Json -Depth 6 -Compress
     }
     'DeployMap' {
         Assert-Text -Name 'Platform' -Value $Platform

@@ -1,6 +1,10 @@
 BeforeAll {
     $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).ProviderPath
     $catalogScript = Join-Path $repositoryRoot 'scripts/plugin-catalog.ps1'
+    $catalogPlugins = @(
+        (Get-Content -LiteralPath (Join-Path $repositoryRoot 'plugins/catalog.json') -Raw |
+            ConvertFrom-Json).plugins
+    )
 
     function New-PluginCatalogFixture {
         param(
@@ -35,15 +39,9 @@ BeforeAll {
 }
 
 Describe 'Plugin catalog generated views' {
-    It 'validates all bundled plugins and emits the complete release matrix' {
+    It 'validates all bundled plugins' {
         (& $catalogScript -View Validate -WorkspaceRoot $repositoryRoot) |
-            Should -Be 'Validated 32 plugin catalog entries.'
-
-        $matrix = & $catalogScript -View ReleaseMatrix -WorkspaceRoot $repositoryRoot |
-            ConvertFrom-Json
-        @($matrix.include).Count | Should -Be 32
-        @($matrix.include.releaseSlug | Select-Object -Unique).Count | Should -Be 32
-        @($matrix.include[0].PSObject.Properties.Name) | Should -Not -Contain 'version'
+            Should -Be "Validated $($catalogPlugins.Count) plugin catalog entries."
     }
 
     It 'emits a complete deterministic linux-x64 deploy map' {
@@ -55,8 +53,12 @@ Describe 'Plugin catalog generated views' {
                 -WorkspaceRoot $repositoryRoot
         )
 
+        $linuxX64 = @(
+            $catalogPlugins |
+                Where-Object { @($_.platforms) -ccontains 'linux' -and @($_.rids) -ccontains 'linux-x64' }
+        )
         @($map | Where-Object { $_ -match "^  \['com\.typewhisper\." }).Count |
-            Should -Be 32
+            Should -Be $linuxX64.Count
         $map[0] | Should -Be 'declare -A PLUGINS=('
         $map[-1] | Should -Be ')'
     }

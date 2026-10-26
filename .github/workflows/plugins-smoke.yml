@@ -32,20 +32,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Run plugin release transaction regression
-        shell: pwsh
-        run: |
-          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
-          Import-Module Pester -RequiredVersion 5.7.1 -Force
-
-          $result = Invoke-Pester `
-            -Path tests/workflows/PublishPluginReleaseTransaction.Tests.ps1 `
-            -Output Detailed `
-            -PassThru
-          if ($result.FailedCount -gt 0) {
-            throw "$($result.FailedCount) plugin release transaction test(s) failed."
-          }
-
       - name: Test plugin smoke discovery
         shell: pwsh
         run: pwsh -NoProfile -File tests/workflows/PluginSmokeDiscovery.Tests.ps1

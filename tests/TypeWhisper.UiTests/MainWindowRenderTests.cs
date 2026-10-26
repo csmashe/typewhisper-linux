@@ -48,7 +48,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
 
     public static TheoryData<string> Languages => new(s_languages);
 
-    internal static readonly (string Name, double Width, double Height)[] Sizes =
+    internal static (string Name, double Width, double Height)[] Sizes { get; } =
         [("wide", 1200, 780), ("compact", 960, 640)];
 
     // Every window pins RequestedThemeVariant="Dark"; add Light here when the app supports it.

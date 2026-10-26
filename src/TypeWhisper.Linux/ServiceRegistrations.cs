@@ -115,7 +115,6 @@ internal static class ServiceRegistrations
         services.AddSingleton<PluginEventBus>();
         services.AddSingleton(new PluginLoader(TypeWhisperEnvironment.PluginDataPath));
         services.AddSingleton<PluginManager>();
-        services.AddSingleton<PluginRegistryService>();
         services.AddSingleton<ModelManagerService>();
 
         // Linux-native platform services

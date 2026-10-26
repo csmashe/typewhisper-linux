@@ -14,30 +14,18 @@ public sealed class AppBootstrapTests
             { App.BootstrapStageNames.SessionCleanup, [] },
             { App.BootstrapStageNames.AudioConfiguration, [] },
             {
-                App.BootstrapStageNames.PluginRegistryRecovery,
-                [
-                    App.BootstrapStageNames.BundledPluginDeployment,
-                    App.BootstrapStageNames.PluginInitialization,
-                    App.BootstrapStageNames.PluginRegistryBootstrap,
-                    App.BootstrapStageNames.WatchFolderAutoStart,
-                ]
-            },
-            {
                 App.BootstrapStageNames.BundledPluginDeployment,
                 [
                     App.BootstrapStageNames.PluginInitialization,
-                    App.BootstrapStageNames.PluginRegistryBootstrap,
                     App.BootstrapStageNames.WatchFolderAutoStart,
                 ]
             },
             {
                 App.BootstrapStageNames.PluginInitialization,
                 [
-                    App.BootstrapStageNames.PluginRegistryBootstrap,
                     App.BootstrapStageNames.WatchFolderAutoStart,
                 ]
             },
-            { App.BootstrapStageNames.PluginRegistryBootstrap, [] },
             { App.BootstrapStageNames.RetentionInitialization, [] },
             {
                 App.BootstrapStageNames.ModelMigration,
