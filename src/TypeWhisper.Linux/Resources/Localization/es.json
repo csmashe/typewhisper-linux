@@ -952,6 +952,8 @@
   "Profiles.Summary": "{0} perfil(es), {1} activado(s)",
   "Profiles.Task": "Tarea",
   "Profiles.TaskHint": "Elige cuándo este perfil debe transcribir normalmente o traducir en su lugar.",
+  "Profiles.TaskTranscribe": "Transcribir",
+  "Profiles.TaskTranslate": "Traducir al inglés",
   "Profiles.Title": "Perfiles",
   "Profiles.Translation": "Traducción",
   "Profiles.TranslationHint": "Anula el ajuste de traducción global para este perfil.",

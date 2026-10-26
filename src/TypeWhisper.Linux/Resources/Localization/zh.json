@@ -952,6 +952,8 @@
   "Profiles.Summary": "{0}个配置方案，{1}个已启用",
   "Profiles.Task": "任务",
   "Profiles.TaskHint": "选择此配置方案何时正常转录、何时改为翻译。",
+  "Profiles.TaskTranscribe": "转录",
+  "Profiles.TaskTranslate": "翻译成英语",
   "Profiles.Title": "配置方案",
   "Profiles.Translation": "翻译",
   "Profiles.TranslationHint": "为此配置方案覆盖全局翻译设置。",

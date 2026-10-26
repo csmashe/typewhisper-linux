@@ -952,6 +952,8 @@
   "Profiles.Summary": "Профилей: {0}, включено: {1}",
   "Profiles.Task": "Задача",
   "Profiles.TaskHint": "Выберите, когда этот профиль должен транскрибировать как обычно или вместо этого переводить.",
+  "Profiles.TaskTranscribe": "Транскрибировать",
+  "Profiles.TaskTranslate": "Перевести на английский",
   "Profiles.Title": "Профили",
   "Profiles.Translation": "Перевод",
   "Profiles.TranslationHint": "Переопределяет глобальную настройку перевода для этого профиля.",

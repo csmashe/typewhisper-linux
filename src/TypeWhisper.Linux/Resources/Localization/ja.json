@@ -952,6 +952,8 @@
   "Profiles.Summary": "{0}件のプロファイル、{1}件が有効",
   "Profiles.Task": "タスク",
   "Profiles.TaskHint": "このプロファイルで通常どおり文字起こしするか、代わりに翻訳するかを選択します。",
+  "Profiles.TaskTranscribe": "文字起こし",
+  "Profiles.TaskTranslate": "英語に翻訳",
   "Profiles.Title": "プロファイル",
   "Profiles.Translation": "翻訳",
   "Profiles.TranslationHint": "このプロファイルではグローバルの翻訳設定を上書きします。",
