@@ -183,9 +183,17 @@ public sealed class TransformSelectionService
             TextInsertionService.IsTerminalApp(capturedSnapshot.ProcessName)
         );
         processingToken.ThrowIfCancellationRequested();
-        return string.Equals(currentSelectedText, capturedSelectedText, StringComparison.Ordinal)
-            ? capturedSnapshot
-            : null;
+        if (!string.Equals(currentSelectedText, capturedSelectedText, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // The copy probe waits on the clipboard, so focus can move while it runs.
+        var afterProbeSnapshot = await activeWindow.GetActiveWindowSnapshotAsync(processingToken);
+        processingToken.ThrowIfCancellationRequested();
+        return HasSelectionTargetChanged(capturedSnapshot, afterProbeSnapshot)
+            ? null
+            : capturedSnapshot;
     }
 
     internal static Task<InsertionResult> DeliverValidatedTransformAsync(

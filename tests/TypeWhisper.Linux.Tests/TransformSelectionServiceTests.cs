@@ -399,6 +399,34 @@ public sealed class TransformSelectionServiceTests
     }
 
     [Fact]
+    public async Task FocusMovesDuringSelectionReprobe_Aborts()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            SelectionText = "the cedar project ships friday.",
+        };
+        var textInsertion = new TextInsertionService(platform);
+        var captured = Snapshot("wayland-window-1", "gnome");
+        var activeWindow = new FakeActiveWindowService(captured)
+        {
+            SnapshotAfterFirstCall = Snapshot("wayland-window-2", "gnome"),
+        };
+
+        var target = await TransformSelectionService.ResolveReplacementTargetAsync(
+            textInsertion,
+            activeWindow,
+            captured,
+            "the cedar project ships friday.",
+            CancellationToken.None
+        );
+
+        Assert.Null(target);
+        Assert.Equal(1, platform.CopyCalls);
+        Assert.Equal(2, activeWindow.SnapshotCalls);
+    }
+
+    [Fact]
     public async Task SameTerminalWindow_SelectionReprobeUsesTerminalCopyShortcut()
     {
         var platform = new FakeTextInsertionPlatform
@@ -532,6 +560,9 @@ public sealed class TransformSelectionServiceTests
     {
         public int SnapshotCalls { get; private set; }
 
+        // When set, returned from the second probe on: focus moved after the first one.
+        public ActiveWindowSnapshot? SnapshotAfterFirstCall { get; init; }
+
         // ReSharper disable once ReturnTypeCanBeNotNullable -- implements IActiveWindowService.GetActiveWindowProcessName, whose contract is nullable; the throw-only body is the assertion.
         public string? GetActiveWindowProcessName()
         {
@@ -552,7 +583,11 @@ public sealed class TransformSelectionServiceTests
         public Task<ActiveWindowSnapshot?> GetActiveWindowSnapshotAsync(CancellationToken ct)
         {
             SnapshotCalls++;
-            return Task.FromResult(snapshot);
+            return Task.FromResult(
+                SnapshotCalls > 1 && SnapshotAfterFirstCall is not null
+                    ? SnapshotAfterFirstCall
+                    : snapshot
+            );
         }
 
         public string? GetBrowserUrlForSnapshot(
