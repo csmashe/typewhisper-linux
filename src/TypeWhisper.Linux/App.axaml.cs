@@ -746,27 +746,37 @@ public class App : Application
             // plugins are deployed and initialized before the model picker loads.
             if (!settings.Current.HasCompletedOnboarding)
             {
-                // ShowDialog rejects a hidden owner (wlroots --minimized), and a later Show()
-                // raises Opened again: open once, when the window is visible.
+                // --minimized hides the owner on wlroots (ShowDialog rejects it) and minimizes it on
+                // Mutter. Restore raises Opened on wlroots, only a WindowState change on Mutter.
                 var wizardOpened = false;
 
                 void OpenWizardWhenVisible(object? sender, EventArgs e) =>
                     FireAndForget(OpenWizardWhenVisibleAsync());
 
+                void OpenWizardWhenRestored(object? sender, AvaloniaPropertyChangedEventArgs e)
+                {
+                    if (e.Property == Window.WindowStateProperty)
+                    {
+                        FireAndForget(OpenWizardWhenVisibleAsync());
+                    }
+                }
+
                 async Task OpenWizardWhenVisibleAsync()
                 {
                     await bootstrapTask;
-                    if (wizardOpened || !main.IsVisible)
+                    if (wizardOpened || !IsOnScreen(main.IsVisible, main.WindowState))
                     {
                         return;
                     }
 
                     wizardOpened = true;
                     main.Opened -= OpenWizardWhenVisible;
+                    main.PropertyChanged -= OpenWizardWhenRestored;
                     (main.DataContext as MainWindowViewModel)?.OpenWizard();
                 }
 
                 main.Opened += OpenWizardWhenVisible;
+                main.PropertyChanged += OpenWizardWhenRestored;
             }
         }
 
@@ -927,6 +937,11 @@ public class App : Application
 
         window.WindowState = WindowState.Minimized;
         window.ShowInTaskbar = false;
+    }
+
+    internal static bool IsOnScreen(bool isVisible, WindowState windowState)
+    {
+        return isVisible && windowState != WindowState.Minimized;
     }
 
     /// <summary>

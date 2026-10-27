@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -270,6 +271,20 @@ public sealed class AppBootstrapTests
             exception.Report.RequiredFailures.Select(outcome => outcome.Name)
         );
         Assert.Equal(2, exception.Report.Outcomes.Count);
+    }
+
+    [Theory]
+    [InlineData(true, WindowState.Normal, true)]
+    [InlineData(true, WindowState.Maximized, true)]
+    [InlineData(true, WindowState.Minimized, false)]
+    [InlineData(false, WindowState.Normal, false)]
+    public void IsOnScreen_DefersOnboardingWhileHiddenOrMinimized(
+        bool isVisible,
+        WindowState windowState,
+        bool expected
+    )
+    {
+        Assert.Equal(expected, App.IsOnScreen(isVisible, windowState));
     }
 
     [Fact]
