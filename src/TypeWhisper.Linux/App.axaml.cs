@@ -746,11 +746,27 @@ public class App : Application
             // plugins are deployed and initialized before the model picker loads.
             if (!settings.Current.HasCompletedOnboarding)
             {
-                main.Opened += async (_, _) =>
+                // ShowDialog rejects a hidden owner (wlroots --minimized), and a later Show()
+                // raises Opened again: open once, when the window is visible.
+                var wizardOpened = false;
+
+                void OpenWizardWhenVisible(object? sender, EventArgs e) =>
+                    FireAndForget(OpenWizardWhenVisibleAsync());
+
+                async Task OpenWizardWhenVisibleAsync()
                 {
                     await bootstrapTask;
+                    if (wizardOpened || !main.IsVisible)
+                    {
+                        return;
+                    }
+
+                    wizardOpened = true;
+                    main.Opened -= OpenWizardWhenVisible;
                     (main.DataContext as MainWindowViewModel)?.OpenWizard();
-                };
+                }
+
+                main.Opened += OpenWizardWhenVisible;
             }
         }
 
@@ -925,11 +941,12 @@ public class App : Application
             return;
         }
 
+        using var deadline = new CancellationTokenSource(s_lateTrayHostTimeout);
         var hostAppeared = await WaitForTrayHostAsync(
-            () => Task.Run(tray.TryConfirmLateHost),
-            LateTrayHostAttempts,
+            () => Task.Run(tray.TryConfirmLateHost, deadline.Token),
             s_lateTrayHostInterval,
-            Task.Delay
+            Task.Delay,
+            deadline.Token
         );
         if (hostAppeared || ShuttingDown)
         {
@@ -946,26 +963,35 @@ public class App : Application
         window.ShowInTaskbar = true;
     }
 
-    private const int LateTrayHostAttempts = 10;
+    private static readonly TimeSpan s_lateTrayHostTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan s_lateTrayHostInterval = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    ///     Probes until a host appears or <paramref name="deadline" /> fires; a probe still
+    ///     running then is abandoned so it can't stretch the wait.
+    /// </summary>
     internal static async Task<bool> WaitForTrayHostAsync(
         Func<Task<bool>> probe,
-        int attempts,
         TimeSpan interval,
-        Func<TimeSpan, Task> delay
+        Func<TimeSpan, CancellationToken, Task> delay,
+        CancellationToken deadline
     )
     {
-        for (var attempt = 0; attempt < attempts; attempt++)
+        try
         {
-            await delay(interval);
-            if (await probe())
+            while (true)
             {
-                return true;
+                await delay(interval, deadline);
+                if (await probe().WaitAsync(deadline))
+                {
+                    return true;
+                }
             }
         }
-
-        return false;
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private static void ShowMainWindow(MainWindow window)

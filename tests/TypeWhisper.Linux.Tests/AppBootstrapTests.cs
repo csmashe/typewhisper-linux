@@ -280,13 +280,13 @@ public sealed class AppBootstrapTests
 
         var appeared = await App.WaitForTrayHostAsync(
             () => Task.FromResult(++probes == 3),
-            10,
             TimeSpan.FromSeconds(1),
-            _ =>
+            (_, _) =>
             {
                 delays++;
                 return Task.CompletedTask;
-            }
+            },
+            CancellationToken.None
         );
 
         Assert.True(appeared);
@@ -295,23 +295,44 @@ public sealed class AppBootstrapTests
     }
 
     [Fact]
-    public async Task WaitForTrayHostAsync_GivesUpAfterTheLastAttempt()
+    public async Task WaitForTrayHostAsync_GivesUpAtTheDeadline()
     {
+        using var deadline = new CancellationTokenSource();
         var probes = 0;
 
         var appeared = await App.WaitForTrayHostAsync(
             () =>
             {
-                probes++;
+                if (++probes == 4)
+                {
+                    deadline.Cancel();
+                }
+
                 return Task.FromResult(false);
             },
-            4,
             TimeSpan.FromSeconds(1),
-            _ => Task.CompletedTask
+            (_, token) => token.IsCancellationRequested ? Task.FromCanceled(token) : Task.CompletedTask,
+            deadline.Token
         );
 
         Assert.False(appeared);
         Assert.Equal(4, probes);
+    }
+
+    [Fact]
+    public async Task WaitForTrayHostAsync_AbandonsAProbeStillRunningAtTheDeadline()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var hungProbe = new TaskCompletionSource<bool>();
+
+        var appeared = await App.WaitForTrayHostAsync(
+            () => hungProbe.Task,
+            TimeSpan.Zero,
+            (_, _) => Task.CompletedTask,
+            deadline.Token
+        );
+
+        Assert.False(appeared);
     }
 
     [Fact]
