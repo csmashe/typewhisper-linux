@@ -1361,8 +1361,13 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             sut.SelectedTaskOption = null;
             Assert.Equal("de", sut.EditLanguage);
             Assert.Equal("translate", sut.EditTask);
+            var taskOptionNotified = false;
+            sut.PropertyChanged += (_, args) =>
+                taskOptionNotified |=
+                    args.PropertyName == nameof(ProfilesSectionViewModel.SelectedTaskOption);
 
             Loc.Instance.CurrentLanguage = "de";
+            Assert.True(taskOptionNotified);
             Assert.Equal("Ins Englische übersetzen", sut.SelectedTaskOption!.Label);
             Assert.Equal("de", sut.SelectedLanguageOption!.Code);
 
