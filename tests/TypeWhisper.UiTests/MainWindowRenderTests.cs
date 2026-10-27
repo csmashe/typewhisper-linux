@@ -48,7 +48,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
 
     public static TheoryData<string> Languages => new(s_languages);
 
-    internal static readonly (string Name, double Width, double Height)[] Sizes =
+    internal static readonly (string Name, double Width, double Height)[] s_sizes =
         [("wide", 1200, 780), ("compact", 960, 640)];
 
     // Every window pins RequestedThemeVariant="Dark"; add Light here when the app supports it.
@@ -89,7 +89,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
             foreach (var (themeName, theme) in s_themes)
             {
                 Application.Current!.RequestedThemeVariant = theme;
-                foreach (var (sizeName, width, height) in Sizes)
+                foreach (var (sizeName, width, height) in s_sizes)
                 {
                     var window = new MainWindow(viewModel) { Width = width, Height = height };
                     window.Show();
