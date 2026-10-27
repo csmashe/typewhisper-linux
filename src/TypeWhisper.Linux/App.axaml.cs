@@ -749,22 +749,31 @@ public class App : Application
                 // --minimized hides the owner on wlroots (ShowDialog rejects it) and minimizes it on
                 // Mutter. Restore raises Opened on wlroots, only a WindowState change on Mutter.
                 var wizardOpened = false;
+                // X11 reports Minimized only once the WM applies the iconify request.
+                var minimizePending = Program.StartMinimized && !TrayHideUsesWindowHide();
 
                 void OpenWizardWhenVisible(object? sender, EventArgs e) =>
                     FireAndForget(OpenWizardWhenVisibleAsync());
 
                 void OpenWizardWhenRestored(object? sender, AvaloniaPropertyChangedEventArgs e)
                 {
-                    if (e.Property == Window.WindowStateProperty)
+                    if (e.Property != Window.WindowStateProperty)
                     {
-                        FireAndForget(OpenWizardWhenVisibleAsync());
+                        return;
                     }
+
+                    if (main.WindowState == WindowState.Minimized)
+                    {
+                        minimizePending = false;
+                    }
+
+                    FireAndForget(OpenWizardWhenVisibleAsync());
                 }
 
                 async Task OpenWizardWhenVisibleAsync()
                 {
                     await bootstrapTask;
-                    if (wizardOpened || !IsOnScreen(main.IsVisible, main.WindowState))
+                    if (wizardOpened || !IsOnScreen(main.IsVisible, main.WindowState, minimizePending))
                     {
                         return;
                     }
@@ -939,9 +948,9 @@ public class App : Application
         window.ShowInTaskbar = false;
     }
 
-    internal static bool IsOnScreen(bool isVisible, WindowState windowState)
+    internal static bool IsOnScreen(bool isVisible, WindowState windowState, bool minimizePending)
     {
-        return isVisible && windowState != WindowState.Minimized;
+        return isVisible && windowState != WindowState.Minimized && !minimizePending;
     }
 
     /// <summary>

@@ -274,17 +274,19 @@ public sealed class AppBootstrapTests
     }
 
     [Theory]
-    [InlineData(true, WindowState.Normal, true)]
-    [InlineData(true, WindowState.Maximized, true)]
-    [InlineData(true, WindowState.Minimized, false)]
-    [InlineData(false, WindowState.Normal, false)]
+    [InlineData(true, WindowState.Normal, false, true)]
+    [InlineData(true, WindowState.Maximized, false, true)]
+    [InlineData(true, WindowState.Minimized, false, false)]
+    [InlineData(false, WindowState.Normal, false, false)]
+    [InlineData(true, WindowState.Normal, true, false)]
     public void IsOnScreen_DefersOnboardingWhileHiddenOrMinimized(
         bool isVisible,
         WindowState windowState,
+        bool minimizePending,
         bool expected
     )
     {
-        Assert.Equal(expected, App.IsOnScreen(isVisible, windowState));
+        Assert.Equal(expected, App.IsOnScreen(isVisible, windowState, minimizePending));
     }
 
     [Fact]
