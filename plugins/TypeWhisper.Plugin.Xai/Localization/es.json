@@ -20,6 +20,7 @@
   "Settings.TextNormalizationDescription": "Normaliza los números y símbolos antes de hablar.",
   "Settings.EnterApiKey": "Primero introduce una clave de API.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
+  "Settings.ApiKeyNoTeamAccess": "xAI aceptó la clave de API, pero su equipo todavía no puede usar la API. Los equipos nuevos necesitan antes créditos o una licencia: añádelos en console.x.ai y vuelve a probar.",
   "Settings.ApiKeyValidFetched": "La clave de API es válida. Se obtuvieron {0} modelo(s) de LLM y {1} voz/voces.",
   "Settings.ApiKeyValidSaved": "La clave de API es válida. Se están usando los modelos y voces guardados o predeterminados.",
   "Settings.ApiKeyNotConfigured": "Clave de API no configurada",

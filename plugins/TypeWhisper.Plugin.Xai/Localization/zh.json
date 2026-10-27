@@ -20,6 +20,7 @@
   "Settings.TextNormalizationDescription": "朗读前规范化数字和符号。",
   "Settings.EnterApiKey": "请先输入API密钥。",
   "Settings.ApiKeyInvalid": "API密钥无效。",
+  "Settings.ApiKeyNoTeamAccess": "xAI 已接受该 API 密钥，但其团队尚无法使用 API。新团队需要先购买额度或许可证：请在 console.x.ai 添加后再测试。",
   "Settings.ApiKeyValidFetched": "API密钥有效。已获取{0}个LLM模型和{1}个声音。",
   "Settings.ApiKeyValidSaved": "API密钥有效。正在使用已保存/默认的模型和声音。",
   "Settings.ApiKeyNotConfigured": "未配置API密钥",
