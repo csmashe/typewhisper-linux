@@ -1,6 +1,7 @@
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,7 +56,7 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
             Seed();
             var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
             var findings = new List<string>();
-            foreach (var (sizeName, width, height) in MainWindowRenderTests.Sizes)
+            foreach (var (sizeName, width, height) in MainWindowRenderTests.s_sizes)
             {
                 var window = new MainWindow(viewModel) { Width = width, Height = height };
                 window.Show();
@@ -70,7 +71,7 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
                         combo.IsEffectivelyVisible
                         && AutomationProperties.GetName(combo) == Loc.Instance["Profiles.Language"]);
                     window.CaptureRenderedFrame()?.Save(
-                        Path.Join(UiEnvironment.SnapshotDir, $"ProfileEditor-{language}-{sizeName}.png"));
+                        Path.Join(UiEnvironment.SnapshotDir, $"ProfileEditor-{language}-{sizeName}.png"), PngBitmapEncoderOptions.Default);
                     findings.AddRange(UiInspector.Inspect(window, new HashSet<string>())
                         .Where(finding => finding.Kind == UiInspector.ClippedText)
                         .Select(finding => $"{sizeName}: {finding.Control} {finding.Detail} at {finding.Location}"));
