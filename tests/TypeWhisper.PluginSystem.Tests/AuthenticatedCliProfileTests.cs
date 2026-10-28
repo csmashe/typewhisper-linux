@@ -119,7 +119,8 @@ public sealed partial class AuthenticatedCliPluginTests
         var tools = builtInArguments.IndexOf("--tools");
         Assert.Equal("", builtInArguments[tools + 1]);
         var disallowed = builtInArguments.IndexOf("--disallowedTools");
-        Assert.Equal(["*", "mcp__*"], builtInArguments.Skip(disallowed + 1).Take(2));
+        Assert.Equal("mcp__*", builtInArguments[disallowed + 1]);
+        Assert.DoesNotContain("*", builtInArguments);
         using var capture = JsonDocument.Parse(await File.ReadAllTextAsync(fake.CapturePath));
         Assert.Equal(
             session,

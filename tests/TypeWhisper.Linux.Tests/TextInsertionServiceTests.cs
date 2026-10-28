@@ -2493,6 +2493,13 @@ public sealed class TextInsertionServiceTests
     [InlineData("text/plain;charset=utf-8\n", true, false)]
     [InlineData("text/plain;charset=utf-8\ntext/html\n", true, true)]
     [InlineData("image/png\n", true, true)]
+    // Native GTK3 plain-text copy as wl-paste lists it, duplicates included.
+    [InlineData(
+        "text/plain\ntext/plain;charset=utf-8\nSTRING\nTEXT\nCOMPOUND_TEXT\nUTF8_STRING\nSTRING\nTEXT\n",
+        true,
+        false
+    )]
+    [InlineData("COMPOUND_TEXT\ntext/html\n", true, true)]
     [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false, false)]
     [InlineData(
         "TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\ntext/uri-list\n",

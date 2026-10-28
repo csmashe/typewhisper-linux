@@ -16,7 +16,7 @@ public sealed class MediaPauseServiceTests
             spotify Playing
             podcast Paused
             """;
-        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
         string[] firstPause = ["-p", "vlc", "pause"];
         string[] secondPause = ["-p", "spotify", "pause"];
         string[] nonPlayingPause = ["-p", "podcast", "pause"];
@@ -43,7 +43,7 @@ public sealed class MediaPauseServiceTests
         service.Dispose();
         service.ResumeMedia();
 
-        Assert.Equal(6, runner.Invocations.Count);
+        Assert.Equal(8, runner.Invocations.Count);
         Assert.Equal(status, runner.Invocations[0].Args);
         Assert.Equal(1, CountInvocations(runner, status));
         Assert.Equal(1, CountInvocations(runner, firstPause));
@@ -78,7 +78,7 @@ public sealed class MediaPauseServiceTests
     public void Dispose_retries_persistently_failed_resume_without_follow_up_call()
     {
         const string players = "vlc Playing";
-        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
         string[] pause = ["-p", "vlc", "pause"];
         string[] play = ["-p", "vlc", "play"];
         var runner = new FakeProcessRunner();
@@ -96,7 +96,7 @@ public sealed class MediaPauseServiceTests
         service.ResumeMedia();
         service.Dispose();
 
-        Assert.Equal(4, runner.Invocations.Count);
+        Assert.Equal(6, runner.Invocations.Count);
         Assert.Equal(1, CountInvocations(runner, status));
         Assert.Equal(1, CountInvocations(runner, pause));
         Assert.Equal(2, CountInvocations(runner, play));
@@ -106,7 +106,7 @@ public sealed class MediaPauseServiceTests
     public void ResumeMedia_retains_timed_out_player_even_with_zero_exit_code()
     {
         const string players = "spotify Playing";
-        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
         string[] pause = ["-p", "spotify", "pause"];
         string[] play = ["-p", "spotify", "play"];
         var runner = new FakeProcessRunner
@@ -142,7 +142,7 @@ public sealed class MediaPauseServiceTests
         service.ResumeMedia();
         service.ResumeMedia();
 
-        Assert.Equal(4, runner.Invocations.Count);
+        Assert.Equal(6, runner.Invocations.Count);
         Assert.Equal(1, CountInvocations(runner, status));
         Assert.Equal(1, CountInvocations(runner, pause));
         Assert.Equal(2, CountInvocations(runner, play));
@@ -165,7 +165,7 @@ public sealed class MediaPauseServiceTests
     public void PauseMedia_StillRunsWhileAnEarlierPlayerIsAwaitingResume()
     {
         const string players = "vlc Playing";
-        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
         string[] pause = ["-p", "vlc", "pause"];
         string[] play = ["-p", "vlc", "play"];
         var runner = new FakeProcessRunner();
@@ -193,7 +193,7 @@ public sealed class MediaPauseServiceTests
     public void ResumeMedia_retires_player_after_three_failures()
     {
         const string players = "vlc Playing";
-        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
         string[] pause = ["-p", "vlc", "pause"];
         string[] play = ["-p", "vlc", "play"];
         var runner = new FakeProcessRunner();
@@ -241,7 +241,7 @@ public sealed class MediaPauseServiceTests
     public void ResumeMedia_missing_player_is_completed_without_retry_or_error()
     {
         const string players = "vlc Playing";
-        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
         string[] pause = ["-p", "vlc", "pause"];
         string[] play = ["-p", "vlc", "play"];
         var runner = new FakeProcessRunner();
@@ -272,7 +272,7 @@ public sealed class MediaPauseServiceTests
     public void ResumeMedia_other_failure_is_not_classified_as_missing()
     {
         const string players = "vlc Playing";
-        string[] status = ["-a", "--format", "{{playerName}} {{status}}", "status"];
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
         string[] play = ["-p", "vlc", "play"];
         var runner = new FakeProcessRunner();
         runner.RespondWith(
@@ -295,6 +295,98 @@ public sealed class MediaPauseServiceTests
             log => log.AddEntry(It.IsAny<string>(), ErrorCategory.General),
             Times.Exactly(2)
         );
+    }
+
+    [Fact]
+    public void Same_name_instances_pause_and_resume_only_the_playing_one()
+    {
+        const string players = """
+            mpv Paused
+            mpv.instance-zrsHlvMS Playing
+            """;
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
+        string[] list = ["-l"];
+        string[] pause = ["-p", "mpv.instance-zrsHlvMS", "pause"];
+        string[] play = ["-p", "mpv.instance-zrsHlvMS", "play"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),
+            players
+        );
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(list),
+            "mpv\nmpv.instance-zrsHlvMS\n"
+        );
+        var service = new MediaPauseService(runner, Mock.Of<IErrorLogService>());
+
+        service.PauseMedia();
+        service.ResumeMedia();
+
+        Assert.Equal(
+            [status, pause, list, play],
+            runner.Invocations.Select(invocation => invocation.Args.ToArray())
+        );
+    }
+
+    [Fact]
+    public void Base_instance_is_addressed_without_matching_its_siblings()
+    {
+        const string players = """
+            mpv Playing
+            mpv.instance-a Paused
+            """;
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
+        string[] list = ["-l"];
+        string[] pause = ["-p", "mpv", "-i", "mpv.instance-a", "pause"];
+        string[] play = ["-p", "mpv", "-i", "mpv.instance-a,mpv.instance-b", "play"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),
+            players
+        );
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(list),
+            "mpv\nmpv.instance-a\nmpv.instance-b\n"
+        );
+        var service = new MediaPauseService(runner, Mock.Of<IErrorLogService>());
+
+        service.PauseMedia();
+        service.ResumeMedia();
+
+        Assert.Equal(
+            [status, pause, list, play],
+            runner.Invocations.Select(invocation => invocation.Args.ToArray())
+        );
+    }
+
+    [Fact]
+    public void ResumeMedia_vanished_base_instance_does_not_resume_a_sibling()
+    {
+        const string players = """
+            mpv Playing
+            mpv.instance-a Paused
+            """;
+        string[] status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
+        string[] list = ["-l"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(status),
+            players
+        );
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(list),
+            "mpv.instance-a\n"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new MediaPauseService(runner, errorLog.Object);
+
+        service.PauseMedia();
+        service.ResumeMedia();
+        service.ResumeMedia();
+
+        Assert.DoesNotContain(runner.Invocations, invocation => invocation.Args[^1] == "play");
+        Assert.Equal(1, CountInvocations(runner, list));
+        errorLog.VerifyNoOtherCalls();
     }
 
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)

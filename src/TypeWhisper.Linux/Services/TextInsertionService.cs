@@ -1267,8 +1267,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
 
+    // GTK owners also advertise the legacy COMPOUND_TEXT encoding for plain-text copies.
     private static readonly HashSet<string> s_waylandTextSafeTargets =
-        new(StringComparer.OrdinalIgnoreCase) { "STRING", "UTF8_STRING", "TEXT" };
+        new(StringComparer.OrdinalIgnoreCase) { "STRING", "UTF8_STRING", "TEXT", "COMPOUND_TEXT" };
 
     // X11 TARGETS listings always include protocol/negotiation targets that carry no
     // content of their own alongside the plain-text encodings. None count as non-text content.

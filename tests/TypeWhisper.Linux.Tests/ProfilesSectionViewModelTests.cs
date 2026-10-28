@@ -172,7 +172,6 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
                 nameof(ProfilesSectionViewModel.SelectedProfileSummary),
                 nameof(ProfilesSectionViewModel.SelectedProfileDisplayName),
                 nameof(ProfilesSectionViewModel.MatchStatusText),
-                nameof(ProfilesSectionViewModel.EditIsEnabledStatusText),
             ];
             HashSet<string?> propertyChanges = [];
 
@@ -1310,6 +1309,113 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         sut.SelectedMemorySourceOption = null;
 
         Assert.Equal(Profile.MemorySourceOff, sut.EditMemorySourceId);
+    }
+
+    [Fact]
+    public void LanguageAndTask_ShowLabelsAndSaveTheirValues()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var service = CreateProfileService();
+            service.AddProfile(new Profile { Id = "plain", Name = "Plain" });
+            service.AddProfile(
+                new Profile
+                {
+                    Id = "custom",
+                    Name = "Custom",
+                    InputLanguage = "de",
+                    SelectedTask = "translate",
+                }
+            );
+            using var pluginManager = CreatePluginManager();
+            var sut = new ProfilesSectionViewModel(
+                service,
+                CreateActiveWindowService().Object,
+                pluginManager,
+                new PromptActionService(Path.Join(_tempDir, "prompt-actions.json")),
+                _hotkeys,
+                Mock.Of<IDetectionFailureTracker>(),
+                new GnomeWindowCallsSetupHelper(),
+                new BrowserAccessibilitySetupHelper(),
+                _uiOperations
+            );
+
+            sut.SelectedProfile = sut.Profiles.Single(profile => profile.Id == "plain");
+            Assert.Equal("Use global default", sut.SelectedLanguageOption!.Label);
+            Assert.Equal("Use global default", sut.SelectedTaskOption!.Label);
+            Assert.Equal(
+                ["Use global default", "Transcribe", "Translate to English"],
+                sut.TaskOptions.Select(option => option.Label)
+            );
+            Assert.Equal("Auto detect", sut.LanguageOptions[1].Label);
+            Assert.DoesNotContain(sut.LanguageOptions, option => option.Label == option.Code);
+
+            sut.SelectedProfile = sut.Profiles.Single(profile => profile.Id == "custom");
+            Assert.Equal("Deutsch", sut.SelectedLanguageOption!.Label);
+            Assert.Equal("Translate to English", sut.SelectedTaskOption!.Label);
+
+            sut.SelectedLanguageOption = null;
+            sut.SelectedTaskOption = null;
+            Assert.Equal("de", sut.EditLanguage);
+            Assert.Equal("translate", sut.EditTask);
+            var taskOptionNotified = false;
+            sut.PropertyChanged += (_, args) =>
+                taskOptionNotified |=
+                    args.PropertyName == nameof(ProfilesSectionViewModel.SelectedTaskOption);
+
+            Loc.Instance.CurrentLanguage = "de";
+            Assert.True(taskOptionNotified);
+            Assert.Equal("Ins Englische übersetzen", sut.SelectedTaskOption!.Label);
+            Assert.Equal("de", sut.SelectedLanguageOption!.Code);
+
+            sut.SelectedLanguageOption = sut.LanguageOptions[0];
+            sut.SelectedTaskOption = sut.TaskOptions[1];
+            sut.SaveProfileCommand.Execute(null);
+            var saved = service.Profiles.Single(profile => profile.Id == "custom");
+            Assert.Null(saved.InputLanguage);
+            Assert.Equal("transcribe", saved.SelectedTask);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void Language_UnlistedSavedCodeStaysSelectableForItsProfileOnly()
+    {
+        var service = CreateProfileService();
+        service.AddProfile(new Profile { Id = "named", Name = "Named", InputLanguage = "sv" });
+        service.AddProfile(new Profile { Id = "unnamed", Name = "Unnamed", InputLanguage = "zz" });
+        service.AddProfile(new Profile { Id = "plain", Name = "Plain" });
+        using var pluginManager = CreatePluginManager();
+        var sut = new ProfilesSectionViewModel(
+            service,
+            CreateActiveWindowService().Object,
+            pluginManager,
+            new PromptActionService(Path.Join(_tempDir, "prompt-actions.json")),
+            _hotkeys,
+            Mock.Of<IDetectionFailureTracker>(),
+            new GnomeWindowCallsSetupHelper(),
+            new BrowserAccessibilitySetupHelper(),
+            _uiOperations
+        );
+
+        sut.SelectedProfile = sut.Profiles.Single(profile => profile.Id == "named");
+        Assert.Equal("sv", sut.SelectedLanguageOption!.Code);
+        Assert.NotEqual("sv", sut.SelectedLanguageOption.Label);
+
+        sut.SelectedProfile = sut.Profiles.Single(profile => profile.Id == "unnamed");
+        Assert.Equal("zz", sut.SelectedLanguageOption!.Label);
+        Assert.DoesNotContain(sut.LanguageOptions, option => option.Code == "sv");
+
+        sut.SaveProfileCommand.Execute(null);
+        Assert.Equal("zz", service.Profiles.Single(profile => profile.Id == "unnamed").InputLanguage);
+
+        sut.SelectedProfile = sut.Profiles.Single(profile => profile.Id == "plain");
+        Assert.DoesNotContain(sut.LanguageOptions, option => option.Code == "zz");
     }
 
     private ProfileService CreateProfileService()

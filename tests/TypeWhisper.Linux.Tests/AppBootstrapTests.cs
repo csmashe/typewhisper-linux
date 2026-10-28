@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
@@ -258,6 +259,85 @@ public sealed class AppBootstrapTests
             exception.Report.RequiredFailures.Select(outcome => outcome.Name)
         );
         Assert.Equal(2, exception.Report.Outcomes.Count);
+    }
+
+    [Theory]
+    [InlineData(true, WindowState.Normal, false, true)]
+    [InlineData(true, WindowState.Maximized, false, true)]
+    [InlineData(true, WindowState.Minimized, false, false)]
+    [InlineData(false, WindowState.Normal, false, false)]
+    [InlineData(true, WindowState.Normal, true, false)]
+    public void IsOnScreen_DefersOnboardingWhileHiddenOrMinimized(
+        bool isVisible,
+        WindowState windowState,
+        bool minimizePending,
+        bool expected
+    )
+    {
+        Assert.Equal(expected, App.IsOnScreen(isVisible, windowState, minimizePending));
+    }
+
+    [Fact]
+    public async Task WaitForTrayHostAsync_ReturnsTrueAsSoonAsALateHostAppears()
+    {
+        var probes = 0;
+        var delays = 0;
+
+        var appeared = await App.WaitForTrayHostAsync(
+            () => Task.FromResult(++probes == 3),
+            TimeSpan.FromSeconds(1),
+            (_, _) =>
+            {
+                delays++;
+                return Task.CompletedTask;
+            },
+            CancellationToken.None
+        );
+
+        Assert.True(appeared);
+        Assert.Equal(3, probes);
+        Assert.Equal(3, delays);
+    }
+
+    [Fact]
+    public async Task WaitForTrayHostAsync_GivesUpAtTheDeadline()
+    {
+        using var deadline = new CancellationTokenSource();
+        var probes = 0;
+
+        var appeared = await App.WaitForTrayHostAsync(
+            () =>
+            {
+                if (++probes == 4)
+                {
+                    deadline.Cancel();
+                }
+
+                return Task.FromResult(false);
+            },
+            TimeSpan.FromSeconds(1),
+            (_, token) => token.IsCancellationRequested ? Task.FromCanceled(token) : Task.CompletedTask,
+            deadline.Token
+        );
+
+        Assert.False(appeared);
+        Assert.Equal(4, probes);
+    }
+
+    [Fact]
+    public async Task WaitForTrayHostAsync_AbandonsAProbeStillRunningAtTheDeadline()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var hungProbe = new TaskCompletionSource<bool>();
+
+        var appeared = await App.WaitForTrayHostAsync(
+            () => hungProbe.Task,
+            TimeSpan.Zero,
+            (_, _) => Task.CompletedTask,
+            deadline.Token
+        );
+
+        Assert.False(appeared);
     }
 
     [Fact]

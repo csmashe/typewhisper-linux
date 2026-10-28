@@ -207,12 +207,14 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
     [InlineData("en", "rate limit exceeded", PluginRequestFailureKind.RateLimit, true, "codex CLI rate limit was reached.")]
     [InlineData("en", "forbidden", PluginRequestFailureKind.Permission, false, "codex account is not permitted to process this request.")]
     [InlineData("en", "unknown model", PluginRequestFailureKind.InvalidRequest, false, "codex CLI rejected the request configuration.")]
+    [InlineData("en", "Error loading config.toml: unknown configuration field `features.network_proxy` in -c/--config override", PluginRequestFailureKind.InvalidRequest, false, "codex CLI rejected the settings TypeWhisper passes to this version of it. Update TypeWhisper, or use an older CLI release.")]
     [InlineData("en", "unexpected failure", PluginRequestFailureKind.Unknown, false, "codex CLI exited without a valid result.")]
     [InlineData("de", "network authentication failed", PluginRequestFailureKind.Network, true, "Die CLI codex konnte den Anbieter nicht erreichen.")]
     [InlineData("de", "not logged in", PluginRequestFailureKind.Authentication, false, "Die CLI codex ist nicht angemeldet.")]
     [InlineData("de", "rate limit exceeded", PluginRequestFailureKind.RateLimit, true, "Das Anfragelimit der CLI codex wurde erreicht.")]
     [InlineData("de", "forbidden", PluginRequestFailureKind.Permission, false, "Das Konto codex ist nicht berechtigt, diese Anfrage zu verarbeiten.")]
     [InlineData("de", "unknown model", PluginRequestFailureKind.InvalidRequest, false, "Die CLI codex hat die Anfragekonfiguration abgelehnt.")]
+    [InlineData("de", "Error loading config.toml: unknown configuration field `x`", PluginRequestFailureKind.InvalidRequest, false, "Die CLI codex lehnt in dieser Version die Einstellungen ab, die TypeWhisper übergibt. Aktualisieren Sie TypeWhisper oder verwenden Sie eine ältere CLI-Version.")]
     [InlineData("de", "unexpected failure", PluginRequestFailureKind.Unknown, false, "Die CLI codex wurde ohne gültiges Ergebnis beendet.")]
     [InlineData("es", "network authentication failed", PluginRequestFailureKind.Network, true, "La CLI codex no pudo conectarse con el proveedor.")]
     [InlineData("es", "not logged in", PluginRequestFailureKind.Authentication, false, "No se ha iniciado sesión en la CLI codex.")]
@@ -347,6 +349,8 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
         Assert.Contains("apps._default.enabled=false", arguments);
         Assert.Contains("agents.enabled=false", arguments);
         Assert.Contains("project_doc_max_bytes=0", arguments);
+        Assert.Contains("features.view_image=false", arguments);
+        Assert.DoesNotContain(arguments, argument => argument.StartsWith("tools.view_image", StringComparison.Ordinal));
         // A shell would have expanded the payload into the request directory before the CLI ran.
         Assert.DoesNotContain(
             "marker",
@@ -355,6 +359,22 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
         );
         await plugin.DeactivateAsync();
     }
+
+    [Theory]
+    [InlineData("codex", "0.146.0", false)]
+    [InlineData("codex", "0.147.0", true)]
+    [InlineData("codex", "0.147.0-alpha.1", false)]
+    [InlineData("codex", "0.147.0+build.5", true)]
+    [InlineData("codex", "0.147.1", true)]
+    [InlineData("codex", "0.164.0-alpha.2", true)]
+    [InlineData("codex", "1.0", true)]
+    [InlineData("claude", "0.1.0", true)]
+    public void MeetsMinimumVersion_GatesCodexBeforeItsOverridesExist(
+        string key, string version, bool expected) =>
+        Assert.Equal(
+            expected,
+            CliProviderDescriptor.All.Single(descriptor => descriptor.Key == key).MeetsMinimumVersion(version)
+        );
 
     [Fact]
     public async Task ClaudeProvider_UsesSafeModeAndStructuredOutput()
@@ -615,6 +635,19 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
         File.WriteAllText(plainPath, "#!/bin/sh\n");
         SetUnixMode(plainPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         Assert.Null(CliExecutableDiscovery.ResolveRealPath(plainPath, "opencode"));
+    }
+
+    [Theory]
+    [InlineData("Credentials ~/.local/share/opencode/auth.json\nOpenCode api\n1 credentials", true)]
+    [InlineData("●  OpenCode Zen oauth", true)]
+    [InlineData("│\n●  opencode wellknown\n│", true)]
+    [InlineData("●  OpenCode Go api", false)]
+    [InlineData("●  GitHub Copilot oauth\n└  1 credentials", false)]
+    [InlineData("Credentials ~/.local/share/opencode/auth.json\n0 credentials", false)]
+    [InlineData("●  OpenCode\napi", false)]
+    public void OpenCodeAuthentication_MatchesOnlyTheOpenCodeCredentialLine(string output, bool expected)
+    {
+        Assert.Equal(expected, Descriptor(CliProviderKind.OpenCode).IsAuthenticated(0, output));
     }
 
     [Fact]
@@ -1781,11 +1814,13 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
     }
 
     [Theory]
+    [InlineData("opencode-auth-current", (int)CliAvailabilityState.Ready)]
+    [InlineData("opencode-auth-legacy", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-ansi", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-stderr", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-missing", (int)CliAvailabilityState.AuthenticationUnknown)]
     [InlineData("opencode-auth-error", (int)CliAvailabilityState.SignedOut)]
-    public async Task OpenCodeAuthentication_RequiresExplicitZenEntryFromCombinedAnsiStrippedOutput(
+    public async Task OpenCodeAuthentication_RequiresExplicitOpenCodeCredentialFromCombinedAnsiStrippedOutput(
         string scenario,
         int expected
     )

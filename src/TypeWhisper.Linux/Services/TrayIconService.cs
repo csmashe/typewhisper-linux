@@ -21,6 +21,7 @@ public sealed class TrayIconService : IDisposable
     private NativeMenuItem? _exitMenuItem;
     private NativeMenuItem? _pasteLastMenuItem;
     private NativeMenuItem? _settingsMenuItem;
+    private bool _iconsRegistered;
     private TrayIcon? _trayIcon;
     private TrayIcons? _trayIcons;
 
@@ -32,9 +33,26 @@ public sealed class TrayIconService : IDisposable
 
     /// <summary>
     ///     Whether a usable system tray was confirmed at <see cref="Initialize" />
-    ///     time. Hiding the window without a tray strands the user (#18).
+    ///     time (or later by <see cref="TryConfirmLateHost" />). Hiding the window
+    ///     without a tray strands the user (#18).
     /// </summary>
     public bool IsTrayAvailable { get; private set; }
+
+    /// <summary>
+    ///     Re-probes for a tray host that registered after <see cref="Initialize" />.
+    ///     Blocks on D-Bus; call off the UI thread.
+    /// </summary>
+    public bool TryConfirmLateHost()
+    {
+        if (IsTrayAvailable || !_iconsRegistered || _disposed || !ProbeTrayAvailable())
+        {
+            return IsTrayAvailable;
+        }
+
+        IsTrayAvailable = true;
+        AvailabilityChanged?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
 
     public void Dispose()
     {
@@ -79,6 +97,7 @@ public sealed class TrayIconService : IDisposable
             {
                 _trayIcons = [_trayIcon];
                 TrayIcon.SetIcons(app, _trayIcons);
+                _iconsRegistered = true;
                 IsTrayAvailable = hostPresent;
             }
         }
@@ -130,6 +149,9 @@ public sealed class TrayIconService : IDisposable
 
         return result.Succeeded && result.StandardOutput.Contains("true", StringComparison.Ordinal);
     }
+
+    /// <summary>Raised on a background thread when a late tray host is confirmed.</summary>
+    public event EventHandler? AvailabilityChanged;
 
     public event EventHandler? ShowSettingsRequested;
     public event EventHandler? ExitRequested;

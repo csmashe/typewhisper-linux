@@ -718,10 +718,16 @@ public class App : Application
                 );
             hotkey.TransformSelectionRequested += (_, _) => _ = transformSelection.ToggleAsync();
 
-            // Launch hidden to the tray if --minimized was passed.
             if (Program.StartMinimized)
             {
-                main.Opened += (_, _) => HideToTray(main);
+                // One-shot: wlroots restores via Show(), which raises Opened again.
+                void HideOnFirstOpen(object? sender, EventArgs e)
+                {
+                    main.Opened -= HideOnFirstOpen;
+                    FireAndForget(ApplyMinimizedStartupAsync(main, tray));
+                }
+
+                main.Opened += HideOnFirstOpen;
             }
 
             BootTrace.Stage("synchronous init complete; starting BootstrapDeferredAsync");
@@ -740,11 +746,46 @@ public class App : Application
             // plugins are deployed and initialized before the model picker loads.
             if (!settings.Current.HasCompletedOnboarding)
             {
-                main.Opened += async (_, _) =>
+                // --minimized hides the owner on wlroots (ShowDialog rejects it) and minimizes it on
+                // Mutter. Restore raises Opened on wlroots, only a WindowState change on Mutter.
+                var wizardOpened = false;
+                // X11 reports Minimized only once the WM applies the iconify request.
+                var minimizePending = Program.StartMinimized && !TrayHideUsesWindowHide();
+
+                void OpenWizardWhenVisible(object? sender, EventArgs e) =>
+                    FireAndForget(OpenWizardWhenVisibleAsync());
+
+                void OpenWizardWhenRestored(object? sender, AvaloniaPropertyChangedEventArgs e)
+                {
+                    if (e.Property != Window.WindowStateProperty)
+                    {
+                        return;
+                    }
+
+                    if (main.WindowState == WindowState.Minimized)
+                    {
+                        minimizePending = false;
+                    }
+
+                    FireAndForget(OpenWizardWhenVisibleAsync());
+                }
+
+                async Task OpenWizardWhenVisibleAsync()
                 {
                     await bootstrapTask;
+                    if (wizardOpened || !IsOnScreen(main.IsVisible, main.WindowState, minimizePending))
+                    {
+                        return;
+                    }
+
+                    wizardOpened = true;
+                    main.Opened -= OpenWizardWhenVisible;
+                    main.PropertyChanged -= OpenWizardWhenRestored;
                     (main.DataContext as MainWindowViewModel)?.OpenWizard();
-                };
+                }
+
+                main.Opened += OpenWizardWhenVisible;
+                main.PropertyChanged += OpenWizardWhenRestored;
             }
         }
 
@@ -905,6 +946,76 @@ public class App : Application
 
         window.WindowState = WindowState.Minimized;
         window.ShowInTaskbar = false;
+    }
+
+    internal static bool IsOnScreen(bool isVisible, WindowState windowState, bool minimizePending)
+    {
+        return isVisible && windowState != WindowState.Minimized && !minimizePending;
+    }
+
+    /// <summary>
+    ///     Hide to the tray; without a tray host, wait briefly for one still starting at login
+    ///     before bringing the window back within reach.
+    /// </summary>
+    private static async Task ApplyMinimizedStartupAsync(MainWindow window, TrayIconService tray)
+    {
+        HideToTray(window);
+        if (tray.IsTrayAvailable)
+        {
+            return;
+        }
+
+        using var deadline = new CancellationTokenSource(s_lateTrayHostTimeout);
+        var hostAppeared = await WaitForTrayHostAsync(
+            () => Task.Run(tray.TryConfirmLateHost, deadline.Token),
+            s_lateTrayHostInterval,
+            Task.Delay,
+            deadline.Token
+        );
+        if (hostAppeared || ShuttingDown)
+        {
+            return;
+        }
+
+        if (TrayHideUsesWindowHide())
+        {
+            ShowMainWindow(window);
+            return;
+        }
+
+        // Stay minimized, but with a taskbar entry to reopen it from.
+        window.ShowInTaskbar = true;
+    }
+
+    private static readonly TimeSpan s_lateTrayHostTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan s_lateTrayHostInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    ///     Probes until a host appears or <paramref name="deadline" /> fires; a probe still
+    ///     running then is abandoned so it can't stretch the wait.
+    /// </summary>
+    internal static async Task<bool> WaitForTrayHostAsync(
+        Func<Task<bool>> probe,
+        TimeSpan interval,
+        Func<TimeSpan, CancellationToken, Task> delay,
+        CancellationToken deadline
+    )
+    {
+        try
+        {
+            while (true)
+            {
+                await delay(interval, deadline);
+                if (await probe().WaitAsync(deadline))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private static void ShowMainWindow(MainWindow window)

@@ -348,8 +348,14 @@
                                         <ComboBox Grid.Row="1"
                                                   HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.Language}"
-                                                  ItemsSource="{Binding LanguageChoices}"
-                                                  SelectedItem="{Binding EditLanguage}" />
+                                                  ItemsSource="{Binding LanguageOptions}"
+                                                  SelectedItem="{Binding SelectedLanguageOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileLanguageOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
                                     </Grid>
                                 </Border>
                                 <Border Grid.Row="1" Background="{DynamicResource TwFillSubtleBrush}" />
@@ -368,9 +374,15 @@
                                         <ComboBox Grid.Row="1"
                                                   HorizontalAlignment="Stretch"
                                                   AutomationProperties.Name="{loc:Str Profiles.Task}"
-                                                  ItemsSource="{Binding TaskChoices}"
-                                                  SelectedItem="{Binding EditTask}"
-                                                  VerticalAlignment="Center" />
+                                                  ItemsSource="{Binding TaskOptions}"
+                                                  SelectedItem="{Binding SelectedTaskOption}"
+                                                  VerticalAlignment="Center">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileTaskOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
                                     </Grid>
                                 </Border>
                                 <Border Grid.Row="3" Background="{DynamicResource TwFillSubtleBrush}" />
@@ -651,7 +663,7 @@
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
                             <Border Padding="18,14">
-                                <Grid ColumnDefinitions="*,Auto,Auto"
+                                <Grid ColumnDefinitions="*,Auto"
                                       ColumnSpacing="14">
                                     <TextBlock Text="{loc:Str Profiles.Enabled}"
                                                Classes="row-label"
@@ -660,11 +672,6 @@
                                                   AutomationProperties.Name="{loc:Str Profiles.Enabled}"
                                                   IsChecked="{Binding EditIsEnabled}"
                                                   VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="2"
-                                               Text="{Binding EditIsEnabledStatusText}"
-                                               VerticalAlignment="Center"
-                                               FontSize="12"
-                                               FontWeight="SemiBold" />
                                 </Grid>
                             </Border>
                         </Border>
