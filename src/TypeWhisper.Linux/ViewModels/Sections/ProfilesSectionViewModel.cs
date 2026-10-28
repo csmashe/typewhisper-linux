@@ -198,6 +198,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         RefreshModelOptions();
         RefreshPromptActionOptions();
         RefreshMemorySourceOptions();
+        RefreshLanguageOptions();
         foreach (var option in TranslationModelInfo.ProfileTargetOptions)
         {
             TranslationTargetOptions.Add(option);
@@ -215,6 +216,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
     public ObservableCollection<MemorySourceOption> MemorySourceOptions { get; } = [];
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
+    public ObservableCollection<ProfileLanguageOption> LanguageOptions { get; } = [];
 
     internal Task CurrentWindowUpdateTask { get; private set; } = Task.CompletedTask;
     internal bool IsLiveContextActive => _liveContextActivationCount > 0;
@@ -252,10 +254,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
         && UrlPatternChips.Count == 0
         && string.IsNullOrWhiteSpace(EditHotkeyData);
 
-    public IReadOnlyList<string> LanguageChoices { get; } =
-        ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
+    private static readonly string[] s_languageCodes =
+        ["en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
 
-    public IReadOnlyList<string> TaskChoices { get; } = ["", "transcribe", "translate"];
+    public ObservableCollection<ProfileTaskOption> TaskOptions { get; } =
+        new(CreateTaskOptions());
 
     public void ActivateLiveContext()
     {
@@ -330,6 +333,49 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; private set; } =
         CreateNullableBooleanOptions();
+
+    public ProfileLanguageOption? SelectedLanguageOption
+    {
+        get
+        {
+            var code = string.IsNullOrWhiteSpace(EditLanguage) ? null : EditLanguage;
+            return LanguageOptions.FirstOrDefault(option =>
+                string.Equals(option.Code, code, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+        set
+        {
+            // A rebuilt list briefly clears the ComboBox; that null is not a user choice.
+            if (value is null || ReferenceEquals(value, SelectedLanguageOption))
+            {
+                return;
+            }
+
+            EditLanguage = value.Code;
+            OnPropertyChanged();
+        }
+    }
+
+    public ProfileTaskOption? SelectedTaskOption
+    {
+        get
+        {
+            var task = string.IsNullOrWhiteSpace(EditTask) ? null : EditTask;
+            return TaskOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, task, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+        set
+        {
+            if (value is null || ReferenceEquals(value, SelectedTaskOption))
+            {
+                return;
+            }
+
+            EditTask = value.Value;
+            OnPropertyChanged();
+        }
+    }
 
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
@@ -557,6 +603,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         EditName = value.Name;
         EditLanguage = value.InputLanguage;
+        // Drops an unlisted code the previous profile added.
+        RefreshLanguageOptions();
         EditTask = value.SelectedTask;
         EditTranslationTarget = value.TranslationTarget;
         EditWhisperModeOverride = value.WhisperModeOverride;
@@ -584,6 +632,23 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         NotifyStateChanged();
+    }
+
+    partial void OnEditLanguageChanged(string? value)
+    {
+        // A saved code outside the built-in list stays selectable instead of blanking the box.
+        if (!string.IsNullOrWhiteSpace(value) && SelectedLanguageOption is null)
+        {
+            RefreshLanguageOptions();
+            return;
+        }
+
+        OnPropertyChanged(nameof(SelectedLanguageOption));
+    }
+
+    partial void OnEditTaskChanged(string? value)
+    {
+        OnPropertyChanged(nameof(SelectedTaskOption));
     }
 
     partial void OnEditTranslationTargetChanged(string? value)
@@ -1102,6 +1167,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var cleanupLevelOverride = EditCleanupLevelOverride;
         var whisperModeOverride = EditWhisperModeOverride;
         var developerFormattingOverride = EditDeveloperFormattingOverride;
+        var language = EditLanguage;
+        var task = EditTask;
 
         RefreshModelOptions();
         RefreshPromptActionOptions();
@@ -1110,6 +1177,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         ReplaceCollection(HotkeyBehaviorOptions, CreateHotkeyBehaviorOptions());
         ReplaceCollection(ContextMatchModeOptions, CreateContextMatchModeOptions());
         ReplaceCollection(CleanupOverrideOptions, CreateCleanupOverrideOptions());
+        ReplaceCollection(TaskOptions, CreateTaskOptions());
+        RefreshLanguageOptions();
         WhisperModeOptions = CreateNullableBooleanOptions();
         OnPropertyChanged(nameof(WhisperModeOptions));
 
@@ -1121,6 +1190,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditCleanupLevelOverride = cleanupLevelOverride;
         EditWhisperModeOverride = whisperModeOverride;
         EditDeveloperFormattingOverride = developerFormattingOverride;
+        EditLanguage = language;
+        EditTask = task;
 
         OnPropertyChanged(nameof(SelectedModelOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
@@ -1132,6 +1203,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(SelectedLanguageOption));
+        OnPropertyChanged(nameof(SelectedTaskOption));
         OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(SelectedProfileSummary));
         OnPropertyChanged(nameof(SelectedProfileDisplayName));
@@ -1185,6 +1258,41 @@ public partial class ProfilesSectionViewModel : ObservableObject
             new(CleanupLevel.Medium, Loc.Instance["Profiles.CleanupMedium"]),
             new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"]),
         ];
+    }
+
+    private static IReadOnlyList<ProfileTaskOption> CreateTaskOptions()
+    {
+        return
+        [
+            new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
+            new("transcribe", Loc.Instance["Profiles.TaskTranscribe"]),
+            new("translate", Loc.Instance["Profiles.TaskTranslate"]),
+        ];
+    }
+
+    private void RefreshLanguageOptions()
+    {
+        var saved = string.IsNullOrWhiteSpace(EditLanguage) ? null : EditLanguage;
+        var choices = DictationSectionViewModel.CreateLanguageChoices(
+            saved is null ? s_languageCodes : [.. s_languageCodes, saved]
+        );
+        List<ProfileLanguageOption> options =
+        [
+            new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
+            .. choices.Select(choice => new ProfileLanguageOption(choice.Code, choice.DisplayName)),
+        ];
+        if (
+            saved is not null
+            && !options.Any(option =>
+                string.Equals(option.Code, saved, StringComparison.OrdinalIgnoreCase)
+            )
+        )
+        {
+            options.Add(new ProfileLanguageOption(saved, saved));
+        }
+
+        ReplaceCollection(LanguageOptions, options);
+        OnPropertyChanged(nameof(SelectedLanguageOption));
     }
 
     private static IReadOnlyList<NullableBooleanOption> CreateNullableBooleanOptions()
@@ -1618,6 +1726,16 @@ public sealed record ProfileContextMatchModeOption(ProfileContextMatchMode Value
 }
 
 public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record ProfileLanguageOption(string? Code, string Label)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record ProfileTaskOption(string? Value, string Label)
 {
     public override string ToString() => Label;
 }

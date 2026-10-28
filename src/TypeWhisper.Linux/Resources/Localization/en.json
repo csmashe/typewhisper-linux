@@ -952,6 +952,8 @@
   "Profiles.Summary": "{0} profile(s), {1} enabled",
   "Profiles.Task": "Task",
   "Profiles.TaskHint": "Choose when this profile should transcribe normally or translate instead.",
+  "Profiles.TaskTranscribe": "Transcribe",
+  "Profiles.TaskTranslate": "Translate to English",
   "Profiles.Title": "Profiles",
   "Profiles.Translation": "Translation",
   "Profiles.TranslationHint": "Overrides the global translation setting for this profile.",

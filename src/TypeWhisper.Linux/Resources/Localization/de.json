@@ -952,6 +952,8 @@
   "Profiles.Summary": "{0} Profil(e), {1} aktiv",
   "Profiles.Task": "Aufgabe",
   "Profiles.TaskHint": "Lege fest, ob dieses Profil normal transkribieren oder direkt übersetzen soll.",
+  "Profiles.TaskTranscribe": "Transkribieren",
+  "Profiles.TaskTranslate": "Ins Englische übersetzen",
   "Profiles.Title": "Profile",
   "Profiles.Translation": "Übersetzung",
   "Profiles.TranslationHint": "Überschreibt die globale Übersetzungseinstellung für dieses Profil.",
