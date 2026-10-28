@@ -13,7 +13,7 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Xai;
 
-internal enum ApiKeyCheck { Valid, Invalid, NoTeamAccess }
+internal enum ApiKeyCheck { Valid, Invalid, NoTeamAccess, Forbidden }
 
 public sealed class XaiPlugin
     : ITranscriptionEnginePlugin,
@@ -459,11 +459,16 @@ public sealed class XaiPlugin
             if (response.IsSuccessStatusCode)
                 return ApiKeyCheck.Valid;
 
-            // xAI rejects a wrong or deleted key with 400; 403 means it accepted the key
-            // but the team can't use the API yet (e.g. a new team with no credits).
-            return response.StatusCode == HttpStatusCode.Forbidden
+            // xAI rejects a wrong or deleted key with 400. A 403 accepted the key; only the body
+            // says whether the team lacks credits or the key lacks permission or is blocked.
+            if (response.StatusCode != HttpStatusCode.Forbidden)
+                return ApiKeyCheck.Invalid;
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return body.Contains("credit", StringComparison.OrdinalIgnoreCase)
+                   || body.Contains("licens", StringComparison.OrdinalIgnoreCase)
                 ? ApiKeyCheck.NoTeamAccess
-                : ApiKeyCheck.Invalid;
+                : ApiKeyCheck.Forbidden;
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -837,8 +842,12 @@ public sealed class XaiPlugin
 
         var check = await ValidateApiKeyAsync(ApiKey, ct);
         if (check != ApiKeyCheck.Valid)
-            return new PluginSettingsValidationResult(false, Loc.L(
-                check == ApiKeyCheck.NoTeamAccess ? "Settings.ApiKeyNoTeamAccess" : "Settings.ApiKeyInvalid"));
+            return new PluginSettingsValidationResult(false, Loc.L(check switch
+            {
+                ApiKeyCheck.NoTeamAccess => "Settings.ApiKeyNoTeamAccess",
+                ApiKeyCheck.Forbidden => "Settings.ApiKeyForbidden",
+                _ => "Settings.ApiKeyInvalid",
+            }));
 
         var models = await FetchLlmModelsAsync(ct);
         if (models.Count > 0)

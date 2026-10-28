@@ -1214,7 +1214,7 @@ public class XaiPluginTests
         Assert.Equal(["leo"], sut.AvailableVoices.Select(v => v.Id).ToArray());
     }
 
-    // Bodies recorded from the live xAI API.
+    // The first two bodies are recorded from the live xAI API.
     [Theory]
     [InlineData(HttpStatusCode.Forbidden,
         """{"code":"permission-denied","error":"Your newly created team doesn't have any credits or licenses yet. You can purchase those on https://console.x.ai/team/00000000-0000-0000-0000-000000000000."}""",
@@ -1222,6 +1222,9 @@ public class XaiPluginTests
     [InlineData(HttpStatusCode.BadRequest,
         """{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}""",
         "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.Forbidden,
+        """{"code":"permission-denied","error":"The API key does not have permission to access this endpoint."}""",
+        "Settings.ApiKeyForbidden")]
     public async Task ValidateAsync_SeparatesUnfundedTeamFromInvalidKey(
         HttpStatusCode status, string body, string expectedMessage)
     {

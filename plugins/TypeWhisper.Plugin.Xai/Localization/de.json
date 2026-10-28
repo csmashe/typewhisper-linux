@@ -21,6 +21,7 @@
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.ApiKeyNoTeamAccess": "xAI hat den API-Schlüssel akzeptiert, aber sein Team kann die API noch nicht nutzen. Neue Teams brauchen zuerst Guthaben oder eine Lizenz: Füge sie unter console.x.ai hinzu und teste dann erneut.",
+  "Settings.ApiKeyForbidden": "xAI hat den API-Schlüssel akzeptiert, aber den Zugriff verweigert. Der Schlüssel darf eventuell keine Modelle auflisten, oder der Schlüssel bzw. sein Team ist gesperrt. Prüfe die Berechtigungen des Schlüssels unter console.x.ai und teste dann erneut.",
   "Settings.ApiKeyValidFetched": "API-Schlüssel ist gültig. {0} LLM-Modell(e) und {1} Stimme(n) geladen.",
   "Settings.ApiKeyValidSaved": "API-Schlüssel ist gültig. Gespeicherte/Standard-Modelle und -Stimmen werden verwendet.",
   "Settings.ApiKeyNotConfigured": "API-Schlüssel nicht konfiguriert",

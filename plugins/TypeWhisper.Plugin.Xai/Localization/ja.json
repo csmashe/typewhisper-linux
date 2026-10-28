@@ -21,6 +21,7 @@
   "Settings.EnterApiKey": "先にAPIキーを入力してください。",
   "Settings.ApiKeyInvalid": "APIキーが無効です。",
   "Settings.ApiKeyNoTeamAccess": "xAI は API キーを受け付けましたが、そのチームはまだ API を利用できません。新しいチームには先にクレジットまたはライセンスが必要です。console.x.ai で追加してから、もう一度テストしてください。",
+  "Settings.ApiKeyForbidden": "xAI は API キーを受け付けましたが、アクセスを拒否しました。キーにモデル一覧の取得権限がないか、キーまたはそのチームがブロックされている可能性があります。console.x.ai でキーの権限を確認してから、もう一度テストしてください。",
   "Settings.ApiKeyValidFetched": "APIキーは有効です。LLMモデルを{0}件、音声を{1}件取得しました。",
   "Settings.ApiKeyValidSaved": "APIキーは有効です。保存済み／既定のモデルと音声を使用します。",
   "Settings.ApiKeyNotConfigured": "APIキーが設定されていません",
