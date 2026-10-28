@@ -858,8 +858,15 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // origin). Native Wayland toolkits report SCREEN == WINDOW (GTK3, Chromium/Electron, Firefox)
     // or shift it by a zero/negative junk offset (GTK4), which sends the toast to the wrong
     // monitor. An XWayland window at exactly 0,0 is rejected too and just gets the fallback spot.
+    // GTK4 also clamps that junk to 0, so a negative WINDOW axis reported as SCREEN 0 yields a fake
+    // positive origin; treat it as native too.
     internal static bool AreGlobalExtents(AtSpiScreenRect screen, AtSpiScreenRect window)
     {
+        if ((screen.X == 0 && window.X < 0) || (screen.Y == 0 && window.Y < 0))
+        {
+            return false;
+        }
+
         var originX = screen.X - window.X;
         var originY = screen.Y - window.Y;
         return originX >= 0 && originY >= 0 && (originX > 0 || originY > 0);

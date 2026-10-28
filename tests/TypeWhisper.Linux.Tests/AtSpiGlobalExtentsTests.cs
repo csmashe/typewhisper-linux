@@ -28,6 +28,10 @@ public sealed class AtSpiGlobalExtentsTests
     // GTK4: SCREEN shifted by a meaningless negative offset.
     [InlineData(0, 0, 0, 120)]
     [InlineData(0, 0, -1, 5)]
+    // GTK4 clamping a negative WINDOW axis to SCREEN 0, which would read as a positive origin.
+    [InlineData(0, 0, -1, 0)]
+    [InlineData(0, 0, -1, -1)]
+    [InlineData(0, 0, 0, -1)]
     public void NativeWaylandClient_IsNotGlobal(int screenX, int screenY, int windowX, int windowY)
     {
         Assert.False(
