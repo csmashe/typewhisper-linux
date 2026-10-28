@@ -293,7 +293,8 @@ internal sealed partial class CliProviderDescriptor
                 "-",
             ],
             // No --max-turns: the flag no longer exists in the shipping Claude Code CLI, and
-            // an empty --tools with everything disallowed already bounds the run to one turn.
+            // an empty --tools already bounds the run. Never disallow "*": --json-schema answers
+            // through the StructuredOutput tool.
             CliProviderKind.Claude =>
             [
                 "-p",
@@ -303,7 +304,7 @@ internal sealed partial class CliProviderDescriptor
                 "--safe-mode",
                 "--disable-slash-commands",
                 "--tools", "",
-                "--disallowedTools", "*", "mcp__*",
+                "--disallowedTools", "mcp__*",
                 "--strict-mcp-config",
                 "--no-chrome",
                 "--no-session-persistence",
