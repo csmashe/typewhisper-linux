@@ -1290,7 +1290,7 @@
   "TextInsertion.YdotoolForeignModulesLoadDetail": "既存のファイルを確認してください。uinputモジュールをまだ読み込んでいない場合は、移動するか名前を変更してから、もう一度セットアップを実行してください。",
   "TextInsertion.YdotoolForeignUdevRuleDetail": "既存のファイルを確認してください。アクティブなユーザーに/dev/uinputへのアクセスをまだ付与していない場合は、移動するか名前を変更してから、もう一度セットアップを実行してください。",
   "TextInsertion.YdotoolNotInstalled": "ydotoolがインストールされていません。パッケージマネージャーでインストールしてください。",
-  "TextInsertion.YdotoolProbeFailed": "ydotooldのソケットには接続できましたが、テストのキー入力に失敗しました。ユーザーに/dev/uinputの読み書きアクセスがあるか確認してください（`groups`を実行すると`input`が表示されるはずです。表示されない場合は`sudo usermod -aG input $USER`を実行してから、ログアウトして再ログインしてください）。",
+  "TextInsertion.YdotoolProbeFailed": "ydotooldのソケットには接続できましたが、テストのキー入力に失敗しました。通常はydotooldが/dev/uinputに書き込めないことが原因です。「ydotoolをセットアップ」をクリックしてください。必要に応じてudevルールで現在のアクティブなセッションに/dev/uinputへのアクセスを許可し、ydotooldを再起動します。それでもキー入力に失敗する場合は、セットアップ結果に残りの対処方法が表示されます。",
   "TextInsertion.YdotoolReady": "準備完了です。ソケット：{0}",
   "TextInsertion.YdotoolSocketUnreachable": "ydotooldは動作中ですが、ソケットに接続できません。",
   "TextInsertion.YdotoolSymlinkRefused": "{0}はシンボリックリンクのため、TypeWhisperは変更しませんでした。",

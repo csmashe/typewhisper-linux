@@ -1290,7 +1290,7 @@
   "TextInsertion.YdotoolForeignModulesLoadDetail": "请检查现有文件。如果它尚未加载uinput模块，请将其移动或重命名，然后再次运行设置。",
   "TextInsertion.YdotoolForeignUdevRuleDetail": "请检查现有文件。如果它尚未授予活动用户对/dev/uinput的访问权限，请将其移动或重命名，然后再次运行设置。",
   "TextInsertion.YdotoolNotInstalled": "未安装ydotool。请通过包管理器安装。",
-  "TextInsertion.YdotoolProbeFailed": "ydotoold套接字可访问，但测试按键失败。请检查你的用户是否拥有/dev/uinput的读写权限（运行`groups`——应能看到`input`；如果没有，请运行`sudo usermod -aG input $USER`，然后注销并重新登录）。",
+  "TextInsertion.YdotoolProbeFailed": "ydotoold套接字可访问，但测试按键失败——通常是因为ydotoold无法写入/dev/uinput。请点击“设置ydotool”：它会在需要时通过udev规则向你当前的活动会话授予/dev/uinput访问权限，然后重启ydotoold。如果按键仍然失败，设置结果会显示剩余的解决方法。",
   "TextInsertion.YdotoolReady": "就绪。套接字：{0}",
   "TextInsertion.YdotoolSocketUnreachable": "ydotoold已激活，但无法访问其套接字。",
   "TextInsertion.YdotoolSymlinkRefused": "TypeWhisper未更改{0}，因为它是符号链接。",
