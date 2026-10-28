@@ -195,6 +195,7 @@ public partial class LiveTextWindow : Window
                     }
 
                     ApplyBounds();
+                    SetClickThrough(false);
                     Opacity = 1.0;
                     IsHitTestVisible = true;
                 },
@@ -202,11 +203,13 @@ public partial class LiveTextWindow : Window
             return;
         }
 
-        // A transparent mapped window still takes clicks on X11, so park it beyond every monitor.
-        // A drag in progress stays tracked: when it ends, EndInteraction re-parks the window.
+        // A transparent mapped window still takes clicks on X11, and Mutter clamps the off-screen
+        // park back onto a monitor, so empty its input region too. A drag in progress stays
+        // tracked: when it ends, EndInteraction re-parks the window.
         FlushPendingSave();
         Opacity = 0.0;
         IsHitTestVisible = false;
+        SetClickThrough(true);
         SetBounds(new PixelRect(_placementState.Hide(CollectScreenBounds(), Position), PixelSize.Empty));
     }
 
@@ -221,6 +224,14 @@ public partial class LiveTextWindow : Window
                 }
             },
             DispatcherPriority.Loaded);
+    }
+
+    private void SetClickThrough(bool passThrough)
+    {
+        if (TryGetPlatformHandle() is { Handle: var xid } && xid != IntPtr.Zero)
+        {
+            X11InputPassthrough.Set((nuint)xid, passThrough);
+        }
     }
 
     private void ApplyBounds()

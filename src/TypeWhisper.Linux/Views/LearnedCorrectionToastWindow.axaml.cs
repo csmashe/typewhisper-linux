@@ -74,6 +74,7 @@ public partial class LearnedCorrectionToastWindow : Window
             MakeStickyAcrossWorkspaces();
         }
 
+        SetClickThrough(false);
         Opacity = 1.0;
         IsHitTestVisible = true;
 
@@ -87,11 +88,20 @@ public partial class LearnedCorrectionToastWindow : Window
         // Kept mapped (see the Mutter workaround in ShowToast). Opacity 0 hides it, but neither
         // Opacity nor Avalonia's IsHitTestVisible clears the native X11 input region, so the mapped
         // Topmost toplevel keeps swallowing pointer events over its rectangle — a dead-click zone by
-        // the field. Park it past every monitor's right edge so those clicks land off-screen; a WM
-        // that clamps it back on-screen leaves us no worse off than Opacity 0 alone.
+        // the field. Empty that region, and park it past every monitor's right edge for display
+        // servers without the SHAPE extension (Mutter clamps the park back on-screen).
         Opacity = 0.0;
         IsHitTestVisible = false;
+        SetClickThrough(true);
         MoveOffScreen();
+    }
+
+    private void SetClickThrough(bool passThrough)
+    {
+        if (TryGetPlatformHandle() is { Handle: var xid } && xid != IntPtr.Zero)
+        {
+            X11InputPassthrough.Set((nuint)xid, passThrough);
+        }
     }
 
     // Moves the (still mapped) window just beyond the right edge of all monitors. Best-effort: on
