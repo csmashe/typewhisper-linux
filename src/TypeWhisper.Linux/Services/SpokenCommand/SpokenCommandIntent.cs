@@ -15,9 +15,23 @@ public static class SpokenCommandIntent
     // make it rhyme"), so we only look inside the opening tokens.
     private const int ReferentTokenWindow = 4;
 
-    private static readonly HashSet<string> s_selectionReferents = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> s_referentPronouns = new(StringComparer.OrdinalIgnoreCase)
     {
-        "this", "that", "it", "these", "those", "them", "selection", "highlighted", "selected",
+        "this", "that", "it", "these", "those", "them",
+    };
+
+    // Unlike pronouns, these name the selection wherever they sit in the window ("edit a selected
+    // paragraph").
+    private static readonly HashSet<string> s_selectionMarkers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "selection", "highlighted", "selected",
+    };
+
+    // An indefinite article introduces the new text being asked for, so a pronoun after it is a
+    // relative clause on that text ("draft a message that says hi"), not a pointer at the selection.
+    private static readonly HashSet<string> s_indefiniteArticles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an",
     };
 
     private static readonly string[] s_selectionPhrases =
@@ -73,8 +87,15 @@ public static class SpokenCommandIntent
             return false;
         }
 
-        return s_leadingTransformVerbs.Contains(meaningful[0])
-               || meaningful.Take(ReferentTokenWindow).Any(s_selectionReferents.Contains);
+        if (s_leadingTransformVerbs.Contains(meaningful[0]))
+        {
+            return true;
+        }
+
+        var window = meaningful.Take(ReferentTokenWindow).ToList();
+        return window.Any(s_selectionMarkers.Contains)
+               || window.TakeWhile(token => !s_indefiniteArticles.Contains(token))
+                   .Any(s_referentPronouns.Contains);
     }
 
     /// <summary>

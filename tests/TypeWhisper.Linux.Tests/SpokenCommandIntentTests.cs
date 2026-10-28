@@ -18,6 +18,10 @@ public sealed class SpokenCommandIntentTests
     // Referent pronoun inside the opening tokens signals the selection.
     [InlineData("please make it shorter")]
     [InlineData("write this more formally")]
+    // A referent ahead of an indefinite article still names the selection.
+    [InlineData("make it a haiku")]
+    // Explicit selection markers still count after an indefinite article.
+    [InlineData("edit a selected paragraph")]
     // Selection phrases match case-insensitively (STT may capitalize) via the phrase path.
     [InlineData("improve The Text please")]
     // Leading politeness/filler must not hide a transform verb.
@@ -39,6 +43,10 @@ public sealed class SpokenCommandIntentTests
     [InlineData("draft an answer to this email")]
     // "this textbook" must not match the selection phrase "this text" via substring.
     [InlineData("write a summary of this textbook")]
+    // A relative clause on the requested text ("a message that says") is not a selection referent.
+    [InlineData("Draft a message that says hello world.")]
+    [InlineData("Write an email that says hello world.")]
+    [InlineData("make a list that covers the basics")]
     [InlineData("")]
     public void RefersToSelection_FalseForFromScratchCreate(string command)
     {
