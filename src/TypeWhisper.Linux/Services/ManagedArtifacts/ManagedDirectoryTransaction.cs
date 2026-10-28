@@ -128,82 +128,8 @@ public sealed class ManagedDirectoryTransaction
     }
 
     /// <summary>
-    ///     Deletes stages, rejected trees, and caller scratch left by an interrupted or
-    ///     rolled-back transaction, so failed attempts don't accumulate forever. Run after
-    ///     <see cref="RecoverAllAsync" /> and before any new transaction; artifacts whose
-    ///     journal or backup survived recovery are skipped so nothing recoverable is discarded.
-    /// </summary>
-    public async Task PurgeAbandonedArtifactsAsync(CancellationToken ct = default)
-    {
-        if (!Directory.Exists(_stateRoot))
-        {
-            return;
-        }
-
-        foreach (
-            var artifactDirectory in Directory
-                .GetDirectories(_stateRoot, "*", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.Ordinal)
-        )
-        {
-            ct.ThrowIfCancellationRequested();
-            var paths = new DirectoryPaths(artifactDirectory);
-            if (File.Exists(paths.Journal) || Directory.Exists(paths.Backup))
-            {
-                continue;
-            }
-
-            // Checked before locking so the steady state — one lock file per installed
-            // artifact and nothing else — costs no lock acquisitions at all.
-            if (!HasPurgeableEntries(paths))
-            {
-                continue;
-            }
-
-            await using var artifactLock = await AcquireLockAsync(paths, ct).ConfigureAwait(false);
-            if (File.Exists(paths.Journal) || Directory.Exists(paths.Backup))
-            {
-                continue;
-            }
-
-            foreach (var entry in Directory.GetFileSystemEntries(artifactDirectory))
-            {
-                if (string.Equals(entry, paths.Lock, PathComparison))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    if (Directory.Exists(entry))
-                    {
-                        Directory.Delete(entry, recursive: true);
-                    }
-                    else
-                    {
-                        File.Delete(entry);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Trace.WriteLine(
-                        $"[ManagedDirectoryTransaction] Failed to purge '{entry}': {ex.Message}"
-                    );
-                }
-            }
-        }
-    }
-
-    private static bool HasPurgeableEntries(DirectoryPaths paths)
-    {
-        return Directory
-            .EnumerateFileSystemEntries(paths.Directory)
-            .Any(entry => !string.Equals(entry, paths.Lock, PathComparison));
-    }
-
-    /// <summary>
     ///     Publishes a validated stage and retains the previous live directory as a backup.
-    ///     The returned commit must be completed or rolled back by the caller.
+    ///     The caller completes the returned commit; one left uncompleted is resolved by recovery.
     /// </summary>
     public async Task<ManagedDirectoryCommit> CommitAsync(
         string artifactId,
@@ -686,61 +612,6 @@ public sealed class ManagedDirectoryTransaction
             }
 
             return Task.CompletedTask;
-        }
-
-        /// <summary>
-        ///     Moves the rejected live tree aside and restores the prior tree. The rejected
-        ///     path is returned for diagnostics and later cleanup.
-        /// </summary>
-        public Task<string?> RollbackAsync()
-        {
-            EnsureOpen();
-            string? rejected = null;
-            Exception? rejectException = null;
-            if (Directory.Exists(_journal.DestinationPath))
-            {
-                rejected = CreateRejectedPath(_paths);
-                try
-                {
-                    Directory.Move(_journal.DestinationPath, rejected);
-                }
-                catch (Exception ex)
-                {
-                    rejectException = ex;
-                }
-            }
-
-            if (rejectException is not null)
-            {
-                return Task.FromException<string?>(
-                    new IOException(
-                        "Could not move the rejected managed directory aside.",
-                        rejectException
-                    )
-                );
-            }
-
-            try
-            {
-                if (_journal.OldExists)
-                {
-                    if (!Directory.Exists(_paths.Backup))
-                    {
-                        throw new DirectoryNotFoundException(
-                            $"Managed directory backup is missing: {_paths.Backup}"
-                        );
-                    }
-
-                    Directory.Move(_paths.Backup, _journal.DestinationPath);
-                }
-
-                DeleteJournal(_paths);
-                return Task.FromResult(rejected);
-            }
-            catch (Exception restoreException)
-            {
-                return Task.FromException<string?>(restoreException);
-            }
         }
 
         public async ValueTask DisposeAsync()

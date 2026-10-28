@@ -1491,20 +1491,8 @@ public class App : Application
                 Required: false
             ),
             new(
-                BootstrapStageNames.PluginRegistryRecovery,
-                [],
-                async () =>
-                {
-                    await services
-                        .GetRequiredService<PluginRegistryService>()
-                        .RecoverInterruptedInstallsAsync();
-                    BootTrace.Stage("PluginRegistryService.RecoverInterruptedInstallsAsync");
-                },
-                Required: false
-            ),
-            new(
                 BootstrapStageNames.BundledPluginDeployment,
-                [BootstrapStageNames.PluginRegistryRecovery],
+                [],
                 async () =>
                 {
                     _ = services.GetRequiredService<BundledPluginDeployer>();
@@ -1522,18 +1510,6 @@ public class App : Application
                     var pluginManager = services.GetRequiredService<PluginManager>();
                     await pluginManager.InitializeAsync();
                     BootTrace.Stage("PluginManager.InitializeAsync");
-                },
-                Required: false
-            ),
-            new(
-                BootstrapStageNames.PluginRegistryBootstrap,
-                [BootstrapStageNames.PluginInitialization],
-                async () =>
-                {
-                    await services
-                        .GetRequiredService<PluginRegistryService>()
-                        .FirstRunAutoInstallAsync();
-                    BootTrace.Stage("PluginRegistryService.FirstRunAutoInstallAsync");
                 },
                 Required: false
             ),
@@ -1682,9 +1658,7 @@ public class App : Application
         public const string SessionCleanup = "Session cleanup";
         public const string AudioConfiguration = "Audio configuration";
         public const string BundledPluginDeployment = "Bundled-plugin deployment";
-        public const string PluginRegistryRecovery = "Plugin-registry recovery";
         public const string PluginInitialization = "Plugin initialization";
-        public const string PluginRegistryBootstrap = "Plugin-registry bootstrap";
         public const string RetentionInitialization = "Retention initialization";
         public const string ModelMigration = "Model migration";
         public const string ModelAutoLoad = "Model auto-load";

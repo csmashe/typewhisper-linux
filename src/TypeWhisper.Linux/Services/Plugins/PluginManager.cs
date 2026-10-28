@@ -598,7 +598,7 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public async Task UnloadPluginAsync(string pluginId)
+    private async Task UnloadPluginAsync(string pluginId)
     {
         LoadedPlugin? plugin;
         lock (_lock)
