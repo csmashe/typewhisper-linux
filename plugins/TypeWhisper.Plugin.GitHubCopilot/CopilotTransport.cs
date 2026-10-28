@@ -57,6 +57,9 @@ internal sealed class CopilotTransport : ICopilotTransport
     // Bounds everything around the send: runtime start, account and model checks, session setup.
     private static readonly TimeSpan s_setupTimeout = TimeSpan.FromSeconds(30);
 
+    private const UnixFileMode OwnerExecutable =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
     // Environment the runtime needs to find the user's Copilot login (~/.copilot or the desktop
     // keyring over the session bus) and reach the network. Tokens, endpoint/runtime overrides and
     // NODE_OPTIONS are deliberately absent.
@@ -99,6 +102,7 @@ internal sealed class CopilotTransport : ICopilotTransport
     private string WorkspaceDirectory => Path.Join(_dataDirectory, "workspace");
     private string ConfigDirectory => Path.Join(_dataDirectory, "config");
     internal string SessionStateDirectory => Path.Join(ConfigDirectory, "session-state");
+    internal string GhStubDirectory => Path.Join(_dataDirectory, "bin");
 
     public void InvalidateCache() => _catalogs.Clear();
 
@@ -136,8 +140,12 @@ internal sealed class CopilotTransport : ICopilotTransport
         }
 
         // The runtime otherwise reports the gh CLI login, which the SDK cannot parse (it omits the
-        // token) and which is not a Copilot account profile anyway.
+        // token) and which is not a Copilot account profile anyway. GH_CONFIG_DIR alone does
+        // not hide it (gh falls back to the keyring), so a gh that always fails goes first on PATH.
         environment["GH_CONFIG_DIR"] = Path.Join(_dataDirectory, "gh");
+        environment["PATH"] = environment.TryGetValue("PATH", out var path)
+            ? GhStubDirectory + Path.PathSeparator + path
+            : GhStubDirectory;
         return new CopilotClientOptions
         {
             // Empty mode disables the user's stored login. Keep login compatibility and explicitly
@@ -402,7 +410,41 @@ internal sealed class CopilotTransport : ICopilotTransport
         PrivateDirectory.Ensure(WorkspaceDirectory);
         PrivateDirectory.Ensure(ConfigDirectory);
         PrivateDirectory.Ensure(Path.Join(_dataDirectory, "gh"));
+        PrivateDirectory.Ensure(GhStubDirectory);
+        WriteGhStub();
         return _createClient(CreateClientOptions());
+    }
+
+    private void WriteGhStub()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            throw new PlatformNotSupportedException();
+        }
+
+        const string script = "#!/bin/sh\nexit 1\n";
+        var target = Path.Join(GhStubDirectory, "gh");
+        var info = new FileInfo(target);
+        if (info is { Exists: true, LinkTarget: null, UnixFileMode: OwnerExecutable }
+            && File.ReadAllText(target) == script)
+        {
+            return;
+        }
+
+        var staging = target + "." + Guid.NewGuid().ToString("N");
+        using (var stream = new FileStream(staging, new FileStreamOptions
+               {
+                   Mode = FileMode.CreateNew,
+                   Access = FileAccess.Write,
+                   UnixCreateMode = OwnerExecutable,
+               }))
+        {
+            stream.Write(Encoding.ASCII.GetBytes(script));
+        }
+
+        // The create mode is subject to umask; a non-executable stub would be skipped for the real gh.
+        File.SetUnixFileMode(staging, OwnerExecutable);
+        File.Move(staging, target, overwrite: true);
     }
 
     private static CopilotAccount? Identity(AccountAllUsers entry) =>

@@ -212,6 +212,7 @@ public sealed class GitHubCopilotTransportTests
     {
         var source = new Dictionary<string, string>
         {
+            ["PATH"] = "/usr/local/bin:/usr/bin",
             ["HOME"] = "/home/fixture",
             ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus",
             ["XDG_RUNTIME_DIR"] = "/run/user/1000",
@@ -237,9 +238,40 @@ public sealed class GitHubCopilotTransportTests
         Assert.DoesNotContain("NODE_OPTIONS", environment.Keys);
         // The gh CLI login would otherwise reach the SDK, which cannot parse it.
         Assert.Equal(Path.Join(root, "gh"), environment["GH_CONFIG_DIR"]);
+        Assert.Equal(Path.Join(root, "bin") + ":/usr/local/bin:/usr/bin", environment["PATH"]);
         Assert.True(options.UseLoggedInUser);
         Assert.Null(options.GitHubToken);
         Assert.False(options.EnableRemoteSessions);
+    }
+
+    [Fact]
+    public async Task RuntimeFindsAFailingGhStubInsteadOfTheGhLogin()
+    {
+        var root = Path.Join(Path.GetTempPath(), "copilot-gh-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var transport = new CopilotTransport(
+                root,
+                () => "/runtime",
+                createClient: _ => throw new InvalidOperationException("stop before the runtime starts"));
+            var stub = Path.Join(transport.GhStubDirectory, "gh");
+            PrivateDirectory.Ensure(transport.GhStubDirectory);
+            await File.WriteAllTextAsync(stub, "#!/bin/sh\necho token\n");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => transport.GetAccountsAsync(CancellationToken.None));
+
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                new FileInfo(stub).UnixFileMode);
+            using var gh = System.Diagnostics.Process.Start(stub, ["auth", "token"]);
+            await gh.WaitForExitAsync();
+            Assert.Equal(1, gh.ExitCode);
+            Assert.Single(Directory.EnumerateFileSystemEntries(transport.GhStubDirectory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
