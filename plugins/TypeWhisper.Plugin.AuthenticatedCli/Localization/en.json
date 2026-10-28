@@ -38,6 +38,7 @@
   "Error.RateLimit": "{0} CLI rate limit was reached.",
   "Error.Permission": "{0} account is not permitted to process this request.",
   "Error.InvalidRequest": "{0} CLI rejected the request configuration.",
+  "Error.IncompatibleCliVersion": "{0} CLI rejected the settings TypeWhisper passes to this version of it. Update TypeWhisper, or use an older CLI release.",
   "Error.NoResult": "{0} CLI exited without a valid result.",
   "Error.UnsupportedModel": "The selected model is not supported by the provider CLI.",
   "Error.ModelNotFree": "The selected OpenCode model is not in the current verified free Zen catalog.",

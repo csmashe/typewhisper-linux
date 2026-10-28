@@ -721,7 +721,7 @@ public sealed partial class AuthenticatedCliPlugin :
             ).ConfigureAwait(false);
             var versionOutput = versionProbe.StandardOutput + "\n" + versionProbe.StandardError;
             var version = CliProviderDescriptor.ParseVersion(versionOutput);
-            if (versionProbe.ExitCode != 0 || version is null)
+            if (versionProbe.ExitCode != 0 || version is null || !descriptor.MeetsMinimumVersion(version))
             {
                 return new CliAvailabilitySnapshot(
                     CliAvailabilityState.UnsupportedVersion,
@@ -1291,6 +1291,16 @@ public sealed partial class AuthenticatedCliPlugin :
     )
     {
         var text = failureText.ToLowerInvariant();
+        // Checked first: the rejected key is quoted in the text and could match a later keyword.
+        if (ContainsAny(text, "unknown configuration field", "error loading config"))
+        {
+            return new PluginRequestException(
+                Loc.L("Error.IncompatibleCliVersion", descriptor.MessageName),
+                PluginRequestFailureKind.InvalidRequest,
+                isTransient: false
+            );
+        }
+
         if (ContainsAny(
                 text,
                 "network",

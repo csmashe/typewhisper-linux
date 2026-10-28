@@ -285,7 +285,8 @@ internal sealed partial class CliProviderDescriptor
                 "-c", "memories.generate_memories=false",
                 "-c", "web_search=\"disabled\"",
                 "-c", "tools.web_search=false",
-                "-c", "tools.view_image=false",
+                // Not tools.view_image: --strict-config rejects that key in every Codex release.
+                "-c", "features.view_image=false",
                 "-c", "project_doc_max_bytes=0",
                 "-c", "history.persistence=\"none\"",
                 "-c", "otel.exporter=\"none\"",
@@ -329,6 +330,27 @@ internal sealed partial class CliProviderDescriptor
     {
         var match = VersionRegex().Match(output);
         return match.Success ? match.Groups["version"].Value : null;
+    }
+
+    /// <summary>
+    ///     Oldest release that accepts every override under --strict-config; older Codex passes
+    ///     the probes, then fails every request.
+    /// </summary>
+    private Version? MinimumVersion => Kind == CliProviderKind.Codex ? new Version(0, 147, 0) : null;
+
+    internal bool MeetsMinimumVersion(string version)
+    {
+        if (MinimumVersion is not { } minimum)
+        {
+            return true;
+        }
+
+        // Build metadata never affects precedence, but a prerelease sorts below its own release.
+        var withoutBuild = version.Split('+')[0];
+        var prereleaseStart = withoutBuild.IndexOf('-');
+        var numeric = prereleaseStart < 0 ? withoutBuild : withoutBuild[..prereleaseStart];
+        return Version.TryParse(numeric, out var parsed)
+               && (parsed > minimum || (parsed == minimum && prereleaseStart < 0));
     }
 
     internal bool HasRequiredCapabilities(string helpOutput) =>

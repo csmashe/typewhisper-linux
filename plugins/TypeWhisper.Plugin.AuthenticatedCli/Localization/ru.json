@@ -38,6 +38,7 @@
   "Error.RateLimit": "Достигнут лимит запросов CLI {0}.",
   "Error.Permission": "У учётной записи {0} нет разрешения на обработку этого запроса.",
   "Error.InvalidRequest": "CLI {0} отклонил конфигурацию запроса.",
+  "Error.IncompatibleCliVersion": "Эта версия CLI {0} отклонила параметры, которые ей передаёт TypeWhisper. Обновите TypeWhisper или используйте более старую версию CLI.",
   "Error.NoResult": "CLI {0} завершился без допустимого результата.",
   "Error.UnsupportedModel": "CLI провайдера не поддерживает выбранную модель.",
   "Error.ModelNotFree": "Выбранной модели OpenCode нет в текущем проверенном каталоге бесплатных моделей Zen.",
