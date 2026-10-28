@@ -85,6 +85,7 @@ public sealed partial class GitHubCopilotPluginTests : IDisposable
         var (plugin, transport, host) = await ActivateAsync();
         await plugin.SetSettingValueAsync(GitHubCopilotPlugin.AccountSettingKey, s_personal.Key);
         await SaveProfilesAsync(plugin, ("Work", s_work));
+        await plugin.BackgroundRefresh;
         await plugin.RefreshAsync(CancellationToken.None);
         var defaultRole = Role(plugin, GitHubCopilotPlugin.DefaultSelectionId);
         Assert.True(defaultRole.IsAvailable);
@@ -240,6 +241,8 @@ public sealed partial class GitHubCopilotPluginTests : IDisposable
     {
         var (plugin, transport, _) = await ActivateAsync();
         await plugin.SetSettingValueAsync(GitHubCopilotPlugin.AccountSettingKey, s_personal.Key);
+        // The account change starts a catalog refresh that would restore the dropped model.
+        await plugin.BackgroundRefresh;
         await plugin.RefreshAsync(CancellationToken.None);
         transport.ProcessFailure = failure switch
         {

@@ -1214,6 +1214,38 @@ public class XaiPluginTests
         Assert.Equal(["leo"], sut.AvailableVoices.Select(v => v.Id).ToArray());
     }
 
+    // The first two bodies are recorded from the live xAI API.
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden,
+        """{"code":"permission-denied","error":"Your newly created team doesn't have any credits or licenses yet. You can purchase those on https://console.x.ai/team/00000000-0000-0000-0000-000000000000."}""",
+        "Settings.ApiKeyNoTeamAccess")]
+    [InlineData(HttpStatusCode.BadRequest,
+        """{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}""",
+        "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.Forbidden,
+        """{"code":"permission-denied","error":"The API key does not have permission to access this endpoint."}""",
+        "Settings.ApiKeyForbidden")]
+    public async Task ValidateAsync_SeparatesUnfundedTeamFromInvalidKey(
+        HttpStatusCode status, string body, string expectedMessage)
+    {
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(status)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(expectedMessage, result.Message);
+    }
+
     private static JsonElement LoadManifest()
     {
         var basePath = Path.GetFullPath(AppContext.BaseDirectory);
