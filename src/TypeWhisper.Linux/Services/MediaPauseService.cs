@@ -21,10 +21,10 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     private readonly IProcessRunner _processRunner;
     private readonly IErrorLogService _errorLog;
 
-    // Paused player name -> consecutive failed resume attempts. Guarded by _playersGate;
+    // Paused MPRIS instance -> consecutive failed resume attempts. Guarded by _playersGate;
     // playerctl itself is always invoked outside the lock.
     private readonly Dictionary<string, int> _pausedPlayers =
-        new(StringComparer.OrdinalIgnoreCase);
+        new(StringComparer.Ordinal);
 
     private readonly Lock _playersGate = new();
 
@@ -52,8 +52,9 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
 
         try
         {
+            // Instances, not names: two mpv processes share playerName "mpv".
             var playersResult = RunPlayerctl(
-                ["-a", "--format", "{{playerName}} {{status}}", "status"]
+                ["-a", "--format", "{{playerInstance}} {{status}}", "status"]
             );
             if (
                 !playersResult.Succeeded
@@ -63,27 +64,29 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                 return;
             }
 
-            foreach (
-                var line in playersResult.StandardOutput.Split(
+            var statuses = playersResult
+                .StandardOutput.Split(
                     '\n',
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
                 )
+                .Select(line =>
+                    line.Split(
+                        ' ',
+                        2,
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    )
+                )
+                .Where(parts => parts.Length == 2)
+                .ToList();
+            var instances = statuses.Select(parts => parts[0]).ToList();
+
+            foreach (
+                var parts in statuses.Where(status =>
+                    string.Equals(status[1], "Playing", StringComparison.OrdinalIgnoreCase)
+                )
             )
             {
-                var parts = line.Split(
-                    ' ',
-                    2,
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-                );
-                if (
-                    parts.Length != 2
-                    || !string.Equals(parts[1], "Playing", StringComparison.OrdinalIgnoreCase)
-                )
-                {
-                    continue;
-                }
-
-                if (!RunPlayerctl(["-p", parts[0], "pause"]).Succeeded)
+                if (!RunPlayerctl(TargetInstance(parts[0], instances, "pause")).Succeeded)
                 {
                     continue;
                 }
@@ -119,12 +122,31 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
             players = [.. _pausedPlayers.Keys];
         }
 
+        var liveInstances = ListInstances();
         foreach (var player in players)
         {
             string failure;
             try
             {
-                var result = RunPlayerctl(["-p", player, "play"]);
+                // "-p mpv" would fall through to a surviving "mpv.instance-…" sibling.
+                if (
+                    liveInstances is not null
+                    && !liveInstances.Contains(player, StringComparer.Ordinal)
+                    && liveInstances.Any(instance => IsSiblingInstance(player, instance))
+                )
+                {
+                    WriteDiagnostic(
+                        $"[MediaPauseService] Player {player} vanished; treating resume as completed."
+                    );
+                    lock (_playersGate)
+                    {
+                        _pausedPlayers.Remove(player);
+                    }
+
+                    continue;
+                }
+
+                var result = RunPlayerctl(TargetInstance(player, liveInstances ?? [], "play"));
                 if (result.Succeeded)
                 {
                     lock (_playersGate)
@@ -206,6 +228,59 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     public void Dispose()
     {
         ResumeMedia();
+    }
+
+    /// <summary>Returns the current MPRIS instances, or null when they could not be listed.</summary>
+    private List<string>? ListInstances()
+    {
+        try
+        {
+            var result = RunPlayerctl(["-l"]);
+            return result.Succeeded
+                ? [
+                    .. result.StandardOutput.Split(
+                        '\n',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    ),
+                ]
+                : null;
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic($"[MediaPauseService] Listing players failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    ///     Builds arguments that address exactly <paramref name="instance" />. playerctl's
+    ///     <c>-p</c> also matches <c>instance.*</c> siblings, so those are ignored explicitly.
+    /// </summary>
+    private static List<string> TargetInstance(
+        string instance,
+        IEnumerable<string> knownInstances,
+        string command
+    )
+    {
+        List<string> arguments = ["-p", instance];
+        var siblings = knownInstances
+            .Where(known => IsSiblingInstance(instance, known))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (siblings.Count > 0)
+        {
+            arguments.Add("-i");
+            arguments.Add(string.Join(',', siblings));
+        }
+
+        arguments.Add(command);
+        return arguments;
+    }
+
+    private static bool IsSiblingInstance(string instance, string candidate)
+    {
+        return candidate.Length > instance.Length + 1
+               && candidate.StartsWith(instance + ".", StringComparison.Ordinal);
     }
 
     private ProcessRunResult RunPlayerctl(IReadOnlyList<string> arguments)
