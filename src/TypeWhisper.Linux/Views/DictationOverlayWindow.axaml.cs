@@ -195,6 +195,7 @@ public partial class DictationOverlayWindow : Window
                         return;
                     }
 
+                    SetClickThrough(false);
                     Opacity = 1.0;
                     IsHitTestVisible = true;
                 },
@@ -204,12 +205,11 @@ public partial class DictationOverlayWindow : Window
         }
 
         // Opacity and Avalonia's IsHitTestVisible do not clear a mapped toplevel's native X11
-        // input region. Leaving this Topmost window at its visible coordinates would therefore
-        // create a transparent dead-click rectangle on X11/XWayland. Keep it mapped for the
-        // Mutter workaround, but park it beyond every monitor while hidden, like the correction
-        // toast. Wayland may ignore client positioning, where this remains a harmless best effort.
+        // input region, so this Topmost window would leave a dead-click rectangle. Empty that
+        // region, since Mutter clamps the off-screen park back onto the nearest monitor.
         Opacity = 0.0;
         IsHitTestVisible = false;
+        SetClickThrough(true);
         SetPositionProgrammatically(
             _placementState.Hide(CollectScreenBounds(), Position)
         );
@@ -236,6 +236,14 @@ public partial class DictationOverlayWindow : Window
                 }
             },
             DispatcherPriority.Loaded);
+    }
+
+    private void SetClickThrough(bool passThrough)
+    {
+        if (TryGetPlatformHandle() is { Handle: var xid } && xid != IntPtr.Zero)
+        {
+            X11InputPassthrough.Set((nuint)xid, passThrough);
+        }
     }
 
     private void PositionOverlay()
