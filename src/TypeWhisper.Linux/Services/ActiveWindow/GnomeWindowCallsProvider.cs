@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
@@ -198,8 +199,10 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
 
     /// <summary>
     ///     Strips the gvariant tuple wrapper (<c>('...',)</c>) and unescapes the
-    ///     inner single-quoted string. gdbus escapes <c>\'</c> and <c>\\</c>;
-    ///     everything else passes through so embedded JSON escapes are preserved.
+    ///     inner string. GLib quotes with <c>"</c> instead of <c>'</c> when the
+    ///     string contains an apostrophe, and prints non-printable characters
+    ///     as <c>\n</c>, <c>\uXXXX</c> or <c>\UXXXXXXXX</c>; this mirrors
+    ///     <c>g_variant_parse</c> so embedded JSON escapes are preserved.
     /// </summary>
     internal static string? UnwrapGvariantString(string gvariantOutput)
     {
@@ -215,7 +218,7 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
             inner = inner[..^1].TrimEnd();
         }
 
-        if (inner.Length < 2 || inner[0] != '\'' || inner[^1] != '\'')
+        if (inner.Length < 2 || inner[0] is not ('\'' or '"') || inner[^1] != inner[0])
         {
             return null;
         }
@@ -225,18 +228,48 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
         for (var i = 0; i < body.Length; i++)
         {
             var c = body[i];
-            if (c == '\\' && i + 1 < body.Length)
+            if (c != '\\' || i + 1 >= body.Length)
             {
-                var next = body[i + 1];
-                if (next is '\\' or '\'')
-                {
-                    sb.Append(next);
-                    i++;
-                    continue;
-                }
+                sb.Append(c);
+                continue;
             }
 
-            sb.Append(c);
+            var next = body[++i];
+            if (next is 'u' or 'U')
+            {
+                var digits = next == 'u' ? 4 : 8;
+                if (
+                    i + digits >= body.Length
+                    || !int.TryParse(
+                        body.AsSpan(i + 1, digits),
+                        NumberStyles.AllowHexSpecifier,
+                        null,
+                        out var codePoint
+                    )
+                    || codePoint is < 0 or > 0x10FFFF or >= 0xD800 and <= 0xDFFF
+                )
+                {
+                    return null;
+                }
+
+                sb.Append(char.ConvertFromUtf32(codePoint));
+                i += digits;
+                continue;
+            }
+
+            sb.Append(
+                next switch
+                {
+                    'a' => '\a',
+                    'b' => '\b',
+                    'f' => '\f',
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    'v' => '\v',
+                    _ => next,
+                }
+            );
         }
 
         return sb.ToString();
