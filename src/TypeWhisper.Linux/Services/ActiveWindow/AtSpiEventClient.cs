@@ -1465,6 +1465,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             await conn.ConnectAsync().ConfigureAwait(false);
             _connection = conn;
 
+#pragma warning disable CS0618 // Tmds 0.94 obsoleted this overload; it forwards to the Notification<T> one unchanged.
             _stateSubscription = await conn.AddMatchAsync(
                 new MatchRule
                 {
@@ -1479,10 +1480,12 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 },
                 s_readSignal,
                 HandleStateChanged,
-                ObserverFlags.None,
+                ObserverFlags.EmitOnConnectionFailed,
                 emitOnCapturedContext: false
             ).ConfigureAwait(false);
+#pragma warning restore CS0618
 
+#pragma warning disable CS0618 // Tmds 0.94 obsoleted this overload; it forwards to the Notification<T> one unchanged.
             _textSubscription = await conn.AddMatchAsync(
                 new MatchRule
                 {
@@ -1492,15 +1495,17 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 },
                 s_readSignal,
                 HandleTextChanged,
-                ObserverFlags.None,
+                ObserverFlags.EmitOnConnectionFailed,
                 emitOnCapturedContext: false
             ).ConfigureAwait(false);
+#pragma warning restore CS0618
 
             // Our RegisterEvent state lives inside registryd, and registryd can be replaced
             // mid-session (the a11y bus broker force-disconnects it under event-flood quota
             // pressure and D-Bus activation spawns a fresh instance with an empty listener
             // table — observed live). Watch the registry name's owner and re-register with
             // every new incarnation, exactly like GTK's own bridge does.
+#pragma warning disable CS0618 // Tmds 0.94 obsoleted this overload; it forwards to the Notification<T> one unchanged.
             _registryOwnerSubscription = await conn.AddMatchAsync(
                 new MatchRule
                 {
@@ -1512,9 +1517,10 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 },
                 s_readNameOwnerChanged,
                 HandleRegistryOwnerChanged,
-                ObserverFlags.None,
+                ObserverFlags.EmitOnConnectionFailed,
                 emitOnCapturedContext: false
             ).ConfigureAwait(false);
+#pragma warning restore CS0618
 
             // Tell registryd which events have listeners so toolkits that gate event emission on
             // demand (GTK) actually broadcast them. focused is permanent (focus tracking must run

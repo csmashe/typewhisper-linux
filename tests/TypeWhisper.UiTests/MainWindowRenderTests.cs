@@ -3,6 +3,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
@@ -101,7 +102,7 @@ public sealed class MainWindowRenderTests(UiSession ui)
                             Settle();
                             var section = item.Content!.GetType().Name.Replace("SectionViewModel", "", StringComparison.Ordinal);
                             var variant = $"{section}-{language}-{themeName}-{sizeName}";
-                            window.CaptureRenderedFrame()?.Save(Path.Join(UiEnvironment.SnapshotDir, variant + ".png"));
+                            window.CaptureRenderedFrame()?.Save(Path.Join(UiEnvironment.SnapshotDir, variant + ".png"), PngBitmapEncoderOptions.Default);
                             findings.AddRange(UiInspector.Inspect(window, knownKeys, foreignText)
                                 .Distinct()
                                 .Select(finding => new RenderedFinding(section, language, themeName, sizeName, finding)));
