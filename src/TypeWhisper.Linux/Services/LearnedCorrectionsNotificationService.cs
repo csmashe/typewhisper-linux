@@ -527,6 +527,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                 {
                     await conn.ConnectAsync().ConfigureAwait(false);
 
+#pragma warning disable CS0618 // Tmds 0.94 obsoleted this overload; it forwards to the Notification<T> one unchanged.
                     _actionSubscription = await conn.AddMatchAsync(
                         new MatchRule
                         {
@@ -538,10 +539,12 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                         },
                         s_readActionInvoked,
                         HandleActionInvoked,
-                        ObserverFlags.None,
+                        ObserverFlags.EmitOnConnectionFailed,
                         emitOnCapturedContext: false
                     ).ConfigureAwait(false);
+#pragma warning restore CS0618
 
+#pragma warning disable CS0618 // Tmds 0.94 obsoleted this overload; it forwards to the Notification<T> one unchanged.
                     _closedSubscription = await conn.AddMatchAsync(
                         new MatchRule
                         {
@@ -553,9 +556,10 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                         },
                         s_readClosed,
                         HandleClosed,
-                        ObserverFlags.None,
+                        ObserverFlags.EmitOnConnectionFailed,
                         emitOnCapturedContext: false
                     ).ConfigureAwait(false);
+#pragma warning restore CS0618
 
                     _connection = conn;
                     // Fresh connection: re-arm the one-reset-per-connection guard so a later

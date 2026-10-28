@@ -81,11 +81,13 @@ internal sealed partial class CliProviderDescriptor
     )]
     private static partial Regex VersionRegex();
 
+    // The `opencode` credential line of `auth list`: display name ("OpenCode", formerly
+    // "OpenCode Zen", or the raw ID offline) then credential type. "OpenCode Go" must not match.
     [GeneratedRegex(
-        @"(?<![0-9A-Za-z])OpenCode\s+Zen(?![0-9A-Za-z])",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+        @"^[^0-9A-Za-z\r\n]*OpenCode(?:[ \t]+Zen)?[ \t]+(?:api|oauth|wellknown)(?![0-9A-Za-z])",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant
     )]
-    private static partial Regex OpenCodeZenRegex();
+    private static partial Regex OpenCodeCredentialRegex();
 
     private CliProviderDescriptor(
         CliProviderKind kind,
@@ -283,7 +285,8 @@ internal sealed partial class CliProviderDescriptor
                 "-c", "memories.generate_memories=false",
                 "-c", "web_search=\"disabled\"",
                 "-c", "tools.web_search=false",
-                "-c", "tools.view_image=false",
+                // Not tools.view_image: --strict-config rejects that key in every Codex release.
+                "-c", "features.view_image=false",
                 "-c", "project_doc_max_bytes=0",
                 "-c", "history.persistence=\"none\"",
                 "-c", "otel.exporter=\"none\"",
@@ -293,7 +296,8 @@ internal sealed partial class CliProviderDescriptor
                 "-",
             ],
             // No --max-turns: the flag no longer exists in the shipping Claude Code CLI, and
-            // an empty --tools with everything disallowed already bounds the run to one turn.
+            // an empty --tools already bounds the run. Never disallow "*": --json-schema answers
+            // through the StructuredOutput tool.
             CliProviderKind.Claude =>
             [
                 "-p",
@@ -303,7 +307,7 @@ internal sealed partial class CliProviderDescriptor
                 "--safe-mode",
                 "--disable-slash-commands",
                 "--tools", "",
-                "--disallowedTools", "*", "mcp__*",
+                "--disallowedTools", "mcp__*",
                 "--strict-mcp-config",
                 "--no-chrome",
                 "--no-session-persistence",
@@ -328,6 +332,27 @@ internal sealed partial class CliProviderDescriptor
         return match.Success ? match.Groups["version"].Value : null;
     }
 
+    /// <summary>
+    ///     Oldest release that accepts every override under --strict-config; older Codex passes
+    ///     the probes, then fails every request.
+    /// </summary>
+    private Version? MinimumVersion => Kind == CliProviderKind.Codex ? new Version(0, 147, 0) : null;
+
+    internal bool MeetsMinimumVersion(string version)
+    {
+        if (MinimumVersion is not { } minimum)
+        {
+            return true;
+        }
+
+        // Build metadata never affects precedence, but a prerelease sorts below its own release.
+        var withoutBuild = version.Split('+')[0];
+        var prereleaseStart = withoutBuild.IndexOf('-');
+        var numeric = prereleaseStart < 0 ? withoutBuild : withoutBuild[..prereleaseStart];
+        return Version.TryParse(numeric, out var parsed)
+               && (parsed > minimum || (parsed == minimum && prereleaseStart < 0));
+    }
+
     internal bool HasRequiredCapabilities(string helpOutput) =>
         RequiredHelpTokens.All(token => Regex.IsMatch(
             helpOutput,
@@ -344,7 +369,7 @@ internal sealed partial class CliProviderDescriptor
 
         if (Kind == CliProviderKind.OpenCode)
         {
-            return OpenCodeZenRegex().IsMatch(CliAnsi.Strip(output));
+            return OpenCodeCredentialRegex().IsMatch(CliAnsi.Strip(output));
         }
 
         if (Kind != CliProviderKind.Claude)

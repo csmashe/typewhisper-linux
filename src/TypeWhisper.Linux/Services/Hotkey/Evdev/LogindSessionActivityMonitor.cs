@@ -324,6 +324,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
         string sessionPath
     )
     {
+#pragma warning disable CS0618 // Tmds 0.94 obsoleted this overload; it forwards to the Notification<T> one unchanged.
         return await connection.AddMatchAsync(
             new MatchRule
             {
@@ -336,9 +337,10 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
             },
             s_readPropertiesChanged,
             HandlePropertiesChanged,
-            ObserverFlags.None,
+            ObserverFlags.EmitOnConnectionFailed,
             emitOnCapturedContext: false
         ).ConfigureAwait(false);
+#pragma warning restore CS0618
     }
 
     private async Task<IDisposable> WatchLockSignalAsync(
@@ -348,6 +350,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
         bool locked
     )
     {
+#pragma warning disable CS0618 // Tmds 0.94 obsoleted this overload; it forwards to the Notification<T> one unchanged.
         return await connection.AddMatchAsync(
             new MatchRule
             {
@@ -359,9 +362,10 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
             },
             locked ? s_readLockSignal : s_readUnlockSignal,
             locked ? HandleLockSignal : HandleUnlockSignal,
-            ObserverFlags.None,
+            ObserverFlags.EmitOnConnectionFailed,
             emitOnCapturedContext: false
         ).ConfigureAwait(false);
+#pragma warning restore CS0618
     }
 
     private async Task RefreshPropertiesAsync(DBusConnection connection, string sessionPath)

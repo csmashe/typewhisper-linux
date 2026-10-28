@@ -1216,7 +1216,7 @@ public partial class DictationSectionViewModel : ObservableObject
         CreateLanguageChoices(s_defaultLanguageCodes);
 
     // Unnamed tags such as Deepgram's "multi" are modes, not spoken languages, so they are dropped.
-    private static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices(IEnumerable<string> codes)
+    internal static IReadOnlyList<SpokenLanguageOption> CreateLanguageChoices(IEnumerable<string> codes)
     {
         var options = codes
             .Distinct(StringComparer.OrdinalIgnoreCase)

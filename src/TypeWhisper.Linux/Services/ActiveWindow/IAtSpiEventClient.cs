@@ -122,9 +122,10 @@ public interface IAtSpiEventClient
     /// <summary>
     ///     Best-effort read of an element's on-screen bounding box via
     ///     org.a11y.atspi.Component.GetExtents (screen coordinates). Returns <c>null</c> when the
-    ///     element doesn't implement the Component interface, the read fails, or the client isn't
-    ///     connected. Used only to position feedback UI, so any failure is non-fatal — the caller
-    ///     falls back to a fixed on-screen spot.
+    ///     element doesn't implement the Component interface, the read fails, the client isn't
+    ///     connected, or (on Wayland) the target is a native Wayland client whose box is only
+    ///     window-relative. Used only to position feedback UI, so any failure is non-fatal — the
+    ///     caller falls back to a fixed on-screen spot.
     /// </summary>
     Task<AtSpiScreenRect?> TryGetScreenExtentsAsync(AtSpiElementRef element);
 

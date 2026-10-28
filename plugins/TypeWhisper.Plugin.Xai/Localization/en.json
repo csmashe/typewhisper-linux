@@ -20,6 +20,8 @@
   "Settings.TextNormalizationDescription": "Normalize numbers and symbols before speaking.",
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Settings.ApiKeyNoTeamAccess": "xAI accepted the API key, but its team can't use the API yet. New teams need credits or a license first: add them at console.x.ai, then test again.",
+  "Settings.ApiKeyForbidden": "xAI accepted the API key but refused access. The key may not be allowed to list models, or the key or its team may be blocked. Check the key's permissions at console.x.ai, then test again.",
   "Settings.ApiKeyValidFetched": "API key is valid. Fetched {0} LLM model(s) and {1} voice(s).",
   "Settings.ApiKeyValidSaved": "API key is valid. Using saved/default models and voices.",
   "Settings.ApiKeyNotConfigured": "API key not configured",

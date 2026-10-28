@@ -64,7 +64,9 @@ internal sealed class AssemblyAiWebSocketAdapter(
     string modelId = AssemblyAiModels.DefaultId
 ) : IWebSocketSessionAdapter
 {
+    // AssemblyAI accepts 50-1000 ms per message (16 kHz PCM16).
     internal const int MinimumChunkBytes = 1600;
+    internal const int MaximumChunkBytes = 32000;
 
     private readonly MemoryStream _audioBuffer = new();
 
@@ -138,11 +140,28 @@ internal sealed class AssemblyAiWebSocketAdapter(
             );
         }
 
-        var chunk = _audioBuffer.ToArray();
-        _audioBuffer.SetLength(0);
-        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
-            [new WebSocketOutboundMessage(chunk, WebSocketMessageType.Binary)]
-        );
+        // A buffered residual plus a full-size write can exceed the 1000 ms limit.
+        var messages = new List<WebSocketOutboundMessage>();
+        var bufferedAudio = _audioBuffer.GetBuffer();
+        var offset = 0;
+        while (_audioBuffer.Length - offset >= MinimumChunkBytes)
+        {
+            // Whole samples only; an odd trailing byte waits for its other half.
+            var count = Math.Min(MaximumChunkBytes, (int)_audioBuffer.Length - offset) & ~1;
+            messages.Add(
+                new WebSocketOutboundMessage(
+                    bufferedAudio.AsSpan(offset, count).ToArray(),
+                    WebSocketMessageType.Binary
+                )
+            );
+            offset += count;
+        }
+
+        var remaining = (int)_audioBuffer.Length - offset;
+        bufferedAudio.AsSpan(offset, remaining).CopyTo(bufferedAudio);
+        _audioBuffer.SetLength(remaining);
+        _audioBuffer.Position = remaining;
+        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(messages);
     }
 
     public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)

@@ -44,11 +44,11 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Avalonia" Version="12.0.1"/>
-        <PackageReference Include="Avalonia.Desktop" Version="12.0.1"/>
+        <PackageReference Include="Avalonia" Version="12.1.4"/>
+        <PackageReference Include="Avalonia.Desktop" Version="12.1.4"/>
         <PackageReference Include="FluentIcons.Avalonia" Version="2.1.323"/>
-        <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.1"/>
-        <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.1"/>
+        <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4"/>
+        <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.4"/>
         <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1">
             <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
             <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
@@ -61,15 +61,15 @@
         <!-- Managed D-Bus client for the event-driven AT-SPI accessibility bus
              (target-app correction learning). Low-level protocol binding: a
              persistent connection with signal match rules, no per-read subprocess.
-             Pinned to 0.92.0 because that is the version Avalonia.FreeDesktop
-             12.0.1 depends on and resolves at startup. Newer releases (e.g. 0.94.2)
+             Pinned to 0.94.1 because that is the version Avalonia.FreeDesktop
+             12.1.4 depends on and resolves at startup. Other releases
              change the Tmds.DBus.Protocol types Avalonia loads during X11/IME init,
-             so a higher pin makes Avalonia throw TypeLoadException before the window
+             so a mismatched pin makes Avalonia throw TypeLoadException before the window
              ever appears.
              MAINTENANCE: recheck this pin after every Avalonia.FreeDesktop upgrade — it
              must track whatever version that package depends on. A stale pin fails at
              runtime (blank launch), not at build time. -->
-        <PackageReference Include="Tmds.DBus.Protocol" Version="0.92.0"/>
+        <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.1"/>
     </ItemGroup>
 
     <Target

@@ -46,6 +46,39 @@ public sealed class GnomeWindowCallsProviderTests
         Assert.Null(GnomeWindowCallsProvider.UnwrapGvariantString(""));
         Assert.Null(GnomeWindowCallsProvider.UnwrapGvariantString("not a tuple"));
         Assert.Null(GnomeWindowCallsProvider.UnwrapGvariantString("(no-quotes,)"));
+        Assert.Null(GnomeWindowCallsProvider.UnwrapGvariantString("('mismatched\",)"));
+        Assert.Null(GnomeWindowCallsProvider.UnwrapGvariantString("""('bad \u12',)"""));
+        Assert.Null(GnomeWindowCallsProvider.UnwrapGvariantString("""('bad \Uffffffff',)"""));
+    }
+
+    [Fact]
+    public void ParsesDoubleQuotedOutputWhenABackgroundTitleHasAnApostrophe()
+    {
+        // GLib switches to double quotes once any title contains an
+        // apostrophe. Captured from GLib.Variant('(s)', ...).print_(True).
+        const string output =
+            """("[{\"id\": 1, \"title\": \"QA background owner's notes\", \"has_focus\": false}, {\"id\": 2, \"title\": \"QA focused field\", \"wm_class\": \"x\", \"pid\": 1, \"has_focus\": true}]",)""";
+
+        var focused = GnomeWindowCallsProvider.ParseFocusedWindow(output);
+
+        Assert.NotNull(focused);
+        Assert.Equal("2", focused.Value.WindowId);
+        Assert.Equal("QA focused field", focused.Value.Title);
+    }
+
+    [Fact]
+    public void UnescapesGlibControlAndUnicodeEscapes()
+    {
+        // Captured from GLib: a title with both quote kinds, a JSON tab
+        // escape, and U+200E, which GLib prints as ‎.
+        const string output =
+            """("[{\"id\": 1, \"title\": \"it's \\\"quoted\\\"\", \"has_focus\": false}, {\"id\": 2, \"title\": \"tab\\there ‎ mark\", \"wm_class\": \"x\", \"pid\": 1, \"has_focus\": true}]",)""";
+
+        var focused = GnomeWindowCallsProvider.ParseFocusedWindow(output);
+
+        Assert.NotNull(focused);
+        Assert.Equal("tab\there ‎ mark", focused.Value.Title);
+        Assert.Equal("\U0001F600\n", GnomeWindowCallsProvider.UnwrapGvariantString("""('\U0001f600\n',)"""));
     }
 
     [Fact]

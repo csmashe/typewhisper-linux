@@ -4,6 +4,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -11,6 +12,8 @@ using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Xai;
+
+internal enum ApiKeyCheck { Valid, Invalid, NoTeamAccess, Forbidden }
 
 public sealed class XaiPlugin
     : ITranscriptionEnginePlugin,
@@ -445,7 +448,7 @@ public sealed class XaiPlugin
         }
     }
 
-    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
+    internal async Task<ApiKeyCheck> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -453,23 +456,35 @@ public sealed class XaiPlugin
         try
         {
             using var response = await _httpClient.SendAsync(request, ct);
-            return response.IsSuccessStatusCode;
+            if (response.IsSuccessStatusCode)
+                return ApiKeyCheck.Valid;
+
+            // xAI rejects a wrong or deleted key with 400. A 403 accepted the key; only the body
+            // says whether the team lacks credits or the key lacks permission or is blocked.
+            if (response.StatusCode != HttpStatusCode.Forbidden)
+                return ApiKeyCheck.Invalid;
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return body.Contains("credit", StringComparison.OrdinalIgnoreCase)
+                   || body.Contains("licens", StringComparison.OrdinalIgnoreCase)
+                ? ApiKeyCheck.NoTeamAccess
+                : ApiKeyCheck.Forbidden;
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
         catch (HttpRequestException)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
         catch (JsonException)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
     }
 
@@ -825,9 +840,14 @@ public sealed class XaiPlugin
         if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(ApiKey, ct);
-        if (!valid)
-            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        var check = await ValidateApiKeyAsync(ApiKey, ct);
+        if (check != ApiKeyCheck.Valid)
+            return new PluginSettingsValidationResult(false, Loc.L(check switch
+            {
+                ApiKeyCheck.NoTeamAccess => "Settings.ApiKeyNoTeamAccess",
+                ApiKeyCheck.Forbidden => "Settings.ApiKeyForbidden",
+                _ => "Settings.ApiKeyInvalid",
+            }));
 
         var models = await FetchLlmModelsAsync(ct);
         if (models.Count > 0)

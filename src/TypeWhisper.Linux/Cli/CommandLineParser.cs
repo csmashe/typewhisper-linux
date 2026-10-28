@@ -48,7 +48,7 @@ internal static class CommandLineParser
         + "  typewhisper record toggle         Start if idle, stop otherwise.\n"
         + "  typewhisper record cancel         Drop in-flight audio with no transcription.\n"
         + "  typewhisper status                Print current state as JSON.\n"
-        + "  typewhisper --minimized           Launch the GUI minimized to the tray.\n"
+        + "  typewhisper --minimized           Launch the GUI minimized (to the tray if available).\n"
         + "  typewhisper --page <page>         Open a settings page, starting the GUI if needed.\n"
         + "  typewhisper --page plugin:<id>    Open one plugin's settings.\n"
         + "  typewhisper --help                Show this help.\n"
