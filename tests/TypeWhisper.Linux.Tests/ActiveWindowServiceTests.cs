@@ -73,6 +73,71 @@ public sealed class ActiveWindowServiceTests
         );
     }
 
+    [Fact]
+    public async Task TryActivateSnapshotWindowAsync_uses_the_provider_that_captured_the_window()
+    {
+        var runner = new FakeProcessRunner();
+        var activator = new StubActivatorProvider("kwin");
+        var service = new ActiveWindowService(
+            [new StubActiveWindowProvider("firefox", "123"), activator],
+            new AtSpiUrlExtractor(runner),
+            runner
+        );
+
+        Assert.True(
+            await service.TryActivateSnapshotWindowAsync(
+                new ActiveWindowSnapshot("kate", "Doc", "{uuid}", "org.kde.kate", "kwin"),
+                CancellationToken.None
+            )
+        );
+        Assert.False(
+            await service.TryActivateSnapshotWindowAsync(
+                new ActiveWindowSnapshot("kate", "Doc", "0x1", null, "xdotool"),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(["{uuid}"], activator.Activated);
+    }
+
+    [Fact]
+    public async Task KWin_activation_runs_kdotool_windowactivate()
+    {
+        var runner = new FakeProcessRunner();
+        runner.SupervisorInvocations.Clear();
+
+        var activated = await new KWinActiveWindowProvider(runner)
+            .TryActivateWindowAsync("{uuid}", CancellationToken.None);
+
+        Assert.True(activated);
+        var invocation = Assert.Single(runner.SupervisorInvocations);
+        Assert.Equal("kdotool", invocation.Command.FileName);
+        Assert.Equal(["windowactivate", "{uuid}"], invocation.Command.Arguments);
+    }
+
+    private sealed class StubActivatorProvider(string name)
+        : IActiveWindowProvider, IActiveWindowActivator
+    {
+        public List<string> Activated { get; } = [];
+
+        public string Name => name;
+
+        public bool IsApplicable()
+        {
+            return true;
+        }
+
+        public Task<ActiveWindowSnapshot?> TryGetActiveWindowAsync(CancellationToken ct)
+        {
+            return Task.FromResult<ActiveWindowSnapshot?>(null);
+        }
+
+        public Task<bool> TryActivateWindowAsync(string windowId, CancellationToken ct)
+        {
+            Activated.Add(windowId);
+            return Task.FromResult(true);
+        }
+    }
+
     private sealed class StubActiveWindowProvider(string processName, string windowId)
         : IActiveWindowProvider
     {

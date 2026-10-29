@@ -65,6 +65,55 @@ public sealed class RecentTranscriptionsServiceTests
         Assert.Equal(3, fixture.Delays.Count);
     }
 
+    [Fact]
+    public async Task FocusLandsOnOwnWindow_ReactivatesCapturedTargetAndInserts()
+    {
+        var captured = Snapshot("editor", "Document", "kwin-editor", "editor", "kwin");
+        var settings = Snapshot("typewhisper", "TypeWhisper", "kwin-main", "typewhisper", "kwin");
+        var fixture = new Fixture(isWayland: true, null, captured, settings)
+        {
+            OnActivate = window => window.WindowId == "kwin-editor" ? captured : null,
+        };
+
+        var result = await fixture.CaptureAndInsertAsync();
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        var request = Assert.Single(fixture.InsertionRequests);
+        Assert.True(request.AutoPaste);
+        Assert.Equal("editor", request.TargetProcessName);
+        Assert.Same(captured, Assert.Single(fixture.Activations));
+    }
+
+    [Fact]
+    public async Task ReactivationDoesNotRestoreFocus_KeepsClipboardFallback()
+    {
+        var captured = Snapshot("editor", "Document", "kwin-editor", "editor", "kwin");
+        var settings = Snapshot("typewhisper", "TypeWhisper", "kwin-main", "typewhisper", "kwin");
+        var fixture = new Fixture(isWayland: true, null, captured, settings);
+
+        var result = await fixture.CaptureAndInsertAsync();
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(Assert.Single(fixture.InsertionRequests).AutoPaste);
+        Assert.Equal(10, fixture.Activations.Count);
+    }
+
+    [Fact]
+    public async Task FocusMovedToAnotherApp_DoesNotReactivateCapturedTarget()
+    {
+        var captured = Snapshot("editor", "Document", "kwin-editor", "editor", "kwin");
+        var browser = Snapshot("browser", "Browser", "kwin-browser", "browser", "kwin");
+        var fixture = new Fixture(isWayland: true, null, captured, browser)
+        {
+            OnActivate = _ => captured,
+        };
+
+        var result = await fixture.CaptureAndInsertAsync();
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Empty(fixture.Activations);
+    }
+
     [Theory]
     [MemberData(nameof(NullIdentityCases))]
     public async Task NullIdentitySnapshot_UsesX11PathOrClipboardFallback(
@@ -518,7 +567,8 @@ public sealed class RecentTranscriptionsServiceTests
                     processName is not null
                     && Strategies.TryGetValue(processName, out var strategy)
                         ? strategy
-                        : TextInsertionStrategy.Auto
+                        : TextInsertionStrategy.Auto,
+                activateWindowAsync: ActivateAsync
             );
             _service.FeedbackRequested += (message, isError) =>
                 Feedback.Add((message, isError));
@@ -532,6 +582,10 @@ public sealed class RecentTranscriptionsServiceTests
             RecentTranscriptionPasteToolHint.X11;
         public List<TextInsertionRequest> InsertionRequests { get; } = [];
         public List<TimeSpan> Delays { get; } = [];
+        public List<ActiveWindowSnapshot> Activations { get; } = [];
+
+        // Returns the snapshot focus moves to after activating a window, or null to leave it.
+        public Func<ActiveWindowSnapshot, ActiveWindowSnapshot?>? OnActivate { get; init; }
         public List<(string Message, bool IsError)> Feedback { get; } = [];
 
         public Task CopyLastTranscriptionToClipboardAsync()
@@ -594,6 +648,22 @@ public sealed class RecentTranscriptionsServiceTests
                         : InsertionResult.CopiedToClipboard
                 )
             );
+        }
+
+        private Task<bool> ActivateAsync(
+            ActiveWindowSnapshot window,
+            CancellationToken cancellationToken
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Activations.Add(window);
+            if (OnActivate?.Invoke(window) is not { } focused)
+            {
+                return Task.FromResult(false);
+            }
+
+            _snapshots.Enqueue(focused);
+            return Task.FromResult(true);
         }
 
         private Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)

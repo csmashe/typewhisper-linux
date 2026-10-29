@@ -29,6 +29,7 @@ public sealed class RecentTranscriptionsService
     private readonly Func<string?> _activeWindowIdProvider;
     private readonly Func<CancellationToken, Task<ActiveWindowSnapshot?>>
         _activeWindowSnapshotProvider;
+    private readonly Func<ActiveWindowSnapshot, CancellationToken, Task<bool>> _activateWindowAsync;
     private readonly Func<bool> _autoPasteProvider;
     private readonly Func<bool> _inputAllowedProvider;
     private readonly Func<string?, TextInsertionStrategy> _insertionStrategyProvider;
@@ -68,7 +69,8 @@ public sealed class RecentTranscriptionsService
                 settings.Current.AppInsertionStrategies,
                 processName
             ),
-            CurrentProcessName()
+            CurrentProcessName(),
+            activeWindow.TryActivateSnapshotWindowAsync
         )
     {
     }
@@ -85,7 +87,8 @@ public sealed class RecentTranscriptionsService
         bool isWaylandSession = false,
         Func<bool>? inputAllowedProvider = null,
         Func<string?, TextInsertionStrategy>? insertionStrategyProvider = null,
-        string ownProcessName = "typewhisper"
+        string ownProcessName = "typewhisper",
+        Func<ActiveWindowSnapshot, CancellationToken, Task<bool>>? activateWindowAsync = null
     )
     {
         _history = history;
@@ -102,6 +105,8 @@ public sealed class RecentTranscriptionsService
         _insertionStrategyProvider =
             insertionStrategyProvider ?? (static _ => TextInsertionStrategy.Auto);
         _ownProcessName = ProcessNameNormalizer.Normalize(ownProcessName);
+        _activateWindowAsync =
+            activateWindowAsync ?? (static (_, _) => Task.FromResult(false));
     }
 
     private static string CurrentProcessName()
@@ -407,6 +412,16 @@ public sealed class RecentTranscriptionsService
                && !string.Equals(process, _ownProcessName, StringComparison.OrdinalIgnoreCase);
     }
 
+    private bool IsOwnWindow(ActiveWindowSnapshot? snapshot)
+    {
+        return snapshot is not null
+               && string.Equals(
+                   ProcessNameNormalizer.Normalize(snapshot.ProcessName ?? snapshot.AppId),
+                   _ownProcessName,
+                   StringComparison.OrdinalIgnoreCase
+               );
+    }
+
     private async Task<bool> WaitForFocusRestorationAsync(ActiveWindowSnapshot target)
     {
         using var timeout = new CancellationTokenSource(s_focusRestoreTimeout);
@@ -439,6 +454,14 @@ public sealed class RecentTranscriptionsService
                 break;
             }
 
+            // KWin hands focus to another TypeWhisper window when the palette closes, so ask the
+            // compositor for the captured window back; the next poll still has to confirm it.
+            // Focus the user moved to a different app is left alone.
+            if (IsOwnWindow(current))
+            {
+                await TryActivateTargetAsync(target, timeout.Token);
+            }
+
             try
             {
                 await _delay(s_focusRestorePollInterval, timeout.Token);
@@ -450,6 +473,26 @@ public sealed class RecentTranscriptionsService
         }
 
         return false;
+    }
+
+    private async Task TryActivateTargetAsync(
+        ActiveWindowSnapshot target,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await _activateWindowAsync(target, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Trace.WriteLine(
+                $"[RecentTranscriptionsService] Focus restore failed: {ex.Message}"
+            );
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
     }
 
     private static bool HasUsableIdentity(ActiveWindowSnapshot? snapshot)
