@@ -86,6 +86,18 @@ public sealed class FileDialogFailureTests(UiSession ui)
         }
     }
 
+    [Fact]
+    public async Task ImportOfFileRemovedAfterPickingShowsFailure()
+    {
+        var path = Path.Join(UiEnvironment.Root, $"snippet-import-removed-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(path, "[]");
+
+        // The read is queued on the dispatcher once the chooser closes, so deleting here beats it.
+        var failure = await ui.Session.Dispatch(() => RunFlow("snippet-import", path, null, () => File.Delete(path)), CancellationToken.None);
+
+        Assert.Contains("Could not find file", failure, StringComparison.Ordinal);
+    }
+
     private string ExpectedExport(string operation) =>
         operation.StartsWith("snippet", StringComparison.Ordinal)
             ? ui.Services.GetRequiredService<SnippetsSectionViewModel>().ExportToJson()
@@ -94,8 +106,9 @@ public sealed class FileDialogFailureTests(UiSession ui)
     /// <summary>
     ///     Picks <paramref name="path" /> in the section's chooser and waits for a message dialog or, when
     ///     <paramref name="expectedExport" /> is given, for the file to hold it; returns the dialog's text, or null when none opened.
+    ///     <paramref name="afterPick" /> runs once the chooser closes, before the section touches the file.
     /// </summary>
-    private string? RunFlow(string operation, string path, string? expectedExport)
+    private string? RunFlow(string operation, string path, string? expectedExport, Action? afterPick = null)
     {
         Control section = operation.StartsWith("snippet", StringComparison.Ordinal)
             ? new SnippetsSection { DataContext = ui.Services.GetRequiredService<SnippetsSectionViewModel>() }
@@ -117,6 +130,7 @@ public sealed class FileDialogFailureTests(UiSession ui)
             chooser.Navigate(Path.GetDirectoryName(path)!, Path.GetFileName(path));
             chooser.FileName = Path.GetFileName(path);
             chooser.Ok();
+            afterPick?.Invoke();
             // Saving over an existing file asks first; confirm as the user would.
             PumpUntil(() => Find<ManagedFileChooserOverwritePrompt>(opened) is not null || opened.OfType<MessageDialogWindow>().Any());
             Find<ManagedFileChooserOverwritePrompt>(opened)?.Confirm();
