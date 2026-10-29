@@ -50,7 +50,7 @@ public sealed class FileDialogFailureTests(UiSession ui)
 
         try
         {
-            var failure = await ui.Session.Dispatch(() => RunFlow(operation, path, original), CancellationToken.None);
+            var failure = await ui.Session.Dispatch(() => RunFlow(operation, path, null), CancellationToken.None);
 
             Assert.Contains("denied", failure, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(snippets.Snippets, s => s.Id == existing.Id);
@@ -58,7 +58,8 @@ public sealed class FileDialogFailureTests(UiSession ui)
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             Assert.Equal(original, await File.ReadAllTextAsync(path));
 
-            var retry = await ui.Session.Dispatch(() => RunFlow(operation, path, original), CancellationToken.None);
+            var expected = importing ? null : await ui.Session.Dispatch(() => ExpectedExport(operation), CancellationToken.None);
+            var retry = await ui.Session.Dispatch(() => RunFlow(operation, path, expected), CancellationToken.None);
 
             if (importing)
             {
@@ -68,7 +69,7 @@ public sealed class FileDialogFailureTests(UiSession ui)
             else
             {
                 Assert.Null(retry);
-                Assert.NotEqual(original, await File.ReadAllTextAsync(path));
+                Assert.Equal(expected, await File.ReadAllTextAsync(path));
             }
         }
         finally
@@ -85,8 +86,16 @@ public sealed class FileDialogFailureTests(UiSession ui)
         }
     }
 
-    /// <summary>Picks <paramref name="path" /> in the section's chooser; returns the message dialog's text, or null when none opened.</summary>
-    private string? RunFlow(string operation, string path, string original)
+    private string ExpectedExport(string operation) =>
+        operation.StartsWith("snippet", StringComparison.Ordinal)
+            ? ui.Services.GetRequiredService<SnippetsSectionViewModel>().ExportToJson()
+            : ui.Services.GetRequiredService<HistorySectionViewModel>().BuildExportContent(".json");
+
+    /// <summary>
+    ///     Picks <paramref name="path" /> in the section's chooser and waits for a message dialog or, when
+    ///     <paramref name="expectedExport" /> is given, for the file to hold it; returns the dialog's text, or null when none opened.
+    /// </summary>
+    private string? RunFlow(string operation, string path, string? expectedExport)
     {
         Control section = operation.StartsWith("snippet", StringComparison.Ordinal)
             ? new SnippetsSection { DataContext = ui.Services.GetRequiredService<SnippetsSectionViewModel>() }
@@ -112,7 +121,7 @@ public sealed class FileDialogFailureTests(UiSession ui)
             PumpUntil(() => Find<ManagedFileChooserOverwritePrompt>(opened) is not null || opened.OfType<MessageDialogWindow>().Any());
             Find<ManagedFileChooserOverwritePrompt>(opened)?.Confirm();
 
-            PumpUntil(() => opened.OfType<MessageDialogWindow>().Any() || FileChanged(path, original));
+            PumpUntil(() => opened.OfType<MessageDialogWindow>().Any() || (expectedExport is not null && FileHolds(path, expectedExport)));
             var dialog = opened.OfType<MessageDialogWindow>().SingleOrDefault();
             var text = dialog?.FindControl<TextBlock>("MessageTextBlock")!.Text;
             dialog?.Close();
@@ -124,11 +133,11 @@ public sealed class FileDialogFailureTests(UiSession ui)
         }
     }
 
-    private static bool FileChanged(string path, string original)
+    private static bool FileHolds(string path, string expected)
     {
         try
         {
-            return File.ReadAllText(path) != original;
+            return File.ReadAllText(path) == expected;
         }
         catch (UnauthorizedAccessException)
         {
