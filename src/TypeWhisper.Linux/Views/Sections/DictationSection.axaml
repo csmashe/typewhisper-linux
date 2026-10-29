@@ -259,13 +259,14 @@
                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                            TextWrapping="Wrap" />
                 <ItemsControl ItemsSource="{Binding LocalModelCards}">
-                    <!-- Hide the item container, not the card, so unlisted cards leave no spacing. -->
-                    <ItemsControl.Styles>
-                        <Style Selector="ContentPresenter"
-                               x:DataType="vm:LocalModelCard">
+                    <!-- Hide the item container, not the card, so unlisted cards leave no spacing. A container
+                         theme, unlike a style, doesn't also match the presenters inside the buttons. -->
+                    <ItemsControl.ItemContainerTheme>
+                        <ControlTheme TargetType="ContentPresenter"
+                                      x:DataType="vm:LocalModelCard">
                             <Setter Property="IsVisible" Value="{Binding IsListed}" />
-                        </Style>
-                    </ItemsControl.Styles>
+                        </ControlTheme>
+                    </ItemsControl.ItemContainerTheme>
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <StackPanel Spacing="10" />
