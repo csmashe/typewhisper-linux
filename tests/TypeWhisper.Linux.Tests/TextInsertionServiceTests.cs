@@ -2499,6 +2499,13 @@ public sealed class TextInsertionServiceTests
         true,
         false
     )]
+    // Native GTK plain-text copy on KDE Wayland also lists SAVE_TARGETS negotiation metadata.
+    [InlineData(
+        "text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n",
+        true,
+        false
+    )]
+    [InlineData("SAVE_TARGETS\ntext/html\n", true, true)]
     [InlineData("COMPOUND_TEXT\ntext/html\n", true, true)]
     [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false, false)]
     [InlineData(
