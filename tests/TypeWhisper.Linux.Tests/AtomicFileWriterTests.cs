@@ -1,3 +1,4 @@
+using System.Text;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 using TypeWhisper.Tests;
@@ -105,6 +106,41 @@ public sealed class AtomicFileWriterTests
             Assert.True(committed);
             Assert.Equal("new", await File.ReadAllTextAsync(path));
             Assert.Empty(Directory.EnumerateFiles(dir, "*.tmp"));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
+    [Theory]
+    [InlineData("utf-16LE")]
+    [InlineData("utf-16BE")]
+    public async Task WriteIfUnchangedAsync_Utf16BomFile_KeepsDecodedText(string encodingName)
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "user.js");
+            const string original = "first-custom-λ\r\nlast";
+            var encoding = Encoding.GetEncoding(encodingName);
+            await File.WriteAllBytesAsync(
+                path,
+                [.. encoding.Preamble, .. encoding.GetBytes(original)]
+            );
+            var snapshot = await AtomicFileWriter.CaptureAsync(path, CancellationToken.None);
+
+            Assert.Equal(original, snapshot.Contents);
+            Assert.False(snapshot.HasUtf8Bom);
+
+            var committed = await AtomicFileWriter.WriteIfUnchangedAsync(
+                snapshot,
+                snapshot.Contents + "\r\nnew",
+                CancellationToken.None
+            );
+
+            Assert.True(committed);
+            Assert.Equal(original + "\r\nnew", await File.ReadAllTextAsync(path));
         }
         finally
         {

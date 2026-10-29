@@ -276,9 +276,9 @@ internal static partial class AtomicFileWriter
     }
 
     /// <summary>
-    ///     Reads a file as UTF-8 and reports whether it began with a UTF-8 byte order
-    ///     mark. The mark is excluded from the returned text, matching
-    ///     <see cref="File.ReadAllTextAsync(string, CancellationToken)" />.
+    ///     Decodes a file the way <see cref="File.ReadAllTextAsync(string, CancellationToken)" />
+    ///     does (honoring UTF-8, UTF-16 and UTF-32 byte order marks, else UTF-8) and
+    ///     reports whether it began with a UTF-8 byte order mark.
     /// </summary>
     private static async Task<(string Contents, bool HasUtf8Bom)> ReadTextAsync(
         string path,
@@ -286,10 +286,13 @@ internal static partial class AtomicFileWriter
     )
     {
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
-        var preamble = Encoding.UTF8.Preamble;
-        var hasUtf8Bom = bytes.AsSpan().StartsWith(preamble);
-        var body = hasUtf8Bom ? bytes.AsSpan(preamble.Length) : bytes;
-        return (Encoding.UTF8.GetString(body), hasUtf8Bom);
+        var hasUtf8Bom = bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble);
+        using var reader = new StreamReader(
+            new MemoryStream(bytes),
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true
+        );
+        return (await reader.ReadToEndAsync(ct).ConfigureAwait(false), hasUtf8Bom);
     }
 
     private static async Task<string> StageAsync(
