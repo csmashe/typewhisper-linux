@@ -30,7 +30,7 @@ public sealed class FileDialogFailureTests(UiSession ui)
         { "history-export", UnixFileMode.UserRead },
     };
 
-    [Theory]
+    [PermissionsEnforcedTheory]
     [MemberData(nameof(Cases))]
     public async Task DeniedFileAccessShowsFailureAndKeepsFile(string operation, UnixFileMode mode)
     {
@@ -101,6 +101,31 @@ public sealed class FileDialogFailureTests(UiSession ui)
         while (!condition() && DateTime.UtcNow < deadline)
         {
             Dispatcher.UIThread.RunJobs();
+        }
+    }
+
+    private sealed class PermissionsEnforcedTheoryAttribute : TheoryAttribute
+    {
+        public PermissionsEnforcedTheoryAttribute()
+        {
+            // Root or CAP_DAC_OVERRIDE ignores file modes, so nothing would be denied.
+            var probe = Path.Join(Path.GetTempPath(), $"tw-permission-probe-{Guid.NewGuid():N}");
+            File.WriteAllText(probe, "");
+            try
+            {
+                File.SetUnixFileMode(probe, UnixFileMode.None);
+                using (File.OpenRead(probe))
+                {
+                    Skip = "File permissions are not enforced for this process (root or CAP_DAC_OVERRIDE).";
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+            finally
+            {
+                File.Delete(probe);
+            }
         }
     }
 }
