@@ -42,6 +42,12 @@ internal sealed record RecordingContext(
 {
     public LockedFocusTarget? LockedFocusField { get; init; }
 
+    /// <summary>The window focused at recording start, used to catch a focus move when there is no xdotool <see cref="WindowId" />.</summary>
+    public ActiveWindowSnapshot? TargetWindow { get; init; }
+
+    /// <summary>Wayland can't activate an XWayland <see cref="WindowId" />, so focus is checked through <see cref="TargetWindow" /> there.</summary>
+    public bool IsWaylandSession { get; init; }
+
     public OverlayPresentationToken? OverlayToken { get; init; }
     public string? TranscriptionTaskUsed { get; init; }
     public string? StreamingDetectedLanguage { get; init; }
@@ -183,6 +189,7 @@ public sealed partial class DictationOrchestrator : IDisposable
 
     private readonly IAtSpiEventClient? _atSpiClient;
     private LockedFocusTarget? _recordingLockedField;
+    private ActiveWindowSnapshot? _recordingTargetWindow;
 
     private EventHandler? _toggleHandler;
     private int _toggleGateCloseOutcome;
@@ -1046,6 +1053,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
+                _recordingTargetWindow = null;
                 _recordingProfile = null;
             }
 
@@ -1131,6 +1139,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         _recordingAppProcess = appProcess;
                         _recordingAppTitle = appTitle;
                         _recordingAppUrl = appUrl;
+                        _recordingTargetWindow = initialSnap;
                         _recordingProfile = matchedProfile;
                     }
                 }
@@ -1624,6 +1633,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // Consent withdrawn mid-recording means the captured element must not be touched again.
                     // TextInsertionService re-checks consent right before it touches the element.
                     LockedFocusField = learningConsent ? _recordingLockedField : null,
+                    TargetWindow = _recordingTargetWindow,
+                    IsWaylandSession = _commands.IsWaylandSession,
                 };
 
                 _recordingAppProcess = null;
@@ -1631,6 +1642,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _recordingAppUrl = null;
                 _recordingWindowId = null;
                 _recordingLockedField = null;
+                _recordingTargetWindow = null;
                 _recordingProfile = null;
                 _recordingStart = default;
             }
@@ -2758,6 +2770,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             InsertionResult insertion;
             ActionPluginExecutionResult? actionExecutionResult = null;
             var insertionThrew = false;
+            var enterSuppressed = false;
             try
             {
                 // Final lock check before synthesizing any keystroke, re-evaluated
@@ -2801,14 +2814,23 @@ public sealed partial class DictationOrchestrator : IDisposable
                 }
                 else
                 {
+                    var autoPaste = _settings.Current.AutoPaste;
+                    var autoEnter = commandResult.AutoEnter;
+                    if ((autoPaste || autoEnter) && !await IsTargetWindowStillFocusedAsync(context))
+                    {
+                        enterSuppressed = autoEnter;
+                        autoPaste = false;
+                        autoEnter = false;
+                    }
+
                     insertion = await _textInsertion.InsertTextAsync(
                         new TextInsertionRequest(
                             insertionText,
-                            _settings.Current.AutoPaste,
+                            autoPaste,
                             context.WindowId,
                             context.AppProcess,
                             context.AppTitle,
-                            commandResult.AutoEnter,
+                            autoEnter,
                             insertionStrategy,
                             context.LockedFocusField
                         )
@@ -2876,6 +2898,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                         "Text insertion failed. Dictated text could not be copied or pasted.",
                     InsertionResult.NoText when commandResult.CancelInsertion =>
                         "Dictation canceled.",
+                    InsertionResult.NoText when enterSuppressed =>
+                        "Enter not sent: focus moved to another window.",
                     _ => "Done.",
                 };
                 var isError =
@@ -3291,6 +3315,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             PromptAction action;
             string input;
             bool wrapInput;
+            Func<Task<bool>>? selectionStillTargeted = null;
             if (wantsSelection)
             {
                 // Only an edit/transform needs the selection. Capturing it synthesizes a copy, so
@@ -3323,6 +3348,17 @@ public sealed partial class DictationOrchestrator : IDisposable
                          );
                 input = selectedText;
                 wrapInput = true;
+                // Re-probe before replacing: another field no longer copies the same text. Only probe
+                // a confirmed window — the copy chord would interrupt a terminal.
+                selectionStillTargeted = async () =>
+                    CanVerifyTargetWindow(context)
+                    && await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
+                    && await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false)
+                    && string.Equals(
+                        await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal).ConfigureAwait(false),
+                        selectedText,
+                        StringComparison.Ordinal
+                    );
             }
             else
             {
@@ -3380,7 +3416,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     return null;
                 }
 
-                var oneShotInsertion = await CompleteViaOneShotInsertionAsync(context, oneShot);
+                var oneShotInsertion = await CompleteViaOneShotInsertionAsync(context, oneShot, selectionStillTargeted);
                 return SpokenCommandOutcomeFor(input, oneShot, oneShotInsertion);
             }
 
@@ -3414,7 +3450,13 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // into whatever app is now active. Mirrors the one-shot insert's focus step and
                     // covers the pre-type yield too (it delays as well). A false result means focus
                     // couldn't be confirmed, so streaming aborts to the safe one-shot fallback.
-                    return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false);
+                    if (selectionStillTargeted is not null)
+                    {
+                        return await selectionStillTargeted().ConfigureAwait(false);
+                    }
+
+                    return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
+                           && await IsTargetWindowStillFocusedAsync(context).ConfigureAwait(false);
                 },
                 commandToken
             );
@@ -3447,7 +3489,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             {
                 // No chunk ever landed (e.g. no working injection backend): fall back to a single
                 // paste/insert of the whole result and report that outcome instead of a false success.
-                var fallbackInsertion = await CompleteViaOneShotInsertionAsync(context, result);
+                var fallbackInsertion = await CompleteViaOneShotInsertionAsync(context, result, selectionStillTargeted);
                 return SpokenCommandOutcomeFor(input, result, fallbackInsertion);
             }
 
@@ -3773,18 +3815,25 @@ public sealed partial class DictationOrchestrator : IDisposable
     // normal insertion path uses, so a genuine failure is never reported as success.
     private async Task<InsertionResult> CompleteViaOneShotInsertionAsync(
         RecordingContext context,
-        string result
+        string result,
+        Func<Task<bool>>? selectionStillTargeted
     )
     {
+        var strategy = ResolveInsertionStrategy(context.AppProcess);
+        var autoPaste = _settings.Current.AutoPaste
+                        && strategy is not TextInsertionStrategy.CopyOnly
+                        && (selectionStillTargeted is null
+                            ? await IsTargetWindowStillFocusedAsync(context)
+                            : await selectionStillTargeted());
         var insertion = await _textInsertion.InsertTextAsync(
             new TextInsertionRequest(
                 result,
-                _settings.Current.AutoPaste,
+                autoPaste,
                 context.WindowId,
                 context.AppProcess,
                 context.AppTitle,
                 false,
-                ResolveInsertionStrategy(context.AppProcess),
+                strategy,
                 context.LockedFocusField
             )
         );
@@ -4406,6 +4455,71 @@ public sealed partial class DictationOrchestrator : IDisposable
     private static Task YieldFocusForInsertionAsync()
     {
         return Task.Delay(90);
+    }
+
+    // Without an xdotool window id, TextInsertionService can't re-activate the recording's window,
+    // so a paste would land in whatever is focused now. Compare compositor snapshots instead.
+    internal static bool HasTargetWindowChanged(ActiveWindowSnapshot? captured, ActiveWindowSnapshot? current)
+    {
+        // Nothing to compare against: deliver to the focused window as before.
+        if (string.IsNullOrWhiteSpace(captured?.WindowId))
+        {
+            return false;
+        }
+
+        return current is null
+               || !string.Equals(captured.Source, current.Source, StringComparison.Ordinal)
+               || !string.Equals(captured.WindowId, current.WindowId, StringComparison.Ordinal);
+    }
+
+    internal static bool CanVerifyTargetWindow(RecordingContext context)
+    {
+        if (!context.IsWaylandSession)
+        {
+            return !string.IsNullOrEmpty(context.WindowId) || !string.IsNullOrWhiteSpace(context.TargetWindow?.WindowId);
+        }
+
+        // xdotool only sees XWayland windows and keeps reporting the last one after focus moves
+        // to a native window, so only a compositor snapshot can vouch for focus here.
+        return !string.IsNullOrWhiteSpace(context.TargetWindow?.WindowId)
+               && !string.Equals(context.TargetWindow.Source, "xdotool", StringComparison.Ordinal);
+    }
+
+    private Task<bool> IsTargetWindowStillFocusedAsync(RecordingContext context)
+    {
+        // A locked field is restored through AT-SPI by TextInsertionService, which falls back to
+        // the clipboard itself when it can't be.
+        return context.LockedFocusField?.Element is not null
+            ? Task.FromResult(true)
+            : IsCapturedWindowFocusedAsync(context);
+    }
+
+    private async Task<bool> IsCapturedWindowFocusedAsync(RecordingContext context)
+    {
+        // On X11 TextInsertionService re-activates an xdotool id instead.
+        if ((!context.IsWaylandSession && !string.IsNullOrEmpty(context.WindowId)) || context.TargetWindow is null)
+        {
+            return true;
+        }
+
+        ActiveWindowSnapshot? current = null;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+            current = await _activeWindow.GetActiveWindowSnapshotAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Target window re-check failed: {ex.GetType().Name}");
+        }
+
+        if (!HasTargetWindowChanged(context.TargetWindow, current))
+        {
+            return true;
+        }
+
+        Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: focus moved off the recording's window.");
+        return false;
     }
 
     private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)

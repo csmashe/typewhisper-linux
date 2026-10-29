@@ -1,0 +1,136 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Moq;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.PluginSDK;
+using Xunit;
+
+namespace TypeWhisper.Linux.Tests;
+
+public sealed class DictationOrchestratorTargetWindowTests
+{
+    private static readonly ActiveWindowSnapshot s_editor = new("editor.py", "Editor", "{aaa}", "editor.py", "kwin");
+
+    [Fact]
+    public void HasTargetWindowChanged_SameWindow_IsFalse()
+    {
+        Assert.False(DictationOrchestrator.HasTargetWindowChanged(s_editor, s_editor with { Title = "Editor *" }));
+    }
+
+    [Fact]
+    public void HasTargetWindowChanged_OtherWindowOfSameProcess_IsTrue()
+    {
+        Assert.True(DictationOrchestrator.HasTargetWindowChanged(s_editor, s_editor with { WindowId = "{bbb}" }));
+    }
+
+    [Fact]
+    public void HasTargetWindowChanged_SnapshotLostAtInsertTime_IsTrue()
+    {
+        Assert.True(DictationOrchestrator.HasTargetWindowChanged(s_editor, null));
+    }
+
+    [Fact]
+    public void HasTargetWindowChanged_DifferentProvider_IsTrue()
+    {
+        Assert.True(DictationOrchestrator.HasTargetWindowChanged(s_editor, s_editor with { Source = "xdotool" }));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HasTargetWindowChanged_NoCapturedIdentity_KeepsDelivering(bool capturedSnapshot)
+    {
+        var captured = capturedSnapshot ? s_editor with { WindowId = null } : null;
+        Assert.False(DictationOrchestrator.HasTargetWindowChanged(captured, s_editor with { WindowId = "{bbb}" }));
+    }
+
+    [Fact]
+    public async Task IsTargetWindowStillFocused_FocusMovedWithoutXdotoolId_IsFalse()
+    {
+        var (sut, provider) = Create(s_editor with { WindowId = "{bbb}" });
+
+        Assert.False(await IsStillFocusedAsync(sut, Context(null, s_editor)));
+        provider.Verify(p => p.TryGetActiveWindowAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task IsTargetWindowStillFocused_SameWindowWithoutXdotoolId_IsTrue()
+    {
+        var (sut, _) = Create(s_editor);
+
+        Assert.True(await IsStillFocusedAsync(sut, Context(null, s_editor)));
+    }
+
+    [Fact]
+    public async Task IsTargetWindowStillFocused_XdotoolId_LeavesActivationToInsertion()
+    {
+        var (sut, provider) = Create(s_editor with { WindowId = "{bbb}" });
+
+        Assert.True(await IsStillFocusedAsync(sut, Context("12345", s_editor)));
+        provider.Verify(p => p.TryGetActiveWindowAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task IsTargetWindowStillFocused_XWaylandIdOnWayland_StillChecksCompositorFocus()
+    {
+        var (sut, _) = Create(s_editor with { WindowId = "{bbb}" });
+
+        Assert.False(await IsStillFocusedAsync(sut, Context("12345", s_editor) with { IsWaylandSession = true }));
+    }
+
+    [Theory]
+    [InlineData("kwin", true, true)]
+    [InlineData("xdotool", true, false)]
+    [InlineData("xdotool", false, true)]
+    public void CanVerifyTargetWindow_OnWaylandNeedsCompositorSnapshot(string source, bool wayland, bool expected)
+    {
+        var context = Context(null, s_editor with { Source = source }) with { IsWaylandSession = wayland };
+
+        Assert.Equal(expected, DictationOrchestrator.CanVerifyTargetWindow(context));
+    }
+
+    [Fact]
+    public async Task IsTargetWindowStillFocused_LockedField_LeavesRestorationToInsertion()
+    {
+        var (sut, provider) = Create(s_editor with { WindowId = "{bbb}" });
+        var context = Context(null, s_editor) with
+        {
+            LockedFocusField = new LockedFocusTarget(new AtSpiElementRef("app", "/field")),
+        };
+
+        Assert.True(await IsStillFocusedAsync(sut, context));
+        provider.Verify(p => p.TryGetActiveWindowAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static (DictationOrchestrator Sut, Mock<IActiveWindowProvider> Provider) Create(ActiveWindowSnapshot? current)
+    {
+        var sut = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(typeof(DictationOrchestrator));
+        var provider = new Mock<IActiveWindowProvider>();
+        provider.Setup(p => p.IsApplicable()).Returns(true);
+        provider.Setup(p => p.TryGetActiveWindowAsync(It.IsAny<CancellationToken>())).ReturnsAsync(current);
+        var runner = new FakeProcessRunner();
+        var activeWindow = new ActiveWindowService([provider.Object], new AtSpiUrlExtractor(runner), runner);
+        typeof(DictationOrchestrator).GetField("_activeWindow", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(sut, activeWindow);
+        return (sut, provider);
+    }
+
+    private static RecordingContext Context(string? windowId, ActiveWindowSnapshot? targetWindow)
+    {
+        return new RecordingContext(1, DateTime.UtcNow, "editor.py", "Editor", null, windowId, null, "", null,
+            false, null, null, LanguageSelection.Automatic, [], CancellationToken.None)
+        {
+            TargetWindow = targetWindow,
+        };
+    }
+
+    private static Task<bool> IsStillFocusedAsync(DictationOrchestrator sut, RecordingContext context)
+    {
+        return (Task<bool>)typeof(DictationOrchestrator)
+            .GetMethod("IsTargetWindowStillFocusedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(sut, [context])!;
+    }
+}
