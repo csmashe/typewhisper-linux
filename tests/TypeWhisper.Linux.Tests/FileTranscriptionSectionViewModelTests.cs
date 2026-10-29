@@ -81,8 +81,8 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
     public void AddFiles_KeepsPathsThatDifferOnlyByCase()
     {
         var vm = CreateViewModel();
-        var upper = Path.Combine(_tempDir, "Case.xyz");
-        var lower = Path.Combine(_tempDir, "case.xyz");
+        var upper = Path.Join(_tempDir, "Case.xyz");
+        var lower = Path.Join(_tempDir, "case.xyz");
 
         vm.AddFilesCommand.Execute([upper, lower, upper]);
 
