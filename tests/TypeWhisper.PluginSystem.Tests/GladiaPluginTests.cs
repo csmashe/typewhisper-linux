@@ -715,8 +715,15 @@ public class GladiaPluginTests
         string missingField
     )
     {
+        var deletedPaths = new List<string?>();
         var handler = new CapturingHandler((request, _) =>
         {
+            if (request.Method == HttpMethod.Delete)
+            {
+                deletedPaths.Add(request.RequestUri?.AbsolutePath);
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
@@ -744,6 +751,8 @@ public class GladiaPluginTests
         );
 
         Assert.Contains(missingField, exception.Message);
+        string?[] expectedDeletes = missingField == "id" ? [] : ["/v2/pre-recorded/job-123"];
+        Assert.Equal(expectedDeletes, deletedPaths);
     }
 
     [Theory]
@@ -753,8 +762,15 @@ public class GladiaPluginTests
     public async Task TranscribeAsync_RejectsNonHttpsResultUrl(string resultUrl)
     {
         // Non-HTTPS result_url would leak x-gladia-key in plaintext during polling; must be rejected.
+        var deletedPaths = new List<string?>();
         var handler = new CapturingHandler((request, _) =>
         {
+            if (request.Method == HttpMethod.Delete)
+            {
+                deletedPaths.Add(request.RequestUri?.AbsolutePath);
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
@@ -785,6 +801,7 @@ public class GladiaPluginTests
         );
 
         Assert.Contains("result_url", exception.Message);
+        Assert.Equal(["/v2/pre-recorded/job-123"], deletedPaths);
     }
 
     [Fact]
