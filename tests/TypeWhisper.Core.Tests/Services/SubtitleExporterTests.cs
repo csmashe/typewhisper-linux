@@ -77,6 +77,54 @@ public sealed class SubtitleExporterTests
     }
 
     [Fact]
+    public void ToSrt_SegmentsOutOfOrder_NumbersCuesInStartOrder()
+    {
+        var segments = new List<TranscriptionSegment>
+        {
+            new("later", 5, 6),
+            new("earlier", 2, 3),
+        };
+
+        var srt = SubtitleExporter.ToSrt(segments);
+
+        Assert.Equal(
+            "1\n00:00:02,000 --> 00:00:03,000\nearlier\n\n2\n00:00:05,000 --> 00:00:06,000\nlater\n\n",
+            srt.ReplaceLineEndings("\n")
+        );
+    }
+
+    [Fact]
+    public void ToWebVtt_SegmentsOutOfOrder_WritesCuesInStartOrder()
+    {
+        var segments = new List<TranscriptionSegment>
+        {
+            new("later", 5, 6),
+            new("earlier", 2, 3),
+        };
+
+        var vtt = SubtitleExporter.ToWebVtt(segments);
+
+        Assert.Equal(
+            "WEBVTT\n\n00:00:02.000 --> 00:00:03.000\nearlier\n\n00:00:05.000 --> 00:00:06.000\nlater\n\n",
+            vtt.ReplaceLineEndings("\n")
+        );
+    }
+
+    [Fact]
+    public void Export_SegmentsWithSameStart_KeepProviderOrder()
+    {
+        var segments = new List<TranscriptionSegment>
+        {
+            new("first", 1, 3),
+            new("second", 1, 2),
+        };
+
+        var vtt = SubtitleExporter.ToWebVtt(segments);
+
+        Assert.True(vtt.IndexOf("first", StringComparison.Ordinal) < vtt.IndexOf("second", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ToSrt_SegmentUnder24Hours_FormatsNormally()
     {
         var segments = new List<TranscriptionSegment>
