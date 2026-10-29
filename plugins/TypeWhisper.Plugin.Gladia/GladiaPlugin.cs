@@ -157,10 +157,11 @@ public sealed class GladiaPlugin
 
         var audioUrl = await UploadAudioAsync(wavAudio, apiKey, ct);
         var job = await InitiateTranscriptionAsync(audioUrl, language, vocabulary, apiKey, ct);
-        var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
 
+        // Once the job exists, cancellation and poll faults must still clean it up.
         try
         {
+            var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
             using var terminalDocument = ParseProtocolJson(
                 terminalJson,
                 "polling"
@@ -244,11 +245,22 @@ public sealed class GladiaPlugin
         var json = await SendJsonAsync(request, "Gladia transcription initiation", ct);
         using var document = ParseProtocolJson(json, "transcription initiation");
         var id = RequireString(document.RootElement, "id", "transcription initiation");
-        var resultUrl = RequireString(
-            document.RootElement,
-            "result_url",
-            "transcription initiation"
-        );
+
+        // The job exists from here on, so a bad result_url must not orphan it.
+        try
+        {
+            return new InitiatedJob(id, ReadResultUrl(document.RootElement));
+        }
+        catch
+        {
+            await DeleteJobBestEffortAsync(id, apiKey);
+            throw;
+        }
+    }
+
+    private static Uri ReadResultUrl(JsonElement root)
+    {
+        var resultUrl = RequireString(root, "result_url", "transcription initiation");
 
         // Require HTTPS: polling sends x-gladia-key to this URL; non-HTTPS would leak it in plaintext.
         if (!Uri.TryCreate(resultUrl, UriKind.Absolute, out var resultUri)
@@ -259,7 +271,7 @@ public sealed class GladiaPlugin
             );
         }
 
-        return new InitiatedJob(id, resultUri);
+        return resultUri;
     }
 
     private async Task<string> PollUntilTerminalAsync(

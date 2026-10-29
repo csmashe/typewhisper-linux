@@ -540,8 +540,15 @@ public class GladiaPluginTests
     public async Task TranscribeAsync_HttpErrorAtEachStageFails(string failingStage)
     {
         var requestCount = 0;
+        var deleteCount = 0;
         var handler = new CapturingHandler((request, _) =>
         {
+            if (request.Method == HttpMethod.Delete)
+            {
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             requestCount++;
 
             if (request.Method == HttpMethod.Post
@@ -613,6 +620,7 @@ public class GladiaPluginTests
             },
             requestCount
         );
+        Assert.Equal(failingStage == "poll" ? 1 : 0, deleteCount);
     }
 
     [Theory]
@@ -652,8 +660,15 @@ public class GladiaPluginTests
     [InlineData("""{ "status": "paused" }""")]
     public async Task TranscribeAsync_MalformedOrUnknownPollStatusFails(string pollResponse)
     {
+        var deleteCount = 0;
         var handler = new CapturingHandler((request, _) =>
         {
+            if (request.Method == HttpMethod.Delete)
+            {
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
@@ -686,6 +701,7 @@ public class GladiaPluginTests
         );
 
         Assert.Contains("status", exception.Message);
+        Assert.Equal(1, deleteCount);
     }
 
     [Theory]
@@ -699,8 +715,15 @@ public class GladiaPluginTests
         string missingField
     )
     {
+        var deletedPaths = new List<string?>();
         var handler = new CapturingHandler((request, _) =>
         {
+            if (request.Method == HttpMethod.Delete)
+            {
+                deletedPaths.Add(request.RequestUri?.AbsolutePath);
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
@@ -728,6 +751,8 @@ public class GladiaPluginTests
         );
 
         Assert.Contains(missingField, exception.Message);
+        string?[] expectedDeletes = missingField == "id" ? [] : ["/v2/pre-recorded/job-123"];
+        Assert.Equal(expectedDeletes, deletedPaths);
     }
 
     [Theory]
@@ -737,8 +762,15 @@ public class GladiaPluginTests
     public async Task TranscribeAsync_RejectsNonHttpsResultUrl(string resultUrl)
     {
         // Non-HTTPS result_url would leak x-gladia-key in plaintext during polling; must be rejected.
+        var deletedPaths = new List<string?>();
         var handler = new CapturingHandler((request, _) =>
         {
+            if (request.Method == HttpMethod.Delete)
+            {
+                deletedPaths.Add(request.RequestUri?.AbsolutePath);
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
@@ -769,15 +801,16 @@ public class GladiaPluginTests
         );
 
         Assert.Contains("result_url", exception.Message);
+        Assert.Equal(["/v2/pre-recorded/job-123"], deletedPaths);
     }
 
     [Fact]
-    public async Task TranscribeAsync_CancellationDuringPollingIsObserved()
+    public async Task TranscribeAsync_CancellationDuringPollingIsObservedAndDeletesJob()
     {
         var pollStarted = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var deleteCount = 0;
+        var deletedPaths = new List<string?>();
         var handler = new AsyncCapturingHandler(async (request, _, cancellationToken) =>
         {
             if (request.Method == HttpMethod.Post
@@ -801,7 +834,7 @@ public class GladiaPluginTests
 
             if (request.Method == HttpMethod.Delete)
             {
-                deleteCount++;
+                deletedPaths.Add(request.RequestUri?.AbsolutePath);
                 return JsonResponse("{}", HttpStatusCode.Accepted);
             }
 
@@ -826,15 +859,22 @@ public class GladiaPluginTests
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transcription);
-        Assert.Equal(0, deleteCount);
+        Assert.Equal(["/v2/pre-recorded/job-123"], deletedPaths);
     }
 
     [Fact]
-    public async Task TranscribeAsync_BoundedPollingWindowTimesOut()
+    public async Task TranscribeAsync_BoundedPollingWindowTimesOutAndDeletesJob()
     {
         var pollCount = 0;
+        var deleteCount = 0;
         var handler = new CapturingHandler((request, _) =>
         {
+            if (request.Method == HttpMethod.Delete)
+            {
+                deleteCount++;
+                return JsonResponse("{}", HttpStatusCode.Accepted);
+            }
+
             if (request.Method == HttpMethod.Post
                 && request.RequestUri?.AbsolutePath == "/v2/upload")
             {
@@ -876,6 +916,7 @@ public class GladiaPluginTests
 
         Assert.Contains("did not complete", exception.Message);
         Assert.Equal(1, pollCount);
+        Assert.Equal(1, deleteCount);
     }
 
     [Fact]
