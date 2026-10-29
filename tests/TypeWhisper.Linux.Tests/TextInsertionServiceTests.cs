@@ -2751,6 +2751,26 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_KdeGtkPlainTextIsTextOnly()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            "text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n"
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        Assert.False(await platform.ClipboardHasNonTextFormatsAsync());
+
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("wl-paste", call.FileName);
+        Assert.Equal(["--list-types"], call.Args);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_TimeoutReturnsFalse()
     {
         var runner = CreateTimedOutProcessRunner();
