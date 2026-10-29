@@ -278,7 +278,9 @@ internal static partial class AtomicFileWriter
     /// <summary>
     ///     Reads a file as UTF-8 and reports whether it began with a UTF-8 byte order
     ///     mark. The mark is excluded from the returned text, matching
-    ///     <see cref="File.ReadAllTextAsync(string, CancellationToken)" />.
+    ///     <see cref="File.ReadAllTextAsync(string, CancellationToken)" />. A UTF-16 or
+    ///     UTF-32 file, or bytes that are not valid UTF-8, are refused rather than decoded
+    ///     lossily, so a write from the snapshot can never re-encode a misread file.
     /// </summary>
     private static async Task<(string Contents, bool HasUtf8Bom)> ReadTextAsync(
         string path,
@@ -286,11 +288,39 @@ internal static partial class AtomicFileWriter
     )
     {
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
+        var span = bytes.AsSpan();
+        if (span.StartsWith(Encoding.UTF32.Preamble)
+            || span.StartsWith(new UTF32Encoding(true, true).Preamble)
+            || span.StartsWith(Encoding.Unicode.Preamble)
+            || span.StartsWith(Encoding.BigEndianUnicode.Preamble))
+        {
+            throw new IOException(
+                $"'{path}' is not UTF-8 (it starts with a UTF-16 or UTF-32 byte order mark). "
+                + "Refusing to rewrite it — convert it to UTF-8 and try again."
+            );
+        }
+
         var preamble = Encoding.UTF8.Preamble;
-        var hasUtf8Bom = bytes.AsSpan().StartsWith(preamble);
-        var body = hasUtf8Bom ? bytes.AsSpan(preamble.Length) : bytes;
-        return (Encoding.UTF8.GetString(body), hasUtf8Bom);
+        var hasUtf8Bom = span.StartsWith(preamble);
+        var body = hasUtf8Bom ? span[preamble.Length..] : span;
+        try
+        {
+            return (s_strictUtf8.GetString(body), hasUtf8Bom);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new IOException(
+                $"'{path}' is not valid UTF-8. Refusing to rewrite it — convert it to UTF-8 "
+                + "and try again.",
+                ex
+            );
+        }
     }
+
+    private static readonly UTF8Encoding s_strictUtf8 = new(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true
+    );
 
     private static async Task<string> StageAsync(
         string resolvedTarget,
