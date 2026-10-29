@@ -63,8 +63,8 @@
              below and the visible page is driven by StepIndex -->
         <TabControl Grid.Row="1" SelectedIndex="{Binding StepIndex}" Margin="32,0">
             <TabControl.Styles>
-                <!-- Hide the tab strip so only content shows -->
-                <Style Selector="TabItem">
+                <!-- Hide the strip, not the TabItems: TabControl won't select a hidden tab -->
+                <Style Selector="TabControl /template/ ItemsPresenter#PART_ItemsPresenter">
                     <Setter Property="IsVisible" Value="False" />
                 </Style>
             </TabControl.Styles>
