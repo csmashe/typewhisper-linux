@@ -78,6 +78,18 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void AddFiles_KeepsPathsThatDifferOnlyByCase()
+    {
+        var vm = CreateViewModel();
+        var upper = Path.Combine(_tempDir, "Case.xyz");
+        var lower = Path.Combine(_tempDir, "case.xyz");
+
+        vm.AddFilesCommand.Execute([upper, lower, upper]);
+
+        Assert.Equal([upper, lower], vm.Items.Select(i => i.FilePath));
+    }
+
+    [Fact]
     public void Constructor_WithConfiguredAutoStart_WaitsForExplicitEntryPoint()
     {
         var watchPath = Path.Join(_tempDir, "configured-auto-start");
