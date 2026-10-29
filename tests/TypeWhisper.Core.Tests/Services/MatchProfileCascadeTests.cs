@@ -268,6 +268,7 @@ public sealed class MatchProfileCascadeTests : IDisposable
     [InlineData("bücher.test", "https://bücher.test.evil/")]
     [InlineData("bücher.test", "https://evil.test/?u=bücher.test")]
     [InlineData("bücher.test", "https://bucher.test/")]
+    [InlineData("xn--bcher-kva.test", "https://bϋcher.test/")]
     [InlineData("bücher.test", "not a url")]
     public void UrlPatternRejectsDifferentIdnHosts(string pattern, string url)
     {
