@@ -49,6 +49,7 @@ public partial class SnippetsSection : UserControl
         catch (Exception ex)
         {
             Trace.WriteLine($"[SnippetsSection] Export failed: {ex.Message}");
+            await ShowFailureAsync("Common.Export", ex);
         }
     }
 
@@ -90,6 +91,16 @@ public partial class SnippetsSection : UserControl
         catch (Exception ex)
         {
             Trace.WriteLine($"[SnippetsSection] Import failed: {ex.Message}");
+            await ShowFailureAsync("Common.Import", ex);
         }
+    }
+
+    private static async Task ShowFailureAsync(string operationKey, Exception ex)
+    {
+        var dialog = new MessageDialogWindow();
+        await dialog.ShowMessageAsync(
+            Loc.Instance["Common.OperationFailedTitle"],
+            Loc.Instance.GetString("Common.OperationFailed", Loc.Instance[operationKey], ex.Message)
+        );
     }
 }

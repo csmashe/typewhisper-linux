@@ -146,6 +146,11 @@ public partial class HistorySection : UserControl
         catch (Exception ex)
         {
             Trace.WriteLine($"[HistorySection] Export failed: {ex.Message}");
+            var dialog = new MessageDialogWindow();
+            await dialog.ShowMessageAsync(
+                Loc.Instance["Common.OperationFailedTitle"],
+                Loc.Instance.GetString("Common.OperationFailed", Loc.Instance["Common.Export"], ex.Message)
+            );
         }
     }
 
