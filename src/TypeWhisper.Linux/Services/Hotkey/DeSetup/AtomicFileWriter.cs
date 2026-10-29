@@ -9,13 +9,16 @@ namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 ///     Exact file state used by <see cref="AtomicFileWriter.WriteIfUnchangedAsync" />.
 ///     The requested path is kept separately from the resolved path so a symlink
 ///     retarget between capture and commit can be detected.
+///     <see cref="HasUtf8Bom" /> records a leading UTF-8 byte order mark that
+///     <see cref="Contents" /> omits, so a write from this snapshot keeps it.
 /// </summary>
 internal readonly record struct AtomicFileSnapshot(
     string RequestedTarget,
     string ResolvedTarget,
     bool Existed,
     string Contents,
-    UnixFileMode? Mode
+    UnixFileMode? Mode,
+    bool HasUtf8Bom = false
 );
 
 /// <summary>
@@ -60,11 +63,11 @@ internal static partial class AtomicFileWriter
             return new AtomicFileSnapshot(target, resolvedTarget, false, string.Empty, null);
         }
 
-        var contents = await File.ReadAllTextAsync(resolvedTarget, ct).ConfigureAwait(false);
+        var (contents, hasUtf8Bom) = await ReadTextAsync(resolvedTarget, ct).ConfigureAwait(false);
         UnixFileMode? mode = OperatingSystem.IsWindows()
             ? null
             : File.GetUnixFileMode(resolvedTarget);
-        return new AtomicFileSnapshot(target, resolvedTarget, true, contents, mode);
+        return new AtomicFileSnapshot(target, resolvedTarget, true, contents, mode, hasUtf8Bom);
     }
 
     public static Task WriteAsync(string target, string contents, CancellationToken ct)
@@ -83,7 +86,15 @@ internal static partial class AtomicFileWriter
         var mode = !OperatingSystem.IsWindows() && File.Exists(resolvedTarget)
             ? File.GetUnixFileMode(resolvedTarget)
             : PrivateConfigMode;
-        var tmp = await StageAsync(resolvedTarget, contents, mode, nameof(target), syncHooks, ct)
+        var tmp = await StageAsync(
+                resolvedTarget,
+                contents,
+                writeUtf8Bom: false,
+                mode,
+                nameof(target),
+                syncHooks,
+                ct
+            )
             .ConfigureAwait(false);
         try
         {
@@ -126,6 +137,7 @@ internal static partial class AtomicFileWriter
         var tmp = await StageAsync(
                 snapshot.ResolvedTarget,
                 contents,
+                snapshot.HasUtf8Bom,
                 snapshot.Mode ?? PrivateConfigMode,
                 nameof(snapshot),
                 syncHooks,
@@ -149,9 +161,10 @@ internal static partial class AtomicFileWriter
             if (currentExists)
             {
                 string currentContents;
+                bool currentHasUtf8Bom;
                 try
                 {
-                    currentContents = await File.ReadAllTextAsync(currentResolved, ct)
+                    (currentContents, currentHasUtf8Bom) = await ReadTextAsync(currentResolved, ct)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -159,7 +172,10 @@ internal static partial class AtomicFileWriter
                     return false;
                 }
 
-                if (!string.Equals(currentContents, snapshot.Contents, StringComparison.Ordinal))
+                if (
+                    currentHasUtf8Bom != snapshot.HasUtf8Bom
+                    || !string.Equals(currentContents, snapshot.Contents, StringComparison.Ordinal)
+                )
                 {
                     return false;
                 }
@@ -226,9 +242,10 @@ internal static partial class AtomicFileWriter
         }
 
         string currentContents;
+        bool currentHasUtf8Bom;
         try
         {
-            currentContents = await File.ReadAllTextAsync(currentResolved, ct)
+            (currentContents, currentHasUtf8Bom) = await ReadTextAsync(currentResolved, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -236,7 +253,10 @@ internal static partial class AtomicFileWriter
             return false;
         }
 
-        if (!string.Equals(currentContents, snapshot.Contents, StringComparison.Ordinal))
+        if (
+            currentHasUtf8Bom != snapshot.HasUtf8Bom
+            || !string.Equals(currentContents, snapshot.Contents, StringComparison.Ordinal)
+        )
         {
             return false;
         }
@@ -255,9 +275,57 @@ internal static partial class AtomicFileWriter
         return true;
     }
 
+    /// <summary>
+    ///     Reads a file as UTF-8 and reports whether it began with a UTF-8 byte order
+    ///     mark. The mark is excluded from the returned text, matching
+    ///     <see cref="File.ReadAllTextAsync(string, CancellationToken)" />. A UTF-16 or
+    ///     UTF-32 file, or bytes that are not valid UTF-8, are refused rather than decoded
+    ///     lossily, so a write from the snapshot can never re-encode a misread file.
+    /// </summary>
+    private static async Task<(string Contents, bool HasUtf8Bom)> ReadTextAsync(
+        string path,
+        CancellationToken ct
+    )
+    {
+        var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
+        var span = bytes.AsSpan();
+        if (span.StartsWith(Encoding.UTF32.Preamble)
+            || span.StartsWith(new UTF32Encoding(true, true).Preamble)
+            || span.StartsWith(Encoding.Unicode.Preamble)
+            || span.StartsWith(Encoding.BigEndianUnicode.Preamble))
+        {
+            throw new IOException(
+                $"'{path}' is not UTF-8 (it starts with a UTF-16 or UTF-32 byte order mark). "
+                + "Refusing to rewrite it — convert it to UTF-8 and try again."
+            );
+        }
+
+        var preamble = Encoding.UTF8.Preamble;
+        var hasUtf8Bom = span.StartsWith(preamble);
+        var body = hasUtf8Bom ? span[preamble.Length..] : span;
+        try
+        {
+            return (s_strictUtf8.GetString(body), hasUtf8Bom);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new IOException(
+                $"'{path}' is not valid UTF-8. Refusing to rewrite it — convert it to UTF-8 "
+                + "and try again.",
+                ex
+            );
+        }
+    }
+
+    private static readonly UTF8Encoding s_strictUtf8 = new(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true
+    );
+
     private static async Task<string> StageAsync(
         string resolvedTarget,
         string contents,
+        bool writeUtf8Bom,
         UnixFileMode mode,
         string argumentName,
         SyncHooks syncHooks,
@@ -293,6 +361,12 @@ internal static partial class AtomicFileWriter
 
             await using (var stream = new FileStream(tmp, options))
             {
+                if (writeUtf8Bom)
+                {
+                    await stream.WriteAsync(Encoding.UTF8.Preamble.ToArray(), ct)
+                        .ConfigureAwait(false);
+                }
+
                 await stream.WriteAsync(Encoding.UTF8.GetBytes(contents), ct)
                     .ConfigureAwait(false);
                 await stream.FlushAsync(ct).ConfigureAwait(false);
