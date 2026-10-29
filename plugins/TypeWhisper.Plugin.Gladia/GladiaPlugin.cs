@@ -157,10 +157,11 @@ public sealed class GladiaPlugin
 
         var audioUrl = await UploadAudioAsync(wavAudio, apiKey, ct);
         var job = await InitiateTranscriptionAsync(audioUrl, language, vocabulary, apiKey, ct);
-        var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
 
+        // Once the job exists, cancellation and poll faults must still clean it up.
         try
         {
+            var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
             using var terminalDocument = ParseProtocolJson(
                 terminalJson,
                 "polling"
