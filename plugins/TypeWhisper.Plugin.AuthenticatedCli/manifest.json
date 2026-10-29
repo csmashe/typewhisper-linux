@@ -1,7 +1,7 @@
 {
   "id": "com.typewhisper.authenticated-cli",
   "name": "Authenticated CLIs",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Use your signed-in Codex, Claude Code and OpenCode CLIs as LLM providers",
