@@ -254,6 +254,51 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.Equal(original, File.ReadAllText(UserChromePath));
     }
 
+    [Fact]
+    public async Task Firefox_user_js_bytes_and_utf8_bom_are_restored_after_setup_and_remove()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        const string text =
+            "user_pref(\"browser.keep_this\", true);\r\n"
+            + "user_pref(\"accessibility.force_disabled\", 1);\r\n";
+        var withBom = WriteFirefoxProfile(
+            firefoxRoot,
+            "bom.default",
+            [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(text)]
+        );
+        var withoutBom = WriteFirefoxProfile(
+            firefoxRoot,
+            "plain.default",
+            System.Text.Encoding.UTF8.GetBytes(text)
+        );
+        var originals = new[] { File.ReadAllBytes(withBom), File.ReadAllBytes(withoutBom) };
+
+        var setup = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+        Assert.True(setup.Success);
+        Assert.NotEqual(originals[0], File.ReadAllBytes(withBom));
+        Assert.NotEqual(originals[1], File.ReadAllBytes(withoutBom));
+
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(removal.Success);
+        Assert.Equal(originals[0], File.ReadAllBytes(withBom));
+        Assert.Equal(originals[1], File.ReadAllBytes(withoutBom));
+    }
+
+    private static string WriteFirefoxProfile(string root, string name, byte[] userJs)
+    {
+        var profile = Path.Join(root, name);
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        var userJsPath = Path.Join(profile, "user.js");
+        File.WriteAllBytes(userJsPath, userJs);
+        return userJsPath;
+    }
+
     private string ConfigHome => Path.Join(_root, "config");
     private string DataHome => Path.Join(_root, "data");
     private string StateRoot => Path.Join(_root, "state");
