@@ -600,6 +600,29 @@ public sealed class GeminiTranscriptionTests
     }
 
     [Fact]
+    public void CalculateWavDurationSeconds_MeasuresFfmpegStdoutWavWithUnknownDataSize()
+    {
+        // Header layout FFmpeg writes to pipe:1: unknown RIFF/data sizes plus a LIST chunk.
+        var wav = new byte[80 + 32_000];
+        "RIFF"u8.CopyTo(wav);
+        BitConverter.GetBytes(uint.MaxValue).CopyTo(wav, 4);
+        "WAVEfmt "u8.CopyTo(wav.AsSpan(8));
+        BitConverter.GetBytes(16).CopyTo(wav, 16);
+        BitConverter.GetBytes((short)1).CopyTo(wav, 20);
+        BitConverter.GetBytes((short)1).CopyTo(wav, 22);
+        BitConverter.GetBytes(16_000).CopyTo(wav, 24);
+        BitConverter.GetBytes(32_000).CopyTo(wav, 28);
+        BitConverter.GetBytes((short)2).CopyTo(wav, 32);
+        BitConverter.GetBytes((short)16).CopyTo(wav, 34);
+        "LIST"u8.CopyTo(wav.AsSpan(36));
+        BitConverter.GetBytes(28).CopyTo(wav, 40);
+        "data"u8.CopyTo(wav.AsSpan(72));
+        BitConverter.GetBytes(uint.MaxValue).CopyTo(wav, 76);
+
+        Assert.Equal(1.0, GeminiTranscriptionClient.CalculateWavDurationSeconds(wav), precision: 6);
+    }
+
+    [Fact]
     public void ExtractVocabulary_NormalizesDeduplicatesAndClipsToBudget()
     {
         Assert.Empty(GeminiPlugin.ExtractVocabulary(null));
