@@ -24,6 +24,17 @@ public sealed partial class AtSpiUrlExtractor
     private const int AtSpiRoleFrame = 23;
 
     private const int AtSpiRoleWindow = 69;
+    private const int AtSpiRoleEditBar = 77;
+    private const int AtSpiRoleEntry = 79;
+    private const string AtSpiMatchAll = "1";
+    private const string AtSpiMatchAny = "2";
+
+    // AT-SPI Collection rules take state and role sets as bitmaps of 32-bit words.
+    private static readonly string s_showingVisibleStateWord =
+        ((1u << AtSpiStateShowing) | (1u << AtSpiStateVisible)).ToString();
+
+    private static readonly string s_editBarOrEntryRoleWord =
+        ((1u << (AtSpiRoleEditBar - 64)) | (1u << (AtSpiRoleEntry - 64))).ToString();
 
     // Each busctl invocation is a separate process + D-Bus round-trip (50–200 ms each on
     // a busy system). Firefox's URL bar also sits under invisible structural containers, so
@@ -348,7 +359,8 @@ public sealed partial class AtSpiUrlExtractor
 
             stats.WindowFound = true;
 
-            var url = FindLikelyBrowserUrlInSubtree(address, window.Value, stats, ct);
+            var url = FindUrlInVisibleEntries(address, window.Value, stats, ct)
+                      ?? FindLikelyBrowserUrlInSubtree(address, window.Value, stats, ct);
             if (url is not null)
             {
                 return url;
@@ -461,17 +473,7 @@ public sealed partial class AtSpiUrlExtractor
 
             if (isShowingVisible)
             {
-                var role = GetAccessibleRole(address, node);
-                var name = GetAccessibleName(address, node);
-                var interfaces = GetAccessibleInterfaces(address, node);
-                var candidate = TryGetAccessibleText(address, node, interfaces) ?? name;
-                var score = ActiveWindowService.ScoreBrowserUrlCandidate(
-                    role,
-                    states,
-                    name,
-                    candidate,
-                    interfaces
-                );
+                var (score, candidate) = ScoreUrlCandidate(address, node, states);
                 if (score > bestScore)
                 {
                     bestScore = score;
@@ -490,6 +492,116 @@ public sealed partial class AtSpiUrlExtractor
         stats.BestScore = bestScore;
         stats.BestCandidate = bestRawCandidate;
         return bestUrl;
+    }
+
+    // One Collection.GetMatches call for the window's showing, visible entries and edit bars.
+    // Chromium's omnibox sits ~120 nodes into a breadth-first walk, and at several busctl
+    // spawns per node the 2.5 s budget often ran out first. Web-page fields (they carry a
+    // "tag" attribute) are skipped so a form field holding a URL can't pose as the address
+    // bar. Null when the browser has no Collection support or no URL-like entry (Firefox's
+    // URL bar is a combo box), so the caller falls back to the full walk.
+    private string? FindUrlInVisibleEntries(
+        string address,
+        AccessibleRef window,
+        WalkStats stats,
+        CancellationToken ct
+    )
+    {
+        var output = RunBusctlCall(
+            address,
+            window.BusName,
+            window.ObjectPath,
+            "org.a11y.atspi.Collection",
+            "GetMatches",
+            "(aiia{ss}iaiiasib)uib",
+            // states: SHOWING and VISIBLE, match all
+            "2", s_showingVisibleStateWord, "0", AtSpiMatchAll,
+            // attributes: none, match all
+            "0", AtSpiMatchAll,
+            // roles: EDITBAR or ENTRY, match any
+            "4", "0", "0", s_editBarOrEntryRoleWord, "0", AtSpiMatchAny,
+            // interfaces: none, match all; invert: false
+            "0", AtSpiMatchAll, "false",
+            // sort canonical, no count limit, traverse
+            "1", "0", "true"
+        );
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        string? bestUrl = null;
+        var bestScore = int.MinValue;
+        var values = ParseQuotedStrings(output);
+        for (var i = 0; i + 1 < values.Count && !ct.IsCancellationRequested; i += 2)
+        {
+            var node = new AccessibleRef(values[i], values[i + 1]);
+            if (IsWebContent(address, node))
+            {
+                continue;
+            }
+
+            var (score, candidate) = ScoreUrlCandidate(
+                address,
+                node,
+                GetAccessibleState(address, node)
+            );
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestUrl = ActiveWindowService.SanitizeCapturedBrowserUrl(candidate);
+                stats.BestScore = score;
+                stats.BestCandidate = candidate;
+            }
+        }
+
+        return bestUrl;
+    }
+
+    private bool IsWebContent(string address, AccessibleRef node)
+    {
+        var output = RunBusctlCall(
+            address,
+            node.BusName,
+            node.ObjectPath,
+            "org.a11y.atspi.Accessible",
+            "GetAttributes"
+        );
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return false;
+        }
+
+        var attributes = ParseQuotedStrings(output);
+        for (var i = 0; i + 1 < attributes.Count; i += 2)
+        {
+            if (attributes[i] == "tag")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private (int Score, string? Candidate) ScoreUrlCandidate(
+        string address,
+        AccessibleRef node,
+        IReadOnlyList<uint> states
+    )
+    {
+        var role = GetAccessibleRole(address, node);
+        var name = GetAccessibleName(address, node);
+        var interfaces = GetAccessibleInterfaces(address, node);
+        var candidate = TryGetAccessibleText(address, node, interfaces) ?? name;
+        var score = ActiveWindowService.ScoreBrowserUrlCandidate(
+            role,
+            states,
+            name,
+            candidate,
+            interfaces
+        );
+        return (score, candidate);
     }
 
     private string? GetAtSpiBusAddress()
@@ -775,12 +887,71 @@ public sealed partial class AtSpiUrlExtractor
         }
     }
 
-    private static List<string> ParseQuotedStrings(string value)
+    internal static List<string> ParseQuotedStrings(string value)
     {
         return QuotedStringRegex()
             .Matches(value)
-            .Select(match => Regex.Unescape(match.Groups[1].Value))
+            .Select(match => UnescapeBusctlString(match.Groups[1].Value))
             .ToList();
+    }
+
+    // busctl C-escapes strings byte by byte: non-ASCII UTF-8 arrives as octal escapes
+    // ("b\303\274cher" for "bücher"). Regex.Unescape would map each escaped byte to its own
+    // Latin-1 char ("bÃ¼cher"), so collect the raw bytes and decode them as UTF-8.
+    internal static string UnescapeBusctlString(string escaped)
+    {
+        if (!escaped.Contains('\\', StringComparison.Ordinal))
+        {
+            return escaped;
+        }
+
+        var bytes = new List<byte>(escaped.Length);
+        var literalStart = 0;
+        var i = 0;
+        while (i < escaped.Length)
+        {
+            if (escaped[i] != '\\' || i + 1 == escaped.Length)
+            {
+                i++;
+                continue;
+            }
+
+            bytes.AddRange(Encoding.UTF8.GetBytes(escaped[literalStart..i]));
+            var next = escaped[i + 1];
+            i += 2;
+            switch (next)
+            {
+                case 'a': bytes.Add(0x07); break;
+                case 'b': bytes.Add(0x08); break;
+                case 'f': bytes.Add(0x0C); break;
+                case 'n': bytes.Add(0x0A); break;
+                case 'r': bytes.Add(0x0D); break;
+                case 't': bytes.Add(0x09); break;
+                case 'v': bytes.Add(0x0B); break;
+                case >= '0' and <= '7':
+                    var octal = next - '0';
+                    for (
+                        var digits = 1;
+                        digits < 3 && i < escaped.Length && escaped[i] is >= '0' and <= '7';
+                        digits++
+                    )
+                    {
+                        octal = octal * 8 + (escaped[i++] - '0');
+                    }
+
+                    bytes.Add((byte)octal);
+                    break;
+                default:
+                    // \\, \", \' and anything unrecognised decode to the escaped char itself.
+                    literalStart = i - 1;
+                    continue;
+            }
+
+            literalStart = i;
+        }
+
+        bytes.AddRange(Encoding.UTF8.GetBytes(escaped[literalStart..]));
+        return Encoding.UTF8.GetString(bytes.ToArray());
     }
 
     private static string? ParseFirstQuotedString(string? value)
