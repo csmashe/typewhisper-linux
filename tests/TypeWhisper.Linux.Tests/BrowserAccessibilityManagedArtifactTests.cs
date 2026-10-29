@@ -289,6 +289,28 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.Equal(originals[1], File.ReadAllBytes(withoutBom));
     }
 
+    [Fact]
+    public async Task Remove_reports_firefox_profiles_whose_user_js_could_not_be_updated()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        var latin1 = System.Text.Encoding.Latin1.GetBytes(
+            "// café\nuser_pref(\"accessibility.force_disabled\", -1); // TypeWhisper\n"
+        );
+        var userJs = WriteFirefoxProfile(firefoxRoot, "latin1.default", latin1);
+
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(removal.Success);
+        Assert.Contains(
+            "Could not update user.js in Firefox profile(s): latin1.default.",
+            removal.Message
+        );
+        Assert.Equal(latin1, File.ReadAllBytes(userJs));
+    }
+
     private static string WriteFirefoxProfile(string root, string name, byte[] userJs)
     {
         var profile = Path.Join(root, name);
