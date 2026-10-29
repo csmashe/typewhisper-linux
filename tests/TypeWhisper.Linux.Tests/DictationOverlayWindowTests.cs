@@ -101,4 +101,55 @@ public sealed class DictationOverlayWindowTests
         Assert.Equal(2561, parked.X);
         Assert.All(screens, screen => Assert.True(parked.X > screen.Right));
     }
+
+    [Fact]
+    public void DragSession_CaptureLostWhileStartingNativeMove_KeepsDragActive()
+    {
+        // X11's BeginMoveDrag drops our pointer capture synchronously while handing the pointer
+        // to the WM; the window mirrors this by ignoring capture loss while IsStartingMove.
+        var session = new DictationOverlayDragSession();
+        var captureLostDuringStart = false;
+
+        session.Begin(() => captureLostDuringStart = session.IsStartingMove);
+
+        Assert.True(captureLostDuringStart);
+        Assert.False(session.IsStartingMove);
+        Assert.True(session.IsActive);
+    }
+
+    [Fact]
+    public void DragSession_WmMovesAfterNativeMoveStarts_CompleteReturnsDropPosition()
+    {
+        var session = new DictationOverlayDragSession();
+        session.Begin(() => { });
+
+        session.RecordMove(new PixelPoint(3000, 400));
+        session.RecordMove(new PixelPoint(3298, 699));
+
+        Assert.Equal(new PixelPoint(3298, 699), session.Complete());
+        Assert.False(session.IsActive);
+    }
+
+    [Fact]
+    public void DragSession_PressWithoutMove_CompleteReturnsNothing()
+    {
+        var session = new DictationOverlayDragSession();
+        session.Begin(() => { });
+
+        Assert.Null(session.Complete());
+    }
+
+    [Fact]
+    public void DragSession_MovesOutsideADrag_AreNotRecorded()
+    {
+        var session = new DictationOverlayDragSession();
+        session.RecordMove(new PixelPoint(10, 10));
+        session.Begin(() => { });
+        session.Complete();
+
+        session.RecordMove(new PixelPoint(20, 20));
+        session.Begin(() => { });
+
+        Assert.Null(session.Complete());
+    }
 }

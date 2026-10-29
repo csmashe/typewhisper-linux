@@ -15,11 +15,14 @@ public partial class DictationOverlayWindow : Window
 {
     private readonly ISettingsService? _settings;
     private readonly DictationOverlayViewModel? _viewModel;
+    // X11 never reports the end of a WM-driven move (the WM owns the pointer grab, so no release
+    // reaches us); treat the drag as finished once the WM stops moving the window for this long.
+    private static readonly TimeSpan s_dragSettleDelay = TimeSpan.FromMilliseconds(750);
+
     private readonly DictationOverlayPlacementState _placementState = new();
-    private bool _userDragging;
+    private readonly DictationOverlayDragSession _dragSession = new();
     private bool _programmaticPositionChange;
-    private DispatcherTimer? _dragSaveTimer;
-    private PixelPoint? _pendingDragPosition;
+    private DispatcherTimer? _dragSettleTimer;
 
     public DictationOverlayWindow()
     {
@@ -273,7 +276,7 @@ public partial class DictationOverlayWindow : Window
 
         // Don't fight the user while they're dragging the overlay
         // — a SizeChanged mid-drag would otherwise yank the window.
-        if (_userDragging)
+        if (_dragSession.IsActive)
         {
             return;
         }
@@ -393,8 +396,10 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        _userDragging = true;
-        BeginMoveDrag(e);
+        _dragSession.Begin(() => BeginMoveDrag(e));
+
+        // Also covers a press the WM never turns into a move: no PositionChanged arrives.
+        RestartDragSettleTimer();
     }
 
     private void OnUserPointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -404,12 +409,44 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
+        // On X11, BeginMoveDrag releases our pointer capture synchronously while handing the
+        // pointer to the WM. That is the start of the move, not its end.
+        if (_dragSession.IsStartingMove)
+        {
+            return;
+        }
+
         EndUserDrag();
+    }
+
+    private void RestartDragSettleTimer()
+    {
+        _dragSettleTimer ??= new DispatcherTimer(
+            s_dragSettleDelay,
+            DispatcherPriority.Background,
+            (_, _) => EndUserDrag());
+        _dragSettleTimer.Stop();
+        _dragSettleTimer.Start();
     }
 
     private void EndUserDrag()
     {
-        _userDragging = false;
+        _dragSettleTimer?.Stop();
+
+        if (!_dragSession.IsActive)
+        {
+            return;
+        }
+
+        // End the session before saving so the SettingsChanged reposition isn't suppressed.
+        if (_dragSession.Complete() is { } droppedAt && _settings is not null)
+        {
+            _settings.Update(current => current with
+            {
+                OverlayCustomLeft = (double)droppedAt.X,
+                OverlayCustomTop = (double)droppedAt.Y,
+            });
+        }
 
         // A move-drag that outlived a hide (content cleared mid-drag) leaves the still-mapped
         // window on-screen wherever the WM's interactive move dropped it — that grab overrides
@@ -428,48 +465,70 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
+        if (!_dragSession.IsActive)
+        {
+            return;
+        }
+
+        // Keep the session open while the WM is still moving the window, even if it is
+        // hidden, so EndUserDrag's re-park runs after the WM's move has stopped.
+        RestartDragSettleTimer();
+
         // A hidden overlay is only ever moved programmatically (parked off-screen). On X11 the
         // move's PositionChanged arrives asynchronously — after SetPositionProgrammatically has
         // cleared _programmaticPositionChange — so if content clears mid-drag the parked sentinel
         // could be mistaken for a user drag and persisted as the saved position. Never persist a
         // position while parked.
-        if (!_placementState.IsShown)
+        if (_placementState.IsShown)
         {
-            return;
+            _dragSession.RecordMove(e.Point);
         }
+    }
+}
 
-        if (!_userDragging)
+/// <summary>
+///     Tracks one user move-drag of the overlay, kept free of Window/timers so the X11
+///     capture-loss ordering can be unit tested without a live compositor.
+/// </summary>
+internal sealed class DictationOverlayDragSession
+{
+    private PixelPoint? _lastPosition;
+
+    public bool IsActive { get; private set; }
+
+    /// <summary>True only while the native move is being handed to the window manager.</summary>
+    public bool IsStartingMove { get; private set; }
+
+    public void Begin(Action startNativeMove)
+    {
+        IsActive = true;
+        _lastPosition = null;
+        IsStartingMove = true;
+        try
         {
-            return;
+            startNativeMove();
         }
-
-        _pendingDragPosition = e.Point;
-
-        _dragSaveTimer ??= new DispatcherTimer(
-            TimeSpan.FromMilliseconds(250),
-            DispatcherPriority.Background,
-            OnDragSaveTimerTick);
-        _dragSaveTimer.Stop();
-        _dragSaveTimer.Start();
+        finally
+        {
+            IsStartingMove = false;
+        }
     }
 
-    private void OnDragSaveTimerTick(object? sender, EventArgs e)
+    public void RecordMove(PixelPoint position)
     {
-        _dragSaveTimer?.Stop();
-
-        if (_settings is null || _pendingDragPosition is null)
+        if (IsActive)
         {
-            return;
+            _lastPosition = position;
         }
+    }
 
-        var pos = _pendingDragPosition.Value;
-        _pendingDragPosition = null;
-
-        _settings.Update(current => current with
-        {
-            OverlayCustomLeft = (double)pos.X,
-            OverlayCustomTop = (double)pos.Y,
-        });
+    /// <summary>Ends the drag and returns where the window was dropped, if it moved.</summary>
+    public PixelPoint? Complete()
+    {
+        var droppedAt = _lastPosition;
+        IsActive = false;
+        _lastPosition = null;
+        return droppedAt;
     }
 }
 
