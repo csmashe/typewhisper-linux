@@ -1,7 +1,7 @@
 {
   "id": "com.typewhisper.assemblyai",
   "name": "AssemblyAI",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "AssemblyAI Universal-3.5 Pro and Universal-2 transcription engine",
