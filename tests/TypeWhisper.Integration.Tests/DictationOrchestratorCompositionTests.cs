@@ -137,6 +137,54 @@ public sealed class DictationOrchestratorCompositionTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public Task CaptureStopFails_PublishesFailedTerminalAndLeavesNothingInFlight()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            var failedSessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            fixture.AudioBoundary.NextStopFault = new IOException("capture stop fault");
+            var failedResultTask = fixture.WaitForResultAsync(failedSessionId);
+
+            var recordingStopped = false;
+            fixture.Orchestrator.RecordingStateChanged += (_, recording) =>
+                recordingStopped |= !recording;
+            var stopEvent = new TaskCompletionSource<RecordingStoppedEvent>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var stopSubscription = fixture.EventBus.Subscribe<RecordingStoppedEvent>(stopped =>
+            {
+                stopEvent.TrySetResult(stopped);
+                return Task.CompletedTask;
+            });
+
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+
+            var failedResult = await BoundedTest.WaitAsync(failedResultTask);
+            Assert.Equal("failed", failedResult.Status);
+            Assert.Equal("capture stop fault", failedResult.Message);
+            Assert.True(recordingStopped);
+            await BoundedTest.WaitAsync(stopEvent.Task);
+            Assert.Equal(0, fixture.Plugin.TranscriptionCount);
+            Assert.False(fixture.Orchestrator.IsSessionInFlight(failedSessionId));
+            Assert.False(fixture.Orchestrator.IsRecording);
+            Assert.False(fixture.Orchestrator.HasDictationInFlight);
+
+            // A later dictation still completes normally.
+            fixture.Plugin.EnqueueText("hello");
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            Assert.Equal("ready", (await BoundedTest.WaitAsync(resultTask)).Status);
+            Assert.True(fixture.SessionResults.TryGet(failedSessionId, out var stored));
+            Assert.Equal("failed", stored.Status);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public Task HasDictationInFlight_StaysTrueWhileTheTextIsInserted()
     {
         return BoundedTest.RunAsync(async () =>
