@@ -242,6 +242,41 @@ public sealed class MatchProfileCascadeTests : IDisposable
         Assert.Equal(MatchKind.NoMatch, _sut.MatchProfile("antigravity", null).Kind);
     }
 
+    [Theory]
+    [InlineData("xn--bcher-kva.test", "https://bücher.test/a")]
+    [InlineData("bücher.test", "https://xn--bcher-kva.test/a")]
+    [InlineData("BÜCHER.test", "https://xn--bcher-kva.test/a")]
+    [InlineData("xn--bcher-kva.test", "https://shop.bücher.test/")]
+    [InlineData("bücher.test", "https://shop.xn--bcher-kva.test/")]
+    [InlineData("*.xn--bcher-kva.test", "https://bücher.test/")]
+    [InlineData("*.bücher.test", "https://shop.xn--bcher-kva.test/")]
+    [InlineData("[::1]", "https://[::1]:8080/")]
+    public void UrlPatternMatchesEquivalentIdnHostForms(string pattern, string url)
+    {
+        var profile = NewProfile("idn", [], [pattern], 0);
+        _sut.AddProfile(profile);
+
+        var result = _sut.MatchProfile(null, url);
+
+        Assert.Equal(MatchKind.Website, result.Kind);
+        Assert.Equal(profile.Id, result.Profile?.Id);
+        Assert.Equal(pattern, result.MatchedDomain);
+    }
+
+    [Theory]
+    [InlineData("bücher.test", "https://xbücher.test/")]
+    [InlineData("bücher.test", "https://bücher.test.evil/")]
+    [InlineData("bücher.test", "https://evil.test/?u=bücher.test")]
+    [InlineData("bücher.test", "https://bucher.test/")]
+    [InlineData("xn--bcher-kva.test", "https://bϋcher.test/")]
+    [InlineData("bücher.test", "not a url")]
+    public void UrlPatternRejectsDifferentIdnHosts(string pattern, string url)
+    {
+        _sut.AddProfile(NewProfile("idn", [], [pattern], 0));
+
+        Assert.Equal(MatchKind.NoMatch, _sut.MatchProfile(null, url).Kind);
+    }
+
     private static Profile NewProfile(
         string name,
         IReadOnlyList<string> processNames,
