@@ -11,7 +11,7 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 ///     requires a writable scripts directory plus a DBus round-trip per query, making
 ///     "install kdotool" the better remediation story.
 /// </summary>
-public sealed class KWinActiveWindowProvider : IActiveWindowProvider
+public sealed class KWinActiveWindowProvider : IActiveWindowProvider, IActiveWindowActivator
 {
     private readonly ProviderProcessRunner _processRunner;
 
@@ -85,5 +85,13 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider
         {
             return null;
         }
+    }
+
+    public async Task<bool> TryActivateWindowAsync(string windowId, CancellationToken ct)
+    {
+        var (exitCode, _) = await _processRunner
+            .RunAsync("kdotool", ["windowactivate", windowId], ct)
+            .ConfigureAwait(false);
+        return exitCode == 0;
     }
 }
