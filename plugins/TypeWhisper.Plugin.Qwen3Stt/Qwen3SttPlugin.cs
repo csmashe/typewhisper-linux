@@ -120,15 +120,15 @@ public sealed class Qwen3SttPlugin
         string? requestedLanguage
     )
     {
+        if (!string.Equals(result.DetectedLanguage, "forced", StringComparison.OrdinalIgnoreCase))
+            return result;
+
         var markerIndex = result.Text.IndexOf(AsrTextMarker, StringComparison.Ordinal);
         var text = markerIndex < 0
             ? result.Text
             : result.Text[(markerIndex + AsrTextMarker.Length)..].Trim();
-        var detectedLanguage = string.Equals(result.DetectedLanguage, "forced", StringComparison.OrdinalIgnoreCase)
-            ? requestedLanguage
-            : result.DetectedLanguage;
 
-        return result with { Text = text, DetectedLanguage = detectedLanguage };
+        return result with { Text = text, DetectedLanguage = requestedLanguage };
     }
 
     private IPluginLocalization? _injectedLocalization;

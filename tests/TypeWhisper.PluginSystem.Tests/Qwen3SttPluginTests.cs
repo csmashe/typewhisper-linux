@@ -193,6 +193,28 @@ public class Qwen3SttPluginTests
         Assert.Equal("English", result.DetectedLanguage);
     }
 
+    [Fact]
+    public async Task TranscribeAsync_KeepsLiteralAsrMarkerInAutomaticMode()
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse(
+                """{ "language": "English", "text": "Type pañol<asr_text> into the prompt." }"""
+            ))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler);
+
+        var result = await sut.TranscribeAsync(
+            [1],
+            null,
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+
+        Assert.Equal("Type pañol<asr_text> into the prompt.", result.Text);
+        Assert.Equal("English", result.DetectedLanguage);
+    }
+
     [Theory]
     // ReSharper disable once RawStringCanBeSimplified -- kept raw to match the sibling InlineData rows, which need raw strings for their quotes.
     [InlineData("""{}""")]
