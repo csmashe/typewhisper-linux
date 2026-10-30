@@ -569,8 +569,10 @@ internal sealed class DictationOverlayDragSession
         return position == _lastProgrammaticTarget;
     }
 
+    /// <summary>A user move was accepted, so any echo still expected is stale.</summary>
     public void MarkMoving()
     {
+        _lastProgrammaticTarget = null;
         if (IsActive)
         {
             IsMoving = true;

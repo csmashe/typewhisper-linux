@@ -197,4 +197,18 @@ public sealed class DictationOverlayWindowTests
         Assert.True(session.IsProgrammaticEcho(new PixelPoint(3200, 650)));
         Assert.False(session.IsProgrammaticEcho(new PixelPoint(3250, 680)));
     }
+
+    [Fact]
+    public void DragSession_UserMoveAfterProgrammaticMove_ExpiresTheEcho()
+    {
+        var session = new DictationOverlayDragSession();
+        session.Begin(() => { });
+        session.Settle();
+        session.NoteProgrammaticMove(new PixelPoint(3200, 650));
+
+        // The move resumes elsewhere, then returns to the same point: that drop is the user's.
+        session.MarkMoving();
+
+        Assert.False(session.IsProgrammaticEcho(new PixelPoint(3200, 650)));
+    }
 }
