@@ -11,15 +11,14 @@ public static class SubtitleExporter
     public static string ToSrt(IReadOnlyList<TranscriptionSegment> segments)
     {
         var sb = new StringBuilder();
-        for (var i = 0; i < segments.Count; i++)
+        var number = 1;
+        foreach (var (start, end, text) in Cues(segments))
         {
-            var seg = segments[i];
-            var (start, end) = CueTimes(seg);
-            sb.AppendLine((i + 1).ToString());
+            sb.AppendLine(number++.ToString());
             sb.Append(FormatSrtTime(start));
             sb.Append(" --> ");
             sb.AppendLine(FormatSrtTime(end));
-            sb.AppendLine(seg.Text);
+            sb.AppendLine(text);
             sb.AppendLine();
         }
 
@@ -32,18 +31,30 @@ public static class SubtitleExporter
         sb.AppendLine("WEBVTT");
         sb.AppendLine();
 
-        foreach (var seg in segments)
+        foreach (var (start, end, text) in Cues(segments))
         {
-            var (start, end) = CueTimes(seg);
             sb.Append(FormatVttTime(start));
             sb.Append(" --> ");
             sb.AppendLine(FormatVttTime(end));
-            sb.AppendLine(seg.Text);
+            sb.AppendLine(text);
             sb.AppendLine();
         }
 
         return sb.ToString();
     }
+
+    // Remote providers can return segments out of order; players expect cues sorted by start.
+    // OrderBy is stable, so cues sharing a start keep the provider's order.
+    private static IEnumerable<(TimeSpan Start, TimeSpan End, string Text)> Cues(
+        IReadOnlyList<TranscriptionSegment> segments
+    ) =>
+        segments
+            .Select(segment =>
+            {
+                var (start, end) = CueTimes(segment);
+                return (start, end, segment.Text);
+            })
+            .OrderBy(cue => cue.start);
 
     // Remote providers can return negative or reversed times. Clamped after rounding so the
     // end always lands at least 1 ms after the start; players drop zero-length cues.
