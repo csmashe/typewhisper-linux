@@ -21,11 +21,13 @@ public sealed partial class AtSpiUrlExtractor
     private const int AtSpiStateActive = 1;
     private const int AtSpiStateShowing = 25;
     private const int AtSpiStateVisible = 30;
+    private const int AtSpiRoleComboBox = 11;
     private const int AtSpiRoleFrame = 23;
 
     private const int AtSpiRoleWindow = 69;
     private const int AtSpiRoleEditBar = 77;
     private const int AtSpiRoleEntry = 79;
+    private const int AtSpiRoleDocumentWeb = 95;
     private const string AtSpiMatchAll = "1";
     private const string AtSpiMatchAny = "2";
 
@@ -33,8 +35,17 @@ public sealed partial class AtSpiUrlExtractor
     private static readonly string s_showingVisibleStateWord =
         ((1u << AtSpiStateShowing) | (1u << AtSpiStateVisible)).ToString();
 
-    private static readonly string s_editBarOrEntryRoleWord =
-        ((1u << (AtSpiRoleEditBar - 64)) | (1u << (AtSpiRoleEntry - 64))).ToString();
+    private static readonly string[] s_urlFieldRoleWords =
+    [
+        (1 << AtSpiRoleComboBox).ToString(),
+        "0",
+        ((1 << (AtSpiRoleEditBar - 64)) | (1 << (AtSpiRoleEntry - 64))).ToString(),
+        "0",
+    ];
+
+    // Bit 31 makes this word negative; RunBusctlCall passes "--" so busctl reads it as a value.
+    private static readonly string[] s_documentWebRoleWords =
+        ["0", "0", (1 << (AtSpiRoleDocumentWeb - 64)).ToString(), "0"];
 
     // Each busctl invocation is a separate process + D-Bus round-trip (50–200 ms each on
     // a busy system). Firefox's URL bar also sits under invisible structural containers, so
@@ -191,7 +202,7 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             using var cts = new CancellationTokenSource(s_walkBudget);
-            url = WalkForUrl(address, browser, stats, cts.Token);
+            url = WalkForUrl(address, browser, focusedTitle, stats, cts.Token);
             budgetExhausted = cts.IsCancellationRequested;
         }
 
@@ -322,6 +333,7 @@ public sealed partial class AtSpiUrlExtractor
     private string? WalkForUrl(
         string address,
         BrowserDescriptor focusedBrowser,
+        string? focusedTitle,
         WalkStats stats,
         CancellationToken ct
     )
@@ -351,7 +363,7 @@ public sealed partial class AtSpiUrlExtractor
 
             stats.MatchedApp = appName;
 
-            var window = FindActiveBrowserWindow(address, app, ct);
+            var window = FindFocusedBrowserWindow(address, app, focusedTitle, ct);
             if (window is null)
             {
                 continue;
@@ -393,14 +405,22 @@ public sealed partial class AtSpiUrlExtractor
         return applicationBrowser?.Id == focusedBrowser.Id;
     }
 
-    private AccessibleRef? FindActiveBrowserWindow(
+    // Picks the browser window the compositor reports as focused. The AT-SPI ACTIVE state alone
+    // is unreliable: Chrome under XWayland on KWin can leave it unset on the focused window
+    // (fresh launch, or focus returning from a native Wayland window) and set on a window that
+    // lost focus. The frame named exactly like the focused window title wins; an ACTIVE frame
+    // is the fallback for titles the compositor decorates (e.g. KWin's " <2>" suffix).
+    private AccessibleRef? FindFocusedBrowserWindow(
         string address,
         AccessibleRef app,
+        string? focusedTitle,
         CancellationToken ct
     )
     {
         var queue = new Queue<(AccessibleRef Node, int Depth)>();
         queue.Enqueue((app, 0));
+        AccessibleRef? titleMatch = null;
+        AccessibleRef? activeWindow = null;
 
         while (queue.Count > 0)
         {
@@ -416,13 +436,28 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             var role = GetAccessibleRole(address, node);
-            var states = GetAccessibleState(address, node);
-            if (
-                role is AtSpiRoleFrame or AtSpiRoleWindow
-                && ActiveWindowService.HasState(states, AtSpiStateActive)
-            )
+            if (role is AtSpiRoleFrame or AtSpiRoleWindow)
             {
-                return node;
+                var isActive = ActiveWindowService.HasState(
+                    GetAccessibleState(address, node),
+                    AtSpiStateActive
+                );
+                var isTitleMatch =
+                    !string.IsNullOrEmpty(focusedTitle)
+                    && string.Equals(
+                        GetAccessibleName(address, node),
+                        focusedTitle,
+                        StringComparison.Ordinal
+                    );
+                if (isActive && (isTitleMatch || string.IsNullOrEmpty(focusedTitle)))
+                {
+                    return node;
+                }
+
+                titleMatch ??= isTitleMatch ? node : null;
+                activeWindow ??= isActive ? node : null;
+                // A window's subtree is its content, not further top-level windows.
+                continue;
             }
 
             foreach (var child in GetAccessibleChildren(address, node))
@@ -431,7 +466,7 @@ public sealed partial class AtSpiUrlExtractor
             }
         }
 
-        return null;
+        return titleMatch ?? activeWindow;
     }
 
     private string? FindLikelyBrowserUrlInSubtree(
@@ -473,12 +508,17 @@ public sealed partial class AtSpiUrlExtractor
 
             if (isShowingVisible)
             {
-                // Score first: most visible nodes (panels, buttons, labels) hold no URL and
-                // are rejected without the extra GetAttributes spawn. Only a node that would
-                // become the best candidate pays for the web-content check, so attribute
-                // lookups cannot eat the walk budget before the address bar is reached.
-                var (score, candidate) = ScoreUrlCandidate(address, node, states);
-                if (score > bestScore && IsWebContent(address, node) == false)
+                // A page's document holds its form fields, never the address bar; skipping
+                // the whole subtree keeps URL-like page fields out and saves walk budget.
+                // An unreadable role (0) can't be ruled out as a document, so skip it too.
+                var role = GetAccessibleRole(address, node);
+                if (role is AtSpiRoleDocumentWeb or 0)
+                {
+                    continue;
+                }
+
+                var (score, candidate) = ScoreUrlCandidate(address, node, role, states);
+                if (score > bestScore)
                 {
                     bestScore = score;
                     bestUrl = ActiveWindowService.SanitizeCapturedBrowserUrl(candidate);
@@ -498,12 +538,12 @@ public sealed partial class AtSpiUrlExtractor
         return bestUrl;
     }
 
-    // One Collection.GetMatches call for the window's showing, visible entries and edit bars.
-    // Chromium's omnibox sits ~120 nodes into a breadth-first walk, and at several busctl
-    // spawns per node the 2.5 s budget often ran out first. Web-page fields (they carry a
-    // "tag" attribute) are skipped so a form field holding a URL can't pose as the address
-    // bar. Null when the browser has no Collection support or no URL-like entry (Firefox's
-    // URL bar is a combo box), so the caller falls back to the full walk.
+    // One Collection.GetMatches call for the window's showing, visible entries, edit bars and
+    // combo boxes (Firefox's URL bar). Chromium's omnibox sits ~120 nodes into a breadth-first
+    // walk, and at several busctl spawns per node the 2.5 s budget often ran out first. Fields
+    // inside a web page's document are dropped so a form field holding a URL can't pose as the
+    // address bar. Null when the browser has no Collection support, a page-field query fails,
+    // or no URL-like entry remains, so the caller falls back to the full walk.
     private string? FindUrlInVisibleEntries(
         string address,
         AccessibleRef window,
@@ -511,25 +551,14 @@ public sealed partial class AtSpiUrlExtractor
         CancellationToken ct
     )
     {
-        var output = RunBusctlCall(
-            address,
-            window.BusName,
-            window.ObjectPath,
-            "org.a11y.atspi.Collection",
-            "GetMatches",
-            "(aiia{ss}iaiiasib)uib",
-            // states: SHOWING and VISIBLE, match all
-            "2", s_showingVisibleStateWord, "0", AtSpiMatchAll,
-            // attributes: none, match all
-            "0", AtSpiMatchAll,
-            // roles: EDITBAR or ENTRY, match any
-            "4", "0", "0", s_editBarOrEntryRoleWord, "0", AtSpiMatchAny,
-            // interfaces: none, match all; invert: false
-            "0", AtSpiMatchAll, "false",
-            // Sort canonical, no cap: page fields must not hide a later address bar. Traverse.
-            "1", "0", "true"
-        );
+        var output = GetVisibleMatches(address, window, s_urlFieldRoleWords);
         if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        var pageFields = FindWebPageFields(address, window);
+        if (pageFields is null)
         {
             return null;
         }
@@ -540,7 +569,7 @@ public sealed partial class AtSpiUrlExtractor
         for (var i = 0; i + 1 < values.Count && !ct.IsCancellationRequested; i += 2)
         {
             var node = new AccessibleRef(values[i], values[i + 1]);
-            if (IsWebContent(address, node) != false)
+            if (pageFields.Contains(node))
             {
                 continue;
             }
@@ -548,6 +577,7 @@ public sealed partial class AtSpiUrlExtractor
             var (score, candidate) = ScoreUrlCandidate(
                 address,
                 node,
+                GetAccessibleRole(address, node),
                 GetAccessibleState(address, node)
             );
             if (score > bestScore)
@@ -569,39 +599,74 @@ public sealed partial class AtSpiUrlExtractor
         return bestUrl;
     }
 
-    private bool? IsWebContent(string address, AccessibleRef node)
+    // URL-like fields inside the window's visible web documents. Every browser exposes its
+    // address bar outside the page document, while Firefox's HTML-built toolbar carries the
+    // same "tag" attribute as page fields, so document membership is the reliable split.
+    // Null when a query fails: unchecked candidates must not be trusted as the address bar.
+    private HashSet<AccessibleRef>? FindWebPageFields(string address, AccessibleRef window)
     {
-        var output = RunBusctlCall(
-            address,
-            node.BusName,
-            node.ObjectPath,
-            "org.a11y.atspi.Accessible",
-            "GetAttributes"
-        );
-        if (string.IsNullOrWhiteSpace(output))
+        var documents = GetVisibleMatches(address, window, s_documentWebRoleWords);
+        if (documents is null)
         {
             return null;
         }
 
-        var attributes = ParseQuotedStrings(output);
-        for (var i = 0; i + 1 < attributes.Count; i += 2)
+        var pageFields = new HashSet<AccessibleRef>();
+        var documentRefs = ParseQuotedStrings(documents);
+        for (var i = 0; i + 1 < documentRefs.Count; i += 2)
         {
-            if (attributes[i] == "tag")
+            var fields = GetVisibleMatches(
+                address,
+                new AccessibleRef(documentRefs[i], documentRefs[i + 1]),
+                s_urlFieldRoleWords
+            );
+            if (string.IsNullOrWhiteSpace(fields))
             {
-                return true;
+                return null;
+            }
+
+            var fieldRefs = ParseQuotedStrings(fields);
+            for (var j = 0; j + 1 < fieldRefs.Count; j += 2)
+            {
+                pageFields.Add(new AccessibleRef(fieldRefs[j], fieldRefs[j + 1]));
             }
         }
 
-        return false;
+        return pageFields;
+    }
+
+    // Collection.GetMatches for showing, visible descendants with any of the given roles.
+    private string? GetVisibleMatches(string address, AccessibleRef root, string[] roleWords)
+    {
+        return RunBusctlCall(
+            address,
+            root.BusName,
+            root.ObjectPath,
+            "org.a11y.atspi.Collection",
+            "GetMatches",
+            [
+                "(aiia{ss}iaiiasib)uib",
+                // states: SHOWING and VISIBLE, match all
+                "2", s_showingVisibleStateWord, "0", AtSpiMatchAll,
+                // attributes: none, match all
+                "0", AtSpiMatchAll,
+                // roles: any of the four role words
+                "4", .. roleWords, AtSpiMatchAny,
+                // interfaces: none, match all; invert: false
+                "0", AtSpiMatchAll, "false",
+                // Sort canonical, no cap: page fields must not hide a later address bar. Traverse.
+                "1", "0", "true",
+            ]
+        );
     }
 
     private (int Score, string? Candidate) ScoreUrlCandidate(
         string address,
         AccessibleRef node,
+        int role,
         IReadOnlyList<uint> states
     )
     {
-        var role = GetAccessibleRole(address, node);
         var name = GetAccessibleName(address, node);
         var interfaces = GetAccessibleInterfaces(address, node);
         var candidate = TryGetAccessibleText(address, node, interfaces) ?? name;
@@ -817,6 +882,7 @@ public sealed partial class AtSpiUrlExtractor
         var args = new List<string>
         {
             $"--address={address}",
+            "--",
             "call",
             destination,
             path,
