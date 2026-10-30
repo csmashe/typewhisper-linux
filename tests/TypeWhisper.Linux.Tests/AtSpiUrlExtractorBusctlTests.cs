@@ -99,7 +99,7 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
                 "0", "1",
                 "4", "0", "0", "40960", "0", "2",
                 "0", "1", "false",
-                "1", "32", "true",
+                "1", "0", "true",
             ],
             getMatches.Command.Arguments.Skip(6)
         );
@@ -142,6 +142,61 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
             invocation => invocation.Command.Arguments.Contains(pageFieldPath)
                           && invocation.Command.Arguments.Contains("GetText")
         );
+    }
+
+    [Fact]
+    public void TryGetBrowserUrl_CollectionMatch_FindsAddressBarAfter32PageFields()
+    {
+        var runner = BuildChromeTree("actual.example/path");
+        var pageFields = Enumerable.Range(0, 32)
+            .Select(i => $"/org/a11y/atspi/accessible/page-{i}").ToArray();
+        var pageMatches = string.Join(" ", pageFields.Select(path => $@""":1.5"" ""{path}"""));
+        // Model the server applying the requested count before client-side tag filtering.
+        runner.RespondWith(
+            (file, args) => file == "busctl" && args.Contains("GetMatches")
+                && args[^2] == "0",
+            $@"a(so) 33 {pageMatches} "":1.5"" ""{EntryPath}""");
+        Respond(runner, FramePath, "GetMatches", $"a(so) 32 {pageMatches}");
+        foreach (var path in pageFields)
+        {
+            Respond(runner, path, "GetAttributes", @"a{ss} 1 ""tag"" ""input""");
+        }
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Equal("https://actual.example/path",
+            extractor.TryGetBrowserUrl("chrome", "QA - Google Chrome"));
+        Assert.DoesNotContain(runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.Contains(FramePath)
+                && invocation.Command.Arguments.Contains("GetChildren"));
+    }
+
+    [Fact]
+    public void TryGetBrowserUrl_AttributeReadFailure_FallbackIgnoresFocusedPageField()
+    {
+        const string uncheckedPath = "/org/a11y/atspi/accessible/unchecked";
+        const string pageFieldPath = "/org/a11y/atspi/accessible/page-field";
+        var runner = BuildChromeTree("actual.example/path", false, pageFieldPath);
+        Respond(runner, FramePath, "GetMatches",
+            $@"a(so) 1 "":1.5"" ""{uncheckedPath}""");
+        runner.FailWhen((file, args) => file == "busctl"
+            && args.Contains(uncheckedPath) && args.Contains("GetAttributes"));
+        Respond(runner, pageFieldPath, "GetAttributes", @"a{ss} 1 ""tag"" ""input""");
+        Respond(runner, pageFieldPath, "GetState",
+            $"au 2 {(1u << 25) | (1u << 30) | (1u << 11) | (1u << 18)} 0");
+        Respond(runner, pageFieldPath, "GetRole", "u 79");
+        Respond(runner, pageFieldPath, "Name", @"s ""https://wrong.example/path""");
+        Respond(runner, pageFieldPath, "GetInterfaces", "as 0");
+        Respond(runner, pageFieldPath, "GetChildren", "a(so) 0");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Equal("https://actual.example/path",
+            extractor.TryGetBrowserUrl("chrome", "QA - Google Chrome"));
+        Assert.Contains(runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.Contains(uncheckedPath)
+                && invocation.Command.Arguments.Contains("GetAttributes"));
+        Assert.Contains(runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.Contains(FramePath)
+                && invocation.Command.Arguments.Contains("GetChildren"));
     }
 
     [Theory]
@@ -188,7 +243,9 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
     }
 
     // Registry root -> Chrome app -> active frame -> focused, editable address bar.
-    private static FakeProcessRunner BuildChromeTree(string addressText)
+    private static FakeProcessRunner BuildChromeTree(
+        string addressText, bool addressFocused = true, string? pageFieldPath = null
+    )
     {
         const uint showingVisibleFocusedEditable =
             (1u << 25) | (1u << 30) | (1u << 11) | (1u << 18);
@@ -202,10 +259,12 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
         Respond(runner, AppPath, "GetChildren", $@"a(so) 1 "":1.5"" ""{FramePath}""");
         Respond(runner, FramePath, "GetRole", "u 23");
         Respond(runner, FramePath, "GetState", $"au 2 {1u << 1} 0");
-        Respond(runner, FramePath, "GetChildren", $@"a(so) 1 "":1.5"" ""{EntryPath}""");
+        Respond(runner, FramePath, "GetChildren", pageFieldPath is null
+            ? $@"a(so) 1 "":1.5"" ""{EntryPath}"""
+            : $@"a(so) 2 "":1.5"" ""{pageFieldPath}"" "":1.5"" ""{EntryPath}""");
         Respond(runner, EntryPath, "GetAttributes", "a{ss} 0");
         Respond(runner, EntryPath, "GetRole", "u 79");
-        Respond(runner, EntryPath, "GetState", $"au 2 {showingVisibleFocusedEditable} 0");
+        Respond(runner, EntryPath, "GetState", $"au 2 {showingVisibleFocusedEditable & (addressFocused ? uint.MaxValue : ~(1u << 11))} 0");
         Respond(
             runner,
             EntryPath,

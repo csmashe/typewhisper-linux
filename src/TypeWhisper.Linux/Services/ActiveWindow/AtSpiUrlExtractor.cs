@@ -471,7 +471,7 @@ public sealed partial class AtSpiUrlExtractor
                 ActiveWindowService.HasState(states, AtSpiStateShowing)
                 && ActiveWindowService.HasState(states, AtSpiStateVisible);
 
-            if (isShowingVisible)
+            if (isShowingVisible && IsWebContent(address, node) == false)
             {
                 var (score, candidate) = ScoreUrlCandidate(address, node, states);
                 if (score > bestScore)
@@ -522,8 +522,8 @@ public sealed partial class AtSpiUrlExtractor
             "4", "0", "0", s_editBarOrEntryRoleWord, "0", AtSpiMatchAny,
             // interfaces: none, match all; invert: false
             "0", AtSpiMatchAll, "false",
-            // sort canonical, cap results to keep page fields from flooding the response, traverse
-            "1", "32", "true"
+            // Sort canonical, no cap: page fields must not hide a later address bar. Traverse.
+            "1", "0", "true"
         );
         if (string.IsNullOrWhiteSpace(output))
         {
