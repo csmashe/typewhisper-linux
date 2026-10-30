@@ -471,10 +471,14 @@ public sealed partial class AtSpiUrlExtractor
                 ActiveWindowService.HasState(states, AtSpiStateShowing)
                 && ActiveWindowService.HasState(states, AtSpiStateVisible);
 
-            if (isShowingVisible && IsWebContent(address, node) == false)
+            if (isShowingVisible)
             {
+                // Score first: most visible nodes (panels, buttons, labels) hold no URL and
+                // are rejected without the extra GetAttributes spawn. Only a node that would
+                // become the best candidate pays for the web-content check, so attribute
+                // lookups cannot eat the walk budget before the address bar is reached.
                 var (score, candidate) = ScoreUrlCandidate(address, node, states);
-                if (score > bestScore)
+                if (score > bestScore && IsWebContent(address, node) == false)
                 {
                     bestScore = score;
                     bestUrl = ActiveWindowService.SanitizeCapturedBrowserUrl(candidate);

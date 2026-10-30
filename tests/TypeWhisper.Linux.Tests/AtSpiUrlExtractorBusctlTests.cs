@@ -199,6 +199,29 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
                 && invocation.Command.Arguments.Contains("GetChildren"));
     }
 
+    [Fact]
+    public void TryGetBrowserUrl_Fallback_ReadsAttributesOnlyForUrlCandidates()
+    {
+        const string buttonPath = "/org/a11y/atspi/accessible/reload-button";
+        var runner = BuildChromeTree("actual.example/path", pageFieldPath: buttonPath);
+        Respond(runner, FramePath, "GetMatches", "a(so) 0");
+        Respond(runner, buttonPath, "GetState", $"au 2 {(1u << 25) | (1u << 30)} 0");
+        Respond(runner, buttonPath, "GetRole", "u 42");
+        Respond(runner, buttonPath, "Name", @"s ""Reload""");
+        Respond(runner, buttonPath, "GetInterfaces", "as 0");
+        Respond(runner, buttonPath, "GetChildren", "a(so) 0");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Equal("https://actual.example/path",
+            extractor.TryGetBrowserUrl("chrome", "QA - Google Chrome"));
+        Assert.DoesNotContain(runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.Contains(buttonPath)
+                && invocation.Command.Arguments.Contains("GetAttributes"));
+        Assert.Contains(runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.Contains(EntryPath)
+                && invocation.Command.Arguments.Contains("GetAttributes"));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
