@@ -105,6 +105,23 @@ public sealed class DictationOrchestratorTargetWindowTests
         provider.Verify(p => p.TryGetActiveWindowAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData("{aaa}", true)]
+    [InlineData("{bbb}", false)]
+    public async Task IsVerifiedTargetFocused_GatesTheInitialSelectionProbe(string currentId, bool expected)
+    {
+        var (sut, _) = Create(s_editor with { WindowId = currentId });
+        typeof(DictationOrchestrator).GetField("_textInsertion", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(sut, new TextInsertionService(new NoWindowIdPlatform()));
+        var context = Context(null, s_editor) with { IsWaylandSession = true };
+
+        var focused = await (Task<bool>)typeof(DictationOrchestrator)
+            .GetMethod("IsVerifiedTargetFocusedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(sut, [context])!;
+
+        Assert.Equal(expected, focused);
+    }
+
     private static (DictationOrchestrator Sut, Mock<IActiveWindowProvider> Provider) Create(ActiveWindowSnapshot? current)
     {
         var sut = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(typeof(DictationOrchestrator));
@@ -132,5 +149,26 @@ public sealed class DictationOrchestratorTargetWindowTests
         return (Task<bool>)typeof(DictationOrchestrator)
             .GetMethod("IsTargetWindowStillFocusedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(sut, [context])!;
+    }
+
+    // Wayland without xdotool: no window id to activate, so focus is decided by the snapshot alone.
+    private sealed class NoWindowIdPlatform : ITextInsertionPlatform
+    {
+        public bool IsClipboardSetAvailable => false;
+        public bool IsPasteAvailable => false;
+        public bool IsKdePlasma => false;
+        public bool PrefersDirectTypingForUnknownTarget => false;
+        public InsertionFailureReason LastFailureReason => InsertionFailureReason.None;
+        public bool LastTypingDeliveredPartialText => false;
+        public Task<string?> TryGetClipboardTextAsync() => Task.FromResult<string?>(null);
+        public Task<bool> SetClipboardTextAsync(string text) => Task.FromResult(false);
+        public Task<bool> ClipboardHasNonTextFormatsAsync() => Task.FromResult(false);
+        public Task DelayAsync(TimeSpan delay) => Task.CompletedTask;
+        public string? GetActiveWindowId() => null;
+        public Task<bool> ActivateWindowAsync(string windowId) => Task.FromResult(false);
+        public Task<bool> SendPasteAsync(bool useTerminalShortcut = false) => Task.FromResult(false);
+        public Task<bool> TypeTextAsync(string text) => Task.FromResult(false);
+        public Task<bool> SendCopyAsync(bool useTerminalShortcut) => Task.FromResult(false);
+        public Task<bool> SendEnterAsync() => Task.FromResult(false);
     }
 }

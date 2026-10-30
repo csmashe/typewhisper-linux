@@ -3323,6 +3323,18 @@ public sealed partial class DictationOrchestrator : IDisposable
                 // at the focused app. Terminals map plain Ctrl+C to SIGINT, so the probe uses
                 // Ctrl+Shift+C there (and still can't read a TUI editor's internal selection).
                 var targetIsTerminal = TextInsertionService.IsTerminalApp(context.AppProcess);
+                // Focus may have moved during transcription: a copy chord sent now would read another
+                // app's selection and hand it to the provider. Unverifiable targets keep the old probe;
+                // their result still only reaches the clipboard.
+                if (CanVerifyTargetWindow(context) && !await IsVerifiedTargetFocusedAsync(context))
+                {
+                    var moved = Localization.Loc.Instance["Command.FocusMoved"];
+                    ReportStatus(context, moved);
+                    ShowFeedback(context, moved, false);
+                    PublishSessionTerminal(context.SessionId, "discarded", moved);
+                    return null;
+                }
+
                 var selectedText = await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal);
                 if (string.IsNullOrWhiteSpace(selectedText))
                 {
@@ -3352,8 +3364,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 // a confirmed window — the copy chord would interrupt a terminal.
                 selectionStillTargeted = async () =>
                     CanVerifyTargetWindow(context)
-                    && await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
-                    && await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false)
+                    && await IsVerifiedTargetFocusedAsync(context).ConfigureAwait(false)
                     && string.Equals(
                         await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal).ConfigureAwait(false),
                         selectedText,
@@ -4492,6 +4503,13 @@ public sealed partial class DictationOrchestrator : IDisposable
         return context.LockedFocusField?.Element is not null
             ? Task.FromResult(true)
             : IsCapturedWindowFocusedAsync(context);
+    }
+
+    // Re-activates the recording's window where xdotool can, then confirms it holds focus.
+    private async Task<bool> IsVerifiedTargetFocusedAsync(RecordingContext context)
+    {
+        return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
+               && await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false);
     }
 
     private async Task<bool> IsCapturedWindowFocusedAsync(RecordingContext context)

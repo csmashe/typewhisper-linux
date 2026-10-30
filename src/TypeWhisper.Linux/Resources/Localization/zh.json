@@ -192,6 +192,7 @@
   "Command.ApplyingPrompt": "正在应用提示词：{0}",
   "Command.Done": "已应用命令。",
   "Command.Failed": "命令失败。",
+  "Command.FocusMoved": "已取消编辑：焦点已移至其他窗口",
   "Command.NoProvider": "未为命令配置AI提供商",
   "Command.NoResult": "命令未生成任何文本。",
   "Command.NoTerminalSelection": "无法读取所选内容——Neovim等终端编辑器会将其保留在内部",
