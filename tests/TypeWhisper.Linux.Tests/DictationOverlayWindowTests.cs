@@ -152,4 +152,34 @@ public sealed class DictationOverlayWindowTests
 
         Assert.Null(session.Complete());
     }
+
+    [Fact]
+    public void DragSession_PauseMidMove_SavesPositionAndKeepsTracking()
+    {
+        var session = new DictationOverlayDragSession();
+        session.Begin(() => { });
+        session.RecordMove(new PixelPoint(3000, 400));
+
+        Assert.Equal(new PixelPoint(3000, 400), session.Settle());
+        Assert.True(session.IsActive);
+        Assert.False(session.IsMoving);
+
+        // The WM's move resumes after the pause; its final drop must still be captured.
+        session.RecordMove(new PixelPoint(3298, 699));
+
+        Assert.True(session.IsMoving);
+        Assert.Equal(new PixelPoint(3298, 699), session.Complete());
+        Assert.False(session.IsActive);
+    }
+
+    [Fact]
+    public void DragSession_CompleteAfterSettleWithoutFurtherMoves_ReturnsNothing()
+    {
+        var session = new DictationOverlayDragSession();
+        session.Begin(() => { });
+        session.RecordMove(new PixelPoint(3000, 400));
+        session.Settle();
+
+        Assert.Null(session.Complete());
+    }
 }

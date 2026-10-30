@@ -16,7 +16,7 @@ public partial class DictationOverlayWindow : Window
     private readonly ISettingsService? _settings;
     private readonly DictationOverlayViewModel? _viewModel;
     // X11 never reports the end of a WM-driven move (the WM owns the pointer grab, so no release
-    // reaches us); treat the drag as finished once the WM stops moving the window for this long.
+    // reaches us); save the position once the WM stops moving the window for this long.
     private static readonly TimeSpan s_dragSettleDelay = TimeSpan.FromMilliseconds(750);
 
     private readonly DictationOverlayPlacementState _placementState = new();
@@ -213,6 +213,14 @@ public partial class DictationOverlayWindow : Window
         Opacity = 0.0;
         IsHitTestVisible = false;
         SetClickThrough(true);
+
+        // A settled drag has nothing left to save; stop tracking so later moves aren't
+        // mistaken for it.
+        if (_dragSession is { IsActive: true, IsMoving: false })
+        {
+            _dragSession.Complete();
+        }
+
         SetPositionProgrammatically(
             _placementState.Hide(CollectScreenBounds(), Position)
         );
@@ -276,7 +284,7 @@ public partial class DictationOverlayWindow : Window
 
         // Don't fight the user while they're dragging the overlay
         // — a SizeChanged mid-drag would otherwise yank the window.
-        if (_dragSession.IsActive)
+        if (_dragSession.IsMoving)
         {
             return;
         }
@@ -396,6 +404,8 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
+        // X11 never delivers the previous drag's release, so save its drop before starting over.
+        EndUserDrag();
         _dragSession.Begin(() => BeginMoveDrag(e));
 
         // Also covers a press the WM never turns into a move: no PositionChanged arrives.
@@ -424,9 +434,24 @@ public partial class DictationOverlayWindow : Window
         _dragSettleTimer ??= new DispatcherTimer(
             s_dragSettleDelay,
             DispatcherPriority.Background,
-            (_, _) => EndUserDrag());
+            (_, _) => OnDragSettled());
         _dragSettleTimer.Stop();
         _dragSettleTimer.Start();
+    }
+
+    private void OnDragSettled()
+    {
+        _dragSettleTimer?.Stop();
+
+        if (!_placementState.IsShown)
+        {
+            EndUserDrag();
+            return;
+        }
+
+        // A pause doesn't end the WM's move, so save where the window is but keep tracking: if
+        // the move resumes, its later drop is saved too.
+        SaveDragPosition(_dragSession.Settle());
     }
 
     private void EndUserDrag()
@@ -439,14 +464,7 @@ public partial class DictationOverlayWindow : Window
         }
 
         // End the session before saving so the SettingsChanged reposition isn't suppressed.
-        if (_dragSession.Complete() is { } droppedAt && _settings is not null)
-        {
-            _settings.Update(current => current with
-            {
-                OverlayCustomLeft = (double)droppedAt.X,
-                OverlayCustomTop = (double)droppedAt.Y,
-            });
-        }
+        SaveDragPosition(_dragSession.Complete());
 
         // A move-drag that outlived a hide (content cleared mid-drag) leaves the still-mapped
         // window on-screen wherever the WM's interactive move dropped it — that grab overrides
@@ -456,6 +474,20 @@ public partial class DictationOverlayWindow : Window
         {
             PositionOverlay();
         }
+    }
+
+    private void SaveDragPosition(PixelPoint? droppedAt)
+    {
+        if (droppedAt is not { } position || _settings is null)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with
+        {
+            OverlayCustomLeft = (double)position.X,
+            OverlayCustomTop = (double)position.Y,
+        });
     }
 
     private void OnUserPositionChanged(object? sender, PixelPointEventArgs e)
@@ -472,6 +504,7 @@ public partial class DictationOverlayWindow : Window
 
         // Keep the session open while the WM is still moving the window, even if it is
         // hidden, so EndUserDrag's re-park runs after the WM's move has stopped.
+        _dragSession.MarkMoving();
         RestartDragSettleTimer();
 
         // A hidden overlay is only ever moved programmatically (parked off-screen). On X11 the
@@ -496,12 +529,16 @@ internal sealed class DictationOverlayDragSession
 
     public bool IsActive { get; private set; }
 
+    /// <summary>True from the press until the WM-driven move pauses; repositioning waits for it.</summary>
+    public bool IsMoving { get; private set; }
+
     /// <summary>True only while the native move is being handed to the window manager.</summary>
     public bool IsStartingMove { get; private set; }
 
     public void Begin(Action startNativeMove)
     {
         IsActive = true;
+        IsMoving = true;
         _lastPosition = null;
         IsStartingMove = true;
         try
@@ -514,20 +551,40 @@ internal sealed class DictationOverlayDragSession
         }
     }
 
+    public void MarkMoving()
+    {
+        if (IsActive)
+        {
+            IsMoving = true;
+        }
+    }
+
     public void RecordMove(PixelPoint position)
     {
         if (IsActive)
         {
+            IsMoving = true;
             _lastPosition = position;
         }
+    }
+
+    /// <summary>
+    ///     The move paused: returns the position to save, if it moved, but keeps the drag active
+    ///     because the WM may still own the pointer and resume the move.
+    /// </summary>
+    public PixelPoint? Settle()
+    {
+        var settledAt = _lastPosition;
+        IsMoving = false;
+        _lastPosition = null;
+        return settledAt;
     }
 
     /// <summary>Ends the drag and returns where the window was dropped, if it moved.</summary>
     public PixelPoint? Complete()
     {
-        var droppedAt = _lastPosition;
+        var droppedAt = Settle();
         IsActive = false;
-        _lastPosition = null;
         return droppedAt;
     }
 }
