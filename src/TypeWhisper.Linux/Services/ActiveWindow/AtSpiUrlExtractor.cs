@@ -522,8 +522,8 @@ public sealed partial class AtSpiUrlExtractor
             "4", "0", "0", s_editBarOrEntryRoleWord, "0", AtSpiMatchAny,
             // interfaces: none, match all; invert: false
             "0", AtSpiMatchAll, "false",
-            // sort canonical, no count limit, traverse
-            "1", "0", "true"
+            // sort canonical, cap results to keep page fields from flooding the response, traverse
+            "1", "32", "true"
         );
         if (string.IsNullOrWhiteSpace(output))
         {
@@ -536,7 +536,7 @@ public sealed partial class AtSpiUrlExtractor
         for (var i = 0; i + 1 < values.Count && !ct.IsCancellationRequested; i += 2)
         {
             var node = new AccessibleRef(values[i], values[i + 1]);
-            if (IsWebContent(address, node))
+            if (IsWebContent(address, node) != false)
             {
                 continue;
             }
@@ -553,12 +553,19 @@ public sealed partial class AtSpiUrlExtractor
                 stats.BestScore = score;
                 stats.BestCandidate = candidate;
             }
+
+            // 250 requires more than an ordinary unfocused entry: e.g. focus,
+            // an address label, or the browser-specific edit-bar role.
+            if (bestUrl is not null && bestScore >= 250)
+            {
+                break;
+            }
         }
 
         return bestUrl;
     }
 
-    private bool IsWebContent(string address, AccessibleRef node)
+    private bool? IsWebContent(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -569,7 +576,7 @@ public sealed partial class AtSpiUrlExtractor
         );
         if (string.IsNullOrWhiteSpace(output))
         {
-            return false;
+            return null;
         }
 
         var attributes = ParseQuotedStrings(output);

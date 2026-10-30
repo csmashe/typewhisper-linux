@@ -99,7 +99,7 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
                 "0", "1",
                 "4", "0", "0", "40960", "0", "2",
                 "0", "1", "false",
-                "1", "0", "true",
+                "1", "32", "true",
             ],
             getMatches.Command.Arguments.Skip(6)
         );
@@ -144,6 +144,49 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
         );
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TryGetBrowserUrl_CollectionMatch_SkipsUncheckedAttributes(bool requestFails)
+    {
+        const string uncheckedPath = "/org/a11y/atspi/accessible/unchecked";
+        var runner = BuildChromeTree("actual.example/path");
+        Respond(runner, FramePath, "GetMatches",
+            $@"a(so) 2 "":1.5"" ""{uncheckedPath}"" "":1.5"" ""{EntryPath}""");
+        if (requestFails)
+        {
+            runner.FailWhen((file, args) => file == "busctl"
+                && args.Contains(uncheckedPath) && args.Contains("GetAttributes"));
+        }
+        else
+        {
+            Respond(runner, uncheckedPath, "GetAttributes", "");
+        }
+        Respond(runner, uncheckedPath, "GetRole", "u 77");
+        Respond(runner, uncheckedPath, "Name", @"s ""https://wrong.example/path""");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Equal("https://actual.example/path",
+            extractor.TryGetBrowserUrl("chrome", "QA - Google Chrome"));
+        Assert.Single(runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.Contains(uncheckedPath));
+    }
+
+    [Fact]
+    public void TryGetBrowserUrl_CollectionMatch_StopsAfterStrongAddressBarCandidate()
+    {
+        const string laterPath = "/org/a11y/atspi/accessible/later";
+        var runner = BuildChromeTree("actual.example/path");
+        Respond(runner, FramePath, "GetMatches",
+            $@"a(so) 2 "":1.5"" ""{EntryPath}"" "":1.5"" ""{laterPath}""");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Equal("https://actual.example/path",
+            extractor.TryGetBrowserUrl("chrome", "QA - Google Chrome"));
+        Assert.DoesNotContain(runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.Contains(laterPath));
+    }
+
     // Registry root -> Chrome app -> active frame -> focused, editable address bar.
     private static FakeProcessRunner BuildChromeTree(string addressText)
     {
@@ -160,6 +203,7 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
         Respond(runner, FramePath, "GetRole", "u 23");
         Respond(runner, FramePath, "GetState", $"au 2 {1u << 1} 0");
         Respond(runner, FramePath, "GetChildren", $@"a(so) 1 "":1.5"" ""{EntryPath}""");
+        Respond(runner, EntryPath, "GetAttributes", "a{ss} 0");
         Respond(runner, EntryPath, "GetRole", "u 79");
         Respond(runner, EntryPath, "GetState", $"au 2 {showingVisibleFocusedEditable} 0");
         Respond(
