@@ -192,6 +192,7 @@
   "Command.ApplyingPrompt": "Applying prompt: {0}",
   "Command.Done": "Command applied.",
   "Command.Failed": "Command failed.",
+  "Command.FocusMoved": "Edit canceled: focus moved to another window",
   "Command.NoProvider": "No AI provider configured for commands",
   "Command.NoResult": "The command produced no text.",
   "Command.NoTerminalSelection": "Couldn't read the selection — terminal editors like Neovim keep it internal",
