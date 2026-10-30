@@ -182,4 +182,19 @@ public sealed class DictationOverlayWindowTests
 
         Assert.Null(session.Complete());
     }
+
+    [Fact]
+    public void DragSession_EchoOfProgrammaticMoveAfterSettle_IsRecognized()
+    {
+        var session = new DictationOverlayDragSession();
+        session.Begin(() => { });
+        session.RecordMove(new PixelPoint(3298, 699));
+        session.Settle();
+
+        // Saving the drop repositions (clamps) the window; X11 reports that move asynchronously.
+        session.NoteProgrammaticMove(new PixelPoint(3200, 650));
+
+        Assert.True(session.IsProgrammaticEcho(new PixelPoint(3200, 650)));
+        Assert.False(session.IsProgrammaticEcho(new PixelPoint(3250, 680)));
+    }
 }

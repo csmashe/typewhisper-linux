@@ -381,6 +381,7 @@ public partial class DictationOverlayWindow : Window
 
     private void SetPositionProgrammatically(PixelPoint point)
     {
+        _dragSession.NoteProgrammaticMove(point);
         _programmaticPositionChange = true;
         try
         {
@@ -497,7 +498,9 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        if (!_dragSession.IsActive)
+        // The drag stays tracked after a pause, so an X11 echo of our own move (a clamp or a
+        // placement reset) would otherwise be saved as if the user had dragged there.
+        if (!_dragSession.IsActive || _dragSession.IsProgrammaticEcho(e.Point))
         {
             return;
         }
@@ -526,6 +529,7 @@ public partial class DictationOverlayWindow : Window
 internal sealed class DictationOverlayDragSession
 {
     private PixelPoint? _lastPosition;
+    private PixelPoint? _lastProgrammaticTarget;
 
     public bool IsActive { get; private set; }
 
@@ -549,6 +553,20 @@ internal sealed class DictationOverlayDragSession
         {
             IsStartingMove = false;
         }
+    }
+
+    /// <summary>
+    ///     Remembers where we last moved the window ourselves: on X11 its PositionChanged arrives
+    ///     after the programmatic flag is cleared.
+    /// </summary>
+    public void NoteProgrammaticMove(PixelPoint target)
+    {
+        _lastProgrammaticTarget = target;
+    }
+
+    public bool IsProgrammaticEcho(PixelPoint position)
+    {
+        return position == _lastProgrammaticTarget;
     }
 
     public void MarkMoving()
