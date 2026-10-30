@@ -114,6 +114,22 @@ public sealed class RecentTranscriptionsServiceTests
         Assert.Empty(fixture.Activations);
     }
 
+    [Fact]
+    public async Task OwnWindowReportedByOtherProvider_DoesNotReactivateCapturedTarget()
+    {
+        var captured = Snapshot("editor", "Document", "kwin-editor", "editor", "kwin");
+        var staleXwayland = Snapshot("typewhisper", "TypeWhisper", "0x1", "typewhisper", "xdotool");
+        var fixture = new Fixture(isWayland: true, null, captured, staleXwayland)
+        {
+            OnActivate = _ => captured,
+        };
+
+        var result = await fixture.CaptureAndInsertAsync();
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Empty(fixture.Activations);
+    }
+
     [Theory]
     [MemberData(nameof(NullIdentityCases))]
     public async Task NullIdentitySnapshot_UsesX11PathOrClipboardFallback(

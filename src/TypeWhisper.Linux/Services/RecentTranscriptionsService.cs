@@ -456,8 +456,13 @@ public sealed class RecentTranscriptionsService
 
             // KWin hands focus to another TypeWhisper window when the palette closes, so ask the
             // compositor for the captured window back; the next poll still has to confirm it.
-            // Focus the user moved to a different app is left alone.
-            if (IsOwnWindow(current))
+            // Focus the user moved to a different app is left alone, and so is a snapshot from
+            // another provider: on Wayland an xdotool fallback reports stale XWayland focus.
+            if (
+                current is { } focused
+                && string.Equals(focused.Source, target.Source, StringComparison.OrdinalIgnoreCase)
+                && IsOwnWindow(focused)
+            )
             {
                 await TryActivateTargetAsync(target, timeout.Token);
             }
