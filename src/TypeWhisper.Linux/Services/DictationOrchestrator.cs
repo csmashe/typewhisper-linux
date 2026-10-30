@@ -48,6 +48,9 @@ internal sealed record RecordingContext(
     /// <summary>Wayland can't activate an XWayland <see cref="WindowId" />, so focus is checked through <see cref="TargetWindow" /> there.</summary>
     public bool IsWaylandSession { get; init; }
 
+    /// <summary>The AT-SPI field focused at recording start, used to catch a focus move to another field of the same window.</summary>
+    public AtSpiElementRef? TargetField { get; init; }
+
     public OverlayPresentationToken? OverlayToken { get; init; }
     public string? TranscriptionTaskUsed { get; init; }
     public string? StreamingDetectedLanguage { get; init; }
@@ -190,6 +193,7 @@ public sealed partial class DictationOrchestrator : IDisposable
     private readonly IAtSpiEventClient? _atSpiClient;
     private LockedFocusTarget? _recordingLockedField;
     private ActiveWindowSnapshot? _recordingTargetWindow;
+    private AtSpiElementRef? _recordingTargetField;
 
     private EventHandler? _toggleHandler;
     private int _toggleGateCloseOutcome;
@@ -910,13 +914,16 @@ public sealed partial class DictationOrchestrator : IDisposable
             _lastSpeechDetectedAtUtc = _recordingStart;
             _silenceStopRequested = false;
 
-            var captureLockedField = startupSettings is { AutoPaste: true, LockPasteToFocusedField: true, TargetAppCorrectionLearningEnabled: true }
-                && _atSpiClient?.IsRunning == true;
+            // AT-SPI only runs with correction-learning consent; the focused field also guards delivery
+            // against a focus move within the same window.
+            var trackFocusedField = startupSettings.TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
+            var captureLockedField = trackFocusedField
+                && startupSettings is { AutoPaste: true, LockPasteToFocusedField: true };
             AtSpiElementRef? initialFocusedElement;
             lock (_recordingSessionLock)
             {
                 _recordingWindowId = _activeWindow.GetActiveWindowId();
-                initialFocusedElement = captureLockedField ? _atSpiClient!.CurrentFocusedElement : null;
+                initialFocusedElement = trackFocusedField ? _atSpiClient!.CurrentFocusedElement : null;
                 _recordingLockedField = captureLockedField ? new LockedFocusTarget(null) : null;
             }
 
@@ -1054,6 +1061,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
                 _recordingTargetWindow = null;
+                _recordingTargetField = null;
                 _recordingProfile = null;
             }
 
@@ -1140,6 +1148,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         _recordingAppTitle = appTitle;
                         _recordingAppUrl = appUrl;
                         _recordingTargetWindow = initialSnap;
+                        _recordingTargetField = initialFocusedElement;
                         _recordingProfile = matchedProfile;
                     }
                 }
@@ -1635,6 +1644,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     LockedFocusField = learningConsent ? _recordingLockedField : null,
                     TargetWindow = _recordingTargetWindow,
                     IsWaylandSession = _commands.IsWaylandSession,
+                    TargetField = learningConsent ? _recordingTargetField : null,
                 };
 
                 _recordingAppProcess = null;
@@ -1643,6 +1653,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _recordingWindowId = null;
                 _recordingLockedField = null;
                 _recordingTargetWindow = null;
+                _recordingTargetField = null;
                 _recordingProfile = null;
                 _recordingStart = default;
             }
@@ -2816,7 +2827,11 @@ public sealed partial class DictationOrchestrator : IDisposable
                 {
                     var autoPaste = _settings.Current.AutoPaste;
                     var autoEnter = commandResult.AutoEnter;
-                    if ((autoPaste || autoEnter) && !await IsTargetWindowStillFocusedAsync(context))
+                    // A prompt's LLM round trip gives the user time to click into another field,
+                    // so its result needs a verified field, not just the same window.
+                    var promptRan = pipelineResult.Steps.Any(step =>
+                        string.Equals(step.Name, PostProcessingStepNames.Llm, StringComparison.OrdinalIgnoreCase));
+                    if ((autoPaste || autoEnter) && !await IsDeliveryTargetStillFocusedAsync(context, promptRan))
                     {
                         enterSuppressed = autoEnter;
                         autoPaste = false;
@@ -2899,7 +2914,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     InsertionResult.NoText when commandResult.CancelInsertion =>
                         "Dictation canceled.",
                     InsertionResult.NoText when enterSuppressed =>
-                        "Enter not sent: focus moved to another window.",
+                        "Enter not sent: focus moved off the dictation's field.",
                     _ => "Done.",
                 };
                 var isError =
@@ -3467,7 +3482,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     }
 
                     return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
-                           && await IsTargetWindowStillFocusedAsync(context).ConfigureAwait(false);
+                           && await IsDeliveryTargetStillFocusedAsync(context, false).ConfigureAwait(false);
                 },
                 commandToken
             );
@@ -3834,7 +3849,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         var autoPaste = _settings.Current.AutoPaste
                         && strategy is not TextInsertionStrategy.CopyOnly
                         && (selectionStillTargeted is null
-                            ? await IsTargetWindowStillFocusedAsync(context)
+                            ? await IsDeliveryTargetStillFocusedAsync(context, false)
                             : await selectionStillTargeted());
         var insertion = await _textInsertion.InsertTextAsync(
             new TextInsertionRequest(
@@ -4496,13 +4511,44 @@ public sealed partial class DictationOrchestrator : IDisposable
                && !string.Equals(context.TargetWindow.Source, "xdotool", StringComparison.Ordinal);
     }
 
-    private Task<bool> IsTargetWindowStillFocusedAsync(RecordingContext context)
+    // requireFieldIdentity: without an AT-SPI field to check, a same-window field move can't be seen,
+    // so the caller would rather copy than paste.
+    private async Task<bool> IsDeliveryTargetStillFocusedAsync(RecordingContext context, bool requireFieldIdentity)
     {
         // A locked field is restored through AT-SPI by TextInsertionService, which falls back to
-        // the clipboard itself when it can't be.
-        return context.LockedFocusField?.Element is not null
-            ? Task.FromResult(true)
-            : IsCapturedWindowFocusedAsync(context);
+        // the clipboard itself (with its own reason) when it can't be or none was captured.
+        if (context.LockedFocusField is not null)
+        {
+            return true;
+        }
+
+        return await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false)
+               && IsTargetFieldStillFocused(context, requireFieldIdentity);
+    }
+
+    // Compares the client's tracked focus rather than querying the element: an app without an
+    // accessibility tree leaves the last focus event in place, which still matches while it stays focused.
+    private bool IsTargetFieldStillFocused(RecordingContext context, bool requireFieldIdentity)
+    {
+        if (context.TargetField is not { } field
+            || _atSpiClient?.IsRunning != true
+            || !_settings.Current.TargetAppCorrectionLearningEnabled)
+        {
+            if (requireFieldIdentity)
+            {
+                Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: the dictation's field can't be verified.");
+            }
+
+            return !requireFieldIdentity;
+        }
+
+        if (_atSpiClient.CurrentFocusedElement == field)
+        {
+            return true;
+        }
+
+        Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: focus moved off the dictation's field.");
+        return false;
     }
 
     // Re-activates the recording's window where xdotool can, then confirms it holds focus.

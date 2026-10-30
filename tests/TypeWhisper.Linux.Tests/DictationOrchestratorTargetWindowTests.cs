@@ -122,6 +122,62 @@ public sealed class DictationOrchestratorTargetWindowTests
         Assert.Equal(expected, focused);
     }
 
+    [Fact]
+    public async Task IsDeliveryTargetStillFocused_OtherFieldOfSameWindow_IsFalse()
+    {
+        var (sut, _) = Create(s_editor);
+        SetFocusedField(sut, new AtSpiElementRef("app", "/field2"));
+
+        Assert.False(await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IsDeliveryTargetStillFocused_SameField_IsTrue(bool requireFieldIdentity)
+    {
+        var (sut, _) = Create(s_editor);
+        SetFocusedField(sut, s_field);
+
+        Assert.True(await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }, requireFieldIdentity));
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task IsDeliveryTargetStillFocused_NoFieldIdentity_OnlyPromptResultsCopy(bool requireFieldIdentity, bool expected)
+    {
+        var (sut, _) = Create(s_editor);
+        SetFocusedField(sut, new AtSpiElementRef("app", "/field2"), learningConsent: false);
+
+        Assert.Equal(expected,
+            await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }, requireFieldIdentity));
+    }
+
+    [Fact]
+    public async Task IsDeliveryTargetStillFocused_WindowMoved_IsFalseEvenWithSameTrackedField()
+    {
+        var (sut, _) = Create(s_editor with { WindowId = "{bbb}" });
+        SetFocusedField(sut, s_field);
+
+        Assert.False(await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }));
+    }
+
+    private static readonly AtSpiElementRef s_field = new("app", "/field1");
+
+    private static void SetFocusedField(DictationOrchestrator sut, AtSpiElementRef focused, bool learningConsent = true)
+    {
+        var client = new Mock<IAtSpiEventClient>(MockBehavior.Strict);
+        client.SetupGet(c => c.IsRunning).Returns(true);
+        client.SetupGet(c => c.CurrentFocusedElement).Returns(focused);
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(s => s.Current).Returns(new AppSettings { TargetAppCorrectionLearningEnabled = learningConsent });
+        typeof(DictationOrchestrator).GetField("_atSpiClient", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(sut, client.Object);
+        typeof(DictationOrchestrator).GetField("_settings", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(sut, settings.Object);
+    }
+
     private static (DictationOrchestrator Sut, Mock<IActiveWindowProvider> Provider) Create(ActiveWindowSnapshot? current)
     {
         var sut = (DictationOrchestrator)RuntimeHelpers.GetUninitializedObject(typeof(DictationOrchestrator));
@@ -144,11 +200,15 @@ public sealed class DictationOrchestratorTargetWindowTests
         };
     }
 
-    private static Task<bool> IsStillFocusedAsync(DictationOrchestrator sut, RecordingContext context)
+    private static Task<bool> IsStillFocusedAsync(
+        DictationOrchestrator sut,
+        RecordingContext context,
+        bool requireFieldIdentity = false
+    )
     {
         return (Task<bool>)typeof(DictationOrchestrator)
-            .GetMethod("IsTargetWindowStillFocusedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(sut, [context])!;
+            .GetMethod("IsDeliveryTargetStillFocusedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(sut, [context, requireFieldIdentity])!;
     }
 
     // Wayland without xdotool: no window id to activate, so focus is decided by the snapshot alone.
