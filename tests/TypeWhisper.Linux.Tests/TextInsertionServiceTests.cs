@@ -2247,6 +2247,47 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("café", platform.TypedText);
+        Assert.False(platform.LastTypeUsedUnicodeBackendsOnly);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_known_app_types_non_ascii_with_unicode_backends_only()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "firefox",
+            targetWindowTitle: "QA — Mozilla Firefox"
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("café", platform.TypedText);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_known_app_pastes_non_ascii_when_unicode_backends_fail()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            TypeSucceeds = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "firefox",
+            targetWindowTitle: "QA — Mozilla Firefox"
+        );
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.True(platform.PasteSent);
     }
 
     [Fact]
@@ -2664,10 +2705,11 @@ public sealed class TextInsertionServiceTests
 
     [Theory]
     [InlineData("Wayland", false, false, "gnome", true, true, false)]
-    [InlineData("Wayland", false, true, "hyprland", true, true, false)]
+    [InlineData("Wayland", false, true, "gnome", true, true, false)]
+    [InlineData("Wayland", false, true, "hyprland", true, true, true)]
     [InlineData("Wayland", false, true, "hyprland", false, false, true)]
     [InlineData("X11", true, false, "gnome", true, true, true)]
-    public void LinuxTextInsertionPlatform_CanTypeNonAscii_OnlyWithoutYdotoolInChain(
+    public void LinuxTextInsertionPlatform_CanTypeNonAscii_WhenChainHasUnicodeBackend(
         string sessionType,
         bool hasXdotool,
         bool hasWtype,
@@ -3505,6 +3547,26 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_UnicodeOnlyTyping_SkipsYdotoolWhenWtypeFails()
+    {
+        // ydotool would drop "é" and still exit 0, so a wtype failure must surface instead.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("wtype", 1, string.Empty));
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("café", unicodeBackendsOnly: true);
+
+        Assert.False(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_MultilineTyping_PartialDeliveryStopsChainInsteadOfRetyping()
     {
         // Regression (audit §3 M2): wtype types "line one" successfully, then fails
@@ -3986,6 +4048,14 @@ public sealed class TextInsertionServiceTests
         }
 
         public Action? OnTypeText { get; init; }
+
+        public bool LastTypeUsedUnicodeBackendsOnly { get; private set; }
+
+        public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
+        {
+            LastTypeUsedUnicodeBackendsOnly = unicodeBackendsOnly;
+            return TypeTextAsync(text);
+        }
 
         public Task<bool> TypeTextAsync(string text)
         {
