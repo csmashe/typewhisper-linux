@@ -1437,7 +1437,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
                     token.ThrowIfCancellationRequested();
                     var url = _activeWindow.GetBrowserUrlForSnapshot(
                         snapshot,
-                        honorMissBackoff: true
+                        isPolling: true
                     );
                     return (Snapshot: snapshot, Url: url);
                 },

@@ -109,14 +109,14 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     public string? GetBrowserUrlForSnapshot(
         ActiveWindowSnapshot? snapshot,
-        bool honorMissBackoff = false
+        bool isPolling = false
     )
     {
         var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(
             snapshot?.ProcessName,
             snapshot?.AppId,
             snapshot?.Title,
-            honorMissBackoff
+            isPolling
         );
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
     }

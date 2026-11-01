@@ -9,7 +9,7 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// <summary>
 ///     Focused AT-SPI walker that pulls the active URL from a browser's address bar.
 ///     1. Resolve the focused browser descriptor (AT-SPI walks cost 50–200 ms each).
-///     2. Cache by <c>(descriptor ID, title)</c> — the URL changes when the title does; cache hits skip the walk.
+///     2. Polling caches by <c>(descriptor ID, title)</c>; dictation always walks, because two tabs can share a title.
 ///     3. Narrow to the matching AT-SPI app and walk only its tree.
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
 ///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
@@ -93,14 +93,14 @@ public sealed partial class AtSpiUrlExtractor
     public string? TryGetBrowserUrl(
         string? focusedProcessName,
         string? focusedTitle,
-        bool honorMissBackoff = false
+        bool isPolling = false
     )
     {
         return TryGetBrowserUrl(
             focusedProcessName,
             null,
             focusedTitle,
-            honorMissBackoff
+            isPolling
         );
     }
 
@@ -108,7 +108,7 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedProcessName,
         string? focusedAppId,
         string? focusedTitle,
-        bool honorMissBackoff = false
+        bool isPolling = false
     )
     {
         var browser = ResolveBrowserDescriptor(
@@ -122,37 +122,36 @@ public sealed partial class AtSpiUrlExtractor
             return null;
         }
 
-        lock (_cacheLock)
+        // Same-title tabs share a cache key, so only polling uses the cache and miss backoff.
+        // Dictation records the URL in history and profile matching, so it always walks.
+        if (isPolling)
         {
-            var now = DateTime.UtcNow;
+            lock (_cacheLock)
+            {
+                var now = DateTime.UtcNow;
 
-            // Cache key is (descriptor ID, title): title is the only signal for tab/page change.
-            // Keying on process alone would return the previous tab's URL after a tab switch.
-            // TTL caps stale trust for SPAs where navigation doesn't change the title.
-            if (
-                _cachedUrl is not null
-                && string.Equals(
-                    _cachedDescriptorId,
-                    browser.Id,
-                    StringComparison.OrdinalIgnoreCase
+                if (
+                    _cachedUrl is not null
+                    && string.Equals(
+                        _cachedDescriptorId,
+                        browser.Id,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                    && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
+                    && now - _cachedUrlAt < s_cacheTtl
                 )
-                && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
-                && now - _cachedUrlAt < s_cacheTtl
-            )
-            {
-                return _cachedUrl;
-            }
+                {
+                    return _cachedUrl;
+                }
 
-            // Miss backoff throttles high-frequency polling only; dictation passes false
-            // so a poll miss on the same (descriptor, title) never suppresses its own walk.
-            if (
-                honorMissBackoff
-                && string.Equals(_missDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
-                && now - _missAt < s_missBackoff
-            )
-            {
-                return null;
+                if (
+                    string.Equals(_missDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
+                    && now - _missAt < s_missBackoff
+                )
+                {
+                    return null;
+                }
             }
         }
 
@@ -198,7 +197,7 @@ public sealed partial class AtSpiUrlExtractor
                 _missTitle = null;
                 _missAt = default;
             }
-            else if (honorMissBackoff)
+            else if (isPolling)
             {
                 // Dictation misses must not throttle the next poll on this (descriptor, title).
                 _missDescriptorId = browser.Id;
