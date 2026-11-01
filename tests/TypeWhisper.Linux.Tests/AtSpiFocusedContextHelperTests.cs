@@ -79,15 +79,20 @@ public sealed class AtSpiFocusedContextHelperTests
 
     [Theory]
     [InlineData("file.txt — Visual Studio Code", "file.txt — Visual Studio Code", true)] // exact
-    [InlineData("file.txt — Visual Studio Code", "file.txt", true)] // recorded title is a substring
-    [InlineData("file.txt", "file.txt — Visual Studio Code", true)] // frame title is a substring
-    [InlineData("FILE.TXT — VS CODE", "file.txt — vs code", true)] // case-insensitive
+    [InlineData("  Report  ", "Report", true)] // surrounding whitespace
+    [InlineData("Report", "Report <2>", true)] // KWin numbers duplicate captions
+    [InlineData("Report", "Report private", false)] // other window whose title extends the recorded one
+    [InlineData("Report private", "Report", false)] // other window whose title is a prefix of the recorded one
+    [InlineData("file.txt — Visual Studio Code", "file.txt", false)] // substring is not the same window
+    [InlineData("REPORT", "Report", false)] // titles differ in case
+    [InlineData("Report <2>", "Report", false)] // the suffix belongs to the compositor title only
+    [InlineData("Report", "Report <x>", false)] // not a KWin duplicate number
     [InlineData("Compose - Gmail", "Inbox (5) - Gmail", false)] // different windows of the same app
     [InlineData("Doc A — Writer", "Sheet B — Calc", false)] // unrelated
     [InlineData(null, "anything", false)] // missing → cannot confirm
     [InlineData("anything", "   ", false)] // blank → cannot confirm
-    public void TitlesRelate_MatchesOnlyPlausiblySameWindow(string? a, string? b, bool expected)
+    public void TitlesRelate_MatchesOnlyTheRecordedWindow(string? frameTitle, string? recordedTitle, bool expected)
     {
-        Assert.Equal(expected, AtSpiUrlExtractor.TitlesRelate(a, b));
+        Assert.Equal(expected, AtSpiUrlExtractor.TitlesRelate(frameTitle, recordedTitle));
     }
 }

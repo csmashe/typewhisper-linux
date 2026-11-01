@@ -580,22 +580,27 @@ public sealed partial class AtSpiUrlExtractor
     }
 
     /// <summary>
-    ///     True when two window titles plausibly name the same window: exact/contains-either-way,
-    ///     case-insensitive. The compositor snapshot title and the AT-SPI frame Name derive from
-    ///     the same window title in GTK/Qt, so this stays lenient to avoid false rejections while
-    ///     still rejecting a clearly different window's title.
+    ///     True when the AT-SPI frame Name is the recorded window title. Toolkits expose the title
+    ///     verbatim, so a containing title (“Report private”) is a different same-app window; only
+    ///     KWin's duplicate-caption suffix (“Report &lt;2&gt;”) on the recorded title is tolerated.
     /// </summary>
-    internal static bool TitlesRelate(string? a, string? b)
+    internal static bool TitlesRelate(string? frameTitle, string? recordedTitle)
     {
-        var x = a?.Trim();
-        var y = b?.Trim();
-        if (string.IsNullOrEmpty(x) || string.IsNullOrEmpty(y))
+        var frame = frameTitle?.Trim();
+        var recorded = recordedTitle?.Trim();
+        if (string.IsNullOrEmpty(frame) || string.IsNullOrEmpty(recorded))
         {
             return false;
         }
 
-        return x.Contains(y, StringComparison.OrdinalIgnoreCase)
-               || y.Contains(x, StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(frame, recorded, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var duplicateSuffix = KWinDuplicateCaptionSuffixRegex().Match(recorded);
+        return duplicateSuffix.Success
+               && string.Equals(frame, recorded[..duplicateSuffix.Index], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1405,6 +1410,10 @@ public sealed partial class AtSpiUrlExtractor
     // Double-quoted string with backslash escapes; group 1 is the (still-escaped) body.
     [GeneratedRegex("\"((?:[^\"\\\\]|\\\\.)*)\"")]
     private static partial Regex QuotedStringRegex();
+
+    // KWin's " <N>" suffix on duplicate window captions.
+    [GeneratedRegex(@" <\d+>$")]
+    private static partial Regex KWinDuplicateCaptionSuffixRegex();
 
     private sealed class WalkStats
     {
