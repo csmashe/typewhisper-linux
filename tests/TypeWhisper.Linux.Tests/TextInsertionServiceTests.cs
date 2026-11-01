@@ -2168,13 +2168,8 @@ public sealed class TextInsertionServiceTests
     [Fact]
     public async Task InsertTextAsync_known_terminal_with_non_ascii_still_direct_types()
     {
-        // The ASCII-safe gate only applies to the *unknown-target*
-        // fallback. When the user has explicitly registered a terminal
-        // (or one of the known direct-typing apps), respect that — they
-        // know paste won't work in their app, and a layout-mangled
-        // character is still a better fix than silently doing nothing.
-        // If they want pristine Unicode, they can switch to clipboard
-        // strategy in their settings.
+        // A typing backend that handles non-ASCII (xdotool, wtype) keeps the
+        // known-app direct-typing preference.
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
         var sut = new TextInsertionService(platform);
 
@@ -2187,6 +2182,71 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("café", platform.TypedText);
         Assert.False(platform.PasteSent);
+    }
+
+    [Theory]
+    [InlineData("firefox", "QA — Mozilla Firefox", false)]
+    [InlineData("ptyxis", "owned-file", true)]
+    public async Task InsertTextAsync_known_app_pastes_non_ascii_when_backend_cannot_type_it(
+        string processName,
+        string windowTitle,
+        bool expectTerminalShortcut
+    )
+    {
+        // ydotool exits 0 after silently dropping "é Ω 東京", so Auto must not report Typed.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            CanTypeNonAscii = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "Bonjour café Ω 東京.",
+            targetProcessName: processName,
+            targetWindowTitle: windowTitle
+        );
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.PasteSent);
+        Assert.Equal(expectTerminalShortcut, platform.LastPasteUsedTerminalShortcut);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_known_app_types_ascii_when_backend_cannot_type_non_ascii()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous", CanTypeNonAscii = false };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "The meeting is tomorrow.",
+            targetProcessName: "firefox",
+            targetWindowTitle: "QA — Mozilla Firefox"
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("The meeting is tomorrow.", platform.TypedText);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_direct_typing_strategy_still_types_non_ascii_when_backend_cannot()
+    {
+        // An explicit DirectTyping choice is the user's call; only Auto reroutes.
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous", CanTypeNonAscii = false };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "firefox",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("café", platform.TypedText);
     }
 
     [Fact]
@@ -2600,6 +2660,30 @@ public sealed class TextInsertionServiceTests
         Assert.False(platform.IsPasteAvailable);
         Assert.False(await platform.SendPasteAsync());
         Assert.Empty(runner.Calls);
+    }
+
+    [Theory]
+    [InlineData("Wayland", false, false, "gnome", true, true, false)]
+    [InlineData("Wayland", false, true, "hyprland", true, true, false)]
+    [InlineData("Wayland", false, true, "hyprland", false, false, true)]
+    [InlineData("X11", true, false, "gnome", true, true, true)]
+    public void LinuxTextInsertionPlatform_CanTypeNonAscii_OnlyWithoutYdotoolInChain(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype,
+        string compositor,
+        bool hasYdotool,
+        bool hasYdotoolSocket,
+        bool expected
+    )
+    {
+        var runner = new RecordingProcessRunner();
+        ITextInsertionPlatform platform = new LinuxTextInsertionPlatform(
+            SnapshotFor(sessionType, hasXdotool, hasWtype, compositor, hasYdotool, hasYdotoolSocket),
+            runner.Run
+        );
+
+        Assert.Equal(expected, platform.CanTypeNonAscii);
     }
 
     [Fact]
@@ -3831,6 +3915,8 @@ public sealed class TextInsertionServiceTests
         public bool IsKdePlasma => false;
 
         public bool PrefersDirectTypingForUnknownTarget { get; init; }
+
+        public bool CanTypeNonAscii { get; init; } = true;
 
         public InsertionFailureReason LastFailureReason { get; private set; }
 

@@ -350,7 +350,9 @@ public sealed class TextInsertionService
             {
                 TextInsertionStrategy.DirectTyping => true,
                 TextInsertionStrategy.ClipboardPaste => false,
-                _ => ShouldTypeDirectly(targetProcessName, targetWindowTitle)
+                // ydotool drops non-ASCII characters yet exits 0, so such text is pasted instead.
+                _ => (ShouldTypeDirectly(targetProcessName, targetWindowTitle)
+                      && (IsAsciiSafe(text) || _platform.CanTypeNonAscii))
                      // On Wayland without xdotool, process/title are null; defaulting to paste
                      // hits terminals (readline quoted-insert), vim, and Claude Code's image-paste.
                      // Direct typing via ydotool is universal — BUT only for ASCII: ydotool
@@ -1214,6 +1216,9 @@ internal interface ITextInsertionPlatform
     /// </summary>
     bool PrefersDirectTypingForUnknownTarget { get; }
 
+    /// <summary>True when every typing backend the platform may use can type non-ASCII text.</summary>
+    bool CanTypeNonAscii => true;
+
     InsertionFailureReason LastFailureReason { get; }
 
     /// <summary>
@@ -1405,6 +1410,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             _snapshot.HasYdotoolAvailable
             || _snapshot is { HasWtype: true, CompositorRejectsWtype: false }
         );
+
+    // xdotool and wtype map arbitrary keysyms; ydotool types only what the US keymap holds.
+    // The chain can fall through to any backend, so one ydotool entry is enough to rule it out.
+    public bool CanTypeNonAscii => !_chain.Contains(InputBackend.Ydotool);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
