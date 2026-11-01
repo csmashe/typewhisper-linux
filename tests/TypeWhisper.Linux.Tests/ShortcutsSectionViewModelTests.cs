@@ -132,6 +132,36 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void HotkeySavedElsewhere_UpdatesHotkeyText()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        using var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+
+        // Mirrors the welcome wizard's shortcut step.
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F8"));
+        var bound = hotkey.CurrentHotkeyString;
+        settings.Update(current => current with { ToggleHotkey = bound });
+
+        Assert.Equal("Ctrl+Shift+F8", sut.HotkeyText);
+    }
+
+    [Fact]
+    public void UnrelatedSettingsSave_KeepsUnappliedHotkeyDraft()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        using var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+
+        sut.HotkeyText = "Alt+F7";
+        settings.Update(current => current with { PromptPaletteHotkey = "Ctrl+Shift+P" });
+
+        Assert.Equal("Alt+F7", sut.HotkeyText);
+    }
+
+    [Fact]
     public async Task ApplyCapturedHotkey_LateCompletionLeavesRestartedCaptureRunning()
     {
         var probeGate = new TaskCompletionSource<bool>(
