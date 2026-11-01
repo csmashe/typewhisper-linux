@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
@@ -7,7 +8,7 @@ using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
-public sealed class PromptProcessingService
+public sealed partial class PromptProcessingService
 {
     // Hard cap on injected reference context so token cost/latency stays small and a
     // hostile page can't bloat the request. Mirrors the harvest's own ~2500-char cap.
@@ -155,13 +156,9 @@ public sealed class PromptProcessingService
         }
 
         // Neutralise any attempt to close the block early and inject instructions after it.
-        // Case-insensitive: the text is attacker-controllable, and an LLM reads the pseudo-XML
-        // delimiter loosely, so "</Reference_Context>" must be defanged the same as lowercase.
-        var sanitized = trimmed.Replace(
-            "</reference_context>",
-            "< /reference_context>",
-            StringComparison.OrdinalIgnoreCase
-        );
+        // The text is attacker-controllable and an LLM reads the pseudo-XML delimiter loosely,
+        // so case variants and XML's allowed whitespace before '>' are defanged too.
+        var sanitized = ReferenceContextCloserRegex().Replace(trimmed, "< /reference_context>");
 
         return $"""
                 {systemPrompt}
@@ -254,4 +251,7 @@ public sealed class PromptProcessingService
 
         return provider is null ? (null, string.Empty) : (provider, modelId);
     }
+
+    [GeneratedRegex(@"</reference_context\s*>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ReferenceContextCloserRegex();
 }
