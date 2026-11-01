@@ -160,6 +160,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
     {
         var patched = new List<string>();
         var skipped = new List<string>();
+        // Unwritable, but prefs.js already carries an un-overridden -1, so URL detection works.
+        var alreadyEnabled = new List<string>();
 
         try
         {
@@ -173,11 +175,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 }
                 catch
                 {
-                    skipped.Add(Path.GetFileName(profileDir));
+                    (IsForceEnabledInProfile(profileDir) ? alreadyEnabled : skipped)
+                        .Add(Path.GetFileName(profileDir));
                 }
             }
 
-            if (patched.Count == 0 && skipped.Count == 0)
+            if (patched.Count == 0 && skipped.Count == 0 && alreadyEnabled.Count == 0)
             {
                 return (
                     new SetupResult(
@@ -195,6 +198,19 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 detail
                     .Append("Patched profile(s): ")
                     .Append(string.Join(", ", patched))
+                    .Append('.');
+            }
+
+            if (alreadyEnabled.Count > 0)
+            {
+                if (detail.Length > 0)
+                {
+                    detail.Append(' ');
+                }
+
+                detail
+                    .Append("Already enabled in prefs.js, but user.js could not be written: ")
+                    .Append(string.Join(", ", alreadyEnabled))
                     .Append('.');
             }
 
@@ -216,10 +232,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 detail.Append(" Restart Firefox for the change to take effect.");
             }
 
+            var enabled = patched.Count > 0 || alreadyEnabled.Count > 0;
             return (
                 new SetupResult(
-                    patched.Count > 0,
-                    patched.Count > 0
+                    enabled,
+                    enabled
                         ? "Firefox accessibility force-enabled."
                         : "Could not enable Firefox accessibility.",
                     detail.ToString()
@@ -618,8 +635,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private static bool IsForceEnabledInProfile(string profileDir)
     {
-        // Either user.js (our preferred override file) or Firefox's own
-        // prefs.js — whichever already has the right value satisfies us.
+        // Firefox applies user.js after prefs.js, so the last user.js entry wins;
+        // prefs.js only counts when user.js leaves the preference alone.
         foreach (var name in new[] { "user.js", "prefs.js" })
         {
             var path = Path.Join(profileDir, name);
@@ -630,10 +647,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
             try
             {
-                var content = File.ReadAllText(path);
-                if (ForceDisabledNegOneMultilineRegex().IsMatch(content))
+                if (LastForceDisabledIsNegOne(File.ReadAllText(path)) is { } isNegOne)
                 {
-                    return true;
+                    return isNegOne;
                 }
             }
             catch
@@ -643,6 +659,24 @@ public sealed partial class BrowserAccessibilitySetupHelper
         }
 
         return false;
+    }
+
+    /// <returns>Whether the last force_disabled entry is -1, or null when there is none.</returns>
+    private static bool? LastForceDisabledIsNegOne(string content)
+    {
+        var lastNegOne = ForceDisabledNegOneMultilineRegex().Matches(content).LastOrDefault();
+        var lastAny = ForceDisabledAnyValueLineRegex().Matches(content).LastOrDefault();
+        if (lastNegOne is null && lastAny is null)
+        {
+            return null;
+        }
+
+        // The -1 pattern's leading \s* can start a match lines early, so compare statement starts.
+        return lastNegOne is not null
+            && (lastAny is null || StatementStart(lastNegOne) >= StatementStart(lastAny));
+
+        static int StatementStart(Match match) =>
+            match.Index + match.Value.IndexOf("user_pref", StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> EnumerateFirefoxProfileDirs()

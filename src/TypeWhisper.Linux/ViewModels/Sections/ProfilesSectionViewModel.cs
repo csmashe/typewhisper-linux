@@ -1574,7 +1574,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
     {
         if (!result.Success)
         {
-            return $"{result.Message} {result.Detail}";
+            var failure = $"{result.Message} {result.Detail}";
+            return result.SkippedFirefoxProfiles.Count > 0
+                ? $"{failure} {Loc.Instance["Profiles.BrowserSetupFirefoxRetry"]}"
+                : failure;
         }
 
         return result.SkippedFirefoxProfiles.Count > 0

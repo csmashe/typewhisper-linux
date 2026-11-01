@@ -88,6 +88,34 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Failed_browserSetupResult_with_skipped_profiles_adds_retry_guidance()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(
+                false,
+                "Could not enable browser accessibility.",
+                "Firefox accessibility: Could not write to: qa.default."
+            )
+            {
+                SkippedFirefoxProfiles = ["qa.default"],
+            };
+
+            Assert.Equal(
+                "Could not enable browser accessibility. Firefox accessibility: Could not write to: qa.default. "
+                + Loc.Instance["Profiles.BrowserSetupFirefoxRetry"],
+                ProfilesSectionViewModel.FormatBrowserSetupResult(result)
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void BrowserSetupResult_without_skipped_profiles_keeps_success_wording()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;
