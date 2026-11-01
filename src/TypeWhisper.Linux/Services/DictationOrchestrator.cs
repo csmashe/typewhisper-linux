@@ -2937,14 +2937,15 @@ public sealed partial class DictationOrchestrator : IDisposable
             // active, run it (awaited) before writing history so its request is
             // recorded on the entry; otherwise keep it fire-and-forget so the
             // common path isn't delayed by the extraction round-trip.
-            if (_settings.Current.MemoryEnabled && !insertionThrew)
+            if (_settings.Current.MemoryEnabled && !insertionThrew
+                && _promptProcessing.TryResolveDefaultProvider() is var (memoryLlm, memoryModel))
             {
                 if (context.Capture is not null)
                 {
                     try
                     {
                         // ReSharper disable once MethodSupportsCancellation -- best-effort memory extraction; awaited only to record its provenance before history, deliberately not tied to the recording's cancellation token (mirrors the fire-and-forget sibling below).
-                        await _memory.ExtractAndStoreAsync(finalText, context.Capture);
+                        await _memory.ExtractAndStoreAsync(finalText, memoryLlm, memoryModel, context.Capture);
                     }
                     catch (Exception ex)
                     {
@@ -2955,7 +2956,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 else
                 {
                     // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
-                    FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
+                    FireAndLog(() => _memory.ExtractAndStoreAsync(finalText, memoryLlm, memoryModel), "memory extraction");
                 }
             }
 
