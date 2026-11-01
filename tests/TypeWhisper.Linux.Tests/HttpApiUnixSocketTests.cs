@@ -1310,6 +1310,50 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Fact]
+    public void StopFromBlockedUiThreadContextCompletes()
+    {
+        // The General toggle stops the API on the Avalonia UI thread, whose context cannot run
+        // posted continuations while the toggle handler blocks.
+        using var fixture = new ApiFixture();
+        Exception? failure = null;
+        // ReSharper disable AccessToDisposedClosure -- the test joins the thread before the fixture is disposed; on a timeout the assert fails first.
+        var uiThread = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new NonPumpingSynchronizationContext());
+            try
+            {
+                fixture.Start();
+                fixture.Disable();
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        // ReSharper restore AccessToDisposedClosure
+
+        uiThread.Start();
+
+        Assert.True(uiThread.Join(TimeSpan.FromSeconds(20)), "Stopping the API deadlocked the UI thread.");
+        Assert.Null(failure);
+        Assert.False(File.Exists(fixture.SocketPath));
+        Assert.Equal("Local API is disabled.", fixture.Service.StatusText);
+    }
+
+    /// <summary>Queues posts without ever running them, like a UI thread blocked in a handler.</summary>
+    private sealed class NonPumpingSynchronizationContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+        }
+
+        public override SynchronizationContext CreateCopy() => this;
+    }
+
+    [Fact]
     public async Task ThirdConcurrentRequestGetsPinned429Response()
     {
         using var entered = new CountdownEvent(HttpApiService.MaxConcurrentRequests);
