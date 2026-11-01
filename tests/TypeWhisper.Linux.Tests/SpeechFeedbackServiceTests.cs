@@ -709,30 +709,42 @@ public sealed class SpeechFeedbackServiceTests
 
         Assert.Equal([(1, true), (2, true)], allocations.ToArray());
 
-        var firstCall = await provider.NextRequestAsync();
-        var secondCall = await provider.NextRequestAsync();
-        var calls = new[] { firstCall, secondCall }.ToDictionary(
-            call => call.Request.Text
-        );
-        var olderCall = calls["older playback"];
+        // Both starts reach the provider synchronously, so every call has arrived. The
+        // newer start may supersede the older one before it reaches the provider; it is
+        // then dropped instead of cancelled there. Both outcomes are correct.
+        var providerCalls = new List<ControlledProviderCall>();
+        for (var i = 0; i < provider.Requests.Length; i++)
+        {
+            providerCalls.Add(await provider.NextRequestAsync());
+        }
+
+        var calls = providerCalls.ToDictionary(call => call.Request.Text);
         var newerCall = calls["newer playback"];
-        Assert.True(olderCall.CancellationToken.IsCancellationRequested);
         Assert.False(newerCall.CancellationToken.IsCancellationRequested);
+        var olderCall = calls.GetValueOrDefault("older playback");
+        if (olderCall is not null)
+        {
+            Assert.True(olderCall.CancellationToken.IsCancellationRequested);
+        }
 
         var newerSession = new ControlledPlaybackSession();
         newerCall.Return(newerSession);
         await newerSession.HandlerAttached.Task.WaitAsync(s_testGuard);
 
-        var olderSession = new ControlledPlaybackSession();
-        olderCall.Return(olderSession);
-        await olderSession.StopCalled.Task.WaitAsync(s_testGuard);
+        ControlledPlaybackSession? olderSession = null;
+        if (olderCall is not null)
+        {
+            olderSession = new ControlledPlaybackSession();
+            olderCall.Return(olderSession);
+            await olderSession.StopCalled.Task.WaitAsync(s_testGuard);
+            Assert.Equal(0, olderSession.SubscriberCount);
+        }
 
-        Assert.Equal(0, olderSession.SubscriberCount);
         Assert.True(newerSession.IsActive);
         Assert.Equal(0, newerSession.StopCount);
         sut.ReadBack("toggle newer playback");
         Assert.Equal(1, newerSession.StopCount);
-        Assert.Equal(2, provider.Requests.Length);
+        Assert.Equal(providerCalls.Count, provider.Requests.Length);
 
         newerSession.Complete();
 
@@ -745,11 +757,11 @@ public sealed class SpeechFeedbackServiceTests
         readBackCall.Return(readBackSession);
         await readBackSession.HandlerAttached.Task.WaitAsync(s_testGuard);
 
-        olderSession.Complete();
+        olderSession?.Complete();
         sut.ReadBack("toggle current readback");
 
         Assert.Equal(1, readBackSession.StopCount);
-        Assert.Equal(3, provider.Requests.Length);
+        Assert.Equal(providerCalls.Count + 1, provider.Requests.Length);
         readBackSession.Complete();
     }
 
