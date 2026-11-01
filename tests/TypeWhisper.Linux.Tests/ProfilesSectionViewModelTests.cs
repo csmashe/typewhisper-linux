@@ -62,6 +62,52 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void BrowserSetupResult_names_skipped_firefox_profiles()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "Browser accessibility enabled.")
+            {
+                SkippedFirefoxProfiles = ["qa.default", "work"],
+            };
+
+            var message = ProfilesSectionViewModel.FormatBrowserSetupResult(result);
+
+            Assert.Equal(
+                Loc.Instance.GetString("Profiles.BrowserSetupPartialFirefox", "qa.default, work"),
+                message
+            );
+            Assert.Contains("qa.default, work", message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void BrowserSetupResult_without_skipped_profiles_keeps_success_wording()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "Browser accessibility enabled.");
+
+            Assert.Equal(
+                Loc.Instance.GetString("Profiles.BrowserSetupSuccess", "Browser accessibility enabled."),
+                ProfilesSectionViewModel.FormatBrowserSetupResult(result)
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void LanguageChange_RecomputesBrowserStatusState()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;

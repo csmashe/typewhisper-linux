@@ -156,7 +156,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     <c>user.js</c>, and a running Firefox won't clobber our change on
     ///     its next save. Takes effect on the next Firefox restart.
     /// </summary>
-    private static SetupResult ForceEnableFirefoxAccessibility()
+    private static (SetupResult Result, IReadOnlyList<string> Skipped) ForceEnableFirefoxAccessibility()
     {
         var patched = new List<string>();
         var skipped = new List<string>();
@@ -179,10 +179,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
             if (patched.Count == 0 && skipped.Count == 0)
             {
-                return new SetupResult(
-                    false,
-                    "No Firefox profiles were found to patch.",
-                    "Run Firefox once to create a profile, then try again."
+                return (
+                    new SetupResult(
+                        false,
+                        "No Firefox profiles were found to patch.",
+                        "Run Firefox once to create a profile, then try again."
+                    ),
+                    skipped
                 );
             }
 
@@ -208,19 +211,28 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     .Append('.');
             }
 
-            detail.Append(" Restart Firefox for the change to take effect.");
+            if (patched.Count > 0)
+            {
+                detail.Append(" Restart Firefox for the change to take effect.");
+            }
 
-            return new SetupResult(
-                patched.Count > 0,
-                patched.Count > 0
-                    ? "Firefox accessibility force-enabled."
-                    : "Could not enable Firefox accessibility.",
-                detail.ToString()
+            return (
+                new SetupResult(
+                    patched.Count > 0,
+                    patched.Count > 0
+                        ? "Firefox accessibility force-enabled."
+                        : "Could not enable Firefox accessibility.",
+                    detail.ToString()
+                ),
+                skipped
             );
         }
         catch (Exception ex)
         {
-            return new SetupResult(false, "Could not enable Firefox accessibility.", ex.Message);
+            return (
+                new SetupResult(false, "Could not enable Firefox accessibility.", ex.Message),
+                skipped
+            );
         }
     }
 
@@ -252,7 +264,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment),
                 PrependEnvWrapperToExecLines
             );
-            var firefoxPrefResult = ForceEnableFirefoxAccessibility();
+            var (firefoxPrefResult, skippedProfiles) = ForceEnableFirefoxAccessibility();
 
             var detail = new StringBuilder();
             if (firefoxPatched.Count > 0)
@@ -274,7 +286,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 detail.Append('.');
             }
 
-            if (firefoxPrefResult.Success && !string.IsNullOrWhiteSpace(firefoxPrefResult.Detail))
+            if (
+                (firefoxPrefResult.Success || skippedProfiles.Count > 0)
+                && !string.IsNullOrWhiteSpace(firefoxPrefResult.Detail)
+            )
             {
                 if (detail.Length > 0)
                 {
@@ -312,6 +327,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
                         : "Could not enable browser accessibility.",
                     detail.ToString()
                 )
+                {
+                    SkippedFirefoxProfiles = skippedProfiles,
+                }
             );
         }
         catch (Exception ex)
@@ -1464,5 +1482,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
     [GeneratedRegex("""(?<separator>\r?\n)?^//\s*Set by TypeWhisper(?<ownsSeparator>; separator newline owned)?[^\r\n]*\r?\nuser_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)[\t ]*;[\t ]*(?<trailing>\r?\n|\z)""", RegexOptions.Multiline)]
     private static partial Regex OwnedAccessibilityEntryRegex();
 
-    public sealed record SetupResult(bool Success, string Message, string? Detail = null);
+    public sealed record SetupResult(bool Success, string Message, string? Detail = null)
+    {
+        public IReadOnlyList<string> SkippedFirefoxProfiles { get; init; } = [];
+    }
 }

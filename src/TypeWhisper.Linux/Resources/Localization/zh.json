@@ -878,6 +878,7 @@
   "Profiles.BrowserSetupIntro": "TypeWhisper将进行以下更改，以在Wayland上启用基于URL的配置方案规则：",
   "Profiles.BrowserSetupOutro": "所有更改仅作用于当前用户，并可在此面板中撤销。之后请完全退出并重新启动受影响的浏览器以应用更改。",
   "Profiles.BrowserSetupSuccess": "{0}请重新启动浏览器（或注销后重新登录）以使更改生效。",
+  "Profiles.BrowserSetupPartialFirefox": "浏览器辅助功能仅部分设置完成：TypeWhisper 无法写入 Firefox 配置文件 {0}，因此其中的 URL 检测暂时无法使用。请确认配置文件夹可写，然后再次点击“启用浏览器URL检测”。请重新启动浏览器以使其余更改生效。",
   "Profiles.BrowserStatusConfigured": "浏览器无障碍已配置。如果URL检测仍然失败，请重新启动浏览器。",
   "Profiles.BrowserStatusDisabled": "基于URL的配置方案规则需要启用浏览器无障碍。点击下方查看TypeWhisper将具体更改哪些内容。",
   "Profiles.BrowserStatusPartial": "浏览器无障碍仅部分配置，至少还有一个浏览器、配置文件或启动器需要设置。点击“启用”完成设置（确认对话框只会列出缺少的项），或点击“撤销”还原TypeWhisper安装的所有内容。",

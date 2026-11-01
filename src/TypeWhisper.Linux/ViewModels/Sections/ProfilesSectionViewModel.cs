@@ -1566,10 +1566,23 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
         // Re-evaluate panel state: Enable should disappear and Revert should appear together.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = result.Success
-            ? Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message)
-            : $"{result.Message} {result.Detail}";
+        BrowserAccessibilityStatusMessage = FormatBrowserSetupResult(result);
         _browserStatusIsState = false;
+    }
+
+    internal static string FormatBrowserSetupResult(BrowserAccessibilitySetupHelper.SetupResult result)
+    {
+        if (!result.Success)
+        {
+            return $"{result.Message} {result.Detail}";
+        }
+
+        return result.SkippedFirefoxProfiles.Count > 0
+            ? Loc.Instance.GetString(
+                "Profiles.BrowserSetupPartialFirefox",
+                string.Join(", ", result.SkippedFirefoxProfiles)
+            )
+            : Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message);
     }
 
     // The computed browser status follows a language switch; a setup result keeps its wording.

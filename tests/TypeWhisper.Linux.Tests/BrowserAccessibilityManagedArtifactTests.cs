@@ -254,6 +254,64 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.Equal(original, File.ReadAllText(UserChromePath));
     }
 
+    [Fact]
+    public async Task Setup_names_firefox_profile_it_could_not_write()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(SystemApps);
+        File.WriteAllText(
+            Path.Join(SystemApps, "firefox.desktop"),
+            "[Desktop Entry]\nName=Firefox\nExec=/usr/bin/firefox %u\n"
+        );
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        const string userJs = "user_pref(\"accessibility.force_disabled\", 1);\n";
+        File.WriteAllText(Path.Join(profile, "user.js"), userJs);
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+        File.SetUnixFileMode(profile, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            var result = await new BrowserAccessibilitySetupHelper()
+                .SetUpAsync(CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Equal(["qa.default"], result.SkippedFirefoxProfiles);
+            Assert.Contains("Could not write to: qa.default.", result.Detail!, StringComparison.Ordinal);
+            Assert.DoesNotContain("Restart Firefox", result.Detail!, StringComparison.Ordinal);
+            Assert.Equal(userJs, File.ReadAllText(Path.Join(profile, "user.js")));
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                profile,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+        }
+    }
+
+    [Fact]
+    public async Task Setup_reports_no_skipped_profiles_when_every_profile_is_patched()
+    {
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.SkippedFirefoxProfiles);
+        Assert.Contains("Patched profile(s): qa.default.", result.Detail!, StringComparison.Ordinal);
+    }
+
     private string ConfigHome => Path.Join(_root, "config");
     private string DataHome => Path.Join(_root, "data");
     private string StateRoot => Path.Join(_root, "state");
