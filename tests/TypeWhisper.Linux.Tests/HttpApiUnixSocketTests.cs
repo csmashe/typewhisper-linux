@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -1343,6 +1344,120 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal("Local API is disabled.", fixture.Service.StatusText);
     }
 
+
+    [Fact]
+    public async Task BackgroundDisable_WithInFlightRequest_DoesNotBlockCaller()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var fixture = new ApiFixture(history: ParkingHistory(entered, release));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var parked = client.GetAsync("/v1/history");
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            var elapsed = Stopwatch.StartNew();
+            var teardown = fixture.DisableInBackground();
+            elapsed.Stop();
+
+            // Kestrel waits up to ~3 s for the parked request; the caller must not.
+            Assert.True(
+                elapsed.Elapsed < TimeSpan.FromMilliseconds(500),
+                $"Disabling blocked the caller for {elapsed.ElapsedMilliseconds} ms."
+            );
+            await teardown.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal("Local API is disabled.", fixture.Service.StatusText);
+            Assert.False(File.Exists(fixture.SocketPath));
+            Assert.False(File.Exists(fixture.DiscoveryPath));
+        }
+        finally
+        {
+            release.Set();
+            await ObserveRequestCompletionAsync(parked);
+        }
+    }
+
+    [Fact]
+    public async Task BackgroundDisableThenEnable_WithInFlightRequest_EndsRunningOnFreshSocket()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var fixture = new ApiFixture(history: ParkingHistory(entered, release));
+        fixture.Start();
+        using var parkedClient = fixture.CreateTcpClient(withBearer: true);
+        var parked = parkedClient.GetAsync("/v1/history");
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            var service = fixture.Service;
+            var originalHost = service.HostLifetime;
+            _ = fixture.DisableInBackground();
+            // Enable only once the old host is detached and tearing down behind the parked request.
+            Assert.True(SpinWait.SpinUntil(() => !service.IsRunning, TimeSpan.FromSeconds(5)));
+            var restart = fixture.EnableInBackground();
+
+            await restart.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.StartsWith("Local API is running", fixture.Service.StatusText, StringComparison.Ordinal);
+            Assert.True(File.Exists(fixture.SocketPath));
+            Assert.NotSame(originalHost, fixture.Service.HostLifetime);
+            using var client = fixture.CreateUnixClient(withBearer: true);
+            using var response = await client.GetAsync("/v1/status");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+        finally
+        {
+            release.Set();
+            await ObserveRequestCompletionAsync(parked);
+        }
+    }
+
+    [Fact]
+    public async Task Quiesce_WaitsForQueuedSettingsTeardown()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var fixture = new ApiFixture(history: ParkingHistory(entered, release));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var parked = client.GetAsync("/v1/history");
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            var teardown = fixture.DisableInBackground();
+            var quiesce = fixture.Service.QuiesceAsync(TimeSpan.FromSeconds(10));
+            release.Set();
+
+            Assert.True(await quiesce);
+            Assert.True(teardown.IsCompleted);
+        }
+        finally
+        {
+            release.Set();
+            await ObserveRequestCompletionAsync(parked);
+        }
+    }
+
+    private static Mock<IHistoryService> ParkingHistory(
+        ManualResetEventSlim entered,
+        ManualResetEventSlim release
+    )
+    {
+        var history = new Mock<IHistoryService>();
+        history
+            .SetupGet(service => service.Records)
+            .Returns(() =>
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+                return [];
+            });
+        return history;
+    }
+
     /// <summary>Queues posts without ever running them, like a UI thread blocked in a handler.</summary>
     private sealed class NonPumpingSynchronizationContext : SynchronizationContext
     {
@@ -2133,7 +2248,7 @@ public sealed class HttpApiUnixSocketTests
         internal string CreateFifo(string fileName)
         {
             var path = Path.Join(_tempDirectory, fileName);
-            using var mkfifo = System.Diagnostics.Process.Start("mkfifo", [path]);
+            using var mkfifo = Process.Start("mkfifo", [path]);
             mkfifo.WaitForExit();
             Assert.Equal(0, mkfifo.ExitCode);
             return path;
@@ -2151,6 +2266,18 @@ public sealed class HttpApiUnixSocketTests
         {
             _current = _current with { ApiServerEnabled = false };
             Service.ApplySettings();
+        }
+
+        internal Task DisableInBackground()
+        {
+            _current = _current with { ApiServerEnabled = false };
+            return Service.ApplySettingsInBackground();
+        }
+
+        internal Task EnableInBackground()
+        {
+            _current = _current with { ApiServerEnabled = true };
+            return Service.ApplySettingsInBackground();
         }
 
         internal HttpClient CreateTcpClient(bool withBearer)
