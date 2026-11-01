@@ -1165,6 +1165,7 @@
   "Shortcuts.GlobalReadsEnabled": "キーボードのグローバル読み取りを有効にしました。",
   "Shortcuts.HotkeyParseFailed": "「{0}」を解析できませんでした。Ctrl+Shift+Space、Alt+F9、Ctrl+Kなどを試してください。",
   "Shortcuts.HotkeyParseOrCollide": "「{0}」を解析できないか、別のショートカットと競合しています。",
+  "Shortcuts.HotkeyCollides": "「{0}」は別のショートカットで既に使用されています。",
   "Shortcuts.HotkeySet": "ショートカットを{0}に設定しました。",
   "Shortcuts.InstallingShortcut": "{0}にショートカットをインストールしています…",
   "Shortcuts.KeyboardAccessBanner": "⚠ Waylandでグローバルショートカットを使用するには、キーボードアクセスを有効にしてください",

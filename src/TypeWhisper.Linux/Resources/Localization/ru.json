@@ -1165,6 +1165,7 @@
   "Shortcuts.GlobalReadsEnabled": "Глобальное чтение клавиатуры включено.",
   "Shortcuts.HotkeyParseFailed": "Не удалось разобрать «{0}». Попробуйте, например, Ctrl+Shift+Space, Alt+F9, Ctrl+K.",
   "Shortcuts.HotkeyParseOrCollide": "Не удалось разобрать «{0}» или оно конфликтует с другим сочетанием.",
+  "Shortcuts.HotkeyCollides": "«{0}» уже используется другим сочетанием.",
   "Shortcuts.HotkeySet": "Горячая клавиша задана: {0}.",
   "Shortcuts.InstallingShortcut": "Установка сочетания на {0}…",
   "Shortcuts.KeyboardAccessBanner": "⚠ Включите доступ к клавиатуре, чтобы использовать глобальные сочетания в Wayland",

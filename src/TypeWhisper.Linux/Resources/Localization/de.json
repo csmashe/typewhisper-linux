@@ -1165,6 +1165,7 @@
   "Shortcuts.GlobalReadsEnabled": "Globales Lesen der Tastatur aktiviert.",
   "Shortcuts.HotkeyParseFailed": "'{0}' konnte nicht verarbeitet werden. Versuchen Sie z.B. Ctrl+Shift+Space, Alt+F9, Ctrl+K.",
   "Shortcuts.HotkeyParseOrCollide": "'{0}' konnte nicht verarbeitet werden oder kollidiert mit einem anderen Tastenkürzel.",
+  "Shortcuts.HotkeyCollides": "'{0}' wird bereits von einem anderen Tastenkürzel verwendet.",
   "Shortcuts.HotkeySet": "Hotkey auf {0} gesetzt.",
   "Shortcuts.InstallingShortcut": "Tastenkürzel wird auf {0} installiert…",
   "Shortcuts.KeyboardAccessBanner": "⚠ Aktivieren Sie den Tastaturzugriff, um globale Hotkeys unter Wayland zu nutzen",

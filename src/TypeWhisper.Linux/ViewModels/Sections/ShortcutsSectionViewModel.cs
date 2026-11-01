@@ -1196,8 +1196,12 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
         else
         {
-            StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", HotkeyText);
+            StatusMessage = Loc.Instance.GetString(
+                HotkeyService.IsParsableHotkey(HotkeyText)
+                    ? "Shortcuts.HotkeyCollides"
+                    : "Shortcuts.HotkeyParseFailed",
+                HotkeyText
+            );
         }
     }
 

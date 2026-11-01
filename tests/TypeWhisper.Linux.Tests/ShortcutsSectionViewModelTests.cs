@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Tests;
 using Xunit;
@@ -129,6 +130,41 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         Assert.Equal(original, sut.HotkeyText);
         Assert.Contains("collides", sut.StatusMessage);
         Assert.False(sut.IsCapturingHotkey);
+    }
+
+    [Fact]
+    public async Task ApplyHotkey_CollisionReportsCollisionNotParseError()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+Alt+J");
+        var original = hotkey.CurrentHotkeyString;
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { HotkeyText = "Ctrl+Alt+J" };
+
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+
+        Assert.Equal(original, hotkey.CurrentHotkeyString);
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyCollides", "Ctrl+Alt+J"),
+            sut.StatusMessage
+        );
+    }
+
+    [Fact]
+    public async Task ApplyHotkey_MalformedTextStillReportsParseError()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { HotkeyText = "not-a-key" };
+
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", "not-a-key"),
+            sut.StatusMessage
+        );
     }
 
     [Fact]
