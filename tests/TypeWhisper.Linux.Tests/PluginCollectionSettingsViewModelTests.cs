@@ -458,6 +458,47 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task PluginStateChanged_AfterFailedValidation_KeepsTheValidationMessage()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.failed-validate")
+        {
+            ValidationResult = new PluginSettingsValidationResult(false, "Could not connect."),
+        };
+        var vm = CreateSection([plugin], TimeSpan.FromSeconds(2), new ErrorLogService(_tempDir));
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+
+        // A capability change from the save or validation rebuilds the card afterwards.
+        InvokeRefresh(vm);
+
+        var rebuiltRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await WaitForAsync(() => rebuiltRow.SettingFields.Count > 0, TimeSpan.FromSeconds(2));
+        Assert.Single(rebuiltRow.SettingFields);
+        Assert.Equal("Could not connect.", rebuiltRow.Status);
+    }
+
+    [Fact]
+    public async Task PluginStateChanged_DuringValidation_KeepsTheValidationMessage()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.validate-race")
+        {
+            ValidationResult = new PluginSettingsValidationResult(false, "Could not connect."),
+        };
+        var vm = CreateSection([plugin], TimeSpan.FromSeconds(2), new ErrorLogService(_tempDir));
+        plugin.DuringValidate = () => InvokeRefresh(vm);
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+
+        var currentRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await WaitForAsync(() => currentRow.SettingFields.Count > 0, TimeSpan.FromSeconds(2));
+        await Task.Delay(100);
+        Assert.Equal("Could not connect.", currentRow.Status);
+    }
+
+    [Fact]
     public async Task PluginStateChanged_SameInstance_PreservesDirtyFlatAndCollectionDrafts_ButRecreatesCleanSibling()
     {
         var plugin = new FakeEditablePlugin("com.test.draft-preservation");
@@ -1276,6 +1317,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         public bool ThrowOnSetValue { get; set; }
         public TimeSpan ValidateDelay { get; init; }
         public PluginSettingsValidationResult? ValidationResult { get; init; }
+        public Action? DuringValidate { get; set; }
         public string PluginId { get; }
         public string PluginName => $"Settings {PluginId}";
         public string PluginVersion => "1.0.0";
@@ -1323,6 +1365,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
                 await Task.Delay(ValidateDelay, ct).ConfigureAwait(false);
             }
 
+            DuringValidate?.Invoke();
             return ValidationResult;
         }
 
