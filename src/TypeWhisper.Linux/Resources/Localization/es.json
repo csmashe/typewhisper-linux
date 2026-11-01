@@ -1165,7 +1165,7 @@
   "Shortcuts.GlobalReadsEnabled": "Lectura global del teclado activada.",
   "Shortcuts.HotkeyParseFailed": "No se pudo interpretar '{0}'. Prueba p. ej. Ctrl+Shift+Space, Alt+F9, Ctrl+K.",
   "Shortcuts.HotkeyParseOrCollide": "No se pudo interpretar '{0}' o entra en conflicto con otro atajo.",
-  "Shortcuts.HotkeyCollides": "'{0}' ya lo usa otro atajo.",
+  "Shortcuts.HotkeyCollides": "'{0}' entra en conflicto con otro atajo.",
   "Shortcuts.HotkeySet": "Atajo establecido en {0}.",
   "Shortcuts.InstallingShortcut": "Instalando el atajo en {0}…",
   "Shortcuts.KeyboardAccessBanner": "⚠ Activa el acceso al teclado para usar atajos globales en Wayland",

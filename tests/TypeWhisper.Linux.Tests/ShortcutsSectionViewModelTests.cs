@@ -128,7 +128,10 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         await sut.ApplyCapturedHotkeyAsync("Ctrl+Shift+P");
 
         Assert.Equal(original, sut.HotkeyText);
-        Assert.Contains("collides", sut.StatusMessage);
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyCollides", "Ctrl+Shift+P"),
+            sut.StatusMessage
+        );
         Assert.False(sut.IsCapturingHotkey);
     }
 
