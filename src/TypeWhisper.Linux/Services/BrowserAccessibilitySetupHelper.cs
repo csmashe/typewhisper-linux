@@ -664,19 +664,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
     /// <returns>Whether the last force_disabled entry is -1, or null when there is none.</returns>
     private static bool? LastForceDisabledIsNegOne(string content)
     {
-        var lastNegOne = ForceDisabledNegOneMultilineRegex().Matches(content).LastOrDefault();
-        var lastAny = ForceDisabledAnyValueLineRegex().Matches(content).LastOrDefault();
-        if (lastNegOne is null && lastAny is null)
-        {
-            return null;
-        }
-
-        // The -1 pattern's leading \s* can start a match lines early, so compare statement starts.
-        return lastNegOne is not null
-            && (lastAny is null || StatementStart(lastNegOne) >= StatementStart(lastAny));
-
-        static int StatementStart(Match match) =>
-            match.Index + match.Value.IndexOf("user_pref", StringComparison.Ordinal);
+        var last = ForceDisabledStatementRegex().Matches(content).LastOrDefault();
+        return last is null ? null : last.Groups["value"].Value == "-1";
     }
 
     private static IEnumerable<string> EnumerateFirefoxProfileDirs()
@@ -778,7 +767,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
             var existing = snapshot.Contents;
             // Already effective (our owned block or a user-authored -1): leave the
             // exact file, link, and metadata untouched.
-            if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
+            if (LastForceDisabledIsNegOne(existing) == true)
             {
                 return false;
             }
@@ -1492,12 +1481,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
             && (!FirefoxInstalled || !FirefoxProfileFound || FirefoxAccessibilityForceEnabled);
     }
 
-    // accessibility.force_disabled = -1 pref line, matched per-line across full user.js content
-    // (Multiline so the line is recognized even when our attribution comment precedes it). Accepts
-    // either quote style, like ForceDisabledAnyValueLineRegex: Firefox's pref parser takes both, so
-    // a single-quoted user-authored -1 is already effective and must not be rewritten/preserved.
-    [GeneratedRegex("""^\s*user_pref\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
-    private static partial Regex ForceDisabledNegOneMultilineRegex();
+    // Every live accessibility.force_disabled statement, including ones sharing a line with
+    // other statements, so the last match is the value Firefox applies. The lookbehind skips
+    // statements after a // comment (quoted strings may contain //). Either quote style.
+    [GeneratedRegex("""(?<=^(?:[^\r\n/"']|/(?!/)|"[^"\r\n]*"|'[^'\r\n]*')*)user_pref\s*\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*(?<value>[^\r\n;)]*?)\s*\)\s*;""", RegexOptions.Multiline)]
+    private static partial Regex ForceDisabledStatementRegex();
 
     // Any live accessibility.force_disabled line, captured verbatim (minus its
     // newline) so setup can prefix it with the preservation comment. Lines where a
