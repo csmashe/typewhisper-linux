@@ -517,6 +517,22 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task PluginStateChanged_AfterThrowingValidation_KeepsTheFailure()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.validate-throws") { ThrowOnValidate = true };
+        var vm = CreateSection([plugin], TimeSpan.FromSeconds(2), new ErrorLogService(_tempDir));
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+
+        InvokeRefresh(vm);
+
+        var rebuiltRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await WaitForAsync(() => rebuiltRow.SettingFields.Count > 0, TimeSpan.FromSeconds(2));
+        Assert.Equal(Loc.Instance["Plugins.UnableToLoadSettings"], rebuiltRow.Status);
+    }
+
+    [Fact]
     public async Task LanguageChanged_DirtyRow_KeepsDraftAndResetsStatus()
     {
         var plugin = new FakeSettingsPlugin("com.test.language-draft")

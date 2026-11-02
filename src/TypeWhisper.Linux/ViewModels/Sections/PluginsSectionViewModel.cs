@@ -240,7 +240,9 @@ public partial class PluginsSectionViewModel : ObservableObject
                     && existingRows.TryGetValue(plugin.Manifest.Id, out var previousRow)
                     && ReferenceEquals(previousRow.LoadedPlugin, plugin)
                     && !string.IsNullOrEmpty(previousRow.Status)
-                    && previousRow.Status != Loc.Instance["Plugins.UnableToLoadSettings"]
+                    // A failed load clears the fields and is retried; a failed validation is kept.
+                    && (previousRow.CanValidateSettings
+                        || previousRow.Status != Loc.Instance["Plugins.UnableToLoadSettings"])
                 )
                 {
                     row.Status = previousRow.Status;
