@@ -694,24 +694,22 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 continue;
             }
 
+            var next = i + 1 < sb.Length ? sb[i + 1] : '\0';
             int end;
-            if (c == '#' || (c == '/' && i + 1 < sb.Length && sb[i + 1] == '/'))
+            switch (c)
             {
-                end = i;
-                while (end < sb.Length && sb[end] != '\n')
-                {
-                    end++;
-                }
-            }
-            else if (c == '/' && i + 1 < sb.Length && sb[i + 1] == '*')
-            {
-                var close = content.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                end = close < 0 ? sb.Length : close + 2;
-            }
-            else
-            {
-                i++;
-                continue;
+                case '#':
+                case '/' when next == '/':
+                    var newline = content.IndexOf('\n', i);
+                    end = newline < 0 ? sb.Length : newline;
+                    break;
+                case '/' when next == '*':
+                    var close = content.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                    end = close < 0 ? sb.Length : close + 2;
+                    break;
+                default:
+                    i++;
+                    continue;
             }
 
             for (; i < end; i++)
