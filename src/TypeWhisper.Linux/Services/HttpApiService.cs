@@ -875,7 +875,12 @@ public sealed partial class HttpApiService : IDisposable
 
     private async Task<bool> RedrainCoreAsync(TimeSpan budget)
     {
-        return await _requestDispatcher.DrainAsync(budget).ConfigureAwait(false);
+        var elapsed = Stopwatch.StartNew();
+        var settingsSettled = await WaitForQueuedSettingsAsync(budget).ConfigureAwait(false);
+        var drained = await _requestDispatcher
+            .DrainAsync(RemainingBudget(budget, elapsed))
+            .ConfigureAwait(false);
+        return drained && settingsSettled;
     }
 
     private void DisposeQuiescedResources()
