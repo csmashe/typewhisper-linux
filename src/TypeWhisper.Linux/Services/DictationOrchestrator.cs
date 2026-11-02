@@ -1176,9 +1176,7 @@ public sealed partial class DictationOrchestrator : IDisposable
 
                     if (!string.IsNullOrWhiteSpace(deferredUrl))
                     {
-                        // The walk reads the live address bar, so a tab switch since
-                        // recording began would yield the other tab's URL. Re-snapshot
-                        // and commit only if both the window and its title are unchanged.
+                        // The walk reads the live address bar: commit only if the recording-start tab is still in front.
                         ActiveWindowSnapshot? verifySnap = null;
                         try
                         {
@@ -1196,12 +1194,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             // Verification snapshot is best-effort; fall through to the initial snapshot.
                         }
 
-                        if (
-                            initialSnap is null
-                            || verifySnap is null
-                            || !IsSameWindow(initialSnap, verifySnap)
-                            || !string.Equals(initialSnap.Title, verifySnap.Title, StringComparison.Ordinal)
-                        )
+                        if (!IsSameWindowAndTab(initialSnap, verifySnap))
                         {
                             Trace.WriteLine(
                                 "[Dictation] Deferred URL discarded — focused window or tab changed mid-capture."
@@ -4413,8 +4406,14 @@ public sealed partial class DictationOrchestrator : IDisposable
         return Task.Delay(90);
     }
 
-    private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)
+    // A tab switch keeps the window ID, so the title is the only tab signal the snapshot has.
+    internal static bool IsSameWindowAndTab(ActiveWindowSnapshot? a, ActiveWindowSnapshot? b)
     {
+        if (a is null || b is null || !string.Equals(a.Title, b.Title, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         if (a.WindowId is not null && b.WindowId is not null)
         {
             return string.Equals(a.WindowId, b.WindowId, StringComparison.Ordinal);
