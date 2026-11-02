@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
@@ -496,6 +497,45 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         await WaitForAsync(() => currentRow.SettingFields.Count > 0, TimeSpan.FromSeconds(2));
         await Task.Delay(100);
         Assert.Equal("Could not connect.", currentRow.Status);
+    }
+
+    [Fact]
+    public async Task PluginStateChanged_DuringFailedValidation_ShowsTheFailureOnTheVisibleRow()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.validate-throws-race") { ThrowOnValidate = true };
+        var vm = CreateSection([plugin], TimeSpan.FromSeconds(2), new ErrorLogService(_tempDir));
+        plugin.DuringValidate = () => InvokeRefresh(vm);
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+
+        var currentRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        Assert.NotSame(row, currentRow);
+        await WaitForAsync(() => currentRow.SettingFields.Count > 0, TimeSpan.FromSeconds(2));
+        Assert.Equal(Loc.Instance["Plugins.UnableToLoadSettings"], currentRow.Status);
+    }
+
+    [Fact]
+    public async Task LanguageChanged_DirtyRow_KeepsDraftAndResetsStatus()
+    {
+        var plugin = new FakeSettingsPlugin("com.test.language-draft")
+        {
+            ValidationResult = new PluginSettingsValidationResult(false, "Could not connect."),
+        };
+        var vm = CreateSection([plugin], TimeSpan.FromSeconds(2), new ErrorLogService(_tempDir));
+        var row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        await vm.ToggleExpandedCommand.ExecuteAsync(row);
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+        row = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        row.SettingFields.Single().Value = "draft";
+
+        InvokePrivate(vm, "RefreshForLanguage");
+
+        var currentRow = AllGroups(vm).SelectMany(group => group.Plugins).Single();
+        Assert.Same(row, currentRow);
+        Assert.Equal("draft", currentRow.SettingFields.Single().Value);
+        Assert.Equal(Loc.Instance["Plugins.EditValuesHint"], currentRow.Status);
     }
 
     [Fact]
@@ -1160,18 +1200,20 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
     private static IEnumerable<PluginCategoryGroup> AllGroups(PluginsSectionViewModel vm) =>
         vm.EnabledGroups.Concat(vm.DisabledGroups);
 
-    private static void InvokeRefresh(PluginsSectionViewModel vm)
+    private static void InvokeRefresh(PluginsSectionViewModel vm) => InvokePrivate(vm, "Refresh");
+
+    private static void InvokePrivate(PluginsSectionViewModel vm, string methodName)
     {
-        var refresh =
+        var method =
             typeof(PluginsSectionViewModel).GetMethod(
-                "Refresh",
+                methodName,
                 BindingFlags.Instance | BindingFlags.NonPublic
             )
             ?? throw new MissingMethodException(
                 typeof(PluginsSectionViewModel).FullName,
-                "Refresh"
+                methodName
             );
-        refresh.Invoke(vm, null);
+        method.Invoke(vm, null);
     }
 
     private static void ReplaceLoadedPlugins(
@@ -1318,6 +1360,7 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
         public TimeSpan ValidateDelay { get; init; }
         public PluginSettingsValidationResult? ValidationResult { get; init; }
         public Action? DuringValidate { get; set; }
+        public bool ThrowOnValidate { get; init; }
         public string PluginId { get; }
         public string PluginName => $"Settings {PluginId}";
         public string PluginVersion => "1.0.0";
@@ -1366,7 +1409,9 @@ public sealed class PluginCollectionSettingsViewModelTests : IDisposable
             }
 
             DuringValidate?.Invoke();
-            return ValidationResult;
+            return ThrowOnValidate
+                ? throw new InvalidOperationException("validation exploded")
+                : ValidationResult;
         }
 
         public Task ActivateAsync(IPluginHostServices host)

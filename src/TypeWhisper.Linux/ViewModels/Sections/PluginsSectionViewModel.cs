@@ -158,6 +158,14 @@ public partial class PluginsSectionViewModel : ObservableObject
             )
             {
                 existingRow.IsEnabled = _pluginManager.IsEnabled(plugin.Manifest.Id);
+                if (!keepStatus)
+                {
+                    // The draft stays, so only the status line is re-localized.
+                    existingRow.Status = IsRefreshingModels(plugin.Manifest.Id, plugin)
+                        ? Loc.Instance["Plugins.RefreshingModels"]
+                        : DefaultSettingsStatus(existingRow);
+                }
+
                 plugins.Add(existingRow);
                 continue;
             }
@@ -617,6 +625,13 @@ public partial class PluginsSectionViewModel : ObservableObject
         if (!validation.IsSuccess)
         {
             row.Status = Loc.Instance["Plugins.UnableToLoadSettings"];
+            // A refresh during validation may have replaced the row; its own reload is already running.
+            var currentRow = AllRows.FirstOrDefault(candidate => ReferenceEquals(candidate.LoadedPlugin, loaded));
+            if (currentRow is not null && !ReferenceEquals(currentRow, row))
+            {
+                currentRow.Status = row.Status;
+            }
+
             return;
         }
 
@@ -1198,16 +1213,18 @@ public partial class PluginsSectionViewModel : ObservableObject
         row.CanValidateSettings = flatProvider is not null;
         if (!preserveStatus)
         {
-            row.Status =
-                hasFlatFields || hasCollections
-                    ? Loc.Instance["Plugins.EditValuesHint"]
-                    : row.HasActions
-                        ? string.Empty
-                        : Loc.Instance["Plugins.NoEditableFields"];
+            row.Status = DefaultSettingsStatus(row);
         }
 
         row.CaptureSettingsBaseline();
     }
+
+    private static string DefaultSettingsStatus(PluginRow row) =>
+        row.SettingFields.Count > 0 || row.Collections.Count > 0
+            ? Loc.Instance["Plugins.EditValuesHint"]
+            : row.HasActions
+                ? string.Empty
+                : Loc.Instance["Plugins.NoEditableFields"];
 
     private void BeginObservedSettingsLoad(
         PluginRow row,
