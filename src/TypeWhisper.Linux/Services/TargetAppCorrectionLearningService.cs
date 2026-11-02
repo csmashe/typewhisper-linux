@@ -10,12 +10,16 @@ namespace TypeWhisper.Linux.Services;
 ///     A batch of corrections learned from a single target-app edit, plus the on-screen box of
 ///     the element they came from (when it could be read). <see cref="SourceExtents" /> lets a
 ///     feedback surface place its toast beside the corrected element instead of at a fixed spot;
-///     it is <c>null</c> when the element doesn't expose extents (native-Wayland apps often can't).
+///     it is <c>null</c> when the element doesn't expose global extents (native-Wayland apps).
+///     <see cref="TargetWindowFrame" /> is then the corrected window's frame, when it could be located.
 /// </summary>
 public sealed record LearnedCorrectionsBatch(
     IReadOnlyList<LearnedDictionaryCorrection> Corrections,
     AtSpiScreenRect? SourceExtents
-);
+)
+{
+    public CompositorWindowFrame? TargetWindowFrame { get; init; }
+}
 
 /// <summary>
 ///     Wispr-Flow-style silent correction learning from the target app. After a
@@ -78,6 +82,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     // ReSharper disable once InconsistentNaming
     private readonly SemaphoreSlim _listenGate = new(1, 1);
     private readonly ISettingsService _settings;
+    private readonly IWindowFrameLocator? _windowFrames;
 
     private readonly TimeSpan _trackingWindow;
     private readonly TimeSpan _idleCommitDelay;
@@ -120,7 +125,8 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         IAtSpiEventClient client,
         IDictionaryService dictionary,
         ISettingsService settings,
-        IErrorLogService errorLog
+        IErrorLogService errorLog,
+        IWindowFrameLocator? windowFrames = null
     )
         : this(
             client,
@@ -129,7 +135,8 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             errorLog,
             s_defaultTrackingWindow,
             s_defaultIdleCommitDelay,
-            s_defaultBaselineRetryDelay
+            s_defaultBaselineRetryDelay,
+            windowFrames
         )
     {
     }
@@ -143,10 +150,12 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         IErrorLogService errorLog,
         TimeSpan trackingWindow,
         TimeSpan idleCommitDelay,
-        TimeSpan baselineRetryDelay
+        TimeSpan baselineRetryDelay,
+        IWindowFrameLocator? windowFrames = null
     )
     {
         _client = client;
+        _windowFrames = windowFrames;
         _dictionary = dictionary;
         _settings = settings;
         _errorLog = errorLog;
@@ -254,6 +263,10 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         // delay all of them; the cold-start branch below waits for it, bounded, where the
         // unlock actually matters.
         var pokeSweep = _client.PokeAccessibilityTreesAsync();
+
+        // The dictation just landed, so the focused window is the target. Captured now because a
+        // focus-out commit runs after focus has already moved elsewhere.
+        var targetWindowTask = _windowFrames?.TryGetFocusedWindowHandleAsync(CancellationToken.None);
 
         var focused = _client.CurrentFocusedElement;
         if (focused is null)
@@ -423,7 +436,10 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
                 insertedText,
                 generation,
                 _client.AcquireTextChangedEvents()
-            );
+            )
+            {
+                TargetWindowHandle = targetWindowTask,
+            };
             _timeoutTimer = new Timer(
                 static state =>
                 {
@@ -1013,7 +1029,22 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             // place its toast beside it. A null result (no Component interface, native-Wayland junk,
             // read failure) just falls back to a fixed spot downstream — never blocks the event.
             var extents = await _client.TryGetScreenExtentsAsync(state.Element).ConfigureAwait(false);
-            RaiseCorrectionsLearned(new LearnedCorrectionsBatch(learned, extents));
+            CompositorWindowFrame? windowFrame = null;
+            if (
+                extents is null
+                && _windowFrames is not null
+                && state.TargetWindowHandle is { } handleTask
+                && await handleTask.ConfigureAwait(false) is { } window
+            )
+            {
+                windowFrame = await _windowFrames
+                    .TryGetWindowFrameAsync(window, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+
+            RaiseCorrectionsLearned(
+                new LearnedCorrectionsBatch(learned, extents) { TargetWindowFrame = windowFrame }
+            );
         }
         catch (Exception ex)
         {
@@ -1190,6 +1221,10 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         public string InsertedText { get; } = insertedText;
         public int Generation { get; } = generation;
         public bool Edited { get; set; }
+
+        // Frame-locator handle of the window the dictation landed in, for anchoring feedback when
+        // the element has no global extents. Awaited only at commit so the lookup never delays arming.
+        public Task<string?>? TargetWindowHandle { get; init; }
 
         // What we persisted for each original during this armed session: the last replacement
         // (to ignore identical repeats and widenings) plus the dictionary entry id we created

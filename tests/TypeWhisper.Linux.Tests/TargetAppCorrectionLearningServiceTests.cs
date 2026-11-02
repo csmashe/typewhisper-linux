@@ -1276,6 +1276,67 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Commit_WithoutGlobalExtents_UsesFrameOfWindowFocusedAtArm()
+    {
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        var frames = new FakeWindowFrameLocator
+        {
+            FocusedHandle = "42",
+            Frames = { ["42"] = Frame(1510, 39, 820, 547), ["99"] = Frame(0, 0, 640, 480) },
+        };
+        using var service = CreateService(client, enabled: true, frames);
+
+        LearnedCorrectionsBatch? raised = null;
+        service.CorrectionsLearned += batch => raised = batch;
+
+        client.TextToReturn = "kubernets";
+        await service.ArmAsync("kubernets");
+
+        // Focus-out commit: by now another window has focus, so the toast must follow the
+        // window captured when the dictation landed, not the current one.
+        frames.FocusedHandle = "99";
+        client.TextToReturn = "Kubernetes";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        Assert.NotNull(raised);
+        Assert.Null(raised.SourceExtents);
+        Assert.Equal(Frame(1510, 39, 820, 547), raised.TargetWindowFrame);
+    }
+
+    [Fact]
+    public async Task Commit_WithGlobalExtents_DoesNotQueryWindowFrame()
+    {
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = s_field,
+            ExtentsToReturn = new AtSpiScreenRect(100, 200, 300, 40),
+        };
+        var frames = new FakeWindowFrameLocator
+        {
+            FocusedHandle = "42",
+            Frames = { ["42"] = Frame(1510, 39, 820, 547) },
+        };
+        using var service = CreateService(client, enabled: true, frames);
+
+        LearnedCorrectionsBatch? raised = null;
+        service.CorrectionsLearned += batch => raised = batch;
+
+        client.TextToReturn = "kubernets";
+        await service.ArmAsync("kubernets");
+        client.TextToReturn = "Kubernetes";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        Assert.NotNull(raised);
+        Assert.Equal(new AtSpiScreenRect(100, 200, 300, 40), raised.SourceExtents);
+        Assert.Null(raised.TargetWindowFrame);
+        Assert.Equal(0, frames.FrameQueries);
+    }
+
+    [Fact]
     public async Task Commit_LearnsNothing_DoesNotRaiseCorrectionsLearnedEvent()
     {
         var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
@@ -1369,14 +1430,16 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
     private TargetAppCorrectionLearningService CreateService(
         FakeAtSpiEventClient client,
-        bool enabled
+        bool enabled,
+        IWindowFrameLocator? windowFrames = null
     )
     {
         return CreateService(
             client,
             new FakeSettingsService(
                 AppSettings.Default with { TargetAppCorrectionLearningEnabled = enabled }
-            )
+            ),
+            windowFrames: windowFrames
         );
     }
 
@@ -1384,7 +1447,8 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         FakeAtSpiEventClient client,
         FakeSettingsService settings,
         TimeSpan? trackingWindow = null,
-        TimeSpan? idleCommitDelay = null
+        TimeSpan? idleCommitDelay = null,
+        IWindowFrameLocator? windowFrames = null
     )
     {
         return new TargetAppCorrectionLearningService(
@@ -1394,8 +1458,32 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
             new NullErrorLogService(),
             trackingWindow ?? TimeSpan.FromSeconds(30),
             idleCommitDelay ?? TimeSpan.FromSeconds(3),
-            TimeSpan.FromMilliseconds(1)
+            TimeSpan.FromMilliseconds(1),
+            windowFrames
         );
+    }
+
+    private static CompositorWindowFrame Frame(int x, int y, int width, int height)
+    {
+        return new CompositorWindowFrame(new AtSpiScreenRect(x, y, width, height), new AtSpiScreenRect(0, 0, 2560, 800));
+    }
+
+    private sealed class FakeWindowFrameLocator : IWindowFrameLocator
+    {
+        public string? FocusedHandle { get; set; }
+        public Dictionary<string, CompositorWindowFrame> Frames { get; } = new(StringComparer.Ordinal);
+        public int FrameQueries { get; private set; }
+
+        public Task<string?> TryGetFocusedWindowHandleAsync(CancellationToken ct)
+        {
+            return Task.FromResult(FocusedHandle);
+        }
+
+        public Task<CompositorWindowFrame?> TryGetWindowFrameAsync(string handle, CancellationToken ct)
+        {
+            FrameQueries++;
+            return Task.FromResult<CompositorWindowFrame?>(Frames.TryGetValue(handle, out var frame) ? frame : null);
+        }
     }
 
     private static async Task AwaitCommit(TargetAppCorrectionLearningService service)
