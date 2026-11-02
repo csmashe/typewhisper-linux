@@ -1199,6 +1199,10 @@ public sealed partial class DictationOrchestrator : IDisposable
                             Trace.WriteLine(
                                 "[Dictation] Deferred URL discarded — focused window or tab changed mid-capture."
                             );
+                            if (initialSnap is not null)
+                            {
+                                _activeWindow.ForgetBrowserUrl(initialSnap, deferredUrl);
+                            }
                         }
                         else
                         {
@@ -4406,10 +4410,17 @@ public sealed partial class DictationOrchestrator : IDisposable
         return Task.Delay(90);
     }
 
-    // A tab switch keeps the window ID, so the title is the only tab signal the snapshot has.
+    // A tab switch keeps the window ID, so the title is the only tab signal the snapshot has;
+    // a missing title can't prove the tab stayed the same.
     internal static bool IsSameWindowAndTab(ActiveWindowSnapshot? a, ActiveWindowSnapshot? b)
     {
-        if (a is null || b is null || !string.Equals(a.Title, b.Title, StringComparison.Ordinal))
+        if (
+            a is null
+            || b is null
+            || string.IsNullOrWhiteSpace(a.Title)
+            || string.IsNullOrWhiteSpace(b.Title)
+            || !string.Equals(a.Title, b.Title, StringComparison.Ordinal)
+        )
         {
             return false;
         }

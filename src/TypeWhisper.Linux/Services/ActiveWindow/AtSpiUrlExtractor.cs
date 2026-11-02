@@ -104,6 +104,41 @@ public sealed partial class AtSpiUrlExtractor
         );
     }
 
+    /// <summary>
+    ///     Drops the cached URL if it is the one a rejected dictation read stored for this
+    ///     tab, so polling can't reuse a URL read after a tab switch.
+    /// </summary>
+    internal void ForgetCachedUrl(
+        string? focusedProcessName,
+        string? focusedAppId,
+        string? focusedTitle,
+        string url
+    )
+    {
+        var browser = ResolveBrowserDescriptor(focusedProcessName, focusedAppId, focusedTitle);
+        if (browser is null)
+        {
+            return;
+        }
+
+        lock (_cacheLock)
+        {
+            if (
+                !string.Equals(_cachedDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
+                || !string.Equals(_cachedUrl, url, StringComparison.Ordinal)
+            )
+            {
+                return;
+            }
+
+            _cachedDescriptorId = null;
+            _cachedTitle = null;
+            _cachedUrl = null;
+            _cachedUrlAt = default;
+        }
+    }
+
     internal string? TryGetBrowserUrl(
         string? focusedProcessName,
         string? focusedAppId,

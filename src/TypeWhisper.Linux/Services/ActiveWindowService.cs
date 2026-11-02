@@ -121,6 +121,15 @@ public sealed class ActiveWindowService : IActiveWindowService
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
     }
 
+    /// <summary>
+    ///     Forgets <paramref name="url" /> if a dictation read cached it for <paramref name="snapshot" />
+    ///     and the caller then rejected it, so polling can't reuse it.
+    /// </summary>
+    public void ForgetBrowserUrl(ActiveWindowSnapshot snapshot, string url)
+    {
+        _atSpiUrlExtractor.ForgetCachedUrl(snapshot.ProcessName, snapshot.AppId, snapshot.Title, url);
+    }
+
     public IReadOnlyList<string> GetRunningAppProcessNames()
     {
         try

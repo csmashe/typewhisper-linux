@@ -35,4 +35,17 @@ public sealed class DictationOrchestratorDeferredUrlTests
         Assert.False(DictationOrchestrator.IsSameWindowAndTab(null, s_tabA));
         Assert.False(DictationOrchestrator.IsSameWindowAndTab(s_tabA, null));
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Blank_title_discards_the_deferred_url(string? title)
+    {
+        var untitled = s_tabA with { Title = title };
+
+        Assert.False(DictationOrchestrator.IsSameWindowAndTab(untitled, untitled with { }));
+        Assert.False(DictationOrchestrator.IsSameWindowAndTab(s_tabA, untitled));
+        Assert.False(DictationOrchestrator.IsSameWindowAndTab(untitled, s_tabA));
+    }
 }

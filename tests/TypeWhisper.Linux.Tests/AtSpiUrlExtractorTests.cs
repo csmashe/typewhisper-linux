@@ -82,6 +82,44 @@ public sealed class AtSpiUrlExtractorTests
     }
 
     [Fact]
+    public void ForgetCachedUrl_RejectedDictationRead_IsNotReusedByPolling()
+    {
+        var current = "http://localhost:19794/tab-b";
+        var walks = 0;
+        // ReSharper disable once AccessToModifiedClosure -- the stub deliberately returns whichever tab is current when it walks.
+        var sut = Build(_ =>
+        {
+            walks++;
+            return current;
+        });
+
+        // The dictation walk ran after a switch to tab B but is keyed on tab A's title.
+        Assert.Equal(current, sut.TryGetBrowserUrl(Browser, "Tab A"));
+        sut.ForgetCachedUrl(Browser, null, "Tab A", current);
+
+        current = "http://127.0.0.1:19794/tab-a";
+        Assert.Equal(current, sut.TryGetBrowserUrl(Browser, "Tab A", isPolling: true));
+        Assert.Equal(2, walks);
+    }
+
+    [Fact]
+    public void ForgetCachedUrl_LeavesADifferentCachedUrlAlone()
+    {
+        var walks = 0;
+        var sut = Build(_ =>
+        {
+            walks++;
+            return "https://example.com/";
+        });
+
+        Assert.Equal("https://example.com/", sut.TryGetBrowserUrl(Browser, "Example", isPolling: true));
+        sut.ForgetCachedUrl(Browser, null, "Example", "https://other.example/");
+
+        Assert.Equal("https://example.com/", sut.TryGetBrowserUrl(Browser, "Example", isPolling: true));
+        Assert.Equal(1, walks);
+    }
+
+    [Fact]
     public void TryGetBrowserUrl_TitleChange_RewalksBecauseTheTabMayHaveChanged()
     {
         var walks = 0;
