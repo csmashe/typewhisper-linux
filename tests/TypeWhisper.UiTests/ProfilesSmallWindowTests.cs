@@ -29,11 +29,14 @@ public sealed class ProfilesSmallWindowTests(UiSession ui)
             Environment.SetEnvironmentVariable("XDG_CURRENT_DESKTOP", "GNOME");
             var failures = ui.Services.GetRequiredService<IDetectionFailureTracker>();
             var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
+            var profiles = (ProfilesSectionViewModel)viewModel.NavItems.First(item => item.Content is ProfilesSectionViewModel).Content!;
+            var statusMessage = profiles.BrowserAccessibilityStatusMessage;
+            var canEnable = profiles.CanEnableBrowserAccessibility;
+            var canRevert = profiles.CanRevertBrowserAccessibility;
             var window = new MainWindow(viewModel) { Width = 800, Height = 600 };
             window.Show();
             try
             {
-                var profiles = (ProfilesSectionViewModel)viewModel.NavItems.First(item => item.Content is ProfilesSectionViewModel).Content!;
                 viewModel.SelectedItem = viewModel.NavItems.First(item => item.Content == profiles);
                 if (!profiles.HasSelectedProfile)
                     profiles.AddProfileCommand.Execute(null);
@@ -80,6 +83,9 @@ public sealed class ProfilesSmallWindowTests(UiSession ui)
             {
                 window.Close();
                 failures.RecordSuccess();
+                profiles.BrowserAccessibilityStatusMessage = statusMessage;
+                profiles.CanEnableBrowserAccessibility = canEnable;
+                profiles.CanRevertBrowserAccessibility = canRevert;
                 Environment.SetEnvironmentVariable("XDG_CURRENT_DESKTOP", desktop);
                 Loc.Instance.CurrentLanguage = "en";
             }
