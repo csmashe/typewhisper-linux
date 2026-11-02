@@ -664,8 +664,66 @@ public sealed partial class BrowserAccessibilitySetupHelper
     /// <returns>Whether the last force_disabled entry is -1, or null when there is none.</returns>
     private static bool? LastForceDisabledIsNegOne(string content)
     {
-        var last = ForceDisabledStatementRegex().Matches(content).LastOrDefault();
+        var last = ForceDisabledStatementRegex().Matches(BlankPrefComments(content)).LastOrDefault();
         return last is null ? null : last.Groups["value"].Value == "-1";
+    }
+
+    /// <summary>
+    ///     Replaces Firefox pref-file comments (<c>//</c>, <c>#</c>, <c>/* */</c>) with spaces,
+    ///     keeping newlines and quoted strings, so commented-out statements never match.
+    /// </summary>
+    private static string BlankPrefComments(string content)
+    {
+        var sb = new StringBuilder(content);
+        var i = 0;
+        while (i < sb.Length)
+        {
+            var c = sb[i];
+            if (c is '"' or '\'')
+            {
+                // Skip the string, honoring backslash escapes; stop at a newline if unterminated.
+                for (i++; i < sb.Length && sb[i] != c && sb[i] != '\n'; i++)
+                {
+                    if (sb[i] == '\\')
+                    {
+                        i++;
+                    }
+                }
+
+                i++;
+                continue;
+            }
+
+            int end;
+            if (c == '#' || (c == '/' && i + 1 < sb.Length && sb[i + 1] == '/'))
+            {
+                end = i;
+                while (end < sb.Length && sb[end] != '\n')
+                {
+                    end++;
+                }
+            }
+            else if (c == '/' && i + 1 < sb.Length && sb[i + 1] == '*')
+            {
+                var close = content.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                end = close < 0 ? sb.Length : close + 2;
+            }
+            else
+            {
+                i++;
+                continue;
+            }
+
+            for (; i < end; i++)
+            {
+                if (sb[i] is not ('\n' or '\r'))
+                {
+                    sb[i] = ' ';
+                }
+            }
+        }
+
+        return sb.ToString();
     }
 
     private static IEnumerable<string> EnumerateFirefoxProfileDirs()
@@ -1482,9 +1540,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
     }
 
     // Every live accessibility.force_disabled statement, including ones sharing a line with
-    // other statements, so the last match is the value Firefox applies. The lookbehind skips
-    // statements after a // comment (quoted strings may contain //). Either quote style.
-    [GeneratedRegex("""(?<=^(?:[^\r\n/"']|/(?!/)|"[^"\r\n]*"|'[^'\r\n]*')*)user_pref\s*\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*(?<value>[^\r\n;)]*?)\s*\)\s*;""", RegexOptions.Multiline)]
+    // other statements, so the last match is the value Firefox applies. Run on BlankPrefComments
+    // output; the lookbehind skips text inside quoted strings. Either quote style.
+    [GeneratedRegex("""(?<=^(?:[^\r\n"']|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*')*)user_pref\s*\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*(?<value>[^\r\n;)]*?)\s*\)\s*;""", RegexOptions.Multiline)]
     private static partial Regex ForceDisabledStatementRegex();
 
     // Any live accessibility.force_disabled line, captured verbatim (minus its

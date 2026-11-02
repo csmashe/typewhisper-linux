@@ -364,6 +364,30 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         "user_pref(\"accessibility.force_disabled\", -1);\n// user_pref(\"accessibility.force_disabled\", 1);\n",
         true
     )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n/* user_pref(\"accessibility.force_disabled\", 1); */\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n/*\nuser_pref(\"accessibility.force_disabled\", 1);\n*/\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n# user_pref(\"accessibility.force_disabled\", 1);\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1); /* note */ user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"x\", \"/* # // \\\" \"); user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", 1);\nuser_pref(\"x\", \"user_pref('accessibility.force_disabled', -1);\");\n",
+        false
+    )]
     [InlineData("user_pref(\"browser.startup.page\", 3);\n", true)]
     public void Status_lets_user_js_override_prefs_js(string userJs, bool expectedEnabled)
     {
