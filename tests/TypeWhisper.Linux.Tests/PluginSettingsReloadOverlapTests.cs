@@ -61,11 +61,11 @@ public sealed class PluginSettingsReloadOverlapTests : IDisposable
         await bothLoadsReading.WaitAsync(s_hangGuard);
         plugin.ReleaseReads();
         await validate.WaitAsync(s_hangGuard);
-        // The ambient load is fire-and-forget; let its last append land before counting.
-        await plugin.WaitForIdleAsync().WaitAsync(s_hangGuard);
-        await Task.Delay(250);
 
         var current = Row(vm, plugin.PluginId);
+        // The ambient load the rebuild started is fire-and-forget; await it before counting.
+        await current.ObservedSettingsLoad.WaitAsync(s_hangGuard);
+
         Assert.NotSame(row, current);
         Assert.True(current.IsExpanded);
         Assert.Equal(["api-key", "stream"], current.SettingFields.Select(field => field.Key));
@@ -85,10 +85,9 @@ public sealed class PluginSettingsReloadOverlapTests : IDisposable
         private readonly Lock _gate = new();
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _heldReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private TaskCompletionSource _idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _firstHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _heldReads;
         private int _heldTarget;
-        private int _activeReads;
 
         public string PluginId => "com.test.notifying";
         public string PluginName => "Notifying";
@@ -107,15 +106,13 @@ public sealed class PluginSettingsReloadOverlapTests : IDisposable
             Task release;
             lock (_gate)
             {
-                _activeReads++;
-                _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 if (!HoldReads)
                 {
-                    EndRead();
                     return key == "stream" ? "true" : "sk-saved";
                 }
 
                 _heldReads++;
+                _firstHeld.TrySetResult();
                 if (_heldReads >= _heldTarget)
                 {
                     _heldReached.TrySetResult();
@@ -125,23 +122,25 @@ public sealed class PluginSettingsReloadOverlapTests : IDisposable
             }
 
             await release.WaitAsync(ct);
-            lock (_gate)
-            {
-                EndRead();
-            }
-
             return key == "stream" ? "true" : "sk-saved";
         }
 
         public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+        public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
         {
             var handler = (EventHandler?)typeof(PluginManager)
                 .GetField(nameof(PluginManager.PluginStateChanged), BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(Manager!);
             handler?.Invoke(Manager, EventArgs.Empty);
-            return Task.FromResult<PluginSettingsValidationResult?>(new PluginSettingsValidationResult(true, "valid"));
+            // Return only once the ambient load is parked in a value read, so the completion
+            // reload always starts mid-load instead of sometimes beating it to its first await.
+            if (HoldReads)
+            {
+                await _firstHeld.Task.WaitAsync(ct);
+            }
+
+            return new PluginSettingsValidationResult(true, "valid");
         }
 
         public Task WaitForHeldReadsAsync(int count)
@@ -164,23 +163,6 @@ public sealed class PluginSettingsReloadOverlapTests : IDisposable
             {
                 HoldReads = false;
                 _release.TrySetResult();
-            }
-        }
-
-        public Task WaitForIdleAsync()
-        {
-            lock (_gate)
-            {
-                return _activeReads == 0 ? Task.CompletedTask : _idle.Task;
-            }
-        }
-
-        private void EndRead()
-        {
-            _activeReads--;
-            if (_activeReads == 0)
-            {
-                _idle.TrySetResult();
             }
         }
 

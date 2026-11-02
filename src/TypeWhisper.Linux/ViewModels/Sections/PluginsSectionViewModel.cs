@@ -1221,6 +1221,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     private void BeginObservedSettingsLoad(PluginRow row, SettingsReloadKind reloadKind)
     {
         var loadTask = ObserveSettingsLoadAsync(row, reloadKind);
+        row.ObservedSettingsLoad = loadTask;
         _ = loadTask.ContinueWith(
             completedTask =>
                 Trace.WriteLine(
@@ -1622,6 +1623,9 @@ public partial class PluginRow : ObservableObject
     }
 
     internal int CurrentSettingsLoad { get; private set; }
+
+    /// <summary>The latest fire-and-forget settings load started for this row.</summary>
+    internal Task ObservedSettingsLoad { get; set; } = Task.CompletedTask;
 
     /// <summary>Claims the row for a new settings load; see <see cref="IsCurrentSettingsLoad" />.</summary>
     internal int BeginSettingsLoad() => ++CurrentSettingsLoad;
