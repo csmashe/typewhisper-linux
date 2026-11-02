@@ -1441,6 +1441,40 @@ public sealed class HttpApiUnixSocketTests
         }
     }
 
+    [Fact]
+    public async Task Quiesce_AfterTimedOutSettingsWait_RedrainStillWaitsForQueuedSettings()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        // The queued disable parks in its status notification, with no request in flight.
+        // ReSharper disable AccessToDisposedClosure -- the finally releases the gate and awaits the teardown before the gates leave scope.
+        fixture.Service.StateChanged += () =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+        };
+        // ReSharper restore AccessToDisposedClosure
+        var teardown = fixture.DisableInBackground();
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.False(await fixture.Service.QuiesceAsync(TimeSpan.Zero));
+            Assert.False(await fixture.Service.QuiesceAsync(TimeSpan.FromMilliseconds(100)));
+
+            release.Set();
+            await teardown.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(await fixture.Service.QuiesceAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            release.Set();
+            await teardown.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
     private static Mock<IHistoryService> ParkingHistory(
         ManualResetEventSlim entered,
         ManualResetEventSlim release
