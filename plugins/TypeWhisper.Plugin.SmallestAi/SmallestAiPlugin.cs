@@ -18,6 +18,7 @@ public sealed partial class SmallestAiPlugin
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.smallest.ai";
+    private const string AutomaticLanguage = "auto";
     private const string PulseEndpoint = $"{BaseUrl}/waves/v1/pulse/get_text";
     private const string ApiKeySecretName = "api-key";
     private const string DefaultModelId = "pulse";
@@ -217,6 +218,7 @@ public sealed partial class SmallestAiPlugin
             ?? GetString(root, "text")?.Trim()
             ?? "";
         var language = GetString(root, "language")
+            ?? GetString(root, "detected_language")
             ?? GetFirstString(root, "languages")
             ?? fallbackLanguage;
 
@@ -286,9 +288,9 @@ public sealed partial class SmallestAiPlugin
     private static Uri BuildPulseUri(string? language, bool includeWordTimestamps)
     {
         var query = new List<string>();
-        var normalizedLanguage = NormalizeLanguage(language);
-        if (normalizedLanguage is not null)
-            query.Add($"language={Uri.EscapeDataString(normalizedLanguage)}");
+        // An omitted language means the provider's "multi" aggregator, which many regions reject.
+        var normalizedLanguage = NormalizeLanguage(language) ?? AutomaticLanguage;
+        query.Add($"language={Uri.EscapeDataString(normalizedLanguage)}");
 
         if (includeWordTimestamps)
             query.Add("word_timestamps=true");
