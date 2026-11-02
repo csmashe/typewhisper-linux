@@ -91,6 +91,50 @@ public sealed class DictationOrchestratorStreamedCommandTests
         });
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task SpokenCommand_WhenTypingChainDropsNonAscii_InsertsWholeResultInsteadOfStreaming()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            // ydotool drops non-ASCII yet exits 0, so typing a stream through it would lose
+            // characters and still report success.
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("codex", "codex — integration")
+            );
+            fixture.InsertionPlatform.CanTypeNonAscii = false;
+            fixture.Settings.Save(fixture.Settings.Current with { CommandModeEnabled = true });
+
+            const string unicodeFirst = "Caf\u00e9 au lait \u2014 \u201cquoted\u201d, ";
+            fixture.Plugin.EnqueueText(Command);
+            fixture.Llm.EnqueueStream(unicodeFirst, SecondDelta, ThirdDelta);
+
+            var unicodeResult = await RunCommandAsync(fixture);
+
+            const string unicodeText = unicodeFirst + SecondDelta + ThirdDelta;
+            Assert.Equal("ready", unicodeResult.Status);
+            Assert.Equal(unicodeText, unicodeResult.Text);
+            Assert.Empty(fixture.InsertionPlatform.Typed);
+            Assert.Contains(unicodeText, fixture.InsertionPlatform.ClipboardWrites);
+            Assert.Equal(1, fixture.InsertionPlatform.PasteAttemptCount);
+            Assert.Equal(0, fixture.Llm.StreamCalls);
+            Assert.Equal(1, fixture.Llm.BatchCalls);
+
+            // An ASCII result still reaches the app by typing, now in one piece.
+            fixture.Plugin.EnqueueText(Command);
+            fixture.Llm.EnqueueStream(FirstDelta, SecondDelta, ThirdDelta);
+
+            var asciiResult = await RunCommandAsync(fixture);
+
+            Assert.Equal("ready", asciiResult.Status);
+            Assert.Equal([FirstDelta + SecondDelta + ThirdDelta], fixture.InsertionPlatform.Typed);
+            Assert.Equal(1, fixture.InsertionPlatform.PasteAttemptCount);
+            Assert.Equal(0, fixture.Llm.StreamCalls);
+            Assert.Equal(2, fixture.Llm.BatchCalls);
+            Assert.Equal("idle", fixture.Orchestrator.CurrentStateLabel);
+        });
+    }
+
     private static async Task<DictationSessionResult> RunCommandAsync(
         OrchestratorCompositionFixture fixture
     )

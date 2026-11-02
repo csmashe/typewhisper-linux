@@ -21,6 +21,9 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
     public bool IsPasteAvailable => true;
     public bool IsKdePlasma => false;
     public bool PrefersDirectTypingForUnknownTarget => true;
+    // Integration tests set it to model a ydotool chain; the UiTests link never does.
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public bool CanTypeNonAscii { get; set; } = true;
 
     public InsertionFailureReason LastFailureReason
     {

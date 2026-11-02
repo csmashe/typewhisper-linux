@@ -582,6 +582,9 @@ public sealed class TextInsertionService
         return FocusTargetWindowAsync(targetWindowId);
     }
 
+    /// <summary>True when every typing backend the platform may use can type non-ASCII text.</summary>
+    public bool CanTypeNonAscii => _platform.CanTypeNonAscii;
+
     /// <summary>
     ///     Whether the Auto insertion policy would deliver to this target by direct typing based on
     ///     the app alone (terminals, supported browsers, Codex windows) — independent of text content.
