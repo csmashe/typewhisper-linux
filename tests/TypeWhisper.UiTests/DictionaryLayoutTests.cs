@@ -1,7 +1,11 @@
 using Avalonia.Controls;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
+using Avalonia.Automation.Provider;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
+using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels;
@@ -39,10 +43,7 @@ public sealed class DictionaryLayoutTests(UiSession ui)
                 {
                     control.BringIntoView();
                     MainWindowRenderTests.Settle();
-                    var bounds = control.GetTransformedBounds()!.Value;
-                    var visible = bounds.Bounds.TransformToAABB(bounds.Transform).Intersect(bounds.Clip);
-                    Assert.True(visible.Height >= control.Bounds.Height - 0.5,
-                        $"{control.GetType().Name} is not reachable at {width}x{height}: visible {visible}, clip {bounds.Clip}");
+                    AssertFullyVisible(control, width, height);
                 }
             }
             finally
@@ -50,5 +51,58 @@ public sealed class DictionaryLayoutTests(UiSession ui)
                 window.Close();
             }
         }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task EntryAliasesButtonScrollsPanelIntoView()
+    {
+        await ui.Session.Dispatch(() =>
+        {
+            var term = new DictionaryEntry { Id = "alias-scroll-term", Original = "Kubernetes", EntryType = DictionaryEntryType.Term };
+            var dictionary = ui.Services.GetRequiredService<IDictionaryService>();
+            dictionary.AddEntry(term);
+            var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
+            var window = new MainWindow(viewModel) { Width = 960, Height = 640 };
+            DictionarySectionViewModel? section = null;
+            window.Show();
+            try
+            {
+                var nav = viewModel.NavItems.First(item => item.Content is DictionarySectionViewModel);
+                section = (DictionarySectionViewModel)nav.Content!;
+                viewModel.SelectedItem = nav;
+                MainWindowRenderTests.Settle();
+
+                var controls = window.GetVisualDescendants().OfType<Control>().ToList();
+                var add = controls.OfType<Button>()
+                    .Single(button => Equals(button.Content, Loc.Instance["Dictionary.Add"]));
+                add.BringIntoView();
+                MainWindowRenderTests.Settle();
+
+                var panel = controls.OfType<Border>().Single(border => border.Name == "AliasPanel");
+                var aliases = controls.OfType<Button>()
+                    .First(button => button.IsEffectivelyVisible && Equals(button.Content, Loc.Instance["Dictionary.AliasesForEntry"]));
+                ((IInvokeProvider)ControlAutomationPeer.CreatePeerForElement(aliases)).Invoke();
+                MainWindowRenderTests.Settle();
+
+                Assert.True(panel.IsVisible);
+                // The panel can be taller than the viewport, so its title stands in for "scrolled to it".
+                AssertFullyVisible(((StackPanel)panel.Child!).Children[0], 960, 640);
+            }
+            finally
+            {
+                // The section is shared, so an open panel would leak its English status into later language checks.
+                section?.AliasSuggestions.CloseCommand.Execute(null);
+                window.Close();
+                dictionary.DeleteEntry(term.Id);
+            }
+        }, CancellationToken.None);
+    }
+
+    private static void AssertFullyVisible(Control control, double width, double height)
+    {
+        var bounds = control.GetTransformedBounds()!.Value;
+        var visible = bounds.Bounds.TransformToAABB(bounds.Transform).Intersect(bounds.Clip);
+        Assert.True(visible.Height >= control.Bounds.Height - 0.5,
+            $"{control.GetType().Name} is not reachable at {width}x{height}: visible {visible}, clip {bounds.Clip}");
     }
 }
