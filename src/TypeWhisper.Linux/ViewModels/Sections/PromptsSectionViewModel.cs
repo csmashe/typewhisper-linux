@@ -70,6 +70,7 @@ public partial class PromptsSectionViewModel : ObservableObject
     // transient null selection cannot clear a saved one.
     private bool _isRefreshingProviders;
     private bool _isSelectingActionPlugin;
+    private bool _isSelectingProvider;
 
     // Placeholder added for the editor's current unresolvable override, so it can be dropped again
     // when the editor moves on.
@@ -231,7 +232,15 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            EditProviderOverride = value?.Value;
+            _isSelectingProvider = true;
+            try
+            {
+                EditProviderOverride = value?.Value;
+            }
+            finally
+            {
+                _isSelectingProvider = false;
+            }
         }
     }
 
@@ -432,8 +441,18 @@ public partial class PromptsSectionViewModel : ObservableObject
         if (_synthesizedProviderOption is not null
             && !string.Equals(_synthesizedProviderOption.Value, value, StringComparison.Ordinal))
         {
-            AvailableProviders.Remove(_synthesizedProviderOption);
-            _synthesizedProviderOption = null;
+            var obsoleteOption = _synthesizedProviderOption;
+            if (_isSelectingProvider)
+            {
+                // Avalonia is still committing SelectedItem; removing a row now invalidates its
+                // selection indices.
+                Dispatcher.UIThread.Post(() => RemoveObsoleteProviderOption(obsoleteOption),
+                    DispatcherPriority.Background);
+            }
+            else
+            {
+                RemoveObsoleteProviderOption(obsoleteOption);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(value)
@@ -445,6 +464,17 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(SelectedEditProvider));
+    }
+
+    private void RemoveObsoleteProviderOption(ProviderOption option)
+    {
+        // A queued removal must not affect a reselected option or a rebuilt option list.
+        if (!ReferenceEquals(_synthesizedProviderOption, option)
+            || string.Equals(option.Value, EditProviderOverride, StringComparison.Ordinal))
+            return;
+
+        AvailableProviders.Remove(option);
+        _synthesizedProviderOption = null;
     }
 
     [RelayCommand]

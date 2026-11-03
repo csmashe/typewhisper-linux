@@ -98,6 +98,28 @@ public sealed class LiveTextWindowTests
     }
 
     [Fact]
+    public void NativeDragStart_CoversOnlyTheHandOffToTheWindowManager()
+    {
+        var guard = new NativeDragStartGuard();
+        var startingDuringHandOff = false;
+
+        guard.Run(() => startingDuringHandOff = guard.IsStarting);
+
+        Assert.True(startingDuringHandOff);
+        Assert.False(guard.IsStarting);
+    }
+
+    [Fact]
+    public void NativeDragStart_ClearsTheFlagWhenTheHandOffThrows()
+    {
+        var guard = new NativeDragStartGuard();
+
+        Assert.Throws<InvalidOperationException>(() => guard.Run(() => throw new InvalidOperationException()));
+
+        Assert.False(guard.IsStarting);
+    }
+
+    [Fact]
     public void Window_ShowsLiveTextOnlyWhenFloating()
     {
         var settings = new FakeSettingsService(AppSettings.Default);

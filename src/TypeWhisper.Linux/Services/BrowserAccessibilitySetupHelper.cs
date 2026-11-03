@@ -428,7 +428,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 || envRemoval.Changed;
             await SweepLegacyEnvFileAsync(ct).ConfigureAwait(false);
             var removedLaunchers = await RemoveOwnedLaunchers(ct).ConfigureAwait(false);
-            var cleanedProfiles = RemoveOwnedFirefoxAccessibilityEntries();
+            var (cleanedProfiles, skippedProfiles) = RemoveOwnedFirefoxAccessibilityEntries();
 
             var summary = new StringBuilder("Browser accessibility integration removed.");
             if (!removedEnv)
@@ -444,15 +444,21 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
-            if (cleanedProfiles.Count <= 0)
+            if (cleanedProfiles.Count > 0)
             {
-                return new SetupResult(true, summary.ToString());
+                summary.Append(' ');
+                summary.Append("Cleaned Firefox profile(s): ");
+                summary.Append(string.Join(", ", cleanedProfiles));
+                summary.Append('.');
             }
 
-            summary.Append(' ');
-            summary.Append("Cleaned Firefox profile(s): ");
-            summary.Append(string.Join(", ", cleanedProfiles));
-            summary.Append('.');
+            if (skippedProfiles.Count > 0)
+            {
+                summary.Append(' ');
+                summary.Append("Could not update user.js in Firefox profile(s): ");
+                summary.Append(string.Join(", ", skippedProfiles));
+                summary.Append('.');
+            }
 
             return new SetupResult(true, summary.ToString());
         }
@@ -934,9 +940,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
         );
     }
 
-    private static List<string> RemoveOwnedFirefoxAccessibilityEntries()
+    private static (List<string> Cleaned, List<string> Skipped)
+        RemoveOwnedFirefoxAccessibilityEntries()
     {
         var cleaned = new List<string>();
+        var skipped = new List<string>();
         foreach (var profileDir in EnumerateFirefoxProfileDirs())
         {
             var userJsPath = Path.Join(profileDir, "user.js");
@@ -949,11 +957,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
             }
             catch
             {
-                /* best effort — summary reports what we managed */
+                // Best effort per profile; the summary names the ones left unreverted.
+                skipped.Add(Path.GetFileName(profileDir));
             }
         }
 
-        return cleaned;
+        return (cleaned, skipped);
     }
 
     private static ManagedFileOperationResult WriteEnvFile()

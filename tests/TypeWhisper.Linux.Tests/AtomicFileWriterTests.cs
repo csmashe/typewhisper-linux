@@ -112,6 +112,34 @@ public sealed class AtomicFileWriterTests
         }
     }
 
+    [Theory]
+    [InlineData("utf-16")]
+    [InlineData("utf-16BE")]
+    [InlineData("utf-32")]
+    [InlineData("utf-32BE")]
+    [InlineData("latin1")]
+    public async Task CaptureAsync_NonUtf8File_RefusesAndLeavesBytesUntouched(string encodingName)
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Join(dir, "user.js");
+            var encoding = System.Text.Encoding.GetEncoding(encodingName);
+            byte[] original = [.. encoding.Preamble, .. encoding.GetBytes("// café\n")];
+            await File.WriteAllBytesAsync(path, original);
+
+            await Assert.ThrowsAsync<IOException>(() =>
+                AtomicFileWriter.CaptureAsync(path, CancellationToken.None)
+            );
+
+            Assert.Equal(original, await File.ReadAllBytesAsync(path));
+        }
+        finally
+        {
+            TestPaths.DeleteDirectory(dir);
+        }
+    }
+
     [Fact]
     public async Task WriteIfUnchangedAsync_EditAfterCapture_ReportsConflictAndPreservesEdit()
     {
