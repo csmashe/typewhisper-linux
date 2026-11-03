@@ -1306,7 +1306,39 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Commit_WithGlobalExtents_DoesNotQueryWindowFrame()
+    public async Task Commit_WithUnusableExtents_StillCarriesFrameOfWindowFocusedAtArm()
+    {
+        // Off-screen extents only look unusable to the toast (it knows the screens), so the frame
+        // must still be fetched for it to fall back on.
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = s_field,
+            ExtentsToReturn = new AtSpiScreenRect(9000, 9000, 300, 40),
+        };
+        var frames = new FakeWindowFrameLocator
+        {
+            FocusedHandle = "42",
+            Frames = { ["42"] = Frame(1510, 39, 820, 547) },
+        };
+        using var service = CreateService(client, enabled: true, frames);
+
+        LearnedCorrectionsBatch? raised = null;
+        service.CorrectionsLearned += batch => raised = batch;
+
+        client.TextToReturn = "kubernets";
+        await service.ArmAsync("kubernets");
+        client.TextToReturn = "Kubernetes";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        Assert.NotNull(raised);
+        Assert.Equal(new AtSpiScreenRect(9000, 9000, 300, 40), raised.SourceExtents);
+        Assert.Equal(Frame(1510, 39, 820, 547), raised.TargetWindowFrame);
+    }
+
+    [Fact]
+    public async Task Commit_WithGlobalExtents_KeepsThemAlongsideTheWindowFrame()
     {
         var client = new FakeAtSpiEventClient
         {
@@ -1332,8 +1364,7 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         Assert.NotNull(raised);
         Assert.Equal(new AtSpiScreenRect(100, 200, 300, 40), raised.SourceExtents);
-        Assert.Null(raised.TargetWindowFrame);
-        Assert.Equal(0, frames.FrameQueries);
+        Assert.Equal(Frame(1510, 39, 820, 547), raised.TargetWindowFrame);
     }
 
     [Fact]
@@ -1472,7 +1503,6 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     {
         public string? FocusedHandle { get; set; }
         public Dictionary<string, CompositorWindowFrame> Frames { get; } = new(StringComparer.Ordinal);
-        public int FrameQueries { get; private set; }
 
         public Task<string?> TryGetFocusedWindowHandleAsync(CancellationToken ct)
         {
@@ -1481,7 +1511,6 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
 
         public Task<CompositorWindowFrame?> TryGetWindowFrameAsync(string handle, CancellationToken ct)
         {
-            FrameQueries++;
             return Task.FromResult<CompositorWindowFrame?>(Frames.TryGetValue(handle, out var frame) ? frame : null);
         }
     }

@@ -62,6 +62,24 @@ public static class LearnedToastPlacement
     }
 
     /// <summary>
+    ///     Picks the box to anchor the toast to: the element's extents when plausible, else its
+    ///     window's frame mapped onto the screens so the toast still lands on that monitor.
+    /// </summary>
+    public static AtSpiScreenRect? ChooseAnchor(
+        AtSpiScreenRect? extents,
+        CompositorWindowFrame? windowFrame,
+        IReadOnlyList<PixelRect> screens
+    )
+    {
+        if (extents is { } rect && IsPlausible(rect, screens))
+        {
+            return rect;
+        }
+
+        return windowFrame is { } window ? MapToScreens(window, screens) : extents;
+    }
+
+    /// <summary>
     ///     Maps a compositor-logical window frame onto the screens' coordinate space by stretching
     ///     the logical desktop over the screens' union. Xwayland applies one scale to the whole
     ///     desktop (2× under fractional scaling, 1× otherwise), so a linear map is exact.

@@ -153,4 +153,26 @@ public sealed class LearnedToastPlacementTests
 
         Assert.Null(LearnedToastPlacement.MapToScreens(window, []));
     }
+
+    [Fact]
+    public void Anchor_PrefersPlausibleExtentsOverTheWindowFrame()
+    {
+        var extents = new AtSpiScreenRect(100, 200, 300, 40);
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(2000, 150, 720, 360), new AtSpiScreenRect(0, 0, 3840, 1080));
+
+        Assert.Equal(extents, LearnedToastPlacement.ChooseAnchor(extents, window, [s_primary, new PixelRect(1920, 0, 1920, 1080)]));
+    }
+
+    [Theory]
+    [InlineData(0, 0, 0, 0)]
+    [InlineData(5000, 5000, 300, 40)]
+    public void Anchor_FallsBackToTheWindowFrameWhenExtentsAreUnusable(int x, int y, int width, int height)
+    {
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(2000, 150, 720, 360), new AtSpiScreenRect(0, 0, 3840, 1080));
+
+        Assert.Equal(
+            new AtSpiScreenRect(2000, 150, 720, 360),
+            LearnedToastPlacement.ChooseAnchor(new AtSpiScreenRect(x, y, width, height), window, [s_primary, new PixelRect(1920, 0, 1920, 1080)])
+        );
+    }
 }

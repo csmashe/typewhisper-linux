@@ -149,9 +149,7 @@ public partial class LearnedCorrectionToastWindow : Window
             (int)Math.Ceiling(height * scaling)
         );
         var screens = CollectScreenBounds();
-        // Without the element's own box, anchor to its window so the toast lands on that monitor.
-        var anchor = _pendingExtents
-            ?? (_pendingWindowFrame is { } window ? LearnedToastPlacement.MapToScreens(window, screens) : null);
+        var anchor = LearnedToastPlacement.ChooseAnchor(_pendingExtents, _pendingWindowFrame, screens);
         Position = LearnedToastPlacement.Compute(anchor, screens, toastSize);
     }
 

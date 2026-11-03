@@ -11,7 +11,8 @@ namespace TypeWhisper.Linux.Services;
 ///     the element they came from (when it could be read). <see cref="SourceExtents" /> lets a
 ///     feedback surface place its toast beside the corrected element instead of at a fixed spot;
 ///     it is <c>null</c> when the element doesn't expose global extents (native-Wayland apps).
-///     <see cref="TargetWindowFrame" /> is then the corrected window's frame, when it could be located.
+///     <see cref="TargetWindowFrame" /> is the corrected window's frame, when it could be located, for
+///     when the extents are missing or unusable.
 /// </summary>
 public sealed record LearnedCorrectionsBatch(
     IReadOnlyList<LearnedDictionaryCorrection> Corrections,
@@ -1029,10 +1030,11 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             // place its toast beside it. A null result (no Component interface, native-Wayland junk,
             // read failure) just falls back to a fixed spot downstream — never blocks the event.
             var extents = await _client.TryGetScreenExtentsAsync(state.Element).ConfigureAwait(false);
+            // Also fetch the window frame: only the toast knows the screens, so it decides whether
+            // the extents are usable or the frame is needed (LearnedToastPlacement.ChooseAnchor).
             CompositorWindowFrame? windowFrame = null;
             if (
-                extents is null
-                && _windowFrames is not null
+                _windowFrames is not null
                 && state.TargetWindowHandle is { } handleTask
                 && await handleTask.ConfigureAwait(false) is { } window
             )
