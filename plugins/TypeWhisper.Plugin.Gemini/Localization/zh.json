@@ -1,0 +1,23 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Gemini转录和LLM请求所必需。",
+  "Settings.StreamResponses": "流式响应",
+  "Settings.StreamResponsesDescription": "在生成时逐个token显示提示词操作的输出，而不是等待完整回复。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyValid": "API密钥有效。",
+  "Settings.ApiKeyInvalid": "API密钥无效。",
+  "Settings.ApiKeyNotConfigured": "未配置API密钥",
+  "Manifest.Name": "Google Gemini",
+  "Manifest.Description": "Google Gemini转录、实时听写以及Gemini/Gemma LLM提供商，支持动态发现模型",
+  "Settings.ApiKeyValidFetched": "API密钥有效！已获取模型：{0}个聊天模型，{1}个转录模型。",
+  "Settings.LlmModelDescriptionFetched": "已从API加载兼容的Gemini和Gemma模型：{0}。",
+  "Settings.LlmModelDescriptionDefault": "正在使用内置的Gemini别名。验证API密钥以加载其可用的Gemini和Gemma聊天模型。",
+  "Settings.LlmModel": "LLM模型",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.TranscriptionModelsFetched": "已从API加载转录模型：{0}。",
+  "Settings.TranscriptionModelFallback": "正在使用内置的Gemini转录模型。验证API密钥以加载其可用的转录模型。",
+  "Settings.TranscriptionMode": "转录风格",
+  "Settings.TranscriptionModeHint": "“智能”会移除填充词、应用口述的纠正并格式化听写文本。“逐字”会按原话保留词语。",
+  "Settings.ModeSmart": "智能",
+  "Settings.ModeVerbatim": "逐字"
+}

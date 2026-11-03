@@ -1,107 +1,59 @@
-using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
+using TypeWhisper.PluginSDK.Helpers;
+using System.Globalization;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Gladia;
 
-/// <summary>
-///     Real-time Gladia transcription over their v2 live API. Two-step handshake:
-///     <c>POST /v2/live</c> (with the <c>x-gladia-key</c> header) returns a
-///     tokenized WebSocket URL, which we then open. Gladia emits one
-///     <c>transcript</c> message per utterance with a <c>data.is_final</c> flag, so
-///     this session follows the Deepgram per-message model — finals land in the
-///     host coordinator live as utterances complete.
-/// </summary>
-internal sealed class GladiaStreamingSession : IStreamingSession
+internal sealed class GladiaStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
-    private const string InitUrl = "https://api.gladia.io/v2/live";
+    internal const string InitUrl = "https://api.gladia.io/v2/live";
 
-    private readonly ClientWebSocket _ws = new();
-    private readonly CancellationTokenSource _receiveCts = new();
-    private readonly TaskCompletionSource _finishedTcs =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Task? _receiveTask;
+    private readonly WebSocketSessionPump _pump;
 
-    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+    private GladiaStreamingSession(WebSocketSessionPump pump)
+    {
+        _pump = pump;
+    }
+
+    public Exception? Fault => _pump.Fault;
+
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived
+    {
+        add => _pump.TranscriptReceived += value;
+        remove => _pump.TranscriptReceived -= value;
+    }
 
     public static async Task<GladiaStreamingSession> ConnectAsync(
         HttpClient httpClient,
         string apiKey,
         string? language,
+        IReadOnlyList<string> vocabulary,
         CancellationToken ct
     )
     {
-        var session = new GladiaStreamingSession();
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Post, InitUrl);
-            request.Headers.Add("x-gladia-key", apiKey);
-            request.Content = new StringContent(
-                BuildInitRequest(language, 16000),
-                Encoding.UTF8,
-                "application/json"
-            );
-
-            using var response = await httpClient.SendAsync(request, ct);
-            var json = await response.Content.ReadAsStringAsync(ct);
-            if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException(
-                    $"Gladia live init failed {(int)response.StatusCode}: {json}"
-                );
-
-            var url = ParseSessionUrl(json)
-                ?? throw new InvalidOperationException("Gladia live init response missing 'url'.");
-
-            await session._ws.ConnectAsync(new Uri(url), ct);
-            session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
-            return session;
-        }
-        catch
-        {
-            // Init/connect failed after we allocated the session — dispose so the
-            // ClientWebSocket and CancellationTokenSource don't leak on the error path.
-            await session.DisposeAsync();
-            throw;
-        }
+        var pump = await WebSocketSessionPump.ConnectAsync(
+            new GladiaWebSocketAdapter(httpClient, apiKey, language, vocabulary),
+            ct
+        );
+        return new GladiaStreamingSession(pump);
     }
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
-    {
-        if (_ws.State != WebSocketState.Open || pcm16Audio.Length == 0)
-            return;
-        // Gladia detects raw bytes vs base64; send raw PCM16 as binary frames.
-        await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
-    }
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
+        _pump.SendAudioAsync(pcm16Audio, ct);
 
-    public async Task FinalizeAsync(CancellationToken ct)
-    {
-        if (_ws.State == WebSocketState.Open)
-        {
-            try
-            {
-                var stop = Encoding.UTF8.GetBytes("""{"type":"stop_recording"}""");
-                await _ws.SendAsync(stop, WebSocketMessageType.Text, true, ct);
-            }
-            catch (Exception ex) when (ex is WebSocketException or OperationCanceledException)
-            {
-                // Couldn't signal stop, but still await the post-processing flush below.
-            }
-        }
+    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
 
-        // Gladia post-processes after stop_recording and can emit trailing final
-        // utterances before closing (code 1000). Wait for the receive loop to observe
-        // that close so a late final lands in the coordinator's final-segment buffer
-        // before it snapshots, instead of committing a truncated transcript. Bounded
-        // by the caller's ct/timeout; a cancel/timeout is the grace-window backstop.
-        try { await _finishedTcs.Task.WaitAsync(ct); }
-        catch (OperationCanceledException) { /* coordinator's grace window backstops */ }
-    }
+    public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
-    internal static string BuildInitRequest(string? language, int sampleRate)
+    internal static string BuildInitRequest(
+        string? language,
+        IReadOnlyList<string> vocabulary,
+        int sampleRate
+    )
     {
         var body = new Dictionary<string, object>
         {
@@ -113,17 +65,25 @@ internal sealed class GladiaStreamingSession : IStreamingSession
             {
                 ["receive_partial_transcripts"] = true,
                 ["receive_final_transcripts"] = true,
+                // end_session is a lifecycle event, which Gladia sends only when asked.
+                ["receive_lifecycle_events"] = true,
+                ["receive_acknowledgments"] = true,
+                ["receive_errors"] = true,
             },
         };
 
-        if (!string.IsNullOrWhiteSpace(language)
-            && !string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(language))
         {
             body["language_config"] = new Dictionary<string, object>
             {
                 ["languages"] = new[] { language },
             };
         }
+
+        var realtimeProcessing = new Dictionary<string, object>();
+        GladiaPlugin.AddCustomVocabulary(realtimeProcessing, vocabulary);
+        if (realtimeProcessing.Count > 0)
+            body["realtime_processing"] = realtimeProcessing;
 
         return JsonSerializer.Serialize(body);
     }
@@ -132,11 +92,14 @@ internal sealed class GladiaStreamingSession : IStreamingSession
     {
         try
         {
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.TryGetProperty("url", out var urlEl)
-                && urlEl.ValueKind == JsonValueKind.String
-                ? urlEl.GetString()
-                : null;
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty(
+                    "url",
+                    out var urlElement
+                )
+                && urlElement.ValueKind == JsonValueKind.String
+                    ? urlElement.GetString()
+                    : null;
         }
         catch (JsonException)
         {
@@ -144,148 +107,330 @@ internal sealed class GladiaStreamingSession : IStreamingSession
         }
     }
 
-    internal readonly record struct GladiaMessage(
+    internal sealed record GladiaError(int? StatusCode, string? Exception, string? Message);
+
+    internal sealed record GladiaMessage(
         string MessageType,
-        string? Text,
-        bool IsFinal
+        string? UtteranceId = null,
+        string? Text = null,
+        bool IsFinal = false,
+        string? Language = null,
+        GladiaError? Error = null,
+        double? Start = null,
+        bool Acknowledged = false
     );
 
-    /// <summary>Reflection-free, never-throws parse of one Gladia frame.</summary>
     internal static GladiaMessage ParseMessage(string json)
     {
-        try
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new FormatException("Gladia message is not an object.");
+
+        var type = GetString(root, "type") ?? "";
+
+        // Acknowledgments and events report failure through "acknowledged" and "error".
+        var rejected = root.TryGetProperty("acknowledged", out var acknowledged)
+            && acknowledged.ValueKind == JsonValueKind.False;
+        if (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null)
+            return new GladiaMessage(type, Error: ParseError(error));
+        if (rejected || type == "error")
+            return new GladiaMessage(type, Error: ParseError(root));
+
+        if (type != "transcript")
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            var type = root.TryGetProperty("type", out var typeEl)
-                && typeEl.ValueKind == JsonValueKind.String
-                ? typeEl.GetString() ?? ""
-                : "";
-
-            if (type != "transcript"
-                || !root.TryGetProperty("data", out var data)
-                || data.ValueKind != JsonValueKind.Object)
-            {
-                return new GladiaMessage(type, null, false);
-            }
-
-            var isFinal = data.TryGetProperty("is_final", out var finalEl)
-                && finalEl.ValueKind == JsonValueKind.True;
-
-            string? text = null;
-            if (data.TryGetProperty("utterance", out var utterance)
-                && utterance.ValueKind == JsonValueKind.Object
-                && utterance.TryGetProperty("text", out var textEl)
-                && textEl.ValueKind == JsonValueKind.String)
-            {
-                text = textEl.GetString();
-            }
-
-            return new GladiaMessage(type, text, isFinal);
-        }
-        catch (JsonException)
-        {
-            return new GladiaMessage("", null, false);
-        }
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[8192];
-        using var messageBuffer = new MemoryStream();
-
-        try
-        {
-            while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
-            {
-                messageBuffer.SetLength(0);
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                        return;
-                    messageBuffer.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                    continue;
-
-                var json = Encoding.UTF8.GetString(
-                    messageBuffer.GetBuffer(),
-                    0,
-                    (int)messageBuffer.Length
-                );
-
-                var message = ParseMessage(json);
-                if (message.MessageType == "transcript"
-                    && !string.IsNullOrWhiteSpace(message.Text))
-                {
-                    Emit(new StreamingTranscriptEvent(message.Text!, message.IsFinal));
-                }
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (WebSocketException ex)
-        {
-            Debug.WriteLine($"Gladia realtime WebSocket error: {ex.Message}");
-            // A transport drop (not a clean code-1000 close, which the loop handles
-            // above) means the stream is incomplete. Fault so the coordinator falls
-            // back to a complete batch transcription instead of committing whatever
-            // utterances arrived before the drop.
-            _finishedTcs.TrySetException(
-                new InvalidOperationException("Gladia streaming transport error.", ex)
+            return new GladiaMessage(
+                type,
+                Acknowledged: root.TryGetProperty("acknowledged", out var ack)
+                    && ack.ValueKind == JsonValueKind.True
             );
         }
-        finally
+
+        if (
+            !root.TryGetProperty("data", out var data)
+            || data.ValueKind != JsonValueKind.Object
+            || GetString(data, "id") is not { Length: > 0 } id
+            || !data.TryGetProperty("is_final", out var finalElement)
+            || finalElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+            || !data.TryGetProperty("utterance", out var utterance)
+            || utterance.ValueKind != JsonValueKind.Object
+            || GetString(utterance, "text") is not { } text
+        )
         {
-            // Unblock FinalizeAsync once the stream has terminated (close / EOF /
-            // cancel). No-op if a fault was already set above.
-            _finishedTcs.TrySetResult();
+            throw new FormatException("Gladia sent a malformed transcript.");
         }
+
+        return new GladiaMessage(
+            type,
+            id,
+            text,
+            finalElement.ValueKind == JsonValueKind.True,
+            GetString(utterance, "language"),
+            Start: utterance.TryGetProperty("start", out var start)
+                && start.ValueKind == JsonValueKind.Number
+                && start.TryGetDouble(out var seconds)
+                    ? seconds
+                    : null
+        );
     }
 
-    private void Emit(StreamingTranscriptEvent evt)
+    private static GladiaError ParseError(JsonElement error)
     {
+        if (error.ValueKind == JsonValueKind.String)
+            return new GladiaError(null, null, error.GetString());
+        if (error.ValueKind != JsonValueKind.Object)
+            return new GladiaError(null, null, null);
+
+        var status = error.TryGetProperty("status_code", out var code) ? ParseStatusCode(code) : null;
+        return new GladiaError(status, GetString(error, "exception"), GetString(error, "message"));
+    }
+
+    // status_code may be a number or a string.
+    private static int? ParseStatusCode(JsonElement code) =>
+        code.ValueKind switch
+        {
+            JsonValueKind.Number when code.TryGetInt32(out var number) => number,
+            JsonValueKind.String when int.TryParse(
+                code.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed
+            ) => parsed,
+            _ => null,
+        };
+
+    // Built from the documented fields only: the raw payload is never echoed.
+    internal static PluginRequestException CreateRequestException(GladiaError error)
+    {
+        var kind = error.StatusCode switch
+        {
+            401 => PluginRequestFailureKind.Authentication,
+            402 or 403 => PluginRequestFailureKind.Permission,
+            408 => PluginRequestFailureKind.Timeout,
+            413 => PluginRequestFailureKind.RequestTooLarge,
+            429 => PluginRequestFailureKind.RateLimit,
+            >= 500 => PluginRequestFailureKind.ServerError,
+            null => PluginRequestFailureKind.Unknown,
+            _ => PluginRequestFailureKind.InvalidRequest,
+        };
+
+        var description = new StringBuilder("Gladia streaming error: ");
+        if (!string.IsNullOrWhiteSpace(error.Exception))
+            description.Append(error.Exception).Append(": ");
+        description.Append(
+            !string.IsNullOrWhiteSpace(error.Message) ? error.Message
+            : error.StatusCode is { } status ? $"HTTP {status}"
+            : "request rejected"
+        );
+
+        return new PluginRequestException(description.ToString(), kind, error.StatusCode);
+    }
+
+    internal static PluginRequestException CreateIncompleteException(
+        string message = "Gladia returned an invalid or incomplete live response.",
+        Exception? inner = null
+    ) =>
+        new(message, PluginRequestFailureKind.OutputIncomplete, innerException: inner);
+
+    private static string? GetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+}
+
+internal sealed class GladiaWebSocketAdapter(
+    HttpClient httpClient,
+    string apiKey,
+    string? language,
+    IReadOnlyList<string> vocabulary
+) : IWebSocketSessionAdapter
+{
+    // Bounds the per-session bookkeeping; a dictation never comes near either.
+    private const int MaxFinalUtterances = 10_000;
+    private const int MaxPendingUtterances = 100;
+
+    // HandleMessage runs only on the receive loop, so these need no lock.
+    private readonly Dictionary<string, string> _finals = new(StringComparer.Ordinal);
+    // Unconfirmed partials by utterance id.
+    private readonly Dictionary<string, (string Text, double? Start)> _pending = new(StringComparer.Ordinal);
+
+    private bool _stopRecordingAcknowledged;
+
+    public string ProviderName => "Gladia";
+    public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("end_session");
+    public WebSocketKeepAlivePolicy? KeepAlive => null;
+    public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
+
+    public async ValueTask<WebSocketConnectionOptions> GetConnectionOptionsAsync(
+        CancellationToken ct
+    )
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            GladiaStreamingSession.InitUrl
+        );
+        request.Headers.Add("x-gladia-key", apiKey);
+        request.Content = new StringContent(
+            GladiaStreamingSession.BuildInitRequest(language, vocabulary, 16000),
+            Encoding.UTF8,
+            "application/json"
+        );
+
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"Gladia live init failed {(int)errorResponse.StatusCode}: {errorBody}");
+        var json = await response.Content.ReadAsStringAsync(ct);
+
+        var url =
+            GladiaStreamingSession.ParseSessionUrl(json)
+            ?? throw new InvalidOperationException(
+                "Gladia live init response missing 'url'."
+            );
+        return new WebSocketConnectionOptions(new Uri(url));
+    }
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>([]);
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            pcm16Audio.Length == 0
+                ? []
+                : [
+                    new WebSocketOutboundMessage(
+                        pcm16Audio.ToArray(),
+                        WebSocketMessageType.Binary
+                    ),
+                ]
+        );
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
+    {
+        return ValueTask.FromResult(
+            new WebSocketFinalizePlan(
+                [
+                    new WebSocketOutboundMessage(
+                        """{"type":"stop_recording"}"""u8.ToArray(),
+                        WebSocketMessageType.Text
+                    ),
+                ]
+            )
+        );
+    }
+
+    public WebSocketInboundResult HandleMessage(
+        WebSocketMessageType type,
+        ReadOnlyMemory<byte> completePayload
+    )
+    {
+        if (type != WebSocketMessageType.Text)
+            return WebSocketInboundResult.Empty;
+
+        GladiaStreamingSession.GladiaMessage message;
         try
         {
-            TranscriptReceived?.Invoke(evt);
+            message = GladiaStreamingSession.ParseMessage(
+                Encoding.UTF8.GetString(completePayload.Span)
+            );
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is JsonException or FormatException)
         {
-            Debug.WriteLine($"Gladia realtime subscriber failed: {ex.Message}");
+            return Fault(GladiaStreamingSession.CreateIncompleteException(inner: ex));
         }
+
+        if (message.Error is not null)
+            return Fault(GladiaStreamingSession.CreateRequestException(message.Error));
+
+        if (message is { MessageType: "stop_recording", Acknowledged: true })
+            _stopRecordingAcknowledged = true;
+
+        if (message.MessageType == "end_session")
+            return EndSession();
+
+        return message.MessageType == "transcript"
+            ? HandleTranscript(message)
+            : WebSocketInboundResult.Empty;
     }
 
-    public async ValueTask DisposeAsync()
+    private WebSocketInboundResult EndSession()
     {
-        _receiveCts.Cancel();
-
-        if (_ws.State == WebSocketState.Open)
+        // Gladia also ends a session on its own (duration limit, inactivity); audio sent
+        // after that point was never transcribed. Only an acknowledged stop proves the
+        // session ended because recording stopped.
+        if (!_stopRecordingAcknowledged)
         {
-            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            try
-            {
-                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token);
-            }
-            catch
-            {
-                try { _ws.Abort(); } catch { /* best effort */ }
-            }
+            return Fault(GladiaStreamingSession.CreateIncompleteException(
+                "Gladia ended the live session before recording stopped."
+            ));
         }
 
-        if (_receiveTask is not null)
+        // An utterance still unconfirmed at end_session is a dropped tail.
+        if (_pending.Values.Any(entry => !string.IsNullOrWhiteSpace(entry.Text)))
         {
-            try { await _receiveTask; }
-            catch { /* expected */ }
+            return Fault(GladiaStreamingSession.CreateIncompleteException(
+                "Gladia ended the live session before confirming every utterance."
+            ));
         }
 
-        _finishedTcs.TrySetResult();
-        // Observe any captured transport fault so it can't surface as an unobserved
-        // task exception when FinalizeAsync was never called.
-        _ = _finishedTcs.Task.Exception;
-        _receiveCts.Dispose();
-        _ws.Dispose();
+        return new WebSocketInboundResult([], WebSocketSessionSignal.Terminal);
     }
+
+    private WebSocketInboundResult HandleTranscript(GladiaStreamingSession.GladiaMessage message)
+    {
+        var id = message.UtteranceId!;
+        var text = message.Text!;
+
+        if (_finals.TryGetValue(id, out var confirmed))
+        {
+            // A repeated final must not insert it twice, nor a late partial reopen it.
+            return message.IsFinal && !string.Equals(confirmed, text, StringComparison.Ordinal)
+                ? Fault(GladiaStreamingSession.CreateIncompleteException(
+                    "Gladia sent conflicting final transcripts for one utterance."
+                ))
+                : WebSocketInboundResult.Empty;
+        }
+
+        if (message.IsFinal)
+        {
+            if (_finals.Count >= MaxFinalUtterances)
+                return Fault(GladiaStreamingSession.CreateIncompleteException());
+
+            _finals.Add(id, text);
+            _pending.Remove(id);
+            if (message.Start is { } start)
+                DropPendingStartedBefore(start);
+            return string.IsNullOrWhiteSpace(text)
+                ? WebSocketInboundResult.Empty
+                : new WebSocketInboundResult(
+                    [new StreamingTranscriptEvent(text, true) { DetectedLanguage = message.Language }]
+                );
+        }
+
+        _pending[id] = (text, message.Start);
+        if (_pending.Count > MaxPendingUtterances)
+            return Fault(GladiaStreamingSession.CreateIncompleteException());
+
+        return string.IsNullOrWhiteSpace(text)
+            ? WebSocketInboundResult.Empty
+            : new WebSocketInboundResult([new StreamingTranscriptEvent(text, false)]);
+    }
+
+    // Gladia may discard a partial without confirming it. One starting before a confirmed
+    // utterance was superseded; a later or undated one may still be a dropped tail.
+    private void DropPendingStartedBefore(double start)
+    {
+        foreach (var (pendingId, entry) in _pending.ToArray())
+        {
+            if (entry.Start < start)
+                _pending.Remove(pendingId);
+        }
+    }
+
+    private static WebSocketInboundResult Fault(Exception exception) =>
+        new([], Fault: exception);
 }

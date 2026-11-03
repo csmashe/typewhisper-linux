@@ -18,8 +18,14 @@ internal static class BootTrace
         {
             var path = Path.Join(TypeWhisperEnvironment.LogsPath, "boot.log");
             var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-            s_fileWriter = new StreamWriter(stream) { AutoFlush = true };
-            s_fileWriter.WriteLine($"=== boot trace @ {DateTime.Now:O} ===");
+            var writer = new StreamWriter(stream) { AutoFlush = true };
+            writer.WriteLine($"=== boot trace @ {DateTime.Now:O} ===");
+            // Reopened after a reset deleted the first file.
+            lock (s_lock)
+            {
+                s_fileWriter?.Dispose();
+                s_fileWriter = writer;
+            }
         }
         catch (Exception ex)
         {

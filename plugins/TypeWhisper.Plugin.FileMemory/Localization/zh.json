@@ -1,0 +1,18 @@
+{
+  "Manifest.Name": "文件记忆",
+  "Manifest.Description": "在本设备上保存事实，并向提示词操作提供匹配的事实",
+  "Action.Name": "记入文件记忆",
+  "Action.Stored": "已保存到文件记忆。",
+  "Action.AlreadyStored": "已在文件记忆中。",
+  "Action.Empty": "没有可记住的内容：文本为空。",
+  "Collection.Label": "记忆",
+  "Collection.Description": "保存在本设备上的事实，每个条目一个事实或主题。当“高级”设置中开启了记忆，或配置方案选择了文件记忆时，提示词操作最多会调用五个匹配的条目。要保存提示词操作的文本，请将其操作目标设为“记入文件记忆”。",
+  "Collection.DisabledDescription": "启用文件记忆以查看和编辑其记忆。",
+  "Collection.Content": "记忆",
+  "Collection.ContentPlaceholder": "例如：Aurora项目使用英式英语。",
+  "Collection.Add": "添加记忆",
+  "Collection.Unknown": "未知的记忆集合。",
+  "Memory.Empty": "记忆不能为空。",
+  "Memory.TooLong": "一条记忆最多{0}个字符。",
+  "Memory.Duplicate": "有两条记忆的文本相同。请删除或修改其中一条。"
+}

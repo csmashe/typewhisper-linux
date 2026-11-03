@@ -4,10 +4,13 @@ using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.UserData;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -17,16 +20,37 @@ namespace TypeWhisper.Linux.ViewModels.Sections;
 public partial class AboutSectionViewModel : ObservableObject
 {
     private readonly IErrorLogService _errorLog;
-    private readonly LinuxPreferencesService _linuxPreferences;
-    private readonly ISettingsService _settings;
+    private readonly LocalDataExportService _dataExport;
+    private readonly LocalDataResetService _dataReset;
+    private readonly Func<bool> _requestRestart;
     private readonly SettingsBackupService _settingsBackup;
+    private readonly SupportReportService? _supportReport;
+    private readonly TimeZoneInfo _timeZone;
     private readonly UpdateCheckService _updateCheck;
+    private readonly UrlLauncher _urlLauncher;
 
     [ObservableProperty]
     private string _backupStatusText = Loc.Instance["About.BackupStatusDefault"];
 
     [ObservableProperty]
     private bool _isBackupBusy;
+
+    [ObservableProperty]
+    private bool _isExportingData;
+
+    [ObservableProperty]
+    private bool _includeRecordingsInExport = true;
+
+    private CancellationTokenSource? _dataExportCancellation;
+
+    [ObservableProperty]
+    private bool _deleteModelsOnReset;
+
+    [ObservableProperty]
+    private bool _isSupportReportBusy;
+
+    [ObservableProperty]
+    private string _supportReportStatusText = Loc.Instance["About.SupportReportDescription"];
 
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(CanCheckForUpdates))]
     private bool _isCheckingForUpdates;
@@ -50,17 +74,59 @@ public partial class AboutSectionViewModel : ObservableObject
 
     public AboutSectionViewModel(
         IErrorLogService errorLog,
-        ISettingsService settings,
-        LinuxPreferencesService linuxPreferences,
         SettingsBackupService settingsBackup,
-        UpdateCheckService updateCheck
+        LocalDataExportService dataExport,
+        LocalDataResetService dataReset,
+        UpdateCheckService updateCheck,
+        UrlLauncher urlLauncher,
+        SupportReportService supportReport
+    )
+        : this(
+            errorLog,
+            settingsBackup,
+            updateCheck,
+            urlLauncher,
+            TimeZoneInfo.Local,
+            dataExport,
+            supportReport,
+            dataReset
+        ) { }
+
+    internal AboutSectionViewModel(
+        IErrorLogService errorLog,
+        SettingsBackupService settingsBackup,
+        UpdateCheckService updateCheck,
+        TimeZoneInfo timeZone
+    )
+        : this(
+            errorLog,
+            settingsBackup,
+            updateCheck,
+            new UrlLauncher(new ProcessRunner()),
+            timeZone
+        ) { }
+
+    internal AboutSectionViewModel(
+        IErrorLogService errorLog,
+        SettingsBackupService settingsBackup,
+        UpdateCheckService updateCheck,
+        UrlLauncher urlLauncher,
+        TimeZoneInfo timeZone,
+        LocalDataExportService? dataExport = null,
+        SupportReportService? supportReport = null,
+        LocalDataResetService? dataReset = null,
+        Func<bool>? requestRestart = null
     )
     {
         _errorLog = errorLog;
-        _settings = settings;
-        _linuxPreferences = linuxPreferences;
         _settingsBackup = settingsBackup;
+        _dataExport = dataExport ?? new LocalDataExportService();
+        _dataReset = dataReset ?? new LocalDataResetService();
+        _requestRestart = requestRestart ?? App.RequestRestart;
+        _supportReport = supportReport;
         _updateCheck = updateCheck;
+        _urlLauncher = urlLauncher;
+        _timeZone = timeZone;
         RefreshErrors();
         // EntriesChanged fires synchronously on whichever thread called AddEntry —
         // and producers now log from background threads (transcription, detection,
@@ -71,6 +137,36 @@ public partial class AboutSectionViewModel : ObservableObject
         _updateCheck.ResultChanged += OnUpdateResultChanged;
         // Reflect any check that already ran (e.g. the startup check).
         ApplyUpdateResult(_updateCheck.LastResult);
+        Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
+    }
+
+    private string _backupStatusDefault = Loc.Instance["About.BackupStatusDefault"];
+    private string _updateStatusDefault = Loc.Instance["About.UpdateStatusDefault"];
+    private string _supportReportStatusDefault = Loc.Instance["About.SupportReportDescription"];
+
+    // Status text is computed, not bound to the catalog: re-resolve defaults and the last
+    // update result in the new language. Keep completed backup and support-report messages.
+    private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
+    {
+        var backupDefault = Loc.Instance["About.BackupStatusDefault"];
+        if (BackupStatusText == _backupStatusDefault)
+            BackupStatusText = backupDefault;
+        _backupStatusDefault = backupDefault;
+
+        var supportDefault = Loc.Instance["About.SupportReportDescription"];
+        if (SupportReportStatusText == _supportReportStatusDefault)
+            SupportReportStatusText = supportDefault;
+        _supportReportStatusDefault = supportDefault;
+
+        var updateDefault = Loc.Instance["About.UpdateStatusDefault"];
+        if (UpdateStatusText == _updateStatusDefault)
+            UpdateStatusText = updateDefault;
+        _updateStatusDefault = updateDefault;
+        if (IsCheckingForUpdates)
+            UpdateStatusText = Loc.Instance["About.CheckingForUpdates"];
+        else
+            ApplyUpdateResult(_updateCheck.LastResult);
+        RefreshErrors();
     }
 
     // Prefers AssemblyInformationalVersion (keeps pre-release suffix, strips +hash).
@@ -93,21 +189,25 @@ public partial class AboutSectionViewModel : ObservableObject
     public string Architecture { get; } =
         RuntimeInformation.OSArchitecture.ToString();
 
-    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section project URL display); not currently bound in-tree
-    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
-    public string ProjectUrl { get; } = "https://github.com/csmashe/typewhisper-linux";
+    internal const string ProjectUrl = "https://github.com/csmashe/typewhisper-linux";
+    internal const string IssuesUrl = ProjectUrl + "/issues";
+    internal const string DocsUrl = ProjectUrl + "/wiki";
+    internal const string LicenseUrl = ProjectUrl + "/blob/linux/LICENSE";
+    internal const string UpstreamUrl = "https://github.com/TypeWhisper/typewhisper-win";
 
-    // ReSharper disable once UnusedMember.Global  public ViewModel property (About-section upstream URL display); not currently bound in-tree
     // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
-    public string UpstreamUrl { get; } = "https://github.com/TypeWhisper/typewhisper-win";
+    public string InstallLocation { get; } = InstallLocationResolver.Resolve();
+
+    // ReSharper disable once ReplaceAutoPropertyWithComputedProperty -- kept as an instance auto-property; the computed form is flagged static (CA1822) on this bindable VM member.
+    public string DataLocation { get; } = TypeWhisperEnvironment.BasePath;
 
     public bool CanCheckForUpdates => !IsCheckingForUpdates;
 
     // Full, unfiltered backing list; drives HasErrors and the category options.
-    private ObservableCollection<ErrorLogEntry> ErrorEntries { get; } = [];
+    private ObservableCollection<ErrorLogEntryRow> ErrorEntries { get; } = [];
 
     // The entries actually shown — ErrorEntries narrowed by SelectedCategoryFilter.
-    public ObservableCollection<ErrorLogEntry> FilteredErrorEntries { get; } = [];
+    public ObservableCollection<ErrorLogEntryRow> FilteredErrorEntries { get; } = [];
 
     // "All categories" + one option per category currently present in the log.
     public ObservableCollection<CategoryFilterOption> CategoryFilters { get; } = [];
@@ -121,6 +221,33 @@ public partial class AboutSectionViewModel : ObservableObject
     public string ExportDiagnostics()
     {
         return _errorLog.ExportDiagnostics();
+    }
+
+    /// <summary>Writes the support report to <paramref name="path" /> and reports the outcome in the status text.</summary>
+    public async Task ExportSupportReportAsync(string path)
+    {
+        if (_supportReport is null || IsSupportReportBusy)
+        {
+            return;
+        }
+
+        IsSupportReportBusy = true;
+        try
+        {
+            var report = await _supportReport.CaptureAsync();
+            await Task.Run(() => report.Export(path));
+            SupportReportStatusText = report.CollectionErrors.Count == 0
+                ? Loc.Instance["About.SupportReportExported"]
+                : Loc.Instance["About.SupportReportPartial"];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SupportReportStatusText = Loc.Instance["About.SupportReportFailed"];
+        }
+        finally
+        {
+            IsSupportReportBusy = false;
+        }
     }
 
     public async Task<SettingsBackupResult> CreateSettingsBackupAsync(string path)
@@ -156,18 +283,116 @@ public partial class AboutSectionViewModel : ObservableObject
         BackupStatusText = Loc.Instance["About.RestoringBackup"];
         try
         {
-            var result = await Task.Run(() => _settingsBackup.RestoreBackup(path));
-            // Re-load and re-save each settings file so in-memory state
-            // reflects the just-restored files and SettingsChanged is fired.
-            _settings.Save(_settings.Load());
-            _linuxPreferences.Save(_linuxPreferences.Load());
+            var result = await Task.Run(() => _settingsBackup.StageRestore(path));
             BackupStatusText =
-                Loc.Instance.GetString("About.BackupRestored", result.FileCount);
+                Loc.Instance.GetString("About.BackupStaged", result.FileCount);
             return result;
         }
         finally
         {
             IsBackupBusy = false;
+        }
+    }
+
+    public async Task<LocalDataExportResult> ExportAllDataAsync(string path)
+    {
+        if (IsBackupBusy)
+        {
+            throw new InvalidOperationException("A settings backup or restore is already running.");
+        }
+
+        IsBackupBusy = true;
+        IsExportingData = true;
+        BackupStatusText = Loc.Instance["About.ExportingData"];
+        using var cancellation = new CancellationTokenSource();
+        _dataExportCancellation = cancellation;
+        // A progress report can arrive after the export finished; it must not replace the outcome.
+        var gate = new object();
+        var running = true;
+        var progress = new Progress<LocalDataExportProgress>(update =>
+        {
+            lock (gate)
+            {
+                // ReSharper disable once AccessToModifiedClosure -- intended: Finish clears it under the same lock.
+                if (running)
+                {
+                    BackupStatusText = Loc.Instance.GetString(
+                        "About.ExportingDataProgress",
+                        update.FileCount,
+                        update.Bytes / (1024.0 * 1024.0)
+                    );
+                }
+            }
+        });
+        void Finish(string status)
+        {
+            lock (gate)
+            {
+                running = false;
+                BackupStatusText = status;
+            }
+        }
+
+        try
+        {
+            var result = await _dataExport.ExportAsync(
+                path,
+                new LocalDataExportOptions(IncludeRecordingsInExport),
+                progress,
+                cancellation.Token
+            );
+            Finish(Loc.Instance.GetString("About.DataExported", result.FileCount));
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            Finish(Loc.Instance["About.DataExportCanceled"]);
+            throw;
+        }
+        catch
+        {
+            Finish(Loc.Instance["About.DataExportFailed"]);
+            throw;
+        }
+        finally
+        {
+            _dataExportCancellation = null;
+            IsExportingData = false;
+            IsBackupBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void CancelDataExport() => _dataExportCancellation?.Cancel();
+
+    /// <summary>
+    ///     Records the reset and restarts the app, which deletes the data at startup. Nothing is
+    ///     deleted when recording it fails.
+    /// </summary>
+    public async Task ResetAllDataAsync()
+    {
+        if (IsBackupBusy)
+        {
+            throw new InvalidOperationException("A settings backup or restore is already running.");
+        }
+
+        IsBackupBusy = true;
+        BackupStatusText = Loc.Instance["About.ResettingData"];
+        try
+        {
+            await Task.Run(() => _dataReset.RequestReset(new LocalDataResetOptions(DeleteModelsOnReset)));
+        }
+        catch
+        {
+            BackupStatusText = Loc.Instance["About.ResetFailed"];
+            IsBackupBusy = false;
+            throw;
+        }
+
+        // The app stays busy until it exits. When it is already quitting, the reset runs at the next launch.
+        if (!_requestRestart())
+        {
+            BackupStatusText = Loc.Instance["About.ResetAtNextLaunch"];
         }
     }
 
@@ -195,7 +420,37 @@ public partial class AboutSectionViewModel : ObservableObject
     [RelayCommand]
     private void OpenReleasePage()
     {
-        UrlLauncher.Open(LatestReleaseUrl);
+        _urlLauncher.Open(LatestReleaseUrl);
+    }
+
+    [RelayCommand]
+    private void OpenProject()
+    {
+        _urlLauncher.Open(ProjectUrl);
+    }
+
+    [RelayCommand]
+    private void OpenIssues()
+    {
+        _urlLauncher.Open(IssuesUrl);
+    }
+
+    [RelayCommand]
+    private void OpenDocs()
+    {
+        _urlLauncher.Open(DocsUrl);
+    }
+
+    [RelayCommand]
+    private void OpenLicense()
+    {
+        _urlLauncher.Open(LicenseUrl);
+    }
+
+    [RelayCommand]
+    private void OpenUpstream()
+    {
+        _urlLauncher.Open(UpstreamUrl);
     }
 
     private void OnUpdateResultChanged(UpdateCheckResult result)
@@ -272,7 +527,12 @@ public partial class AboutSectionViewModel : ObservableObject
         ErrorEntries.Clear();
         foreach (var entry in _errorLog.Entries)
         {
-            ErrorEntries.Add(entry);
+            ErrorEntries.Add(
+                new ErrorLogEntryRow(
+                    entry,
+                    PresentationDateTime.ToLocal(entry.Timestamp, _timeZone)
+                )
+            );
         }
 
         RebuildCategoryFilters();
@@ -292,12 +552,12 @@ public partial class AboutSectionViewModel : ObservableObject
 
         var desired = new List<CategoryFilterOption>
         {
-            new(null, Loc.Instance["About.ErrorFilterAll"])
+            new(null, Loc.Instance["About.ErrorFilterAll"]),
         };
         desired.AddRange(present.Select(c => new CategoryFilterOption(c, FormatCategory(c))));
 
         // Option set unchanged → keep the current selection object as-is.
-        if (CategoryFilters.Select(o => o.Key).SequenceEqual(desired.Select(o => o.Key)))
+        if (CategoryFilters.Select(o => (o.Key, o.Display)).SequenceEqual(desired.Select(o => (o.Key, o.Display))))
         {
             return;
         }
@@ -358,4 +618,18 @@ public partial class AboutSectionViewModel : ObservableObject
             return Display;
         }
     }
+}
+
+public sealed class ErrorLogEntryRow
+{
+    public ErrorLogEntryRow(ErrorLogEntry record, DateTime localTimestamp)
+    {
+        Record = record;
+        LocalTimestamp = localTimestamp;
+    }
+
+    public ErrorLogEntry Record { get; }
+    public DateTime LocalTimestamp { get; }
+    public string Category => Record.Category;
+    public string Message => Record.Message;
 }

@@ -34,6 +34,53 @@ public sealed class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetRecords_TreatsACorruptHistoryResetToEmptyAsUntrustworthy()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+        var corrupt = new HistoryService(_filePath, _audioDirectory);
+
+        Assert.False(corrupt.TryGetRecords(out var records));
+        Assert.Empty(records);
+
+        corrupt.AddRecord(CreateRecord("record", DateTime.UtcNow));
+
+        Assert.True(corrupt.TryGetRecords(out var healed));
+        Assert.Single(healed);
+    }
+
+    [Fact]
+    public void RecordsAvailable_IsFalseAfterUnreadableFileAndTrueAfterSuccessfulRetry()
+    {
+        Directory.CreateDirectory(_filePath);
+
+        Assert.Empty(_sut.Records);
+        Assert.False(_sut.RecordsAvailable);
+
+        Directory.Delete(_filePath);
+        File.WriteAllText(_filePath, "[]");
+        Assert.Empty(_sut.Records);
+        Assert.True(_sut.RecordsAvailable);
+    }
+
+    [Fact]
+    public void RecordsAvailable_IsTrueForMissingHistory()
+    {
+        Assert.Empty(_sut.Records);
+        Assert.True(_sut.RecordsAvailable);
+    }
+
+    [Fact]
+    public void RecordsChanged_ContinuesAfterThrowingSubscriber()
+    {
+        var called = false;
+        _sut.RecordsChanged += () => throw new InvalidOperationException("listener failed");
+        _sut.RecordsChanged += () => called = true;
+        _sut.AddRecord(CreateRecord("record", DateTime.UtcNow));
+        Assert.True(called);
+        Assert.Single(_sut.Records);
+    }
+
+    [Fact]
     public void ModelUsed_PersistsCorrectly()
     {
         var record = new TranscriptionRecord
@@ -43,7 +90,7 @@ public sealed class HistoryServiceTests : IDisposable
             RawText = "hello",
             FinalText = "hello",
             EngineUsed = "plugin:com.test:model-1",
-            ModelUsed = "plugin:com.test:model-1"
+            ModelUsed = "plugin:com.test:model-1",
         };
 
         _sut.AddRecord(record);
@@ -61,7 +108,7 @@ public sealed class HistoryServiceTests : IDisposable
             Id = Guid.NewGuid().ToString(),
             Timestamp = DateTime.UtcNow,
             RawText = "test",
-            FinalText = "test"
+            FinalText = "test",
         };
 
         _sut.AddRecord(record);
@@ -81,7 +128,7 @@ public sealed class HistoryServiceTests : IDisposable
             RawText = "hello",
             FinalText = "hello",
             InsertionStatus = TextInsertionStatus.MissingPasteTool,
-            InsertionFailureReason = "Automatic paste tool is unavailable."
+            InsertionFailureReason = "Automatic paste tool is unavailable.",
         };
 
         _sut.AddRecord(record);
@@ -100,7 +147,7 @@ public sealed class HistoryServiceTests : IDisposable
             Id = Guid.NewGuid().ToString(),
             Timestamp = DateTime.UtcNow,
             RawText = "hello",
-            FinalText = "hello"
+            FinalText = "hello",
         };
         _sut.AddRecord(record);
 
@@ -130,8 +177,8 @@ public sealed class HistoryServiceTests : IDisposable
                 FinalText = "Hello, world!",
                 AppProcessName = "notepad",
                 DurationSeconds = 2.5,
-                Language = "en"
-            }
+                Language = "en",
+            },
         };
 
         var result = _sut.ExportToMarkdown(records);
@@ -155,8 +202,8 @@ public sealed class HistoryServiceTests : IDisposable
                 FinalText = "Hello, \"world\"",
                 AppProcessName = "browser, tab",
                 DurationSeconds = 1.5,
-                Language = "en,us"
-            }
+                Language = "en,us",
+            },
         };
 
         var result = _sut.ExportToCsv(records);
@@ -180,8 +227,8 @@ public sealed class HistoryServiceTests : IDisposable
                 AppProcessName = "code",
                 DurationSeconds = 1.0,
                 Language = "en",
-                InsertionStatus = TextInsertionStatus.Pasted
-            }
+                InsertionStatus = TextInsertionStatus.Pasted,
+            },
         };
 
         var result = _sut.ExportToJson(records);
@@ -191,6 +238,47 @@ public sealed class HistoryServiceTests : IDisposable
         Assert.Contains("\"insertion_status\": \"Pasted\"", result);
         Assert.StartsWith("[", result.Trim());
         Assert.EndsWith("]", result.Trim());
+    }
+
+    [Fact]
+    public void Exports_SkipRecordsThatDidNotSucceed()
+    {
+        var records = new List<TranscriptionRecord>
+        {
+            new()
+            {
+                Id = "ok",
+                Timestamp = new DateTime(2026, 3, 15, 10, 30, 0, DateTimeKind.Utc),
+                RawText = "kept raw",
+                FinalText = "kept final",
+                AppProcessName = "notepad",
+                DurationSeconds = 2.5,
+                Language = "en",
+            },
+            new()
+            {
+                Id = "failed",
+                Timestamp = new DateTime(2026, 3, 15, 10, 35, 0, DateTimeKind.Utc),
+                RawText = "",
+                FinalText = "",
+                AppProcessName = "dropped-app",
+                Status = TranscriptionRecordStatus.TranscriptionFailed,
+                FailureMessage = "dropped failure",
+            },
+        };
+
+        foreach (var export in new[]
+                 {
+                     _sut.ExportToText(records), _sut.ExportToCsv(records),
+                     _sut.ExportToMarkdown(records), _sut.ExportToJson(records),
+                 })
+        {
+            Assert.Contains("kept final", export);
+            Assert.DoesNotContain("dropped-app", export);
+            Assert.DoesNotContain("dropped failure", export);
+        }
+
+        Assert.Contains("1", _sut.ExportToText(records).Split('\n')[2]);
     }
 
     [Fact]
@@ -207,6 +295,18 @@ public sealed class HistoryServiceTests : IDisposable
 
         Assert.DoesNotContain(_sut.Records, record => record.Id == stale.Id);
         Assert.Contains(_sut.Records, record => record.Id == fresh.Id);
+    }
+
+    [Fact]
+    public void PurgeOldRecords_WithNothingExpired_StillHealsACorruptHistoryResetToEmpty()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+        var corrupt = new HistoryService(_filePath, _audioDirectory);
+
+        corrupt.PurgeOldRecords(TimeSpan.FromHours(1));
+
+        Assert.True(corrupt.TryGetRecords(out var records));
+        Assert.Empty(records);
     }
 
     [Fact]
@@ -246,6 +346,126 @@ public sealed class HistoryServiceTests : IDisposable
         Assert.False(File.Exists(Path.Join(_audioDirectory, audioFile)));
     }
 
+    [Fact]
+    public void TryDeleteRecords_DeletesOnlyGivenIdsAndRaisesOnce()
+    {
+        _sut.AddRecord(CreateRecord("one", DateTime.UtcNow));
+        _sut.AddRecord(CreateRecord("two", DateTime.UtcNow));
+        _sut.AddRecord(CreateRecord("three", DateTime.UtcNow));
+        var events = 0;
+        _sut.RecordsChanged += () => events++;
+
+        Assert.True(_sut.TryDeleteRecords(["one", "two", "one", "missing"]));
+
+        Assert.Equal("three", Assert.Single(_sut.Records).Id);
+        Assert.Equal(1, events);
+        Assert.True(_sut.TryDeleteRecords(["missing"]));
+        Assert.Equal(1, events);
+    }
+
+    [Fact]
+    public void TryDeleteRecords_EmptyIdsIsNoOp()
+    {
+        _sut.AddRecord(CreateRecord("one", DateTime.UtcNow));
+        var events = 0;
+        _sut.RecordsChanged += () => events++;
+
+        Assert.True(_sut.TryDeleteRecords([]));
+
+        Assert.Equal("one", Assert.Single(_sut.Records).Id);
+        Assert.Equal(0, events);
+    }
+
+    [Fact]
+    public void TryDeleteRecords_KeepsAudioStillReferencedByRemainingRecord()
+    {
+        var audioPath = Path.Join(_audioDirectory, "shared.wav");
+        File.WriteAllText(audioPath, "audio");
+        _sut.AddRecord(CreateRecord("one", DateTime.UtcNow, "shared.wav"));
+        _sut.AddRecord(CreateRecord("two", DateTime.UtcNow, "shared.wav"));
+
+        Assert.True(_sut.TryDeleteRecords(["one"]));
+        Assert.True(File.Exists(audioPath));
+        Assert.True(_sut.TryDeleteRecords(["two"]));
+        Assert.False(File.Exists(audioPath));
+    }
+
+    [Fact]
+    public void TryDeleteRecords_PreservesRecordAddedAfterSnapshot()
+    {
+        _sut.AddRecord(CreateRecord("one", DateTime.UtcNow));
+        _sut.AddRecord(CreateRecord("two", DateTime.UtcNow));
+        var snapshot = _sut.Records.Select(record => record.Id).ToArray();
+        var otherService = new HistoryService(_filePath, _audioDirectory);
+        otherService.AddRecord(CreateRecord("later", DateTime.UtcNow));
+
+        Assert.True(_sut.TryDeleteRecords(snapshot));
+
+        Assert.Equal("later", Assert.Single(_sut.Records).Id);
+        Assert.Equal("later", Assert.Single(new HistoryService(_filePath).Records).Id);
+    }
+
+    [Fact]
+    public void TryDeleteRecords_ReturnsFalseAndChangesNothingWhenWriteFails()
+    {
+        var audioPath = Path.Join(_audioDirectory, "one.wav");
+        File.WriteAllText(audioPath, "audio");
+        _sut.AddRecord(CreateRecord("one", DateTime.UtcNow, "one.wav") with
+        {
+            FinalText = "two words",
+            DurationSeconds = 2.5,
+        });
+        _sut.AddRecord(CreateRecord("two", DateTime.UtcNow));
+        var records = _sut.Records.ToArray();
+        var totals = (_sut.TotalRecords, _sut.TotalWords, _sut.TotalDuration);
+        var persisted = File.ReadAllBytes(_filePath);
+        var events = 0;
+        _sut.RecordsChanged += () => events++;
+        File.Move(_filePath, _filePath + ".saved");
+        Directory.CreateDirectory(_filePath);
+
+        Assert.False(_sut.TryDeleteRecords(["one", "two"]));
+
+        Assert.Equal(records, _sut.Records);
+        Assert.Equal(totals, (_sut.TotalRecords, _sut.TotalWords, _sut.TotalDuration));
+        Assert.True(File.Exists(audioPath));
+        Assert.Equal(0, events);
+        Directory.Delete(_filePath);
+        File.Move(_filePath + ".saved", _filePath);
+        Assert.Equal(persisted, File.ReadAllBytes(_filePath));
+        Assert.Equal(records.Select(record => record.Id),
+            new HistoryService(_filePath).Records.Select(record => record.Id));
+    }
+
+    [Fact]
+    public void DeleteRecord_KeepsAudioReferencedByAnotherRecord()
+    {
+        var audioPath = Path.Join(_audioDirectory, "shared.wav");
+        File.WriteAllText(audioPath, "audio");
+        _sut.AddRecord(CreateRecord("one", DateTime.UtcNow, "shared.wav"));
+        _sut.AddRecord(CreateRecord("two", DateTime.UtcNow, "SHARED.wav"));
+
+        _sut.DeleteRecord("one");
+
+        Assert.True(File.Exists(audioPath));
+        Assert.Equal("two", Assert.Single(_sut.Records).Id);
+    }
+
+    [Fact]
+    public void DeleteRecord_PropagatesWriteFailureInsteadOfReportingSuccess()
+    {
+        _sut.AddRecord(CreateRecord("one", DateTime.UtcNow));
+        File.Move(_filePath, _filePath + ".saved");
+        Directory.CreateDirectory(_filePath);
+
+        var failure = Record.Exception(() => _sut.DeleteRecord("one"));
+
+        Assert.True(failure is IOException or UnauthorizedAccessException, $"unexpected: {failure}");
+        Assert.Equal("one", Assert.Single(_sut.Records).Id);
+        Directory.Delete(_filePath);
+        File.Move(_filePath + ".saved", _filePath);
+    }
+
     private static TranscriptionRecord CreateRecord(
         string id,
         DateTime createdAt,
@@ -259,7 +479,7 @@ public sealed class HistoryServiceTests : IDisposable
             CreatedAt = createdAt,
             RawText = "test",
             FinalText = "test",
-            AudioFileName = audioFileName
+            AudioFileName = audioFileName,
         };
     }
 }

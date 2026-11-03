@@ -1,12 +1,25 @@
 {
   "Settings.ApiKey": "API-ключ",
-  "Settings.ApiKeyDescription": "Требуется для транскрипции Voxtral через Mistral.",
+  "Settings.ApiKeyDescription": "Требуется для транскрипции Voxtral и обработки текста Mistral. При проверке также загружаются текстовые модели Mistral, доступные для этого ключа.",
   "Settings.TranscriptionModel": "Модель транскрипции",
   "Settings.ModelDescription": "Выберите модель Voxtral.",
+  "Settings.StreamResponses": "Потоковая передача текстовых ответов",
+  "Settings.StreamResponsesDescription": "Отображать вывод действия промпта Mistral по токенам по мере генерации, не дожидаясь полного ответа.",
+  "Settings.TemperatureMode": "Температура текста",
+  "Settings.TemperatureModeDescription": "В режиме по умолчанию температура не отправляется, и Mistral использует значение по умолчанию для каждой модели; в пользовательском режиме отправляется указанное ниже значение.",
+  "Settings.TemperatureProviderDefault": "По умолчанию у провайдера",
+  "Settings.TemperatureCustom": "Пользовательская",
+  "Settings.TemperatureValue": "Значение температуры текста",
+  "Settings.TemperatureValueDescription": "От 0 до 1.5. Более низкие значения дают более стабильные результаты. Используется только в пользовательском режиме температуры.",
+  "Settings.TemperatureInvalid": "Введите температуру от 0 до 1.5, используя точку в качестве десятичного разделителя.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
-  "Settings.ApiKeyValid": "API-ключ действителен.",
+  "Settings.ApiKeyValidFetchedTextModels": "API-ключ действителен. Загружено текстовых моделей Mistral, доступных для этой учётной записи: {0}.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Settings.ModelRefreshFailed": "Не удалось загрузить текстовые модели Mistral: {0} Сохранённый список моделей не изменён.",
+  "Settings.ModelRefreshStale": "API-ключ изменился во время загрузки моделей. Выполните проверку ещё раз.",
+  "Errors.ModelRefreshTimedOut": "Истекло время ожидания загрузки.",
+  "Errors.ModelCatalogInvalid": "Mistral вернул недопустимый или слишком большой список моделей либо список без текстовых моделей.",
   "Settings.NotConfiguredMistralApiKeyRequired": "Плагин не настроен. Требуется API-ключ Mistral.",
   "Manifest.Name": "Voxtral",
-  "Manifest.Description": "Транскрипция и перевод аудио Voxtral (Mistral)"
+  "Manifest.Description": "Транскрипция аудио Voxtral (Mistral) и обработка текста Mistral"
 }

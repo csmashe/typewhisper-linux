@@ -10,6 +10,14 @@ public interface IErrorLogService
 {
     IReadOnlyList<ErrorLogEntry> Entries { get; }
 
+    /// <summary>Reads the entries and reports whether the read succeeded; an unreadable log yields none.</summary>
+    /// <returns><c>false</c> when the log was unreadable or reset after corruption, not merely empty.</returns>
+    bool TryGetEntries(out IReadOnlyList<ErrorLogEntry> entries)
+    {
+        entries = Entries;
+        return true;
+    }
+
     /// <summary>Appends a message under the given <paramref name="category" />, evicting the oldest entry once full.</summary>
     void AddEntry(string message, string category = ErrorCategory.General);
 

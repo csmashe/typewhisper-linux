@@ -1,15 +1,15 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
 ///     Focused AT-SPI walker that pulls the active URL from a browser's address bar.
-///     1. Gate on focused process name (AT-SPI walks cost 50–200 ms each).
-///     2. Cache by <c>(processName, title)</c> — the URL changes when the title does; cache hits skip the walk.
+///     1. Resolve the focused browser descriptor (AT-SPI walks cost 50–200 ms each).
+///     2. Polling caches by <c>(descriptor ID, title)</c>; dictation always walks, because two tabs can share a title.
 ///     3. Narrow to the matching AT-SPI app and walk only its tree.
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
 ///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
@@ -21,9 +21,31 @@ public sealed partial class AtSpiUrlExtractor
     private const int AtSpiStateActive = 1;
     private const int AtSpiStateShowing = 25;
     private const int AtSpiStateVisible = 30;
+    private const int AtSpiRoleComboBox = 11;
     private const int AtSpiRoleFrame = 23;
 
     private const int AtSpiRoleWindow = 69;
+    private const int AtSpiRoleEditBar = 77;
+    private const int AtSpiRoleEntry = 79;
+    private const int AtSpiRoleDocumentWeb = 95;
+    private const string AtSpiMatchAll = "1";
+    private const string AtSpiMatchAny = "2";
+
+    // AT-SPI Collection rules take state and role sets as bitmaps of 32-bit words.
+    private static readonly string s_showingVisibleStateWord =
+        ((1u << AtSpiStateShowing) | (1u << AtSpiStateVisible)).ToString();
+
+    private static readonly string[] s_urlFieldRoleWords =
+    [
+        (1 << AtSpiRoleComboBox).ToString(),
+        "0",
+        ((1 << (AtSpiRoleEditBar - 64)) | (1 << (AtSpiRoleEntry - 64))).ToString(),
+        "0",
+    ];
+
+    // Bit 31 makes this word negative; RunBusctlCall passes "--" so busctl reads it as a value.
+    private static readonly string[] s_documentWebRoleWords =
+        ["0", "0", (1 << (AtSpiRoleDocumentWeb - 64)).ToString(), "0"];
 
     // Focused-context harvest (Feature 03). Independent of the URL walk: targets the
     // single focused element (+ nearby labels) so Medium/High cleanup can match the
@@ -59,32 +81,8 @@ public sealed partial class AtSpiUrlExtractor
     // the walker descends into unseen subtrees — 2.5 s gives headroom while remaining
     // strictly inside the orchestrator's 4 s deferred-URL timeout.
     private static readonly TimeSpan s_walkBudget = TimeSpan.FromMilliseconds(2500);
-    private static readonly bool s_isBusctlAvailable = CheckCommandAvailable("busctl", "--version");
-
-    // gdbus has no --version flag (exits 1 with "Unknown command"). Probe
-    // with `help`, which exits 0 and proves the binary is runnable.
-    private static readonly bool s_isGdbusAvailable = CheckCommandAvailable("gdbus", "help");
-
-    private static readonly HashSet<string> s_supportedBrowserProcessNames = new(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        "firefox",
-        "librewolf",
-        "waterfox",
-        "chrome",
-        "chromium",
-        "brave",
-        "edge",
-        "msedge",
-        "vivaldi",
-        "opera",
-        "zen",
-        "zen-browser",
-        "zen-bin"
-    };
-
     private static readonly TimeSpan s_cacheTtl = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan s_missBackoff = TimeSpan.FromSeconds(10);
 
     // Diagnostic logging is off by default — flip to true to emit one line per unique
     // walk outcome to the Error Log. Kept as `static readonly` (not `const`) so the
@@ -94,89 +92,221 @@ public sealed partial class AtSpiUrlExtractor
 
     private readonly Lock _cacheLock = new();
     private readonly IErrorLogService? _errorLog;
-    private string? _cachedProcessName;
+    private readonly bool _isBusctlAvailable;
+    private readonly bool _isGdbusAvailable;
+    private readonly IProcessRunner _processRunner;
+    private string? _cachedDescriptorId;
     private string? _cachedTitle;
     private string? _cachedUrl;
     private DateTime _cachedUrlAt;
     private string? _lastDiagnosticKey;
+    private DateTime _missAt;
+    private string? _missDescriptorId;
+    private string? _missTitle;
+
+    // Test seam standing in for the AT-SPI tree walk, so the cache/miss-backoff state machine
+    // can be exercised without busctl, gdbus, or a live a11y bus. Always null in production.
+    private readonly Func<string, string?>? _walkOverride;
 
     public AtSpiUrlExtractor()
-        : this(null)
+        : this(new ProcessRunner())
     {
     }
 
     public AtSpiUrlExtractor(IErrorLogService? errorLog)
+        : this(new ProcessRunner(), errorLog)
     {
-        _errorLog = errorLog;
     }
 
-    public string? TryGetBrowserUrl(string? focusedProcessName, string? focusedTitle)
+    public AtSpiUrlExtractor(
+        IProcessRunner processRunner,
+        IErrorLogService? errorLog = null
+    )
     {
-        var processHint = !string.IsNullOrWhiteSpace(focusedProcessName)
-            ? focusedProcessName
-            : ActiveWindowService.TryInferBrowserProcessNameFromTitle(focusedTitle);
+        _processRunner = processRunner;
+        _errorLog = errorLog;
+        _isBusctlAvailable = CheckCommandAvailable("busctl", ["--version"]);
+        // gdbus has no --version flag (exits 1 with "Unknown command"). Probe
+        // with `help`, which exits 0 and proves the binary is runnable.
+        _isGdbusAvailable = CheckCommandAvailable("gdbus", ["help"]);
+    }
 
-        if (
-            string.IsNullOrWhiteSpace(processHint)
-            || !s_supportedBrowserProcessNames.Contains(processHint)
-        )
+    internal AtSpiUrlExtractor(
+        IProcessRunner processRunner,
+        IErrorLogService? errorLog,
+        Func<string, string?>? walkOverride
+    )
+        : this(processRunner, errorLog)
+    {
+        _walkOverride = walkOverride;
+    }
+
+    public string? TryGetBrowserUrl(
+        string? focusedProcessName,
+        string? focusedTitle,
+        bool isPolling = false
+    )
+    {
+        return TryGetBrowserUrl(
+            focusedProcessName,
+            null,
+            focusedTitle,
+            isPolling
+        );
+    }
+
+    /// <summary>
+    ///     Drops the cached URL if it is the one a rejected dictation read stored for this
+    ///     tab, so polling can't reuse a URL read after a tab switch.
+    /// </summary>
+    internal void ForgetCachedUrl(
+        string? focusedProcessName,
+        string? focusedAppId,
+        string? focusedTitle,
+        string url
+    )
+    {
+        var browser = ResolveBrowserDescriptor(focusedProcessName, focusedAppId, focusedTitle);
+        if (browser is null)
         {
-            return null;
+            return;
         }
 
         lock (_cacheLock)
         {
-            // Cache key is (process, title): title is the only signal for tab/page change.
-            // Keying on process alone would return the previous tab's URL after a tab switch.
-            // TTL caps stale trust for SPAs where navigation doesn't change the title.
             if (
-                _cachedUrl is not null
-                && string.Equals(
-                    _cachedProcessName,
-                    processHint,
-                    StringComparison.OrdinalIgnoreCase
-                )
-                && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
-                && DateTime.UtcNow - _cachedUrlAt < s_cacheTtl
+                !string.Equals(_cachedDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
+                || !string.Equals(_cachedUrl, url, StringComparison.Ordinal)
             )
             {
-                return _cachedUrl;
+                return;
+            }
+
+            _cachedDescriptorId = null;
+            _cachedTitle = null;
+            _cachedUrl = null;
+            _cachedUrlAt = default;
+        }
+    }
+
+    internal string? TryGetBrowserUrl(
+        string? focusedProcessName,
+        string? focusedAppId,
+        string? focusedTitle,
+        bool isPolling = false
+    )
+    {
+        var browser = ResolveBrowserDescriptor(
+            focusedProcessName,
+            focusedAppId,
+            focusedTitle
+        );
+
+        if (browser is null)
+        {
+            return null;
+        }
+
+        // Same-title tabs share a cache key, so only polling uses the cache and miss backoff.
+        // Dictation records the URL in history and profile matching, so it always walks.
+        if (isPolling)
+        {
+            lock (_cacheLock)
+            {
+                var now = DateTime.UtcNow;
+
+                if (
+                    _cachedUrl is not null
+                    && string.Equals(
+                        _cachedDescriptorId,
+                        browser.Id,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                    && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
+                    && now - _cachedUrlAt < s_cacheTtl
+                )
+                {
+                    return _cachedUrl;
+                }
+
+                if (
+                    string.Equals(_missDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
+                    && now - _missAt < s_missBackoff
+                )
+                {
+                    return null;
+                }
             }
         }
 
-        if (!s_isBusctlAvailable || !s_isGdbusAvailable)
-        {
-            LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
-            return null;
-        }
-
-        var address = GetAtSpiBusAddress();
-        if (string.IsNullOrWhiteSpace(address))
-        {
-            LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
-            return null;
-        }
-
-        using var cts = new CancellationTokenSource(s_walkBudget);
+        string? url;
         var stats = new WalkStats();
-        var url = WalkForUrl(address, processHint, stats, cts.Token);
+        var budgetExhausted = false;
+
+        if (_walkOverride is not null)
+        {
+            url = _walkOverride(browser.CanonicalProcessName);
+        }
+        else
+        {
+            if (!_isBusctlAvailable || !_isGdbusAvailable)
+            {
+                LogOnce("AT-SPI URL walk skipped: busctl/gdbus not on PATH.");
+                return null;
+            }
+
+            var address = GetAtSpiBusAddress();
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                LogOnce("AT-SPI URL walk skipped: a11y bus address not resolvable via gdbus.");
+                return null;
+            }
+
+            using var cts = new CancellationTokenSource(s_walkBudget);
+            url = WalkForUrl(address, browser, focusedTitle, stats, cts.Token);
+            budgetExhausted = cts.IsCancellationRequested;
+        }
 
         lock (_cacheLock)
         {
-            // Only cache successes — caching null would suppress retries for 10 s,
-            // and updating keys on miss would re-key a still-valid previous URL.
+            // Only cache successes — caching null here would re-key a still-valid previous
+            // URL. Misses are tracked separately so a title change retries immediately.
             if (!string.IsNullOrWhiteSpace(url))
             {
-                _cachedProcessName = processHint;
+                _cachedDescriptorId = browser.Id;
                 _cachedTitle = focusedTitle;
                 _cachedUrl = url;
                 _cachedUrlAt = DateTime.UtcNow;
+                _missDescriptorId = null;
+                _missTitle = null;
+                _missAt = default;
+            }
+            else if (isPolling)
+            {
+                // Dictation misses must not throttle the next poll on this (descriptor, title).
+                _missDescriptorId = browser.Id;
+                _missTitle = focusedTitle;
+                _missAt = DateTime.UtcNow;
             }
         }
 
-        LogOnce(
-            BuildDiagnosticLine(processHint, focusedTitle, stats, url, cts.IsCancellationRequested)
-        );
+        // Guarded here too, not just inside LogOnce: building the line is StringBuilder and
+        // LINQ work on every walk, and this runs in the dictation path.
+        if (s_diagnosticLoggingEnabled)
+        {
+            LogOnce(
+                BuildDiagnosticLine(
+                    browser.CanonicalProcessName,
+                    focusedTitle,
+                    stats,
+                    url,
+                    budgetExhausted
+                )
+            );
+        }
+
         return url;
     }
 
@@ -807,9 +937,10 @@ public sealed partial class AtSpiUrlExtractor
         return sb.ToString();
     }
 
-    private static string? WalkForUrl(
+    private string? WalkForUrl(
         string address,
-        string processHint,
+        BrowserDescriptor focusedBrowser,
+        string? focusedTitle,
         WalkStats stats,
         CancellationToken ct
     )
@@ -832,14 +963,14 @@ public sealed partial class AtSpiUrlExtractor
                 stats.AppsSeen.Add(appName);
             }
 
-            if (!IsMatchingApp(appName, processHint))
+            if (!IsMatchingApp(appName, focusedBrowser))
             {
                 continue;
             }
 
             stats.MatchedApp = appName;
 
-            var window = FindActiveBrowserWindow(address, app, ct);
+            var window = FindFocusedBrowserWindow(address, app, focusedTitle, ct);
             if (window is null)
             {
                 continue;
@@ -847,7 +978,8 @@ public sealed partial class AtSpiUrlExtractor
 
             stats.WindowFound = true;
 
-            var url = FindLikelyBrowserUrlInSubtree(address, window.Value, stats, ct);
+            var url = FindUrlInVisibleEntries(address, window.Value, stats, ct)
+                      ?? FindLikelyBrowserUrlInSubtree(address, window.Value, stats, ct);
             if (url is not null)
             {
                 return url;
@@ -857,75 +989,45 @@ public sealed partial class AtSpiUrlExtractor
         return null;
     }
 
-    private static bool IsMatchingApp(string? identity, string processHint)
+    internal static BrowserDescriptor? ResolveBrowserDescriptor(
+        string? focusedProcessName,
+        string? focusedAppId,
+        string? focusedTitle
+    )
     {
-        if (string.IsNullOrWhiteSpace(identity))
-        {
-            return false;
-        }
-
-        if (string.Equals(identity, processHint, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        // AT-SPI app Name often differs from the process name ("Firefox" vs "firefox",
-        // "Google Chrome" vs "chrome"). Match within the same browser family so the walker
-        // can bridge that gap without accepting a different browser's URL. Without the
-        // family gate, when Firefox and Chrome are both on the bus the walker could return
-        // Chrome's URL when Firefox is the focused window.
-        var identityFamily = ClassifyBrowserFamily(identity);
-        var hintFamily = ClassifyBrowserFamily(processHint);
-        return identityFamily is not null && hintFamily is not null && identityFamily == hintFamily;
+        return BrowserDescriptorCatalog.Resolve(
+            focusedProcessName,
+            focusedAppId,
+            focusedTitle,
+            BrowserCapabilities.AtSpiExtraction
+        );
     }
 
-    /// <summary>
-    ///     Maps a browser identity or process name to its engine family ("firefox" or "chromium").
-    ///     Forks sharing an engine share a family (Firefox/Zen/LibreWolf/Waterfox → "firefox";
-    ///     Chrome/Chromium/Brave/Edge/Vivaldi/Opera → "chromium"). Returns null for unknown identities.
-    /// </summary>
-    private static string? ClassifyBrowserFamily(string? value)
+    internal static bool IsMatchingApp(string? identity, BrowserDescriptor focusedBrowser)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        var lower = value.ToLowerInvariant();
-
-        if (
-            lower.Contains("firefox")
-            || lower.Contains("zen")
-            || lower.Contains("librewolf")
-            || lower.Contains("waterfox")
-        )
-        {
-            return "firefox";
-        }
-
-        if (
-            lower.Contains("chrome")
-            || lower.Contains("chromium")
-            || lower.Contains("brave")
-            || lower.Contains("edge")
-            || lower.Contains("vivaldi")
-            || lower.Contains("opera")
-        )
-        {
-            return "chromium";
-        }
-
-        return null;
+        var applicationBrowser = BrowserDescriptorCatalog.ResolveWindowIdentity(
+            identity,
+            BrowserCapabilities.AtSpiExtraction
+        );
+        return applicationBrowser?.Id == focusedBrowser.Id;
     }
 
-    private static AccessibleRef? FindActiveBrowserWindow(
+    // Picks the browser window the compositor reports as focused. The AT-SPI ACTIVE state alone
+    // is unreliable: Chrome under XWayland on KWin can leave it unset on the focused window
+    // (fresh launch, or focus returning from a native Wayland window) and set on a window that
+    // lost focus. The frame named exactly like the focused window title wins; an ACTIVE frame
+    // is the fallback for titles the compositor decorates (e.g. KWin's " <2>" suffix).
+    private AccessibleRef? FindFocusedBrowserWindow(
         string address,
         AccessibleRef app,
+        string? focusedTitle,
         CancellationToken ct
     )
     {
         var queue = new Queue<(AccessibleRef Node, int Depth)>();
         queue.Enqueue((app, 0));
+        AccessibleRef? titleMatch = null;
+        AccessibleRef? activeWindow = null;
 
         while (queue.Count > 0)
         {
@@ -941,13 +1043,28 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             var role = GetAccessibleRole(address, node);
-            var states = GetAccessibleState(address, node);
-            if (
-                role is AtSpiRoleFrame or AtSpiRoleWindow
-                && ActiveWindowService.HasState(states, AtSpiStateActive)
-            )
+            if (role is AtSpiRoleFrame or AtSpiRoleWindow)
             {
-                return node;
+                var isActive = ActiveWindowService.HasState(
+                    GetAccessibleState(address, node),
+                    AtSpiStateActive
+                );
+                var isTitleMatch =
+                    !string.IsNullOrEmpty(focusedTitle)
+                    && string.Equals(
+                        GetAccessibleName(address, node),
+                        focusedTitle,
+                        StringComparison.Ordinal
+                    );
+                if (isActive && (isTitleMatch || string.IsNullOrEmpty(focusedTitle)))
+                {
+                    return node;
+                }
+
+                titleMatch ??= isTitleMatch ? node : null;
+                activeWindow ??= isActive ? node : null;
+                // A window's subtree is its content, not further top-level windows.
+                continue;
             }
 
             foreach (var child in GetAccessibleChildren(address, node))
@@ -956,10 +1073,10 @@ public sealed partial class AtSpiUrlExtractor
             }
         }
 
-        return null;
+        return titleMatch ?? activeWindow;
     }
 
-    private static string? FindLikelyBrowserUrlInSubtree(
+    private string? FindLikelyBrowserUrlInSubtree(
         string address,
         AccessibleRef root,
         WalkStats stats,
@@ -998,17 +1115,16 @@ public sealed partial class AtSpiUrlExtractor
 
             if (isShowingVisible)
             {
+                // A page's document holds its form fields, never the address bar; skipping
+                // the whole subtree keeps URL-like page fields out and saves walk budget.
+                // An unreadable role (0) can't be ruled out as a document, so skip it too.
                 var role = GetAccessibleRole(address, node);
-                var name = GetAccessibleName(address, node);
-                var interfaces = GetAccessibleInterfaces(address, node);
-                var candidate = TryGetAccessibleText(address, node, interfaces) ?? name;
-                var score = ActiveWindowService.ScoreBrowserUrlCandidate(
-                    role,
-                    states,
-                    name,
-                    candidate,
-                    interfaces
-                );
+                if (role is AtSpiRoleDocumentWeb or 0)
+                {
+                    continue;
+                }
+
+                var (score, candidate) = ScoreUrlCandidate(address, node, role, states);
                 if (score > bestScore)
                 {
                     bestScore = score;
@@ -1029,11 +1145,162 @@ public sealed partial class AtSpiUrlExtractor
         return bestUrl;
     }
 
-    private static string? GetAtSpiBusAddress()
+    // One Collection.GetMatches call for the window's showing, visible entries, edit bars and
+    // combo boxes (Firefox's URL bar). Chromium's omnibox sits ~120 nodes into a breadth-first
+    // walk, and at several busctl spawns per node the 2.5 s budget often ran out first. Fields
+    // inside a web page's document are dropped so a form field holding a URL can't pose as the
+    // address bar. Null when the browser has no Collection support, a page-field query fails,
+    // or no URL-like entry remains, so the caller falls back to the full walk.
+    private string? FindUrlInVisibleEntries(
+        string address,
+        AccessibleRef window,
+        WalkStats stats,
+        CancellationToken ct
+    )
+    {
+        var output = GetVisibleMatches(address, window, s_urlFieldRoleWords);
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        var pageFields = FindWebPageFields(address, window);
+        if (pageFields is null)
+        {
+            return null;
+        }
+
+        string? bestUrl = null;
+        var bestScore = int.MinValue;
+        var values = ParseQuotedStrings(output);
+        for (var i = 0; i + 1 < values.Count && !ct.IsCancellationRequested; i += 2)
+        {
+            var node = new AccessibleRef(values[i], values[i + 1]);
+            if (pageFields.Contains(node))
+            {
+                continue;
+            }
+
+            var (score, candidate) = ScoreUrlCandidate(
+                address,
+                node,
+                GetAccessibleRole(address, node),
+                GetAccessibleState(address, node)
+            );
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestUrl = ActiveWindowService.SanitizeCapturedBrowserUrl(candidate);
+                stats.BestScore = score;
+                stats.BestCandidate = candidate;
+            }
+
+            // 250 requires more than an ordinary unfocused entry: e.g. focus,
+            // an address label, or the browser-specific edit-bar role.
+            if (bestUrl is not null && bestScore >= 250)
+            {
+                break;
+            }
+        }
+
+        return bestUrl;
+    }
+
+    // URL-like fields inside the window's visible web documents. Every browser exposes its
+    // address bar outside the page document, while Firefox's HTML-built toolbar carries the
+    // same "tag" attribute as page fields, so document membership is the reliable split.
+    // Null when a query fails: unchecked candidates must not be trusted as the address bar.
+    private HashSet<AccessibleRef>? FindWebPageFields(string address, AccessibleRef window)
+    {
+        var documents = GetVisibleMatches(address, window, s_documentWebRoleWords);
+        if (documents is null)
+        {
+            return null;
+        }
+
+        var pageFields = new HashSet<AccessibleRef>();
+        var documentRefs = ParseQuotedStrings(documents);
+        for (var i = 0; i + 1 < documentRefs.Count; i += 2)
+        {
+            var fields = GetVisibleMatches(
+                address,
+                new AccessibleRef(documentRefs[i], documentRefs[i + 1]),
+                s_urlFieldRoleWords
+            );
+            if (string.IsNullOrWhiteSpace(fields))
+            {
+                return null;
+            }
+
+            var fieldRefs = ParseQuotedStrings(fields);
+            for (var j = 0; j + 1 < fieldRefs.Count; j += 2)
+            {
+                pageFields.Add(new AccessibleRef(fieldRefs[j], fieldRefs[j + 1]));
+            }
+        }
+
+        return pageFields;
+    }
+
+    // Collection.GetMatches for showing, visible descendants with any of the given roles.
+    private string? GetVisibleMatches(string address, AccessibleRef root, string[] roleWords)
+    {
+        return RunBusctlCall(
+            address,
+            root.BusName,
+            root.ObjectPath,
+            "org.a11y.atspi.Collection",
+            "GetMatches",
+            [
+                "(aiia{ss}iaiiasib)uib",
+                // states: SHOWING and VISIBLE, match all
+                "2", s_showingVisibleStateWord, "0", AtSpiMatchAll,
+                // attributes: none, match all
+                "0", AtSpiMatchAll,
+                // roles: any of the four role words
+                "4", .. roleWords, AtSpiMatchAny,
+                // interfaces: none, match all; invert: false
+                "0", AtSpiMatchAll, "false",
+                // Sort canonical, no cap: page fields must not hide a later address bar. Traverse.
+                "1", "0", "true",
+            ]
+        );
+    }
+
+    private (int Score, string? Candidate) ScoreUrlCandidate(
+        string address,
+        AccessibleRef node,
+        int role,
+        IReadOnlyList<uint> states
+    )
+    {
+        var name = GetAccessibleName(address, node);
+        var interfaces = GetAccessibleInterfaces(address, node);
+        var candidate = TryGetAccessibleText(address, node, interfaces) ?? name;
+        var score = ActiveWindowService.ScoreBrowserUrlCandidate(
+            role,
+            states,
+            name,
+            candidate,
+            interfaces
+        );
+        return (score, candidate);
+    }
+
+    private string? GetAtSpiBusAddress()
     {
         var exitCode = RunProcess(
             "gdbus",
-            "call --session --dest org.a11y.Bus --object-path /org/a11y/bus --method org.a11y.Bus.GetAddress",
+            [
+                "call",
+                "--session",
+                "--dest",
+                "org.a11y.Bus",
+                "--object-path",
+                "/org/a11y/bus",
+                "--method",
+                "org.a11y.Bus.GetAddress",
+            ],
             out var output
         );
 
@@ -1046,7 +1313,7 @@ public sealed partial class AtSpiUrlExtractor
         return match.Success ? match.Groups["value"].Value : null;
     }
 
-    private static string? TryGetAccessibleText(
+    private string? TryGetAccessibleText(
         string address,
         AccessibleRef node,
         IReadOnlyList<string> interfaces,
@@ -1103,7 +1370,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseFirstQuotedString(output);
     }
 
-    private static List<AccessibleRef> GetAccessibleChildren(
+    private List<AccessibleRef> GetAccessibleChildren(
         string address,
         AccessibleRef node
     )
@@ -1130,7 +1397,7 @@ public sealed partial class AtSpiUrlExtractor
         return children;
     }
 
-    private static List<string> GetAccessibleInterfaces(string address, AccessibleRef node)
+    private List<string> GetAccessibleInterfaces(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -1142,7 +1409,7 @@ public sealed partial class AtSpiUrlExtractor
         return string.IsNullOrWhiteSpace(output) ? [] : ParseQuotedStrings(output);
     }
 
-    private static string? GetAccessibleName(string address, AccessibleRef node)
+    private string? GetAccessibleName(string address, AccessibleRef node)
     {
         return GetBusctlStringProperty(
             address,
@@ -1153,7 +1420,7 @@ public sealed partial class AtSpiUrlExtractor
         );
     }
 
-    private static int GetAccessibleRole(string address, AccessibleRef node)
+    private int GetAccessibleRole(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -1165,7 +1432,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseLastInt(output);
     }
 
-    private static IReadOnlyList<uint> GetAccessibleState(string address, AccessibleRef node)
+    private IReadOnlyList<uint> GetAccessibleState(string address, AccessibleRef node)
     {
         var output = RunBusctlCall(
             address,
@@ -1191,7 +1458,7 @@ public sealed partial class AtSpiUrlExtractor
         return ints.Count > 1 ? ints[1..] : [];
     }
 
-    private static string? GetBusctlStringProperty(
+    private string? GetBusctlStringProperty(
         string address,
         string destination,
         string path,
@@ -1203,7 +1470,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseFirstQuotedString(output);
     }
 
-    private static int GetBusctlUInt32Property(
+    private int GetBusctlUInt32Property(
         string address,
         string destination,
         string path,
@@ -1215,7 +1482,7 @@ public sealed partial class AtSpiUrlExtractor
         return ParseLastInt(output);
     }
 
-    private static string? RunBusctlCall(
+    private string? RunBusctlCall(
         string address,
         string destination,
         string path,
@@ -1227,11 +1494,12 @@ public sealed partial class AtSpiUrlExtractor
         var args = new List<string>
         {
             $"--address={address}",
+            "--",
             "call",
             destination,
             path,
             @interface,
-            method
+            method,
         };
         args.AddRange(signatureAndArgs);
 
@@ -1239,7 +1507,7 @@ public sealed partial class AtSpiUrlExtractor
         return exitCode == 0 ? output?.Trim() : null;
     }
 
-    private static string? RunBusctlGetProperty(
+    private string? RunBusctlGetProperty(
         string address,
         string destination,
         string path,
@@ -1255,18 +1523,22 @@ public sealed partial class AtSpiUrlExtractor
         return exitCode == 0 ? output?.Trim() : null;
     }
 
-    private static bool CheckCommandAvailable(string command, string args)
+    private bool CheckCommandAvailable(
+        string command,
+        IReadOnlyList<string> args
+    )
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(command, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(command, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            p?.WaitForExit(1000);
-            return p?.ExitCode == 0;
+            return result.Succeeded;
         }
         catch
         {
@@ -1274,42 +1546,29 @@ public sealed partial class AtSpiUrlExtractor
         }
     }
 
-    private static int RunProcess(string fileName, string args, out string? output)
+    private int RunProcess(
+        string fileName,
+        IReadOnlyList<string> args,
+        out string? output
+    )
     {
         output = null;
 
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(fileName, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(fileName, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            if (p is null)
-            {
-                return -1;
-            }
-
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return -1;
-            }
-
-            output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode;
+            output = result.Status == ProcessRunStatus.Exited
+                ? result.StandardOutputText
+                : null;
+            return result.Status == ProcessRunStatus.Exited
+                ? result.ExitCode ?? -1
+                : -1;
         }
         catch
         {
@@ -1317,59 +1576,71 @@ public sealed partial class AtSpiUrlExtractor
         }
     }
 
-    private static int RunProcess(string fileName, IReadOnlyList<string> args, out string? output)
-    {
-        output = null;
-
-        try
-        {
-            var startInfo = new ProcessStartInfo(fileName)
-            {
-                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
-            };
-            foreach (var arg in args)
-            {
-                startInfo.ArgumentList.Add(arg);
-            }
-
-            using var p = Process.Start(startInfo);
-            if (p is null)
-            {
-                return -1;
-            }
-
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return -1;
-            }
-
-            output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode;
-        }
-        catch
-        {
-            return -1;
-        }
-    }
-
-    private static List<string> ParseQuotedStrings(string value)
+    internal static List<string> ParseQuotedStrings(string value)
     {
         return QuotedStringRegex()
             .Matches(value)
-            .Select(match => Regex.Unescape(match.Groups[1].Value))
+            .Select(match => UnescapeBusctlString(match.Groups[1].Value))
             .ToList();
+    }
+
+    // busctl C-escapes strings byte by byte: non-ASCII UTF-8 arrives as octal escapes
+    // ("b\303\274cher" for "bücher"). Regex.Unescape would map each escaped byte to its own
+    // Latin-1 char ("bÃ¼cher"), so collect the raw bytes and decode them as UTF-8.
+    internal static string UnescapeBusctlString(string escaped)
+    {
+        if (!escaped.Contains('\\', StringComparison.Ordinal))
+        {
+            return escaped;
+        }
+
+        var bytes = new List<byte>(escaped.Length);
+        var literalStart = 0;
+        var i = 0;
+        while (i < escaped.Length)
+        {
+            if (escaped[i] != '\\' || i + 1 == escaped.Length)
+            {
+                i++;
+                continue;
+            }
+
+            bytes.AddRange(Encoding.UTF8.GetBytes(escaped[literalStart..i]));
+            var next = escaped[i + 1];
+            i += 2;
+            switch (next)
+            {
+                case 'a': bytes.Add(0x07); break;
+                case 'b': bytes.Add(0x08); break;
+                case 'f': bytes.Add(0x0C); break;
+                case 'n': bytes.Add(0x0A); break;
+                case 'r': bytes.Add(0x0D); break;
+                case 't': bytes.Add(0x09); break;
+                case 'v': bytes.Add(0x0B); break;
+                case >= '0' and <= '7':
+                    var octal = next - '0';
+                    for (
+                        var digits = 1;
+                        digits < 3 && i < escaped.Length && escaped[i] is >= '0' and <= '7';
+                        digits++
+                    )
+                    {
+                        octal = octal * 8 + (escaped[i++] - '0');
+                    }
+
+                    bytes.Add((byte)octal);
+                    break;
+                default:
+                    // \\, \", \' and anything unrecognised decode to the escaped char itself.
+                    literalStart = i - 1;
+                    continue;
+            }
+
+            literalStart = i;
+        }
+
+        bytes.AddRange(Encoding.UTF8.GetBytes(escaped[literalStart..]));
+        return Encoding.UTF8.GetString(bytes.ToArray());
     }
 
     private static string? ParseFirstQuotedString(string? value)

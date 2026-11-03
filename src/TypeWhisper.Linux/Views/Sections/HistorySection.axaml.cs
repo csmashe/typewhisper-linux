@@ -1,9 +1,9 @@
-using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using System.Diagnostics;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
@@ -88,21 +88,32 @@ public partial class HistorySection : UserControl
             return;
         }
 
+        var exportSelection = viewModel is { IsSelecting: true, HasSelection: true };
+        var selectedIds = exportSelection ? viewModel.SnapshotSelectedIds() : null;
+        if (exportSelection && selectedIds!.Count == 0)
+        {
+            // Never fall back to exporting everything visible when the selection has vanished.
+            viewModel.Notice = Loc.Instance["History.ExportSelectionMissing"];
+            return;
+        }
+
         try
         {
             var file = await topLevel.StorageProvider.SaveFilePickerAsync(
                 new FilePickerSaveOptions
                 {
                     Title = Loc.Instance["Dialog.ExportHistory"],
-                    SuggestedFileName = $"typewhisper-history-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
+                    SuggestedFileName = selectedIds is { Count: > 0 }
+                        ? $"typewhisper-history-selection-{DateTime.Now:yyyyMMdd-HHmmss}.txt"
+                        : $"typewhisper-history-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
                     DefaultExtension = "txt",
                     FileTypeChoices =
                     [
                         new FilePickerFileType("Text") { Patterns = ["*.txt"] },
                         new FilePickerFileType("CSV") { Patterns = ["*.csv"] },
                         new FilePickerFileType("Markdown") { Patterns = ["*.md"] },
-                        new FilePickerFileType("JSON") { Patterns = ["*.json"] }
-                    ]
+                        new FilePickerFileType("JSON") { Patterns = ["*.json"] },
+                    ],
                 }
             );
 
@@ -121,11 +132,25 @@ public partial class HistorySection : UserControl
                 path += extension;
             }
 
-            await File.WriteAllTextAsync(path, viewModel.BuildExportContent(extension));
+            var content = viewModel.BuildExportContent(extension, selectedIds, out var exportedCount);
+            await File.WriteAllTextAsync(path, content);
+            if (selectedIds is { Count: > 0 })
+            {
+                viewModel.Notice = Loc.Instance.GetString("History.ExportedSelected", exportedCount);
+            }
+        }
+        catch (InvalidOperationException ex) when (selectedIds is { Count: > 0 })
+        {
+            viewModel.Notice = ex.Message;
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[HistorySection] Export failed: {ex.Message}");
+            var dialog = new MessageDialogWindow();
+            await dialog.ShowMessageAsync(
+                Loc.Instance["Common.OperationFailedTitle"],
+                Loc.Instance.GetString("Common.OperationFailed", Loc.Instance["Common.Export"], ex.Message)
+            );
         }
     }
 
@@ -154,6 +179,40 @@ public partial class HistorySection : UserControl
         catch (Exception ex)
         {
             Trace.WriteLine($"[HistorySection] Clear all failed: {ex.Message}");
+        }
+    }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler requires a void return
+    private async void OnDeleteSelected(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not HistorySectionViewModel viewModel)
+        {
+            return;
+        }
+
+        var snapshot = viewModel.SnapshotSelectedIds();
+        if (snapshot.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var dialog = new MessageDialogWindow();
+            var confirmed = await dialog.ShowConfirmationAsync(
+                Loc.Instance.GetString("History.DeleteSelectedTitle", snapshot.Count),
+                Loc.Instance["History.DeleteSelectedMessage"],
+                Loc.Instance["Common.Delete"]
+            );
+
+            if (confirmed)
+            {
+                await viewModel.DeleteSelectedAsync(snapshot);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[HistorySection] Delete selected failed: {ex.Message}");
         }
     }
 

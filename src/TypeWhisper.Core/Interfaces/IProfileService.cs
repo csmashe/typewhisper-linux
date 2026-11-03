@@ -10,9 +10,24 @@ public interface IProfileService
 {
     IReadOnlyList<Profile> Profiles { get; }
 
+    /// <summary>Reads the profiles and reports whether they are stored data.</summary>
+    /// <returns><c>false</c> when the store was reset after corruption, not merely empty.</returns>
+    bool TryGetProfiles(out IReadOnlyList<Profile> profiles)
+    {
+        profiles = Profiles;
+        return true;
+    }
+
     void AddProfile(Profile profile);
     void UpdateProfile(Profile profile);
     void DeleteProfile(string id);
+
+    /// <summary>
+    ///     Atomically finds the latest profile with <paramref name="id" />, inverts its enabled
+    ///     state, updates its timestamp, persists and publishes the complete list, and returns
+    ///     the committed profile. Returns <see langword="null" /> without writing when missing.
+    /// </summary>
+    Profile? ToggleProfileEnabled(string id);
 
     /// <summary>Seeds the built-in default profiles only on a genuine first run (when no profile file exists yet).</summary>
     void SeedFirstRunDefaultsIfMissing();

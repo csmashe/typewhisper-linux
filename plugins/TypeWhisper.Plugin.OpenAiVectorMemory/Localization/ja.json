@@ -1,0 +1,8 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "ベクトルメモリ用の埋め込みを生成するために使用するOpenAI APIキーです。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyConfigured": "APIキーが設定されています。",
+  "Manifest.Name": "OpenAIベクトルメモリ",
+  "Manifest.Description": "OpenAIの埋め込みを使用したベクトルベースのメモリストレージ"
+}

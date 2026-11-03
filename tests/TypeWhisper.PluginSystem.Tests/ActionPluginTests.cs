@@ -59,6 +59,22 @@ public class ActionPluginTests
     }
 
     [Fact]
+    public void ActionResult_DocumentedPresentationFieldsAreAccessible()
+    {
+        var result = new ActionResult(
+            true,
+            "Created",
+            "https://example.com/issues/42",
+            "task-due",
+            4.25
+        );
+
+        Assert.Equal("https://example.com/issues/42", result.Url);
+        Assert.Equal("task-due", result.Icon);
+        Assert.Equal(4.25, result.DisplayDuration);
+    }
+
+    [Fact]
     public void ActionResult_DefaultDisplayDurationIsThreeSeconds()
     {
         var result = new ActionResult(true);

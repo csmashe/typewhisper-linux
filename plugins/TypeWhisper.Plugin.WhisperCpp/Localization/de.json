@@ -4,6 +4,7 @@
   "Settings.UsingDefaultThreshold": "Standardschwellenwert {0} wird verwendet.",
   "Settings.ThresholdSet": "Schwellenwert auf {0} gesetzt.",
   "Settings.ThresholdInvalid": "Der Schwellenwert für Sprachlosigkeit muss eine Zahl zwischen 0.0 und 1.0 sein.",
+  "Errors.TranslationUnsupported": "{0} kann nicht ins Englische übersetzen. Wählen Sie ein mehrsprachiges Modell außer Turbo, zum Beispiel Small oder Medium.",
   "Manifest.Name": "whisper.cpp (Lokal)",
   "Manifest.Description": "Offline-Transkription über whisper.cpp mit Whisper.net"
 }

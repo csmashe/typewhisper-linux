@@ -8,7 +8,11 @@ Speech-to-text and AI text processing for the Linux desktop. This repository is 
 
 If the TypeWhisper project releases an official Linux version, or if this port is merged into the main TypeWhisper branch, I plan to use the upstream Linux version instead. Until then, this branch exists as a practical Linux port adapted around Avalonia, Linux desktop services, and Linux-friendly install and startup behavior.
 
-Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary and snippet post-processing, and run prompt-based AI text actions through plugins.
+Press a key, talk, and have clean, punctuated text land in whatever app you're in — tuned to feel as close to [Wispr Flow](https://wisprflow.ai/) as possible on Linux. TypeWhisper lets you dictate into other applications, transcribe audio files, record longer WAV sessions, apply dictionary, snippet, and spoken-number post-processing, and run prompt-based AI text actions through plugins.
+
+## New in 0.19.1
+
+This maintenance release stops **hidden overlay windows from swallowing clicks** in the top-right corner on GNOME, makes **file drops from other apps work on X11**, keeps **`--minimized` startup reachable without a tray**, and fixes the **Codex, Claude Code and OpenCode** providers in Authenticated CLIs (Codex now needs 0.147 or later), **GitHub Copilot accounts** for users signed into `gh`, **AssemblyAI streaming**, **Transform Selection** pasting into another field, and **media pause** with two instances of one player, plus profile, clipboard, xAI and subtitle fixes. The unpublished **online plugin registry is removed**; plugins stay bundled. See the [0.19.1 release notes](docs/releases/v0.19.1.md) for the full list, and the [0.19.0 release notes](docs/releases/v0.19.0.md) for Japanese and Simplified Chinese, the new providers and local models, and the rest of that release.
 
 ## Documentation
 
@@ -23,16 +27,21 @@ Press a key, talk, and have clean, punctuated text land in whatever app you're i
 
 ## What it does
 
-- **Global dictation** with Toggle, Push-to-talk, and Hybrid activation modes, a configurable recording overlay, recent-transcriptions and transform-selection hotkeys, and cancel-in-flight. See [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) and [Global Hotkeys](https://github.com/csmashe/typewhisper-linux/wiki/Global-Hotkeys).
+- **Global dictation** with Toggle, Push-to-talk, and Hybrid activation modes, a configurable recording overlay, recent-transcriptions, paste-last-transcription and transform-selection hotkeys, cancel-in-flight, and a built-in microphone test. See [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) and [Global Hotkeys](https://github.com/csmashe/typewhisper-linux/wiki/Global-Hotkeys).
 - **Plugin-backed transcription** — local engines (whisper.cpp, sherpa-onnx, …) and cloud engines, with optional real-time websocket streaming and token-by-token LLM response streaming. See [Transcription Engines](https://github.com/csmashe/typewhisper-linux/wiki/Transcription-Engines).
-- **Local GPU acceleration** — optional NVIDIA CUDA for the bundled whisper.cpp and sherpa-onnx engines, with the runtime downloaded on demand rather than bundled — resumable downloads, and an in-app reset to recover from a bad cache. See [GPU & CUDA](https://github.com/csmashe/typewhisper-linux/wiki/GPU-and-CUDA).
+- **Local GPU acceleration** — optional NVIDIA CUDA for the bundled whisper.cpp and sherpa-onnx engines, with the runtime downloaded on demand rather than bundled — resumable downloads, and an in-app reset to recover from a bad cache — and Vulkan for whisper.cpp on AMD, Intel and NVIDIA GPUs. Both engines transcribe in a supervised worker process: a crash is retried, and repeated GPU crashes fall back to the CPU. See [GPU & CUDA](https://github.com/csmashe/typewhisper-linux/wiki/GPU-and-CUDA).
 - **Smart per-app text insertion** — `Auto` / `Clipboard Paste` / `Direct Typing` / `Copy Only` keyed by process name, with session-aware Wayland backends (`wtype` / `ydotool` / `xdotool`). See [Text Insertion](https://github.com/csmashe/typewhisper-linux/wiki/Text-Insertion).
 - **AI text cleanup & formatting** in the Wispr-Flow style, driven by your own LLM, with profile style presets and developer-safe formatting. See [Text Cleanup](https://github.com/csmashe/typewhisper-linux/wiki/Text-Cleanup).
-- **File transcription and a recorder** — batch queues, watch folders, subtitle (SRT/VTT) export, and longer WAV captures. See [File Transcription](https://github.com/csmashe/typewhisper-linux/wiki/File-Transcription) and [Recorder](https://github.com/csmashe/typewhisper-linux/wiki/Recorder).
-- **Personalization** — searchable history, a dictionary with term packs, snippets, and app/URL-matched profiles. See [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles).
-- **A localized interface** — English, German, Spanish, or Russian, switched live (or Auto, to follow your system locale). See [General Settings](https://github.com/csmashe/typewhisper-linux/wiki/General-Settings).
-- **Automation** — a local [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and an installable `typewhisper` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI).
-- **Desktop integration** — tray icon, XDG autostart, single-instance handoff, and a user-level installer. See [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration).
+- **Voice-native editing** — start a dictation with a keyphrase ("TypeWhisper") and the rest becomes a command that edits your highlighted text or writes new text at the cursor, instead of being typed verbatim. Ships disabled; enable it in [Prompts](https://github.com/csmashe/typewhisper-linux/wiki/Prompts).
+- **File transcription and a recorder** — batch queues, watch folders, subtitle (SRT/VTT) export, and longer WAV captures with pause/resume and in-app playback. See [File Transcription](https://github.com/csmashe/typewhisper-linux/wiki/File-Transcription) and [Recorder](https://github.com/csmashe/typewhisper-linux/wiki/Recorder).
+- **Personalization** — searchable history, a dictionary with term packs and optional acoustic boosting (misheard terms are checked against the audio, not just their spelling), snippets, and app/URL-matched profiles, each of which can choose its own memory source for prompt actions. History also has an opt-in **Inspect** panel that shows exactly what was sent to the LLM for each entry — the raw→final diff, the exact prompt, injected memory context, and the reply, with local-vs-cloud labelling. See [Profiles](https://github.com/csmashe/typewhisper-linux/wiki/Profiles) and [History](https://github.com/csmashe/typewhisper-linux/wiki/History).
+- **Learns from your corrections** in the Wispr-Flow style — when you type over a dictated word in the target app to fix it, TypeWhisper silently learns the correction (via AT-SPI) and auto-applies it to future dictations. A brief toast shows what was learned and offers **Undo**. Off by default (it reads the focused field); enable it under [Dictation](https://github.com/csmashe/typewhisper-linux/wiki/Dictation) settings, and review or remove learned entries in the [Dictionary](https://github.com/csmashe/typewhisper-linux/wiki/Dictionary).
+- **A localized interface** — English, German, Spanish, Russian, Japanese, or Simplified Chinese, switched live (or Auto, to follow your system locale). See [General Settings](https://github.com/csmashe/typewhisper-linux/wiki/General-Settings).
+- **Automation** — a local, authenticated [HTTP API](https://github.com/csmashe/typewhisper-linux/wiki/HTTP-API) and a `typewhisper-cli` [CLI](https://github.com/csmashe/typewhisper-linux/wiki/CLI) bundled in every package.
+- **Authenticated provider CLIs** — use installed, signed-in Codex, Claude Code, or OpenCode tools for LLM text processing through the Authenticated CLIs plugin, including further sessions (for example a second account) as their own providers. These are separate from `typewhisper-cli`; their providers may process your text remotely. See [LLM Providers](https://github.com/csmashe/typewhisper-linux/wiki/LLM-Providers).
+- **Dictation recovery** — retry a failed dictation from History while its recording is available. The recovered result is copied to the clipboard. Recovery audio is kept locally for **30 days by default**; change **Dictation → Recovery → Keep dictation recordings for recovery (days)**, or use `-1` to delete captures when the app closes. History saving must be enabled. See [History](https://github.com/csmashe/typewhisper-linux/wiki/History).
+- **Your data, exportable** — **Export All Data** writes one archive of your settings, history, dictionary, profiles and (optionally) recordings, with every credential removed and a settings backup that Restore accepts. **Delete All Data** starts over like a new installation, keeping installed plugins and, unless you choose otherwise, downloaded models. See [Backup and Restore](https://github.com/csmashe/typewhisper-linux/wiki/Backup-and-Restore).
+- **Desktop integration** — tray icon (with paste/copy last transcription), XDG autostart, single-instance handoff, and a user-level installer. See [Desktop Integration](https://github.com/csmashe/typewhisper-linux/wiki/Desktop-Integration).
 
 Everything here is Linux-specific work adapted from the upstream macOS/Windows project: Wayland/X11 global hotkeys, compositor-native window and URL detection, session audio handling, and Linux packaging. The deep how-and-why for each lives in the wiki — start with [Wayland Notes](https://github.com/csmashe/typewhisper-linux/wiki/Wayland-Notes) if you're on Wayland.
 
@@ -43,11 +52,11 @@ I run this branch as my daily driver and tune it to feel as close to [Wispr Flow
 The stack I actually use day to day:
 
 - **Transcription** — the bundled whisper.cpp engine on the GPU (CUDA 12), running the full `large-v3` model. Since I'm running on a GPU there's headroom for it, so I moved up from `large-v3-turbo` to the full model. It's fully local, runs fine on my GTX 1070, and accurate enough that I rarely re-record.
-- **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box. I now run cleanup through a custom dictation-cleanup model we're still putting together; it isn't released yet (more on that below). If you want the same setup today, I recommend `mistral-small:24b` — it's what I ran before and still works well. My **Auto Clean Up Text** prompt drives the model, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM.
+- **Cleanup** — an OpenAI-compatible LLM server (Ollama) running on a separate machine on my LAN — an RTX 3090 box. I now run cleanup through a custom dictation-cleanup model we're still putting together; it isn't released yet (more on that below). If you want the same setup today, I recommend `mistral-small:24b` — it's what I ran before and still works well. My **Auto Clean Up Text** prompt drives the model, and it's written to clean dictation the way Wispr Flow does: strip filler words ("um", "uh", "like"), fix capitalization and punctuation, apply spoken self-corrections in place, and format lists when I clearly ask for one — without ever adding, answering, or dropping anything I actually said. The **Auto Format** profile binds that prompt to a single hotkey (`Ctrl+Alt+E`), so dictation goes straight through cleanup before it's inserted. Both ship seeded but disabled on a fresh install, so you can turn them on and point the cleanup at your own LLM. If your server runs a reasoning model, its thinking is stripped before insertion, and each OpenAI-compatible endpoint has a **Thinking Mode** setting to turn it off for cleanup entirely.
 - **Insertion** — auto-paste is on, and on GNOME Wayland the text is delivered through `ydotool`.
 - **Hotkeys** — I run in **Hybrid** activation mode: a quick tap toggles recording, and holding acts as push-to-talk.
 
-I keep the rest deliberately minimal for latency and predictability — audio ducking, media pause, sound feedback, live/streaming transcription, and silence auto-stop are all off. The cleanup LLM is the only network hop, and it lives on a separate box on my own LAN, so nothing leaves the machines I control.
+I keep the rest deliberately minimal for latency and predictability — audio ducking, media pause, sound feedback, live/streaming transcription, and silence auto-stop are all off. In this setup, the cleanup LLM is the only network hop for audio and text, and it lives on a separate box on my own LAN. Optional Sentry diagnostic reporting is described below.
 
 **Where this is going:** the cleanup model I run now is an early, not-yet-released build of a model we're putting together purpose-built for dictation cleanup, so the behavior lives in the weights instead of being carried by a long system prompt (see [`docs/prompts/`](docs/prompts/) for the prompt-driven approach `mistral-small:24b` still uses). The goal is cleanup that's faster, more consistent, and far less sensitive to prompt wording than leaning on a general model. Until it ships, `mistral-small:24b` is the one to use — and if you find a model that works better, let me know and I will update the documentation.
 
@@ -55,11 +64,24 @@ I keep the rest deliberately minimal for latency and predictability — audio du
 
 Tagged releases on [GitHub Releases](https://github.com/csmashe/typewhisper-linux/releases) ship four `linux-x64` formats — **AppImage**, Debian/Ubuntu **`.deb`**, Fedora/RHEL **`.rpm`**, and a no-root **tarball** — each bundling the self-contained .NET runtime and the Linux plugins. See **[Installation](https://github.com/csmashe/typewhisper-linux/wiki/Installation)** for which format to pick and the per-format commands, and **[Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements)** for the optional desktop helpers (`pactl`, `playerctl`, `wtype` / `ydotool` / `xdotool`, `pw-play` / `paplay` / `aplay`, …).
 
+### Tarball and AppImage system libraries
+
+The `.deb` and `.rpm` install required system libraries through the package manager; tarball and AppImage users must install the equivalent libraries from the [Requirements](https://github.com/csmashe/typewhisper-linux/wiki/Requirements) page first.
+
 Whichever format you install, the first-run [Setup Wizard](https://github.com/csmashe/typewhisper-linux/wiki/Setup-Wizard) checks what's needed and gets you set up with everything required — the typing/paste backend, the global-dictation hotkey, active-window detection, and more — so you don't have to wire it up by hand.
 
 ### Build from source
 
-Requires the **.NET 10 SDK**.
+Requires the **.NET 10 SDK** and `python3`. `global.json` pins a 10.0.100 floor so CI is reproducible, and rolls forward from there — your distribution's package is enough:
+
+```bash
+sudo dnf install dotnet-sdk-10.0      # Fedora / RHEL
+sudo apt install dotnet-sdk-10.0      # Debian / Ubuntu
+```
+
+The floor is deliberately on the `10.0.1xx` feature band. Fedora, RHEL and Debian ship *source-built* .NET, which only ever tracks that band, so pinning one of Microsoft's `10.0.2xx`/`10.0.3xx` bands would lock every distro contributor out — `rollForward` only rolls forward, never back. Microsoft's own builds are newer bands and satisfy the pin too, if you prefer one.
+
+The build bundles the Linux plugins, reading the authoritative list in `plugins/catalog.json` via `scripts/plugin-catalog-deploy-map.py`. Skip that step with `-p:DeployBundledLinuxPlugins=false`.
 
 ```bash
 git clone https://github.com/csmashe/typewhisper-linux.git
@@ -71,7 +93,7 @@ dotnet run --project src/TypeWhisper.Linux
 To install a clickable launcher and icon for the current user (publishes self-contained, bundles the Linux plugins, and registers a `.desktop` entry):
 
 ```bash
-./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove
+./scripts/install-linux-app.sh      # ./scripts/uninstall-linux-app.sh to remove (keeps your data; add --purge to delete it too)
 ```
 
 ## Project Layout
@@ -89,11 +111,21 @@ typewhisper-linux/
 └── tests/                       # Automated tests
 ```
 
+## Optional crash and performance reporting
+
+**Sending reports to Sentry is off by default.** We would appreciate you turning it on, especially if you are having crashes, errors, or slow dictation: these reports help us find and fix problems across Linux setups.
+
+Enable **Advanced → Data → Send anonymous crash and performance reports**. When enabled, TypeWhisper sends diagnostic data to the Excel on the Web Sentry project: app version, OS and hardware details, engine and model names, error types and stack traces, and startup/dictation timings. Reports also include audio duration and transcript character count, but **never audio, transcript or prompt text, clipboard contents, window titles, or API keys**. Exception message text and persistent user/install identifiers are excluded.
+
+You can turn reporting off at any time; it stops immediately, and queued reports are discarded. This feature does not keep an offline report cache. See the [Privacy Policy](docs/PRIVACY.md) for the full details. Cloud transcription and LLM providers have their own data flows, independent of this switch.
+
+If you would rather not send anything, two local options help with a support request instead: **Advanced → Data → Keep a local diagnostic log** (off by default) records dictation steps, timings and error types to a file on your computer, and **About → Support Report → Export Report** saves a JSON description of the app's current state. Neither contains audio, transcripts, prompts, names, file paths, API keys or error messages, and neither is sent anywhere.
+
 ## Contributing & Support
 
 This branch is tested on Pop!_OS (GNOME/X11), Linux Mint (Cinnamon/X11), Fedora (GNOME and KDE Wayland), and Arch (Hyprland/Wayland) — see [Tested Configurations](https://github.com/csmashe/typewhisper-linux/wiki/Tested-Configurations) for the per-setup detail. Other Wayland compositors should work via their compositor-native providers but are untested.
 
-If you hit a setup-specific issue, please open an issue or pull request with your distribution, desktop environment, display server, reproduction steps, and any relevant logs (the About page's Error Log captures diagnostics). See [Troubleshooting](https://github.com/csmashe/typewhisper-linux/wiki/Troubleshooting) and [Contributing](https://github.com/csmashe/typewhisper-linux/wiki/Contributing).
+If you hit a setup-specific issue, please open an issue or pull request with your distribution, desktop environment, display server, reproduction steps, and any relevant logs (the About page's Error Log captures errors, and **Export Report** there saves a content-free support report you can attach). See [Troubleshooting](https://github.com/csmashe/typewhisper-linux/wiki/Troubleshooting) and [Contributing](https://github.com/csmashe/typewhisper-linux/wiki/Contributing).
 
 ## License
 

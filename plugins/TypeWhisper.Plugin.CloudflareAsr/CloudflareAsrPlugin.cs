@@ -1,30 +1,77 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Buffers.Binary;
+using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.CloudflareAsr;
 
-public sealed partial class CloudflareAsrPlugin
+public sealed class CloudflareAsrPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private const string WhisperModelId = "whisper";
+    private const string TurboModelId = "whisper-large-v3-turbo";
+
+    // Cloudflare's Free/Pro request-body ceiling. Turbo sends the WAV as base64 JSON, a third larger.
+    private const int MaxWhisperUploadBytes = 100_000_000;
+    private const int MaxTurboUploadBytes = 74_000_000;
+
+    private static readonly TimeSpan s_validationTimeout = TimeSpan.FromSeconds(15);
+
+    private static readonly IReadOnlyList<string> s_turboLanguages =
+    [
+        "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi",
+        "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la",
+        "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy",
+        "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be",
+        "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl",
+        "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su",
+    ];
+
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
+    [
+        new(WhisperModelId, "Whisper (Cloudflare)"),
+        new(TurboModelId, "Whisper Large V3 Turbo (Cloudflare)")
+        {
+            IsRecommended = true,
+            LanguageCount = s_turboLanguages.Count,
+        },
+    ];
+
+    private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
     private string? _apiToken;
     private string? _accountId;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
-    [
-        new("whisper", "Whisper (Cloudflare)"),
-    ];
+    public CloudflareAsrPlugin()
+        : this(
+            new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            {
+                Timeout = TimeSpan.FromSeconds(120),
+            }
+        )
+    {
+    }
+
+    internal CloudflareAsrPlugin(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+    }
 
     public string PluginId => "com.typewhisper.cloudflare-asr";
     public string PluginName => "Cloudflare ASR";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
@@ -36,7 +83,8 @@ public sealed partial class CloudflareAsrPlugin
         _apiToken = string.IsNullOrWhiteSpace(loadedToken) ? null : loadedToken.Trim();
         var loadedAccount = await host.LoadSecretAsync("account-id");
         _accountId = string.IsNullOrWhiteSpace(loadedAccount) ? null : loadedAccount.Trim();
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        var savedModel = host.GetSetting<string>("selectedModel");
+        SelectedModelId = s_models.Any(m => m.Id == savedModel) ? savedModel : s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -51,17 +99,26 @@ public sealed partial class CloudflareAsrPlugin
     public bool IsConfigured =>
         !string.IsNullOrEmpty(_apiToken) && !string.IsNullOrEmpty(_accountId);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
+
+    private bool IsTurbo => SelectedModelId == TurboModelId;
 
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport =>
+        IsTurbo ? LanguageSelectionSupport.Supported : LanguageSelectionSupport.Unsupported;
+    public IReadOnlyList<string> SupportedLanguages => IsTurbo ? s_turboLanguages : [];
+
+    // Only Turbo takes an initial prompt; the original Whisper endpoint accepts audio alone.
+    public bool SupportsStructuredDictionaryTerms => IsTurbo;
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -73,81 +130,186 @@ public sealed partial class CloudflareAsrPlugin
         CancellationToken ct
     )
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException(
-                "Plugin not configured. Account ID and API token required."
+        if (translate)
+            throw new NotSupportedException(
+                "Translation is not supported by the Cloudflare ASR plugin."
             );
 
-        var url =
-            $"https://api.cloudflare.com/client/v4/accounts/{_accountId}/ai/run/@cf/openai/whisper";
+        var modelId = SelectedModelId ?? s_models[0].Id;
+        var isTurbo = modelId == TurboModelId;
+
+        // "auto" is the sentinel for "no explicit language".
+        var normalized = language?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            normalized = null;
+
+        // Defense in depth for direct/legacy callers; the typed host invoker resolves the
+        // selection against the advertised capabilities before entering the plugin.
+        if (normalized is not null && !isTurbo)
+            throw new NotSupportedException(
+                "This Cloudflare model does not support explicit language selection. Choose Whisper Large V3 Turbo or use automatic detection."
+            );
+        if (normalized is not null && !s_turboLanguages.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+            throw new NotSupportedException(
+                $"Cloudflare Whisper Large V3 Turbo does not support the language '{normalized}'."
+            );
+
+        if (!IsConfigured)
+            throw new PluginRequestException(Loc.L("Settings.EnterAccountIdAndApiToken"), PluginRequestFailureKind.Configuration);
+
+        var accountId = _accountId!;
+        if (!IsValidAccountId(accountId))
+            throw new PluginRequestException(Loc.L("Settings.InvalidAccountId"), PluginRequestFailureKind.Configuration);
+
+        if (wavAudio.Length > (isTurbo ? MaxTurboUploadBytes : MaxWhisperUploadBytes))
+            throw new PluginRequestException(Loc.L("Errors.RecordingTooLarge"), PluginRequestFailureKind.RequestTooLarge);
+
+        var url = $"https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/run/@cf/openai/{modelId}";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
-        request.Content = new ByteArrayContent(wavAudio);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        if (isTurbo)
+        {
+            request.Content = new TurboAudioContent(
+                wavAudio,
+                normalized?.ToLowerInvariant(),
+                PluginTranscriptionPrompt.Parse(prompt).ToPlainText()
+            );
+        }
+        else
+        {
+            request.Content = new ByteArrayContent(wavAudio);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        }
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            // Status + reason only: the body can echo request fragments or token-bearing identifiers.
+            (errorResponse, _) =>
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"Cloudflare API error {(int)errorResponse.StatusCode} ({errorResponse.ReasonPhrase})"
+                );
+                return $"Cloudflare API error {(int)errorResponse.StatusCode}: {errorResponse.ReasonPhrase}";
+            });
         var json = await response.Content.ReadAsStringAsync(ct);
 
-        if (!response.IsSuccessStatusCode)
-        {
-            // Keep only the stable HTTP status + reason in both the plugin log
-            // and the thrown exception; the raw response body may echo request
-            // fragments or token-bearing identifiers that we don't want in any
-            // diagnostic surface.
-            _host?.Log(
-                PluginLogLevel.Warning,
-                $"Cloudflare API error {(int)response.StatusCode} ({response.ReasonPhrase})"
-            );
-            throw new HttpRequestException(
-                $"Cloudflare API error {(int)response.StatusCode}: {response.ReasonPhrase}"
-            );
-        }
-
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        var text = "";
-        if (
-            root.TryGetProperty("result", out var result)
-            && result.ValueKind == JsonValueKind.Object
-            && result.TryGetProperty("text", out var textEl)
-        )
-        {
-            text = textEl.GetString() ?? "";
-        }
-
-        // Language and duration are nested under result.language / result.duration;
-        // both fields are optional and absent when Cloudflare can't determine them.
-        string? detectedLanguage = null;
-        if (
-            root.TryGetProperty("result", out var res)
-            && res.ValueKind == JsonValueKind.Object
-            && res.TryGetProperty("language", out var langEl)
-        )
-        {
-            detectedLanguage = langEl.GetString();
-        }
-
-        double duration = 0;
-        if (
-            root.TryGetProperty("result", out var res2)
-            && res2.ValueKind == JsonValueKind.Object
-            && res2.TryGetProperty("duration", out var durEl)
-            && durEl.ValueKind == JsonValueKind.Number
-            && durEl.TryGetDouble(out var parsedDuration)
-        )
-        {
-            duration = parsedDuration;
-        }
-
-        return new PluginTranscriptionResult(
-            text.Trim(),
-            detectedLanguage,
-            duration,
-            NoSpeechProbability: null
-        );
+        return ParseTranscription(json, wavAudio);
     }
+
+    private static PluginTranscriptionResult ParseTranscription(string json, byte[] wavAudio)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(json);
+        }
+        catch (JsonException ex)
+        {
+            throw InvalidResponse("the body is not valid JSON", ex);
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (
+                root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("success", out var success)
+                || success.ValueKind != JsonValueKind.True
+            )
+                throw InvalidResponse("'success' must be true");
+
+            if (
+                !root.TryGetProperty("result", out var result)
+                || result.ValueKind != JsonValueKind.Object
+                || !result.TryGetProperty("text", out var textEl)
+                || textEl.ValueKind != JsonValueKind.String
+            )
+                throw InvalidResponse("required field 'result.text' must be a string");
+
+            // Turbo nests language and duration under result.transcription_info; both are
+            // optional and absent when Cloudflare can't determine them.
+            var info =
+                result.TryGetProperty("transcription_info", out var details)
+                && details.ValueKind == JsonValueKind.Object
+                    ? details
+                    : result;
+
+            string? detectedLanguage = null;
+            if (info.TryGetProperty("language", out var langEl) && langEl.ValueKind == JsonValueKind.String)
+                detectedLanguage = langEl.GetString();
+
+            // The base whisper model omits duration, so fall back to the length of the WAV we sent.
+            double duration;
+            if (
+                info.TryGetProperty("duration", out var durEl)
+                && durEl.ValueKind == JsonValueKind.Number
+                && durEl.TryGetDouble(out var parsedDuration)
+                && double.IsFinite(parsedDuration)
+                && parsedDuration >= 0
+            )
+                duration = parsedDuration;
+            else
+                duration = CalculateWavDurationSeconds(wavAudio);
+
+            return new PluginTranscriptionResult(
+                (textEl.GetString() ?? "").Trim(),
+                detectedLanguage,
+                duration,
+                NoSpeechProbability: null
+            );
+        }
+    }
+
+    // Bounded chunk walk, so a truncated or hostile header cannot loop forever.
+    internal static double CalculateWavDurationSeconds(byte[] wavAudio)
+    {
+        if (wavAudio.Length < 12
+            || Encoding.ASCII.GetString(wavAudio, 0, 4) != "RIFF"
+            || Encoding.ASCII.GetString(wavAudio, 8, 4) != "WAVE")
+        {
+            return 0;
+        }
+
+        var byteRate = 0;
+        var dataSize = 0;
+        for (var offset = 12; offset <= wavAudio.Length - 8;)
+        {
+            var chunkId = Encoding.ASCII.GetString(wavAudio, offset, 4);
+            // Unsigned, because FFmpeg streaming to a pipe writes 0xFFFFFFFF ("unknown length")
+            // for the data chunk; it is clamped to the bytes actually present below.
+            var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(wavAudio.AsSpan(offset + 4, 4));
+            var dataStart = offset + 8;
+            switch (chunkId)
+            {
+                case "fmt " when chunkSize >= 12 && dataStart <= wavAudio.Length - 12:
+                    byteRate = BinaryPrimitives.ReadInt32LittleEndian(wavAudio.AsSpan(dataStart + 8, 4));
+                    break;
+                case "data":
+                    dataSize = (int)Math.Min(chunkSize, (uint)(wavAudio.Length - dataStart));
+                    break;
+            }
+
+            var paddedChunkSize = (long)chunkSize + (chunkSize & 1);
+            if (paddedChunkSize > wavAudio.Length - (long)dataStart)
+                break;
+            offset = dataStart + (int)paddedChunkSize;
+        }
+
+        return byteRate > 0 && dataSize > 0 ? dataSize / (double)byteRate : 0;
+    }
+
+    private static PluginRequestException InvalidResponse(string reason, Exception? inner = null) =>
+        new(
+            $"Invalid Cloudflare transcription response: {reason}.",
+            PluginRequestFailureKind.OutputIncomplete,
+            innerException: inner
+        );
+
+    // Cloudflare account IDs are 32 hex characters; anything else would also alter the request path.
+    internal static bool IsValidAccountId(string? accountId) =>
+        accountId is { Length: 32 } && accountId.All(char.IsAsciiHexDigit);
 
     public void Dispose()
     {
@@ -180,7 +342,7 @@ public sealed partial class CloudflareAsrPlugin
 
     internal async Task SetApiTokenAsync(string apiToken)
     {
-        var trimmed = apiToken?.Trim();
+        var trimmed = apiToken.Trim();
         _apiToken = string.IsNullOrEmpty(trimmed) ? null : trimmed;
         if (_host is not null)
         {
@@ -213,7 +375,7 @@ public sealed partial class CloudflareAsrPlugin
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -223,7 +385,7 @@ public sealed partial class CloudflareAsrPlugin
             {
                 "account-id" => _accountId,
                 "api-token" => _apiToken,
-                "selectedModel" => _selectedModelId,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );
@@ -249,18 +411,73 @@ public sealed partial class CloudflareAsrPlugin
         }
     }
 
-    public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_accountId) || string.IsNullOrWhiteSpace(_apiToken))
-            return Task.FromResult<PluginSettingsValidationResult?>(
-                new PluginSettingsValidationResult(
-                    false,
-                    Loc.L("Settings.EnterAccountIdAndApiToken")
-                )
-            );
+        var accountId = _accountId;
+        var apiToken = _apiToken;
+        if (string.IsNullOrWhiteSpace(accountId) || string.IsNullOrWhiteSpace(apiToken))
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterAccountIdAndApiToken"));
 
-        return Task.FromResult<PluginSettingsValidationResult?>(
-            new PluginSettingsValidationResult(true, Loc.L("Settings.CredentialsSaved"))
+        if (!IsValidAccountId(accountId))
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.InvalidAccountId"));
+
+        var problem = await ProbeWorkersAiAccessAsync(accountId, apiToken, ct);
+        if (accountId != _accountId || apiToken != _apiToken)
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.SettingsChangedDuringValidation"));
+
+        return problem is null
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.CredentialsValid"))
+            : new PluginSettingsValidationResult(false, problem);
+    }
+
+    // Proves Workers AI access for this account without uploading audio. Null on success, else the problem.
+    private async Task<string?> ProbeWorkersAiAccessAsync(string accountId, string apiToken, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/models/search?per_page=1"
         );
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(s_validationTimeout);
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, deadline.Token);
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                return Loc.L("Settings.TokenRejected");
+            if (!response.IsSuccessStatusCode)
+                return Loc.L("Settings.ValidationFailedStatus", (int)response.StatusCode);
+
+            var body = await response.Content.ReadAsStringAsync(deadline.Token);
+            return IsSuccessfulModelList(body) ? null : Loc.L("Settings.InvalidValidationResponse");
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return Loc.L("Settings.CloudflareUnreachable");
+        }
+        // A body cut off mid-read surfaces as an IOException rather than HttpRequestException.
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            return Loc.L("Settings.CloudflareUnreachable");
+        }
+    }
+
+    private static bool IsSuccessfulModelList(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            return root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("success", out var success)
+                && success.ValueKind == JsonValueKind.True
+                && root.TryGetProperty("result", out var result)
+                && result.ValueKind == JsonValueKind.Array;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 }

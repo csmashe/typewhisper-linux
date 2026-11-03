@@ -18,13 +18,44 @@ public sealed class AudioPlaybackService : IDisposable
     private static readonly Lock s_paInitLock = new();
 
     private readonly Lock _gate = new();
+    private readonly Action _terminateNative;
+    private readonly Action<string>? _playNative;
+    private readonly Action? _stopNative;
+    private readonly bool _portAudioReady;
     private int _position;
     private float[] _samples = [];
     private PaStream? _stream;
 
     public AudioPlaybackService()
+        : this(EnsurePortAudioInitialized, EnsurePortAudioTerminated, null)
     {
-        EnsurePortAudioInitialized();
+    }
+
+    internal AudioPlaybackService(
+        Action initializeNative,
+        Action terminateNative,
+        Action<string>? playNative,
+        Action? stopNative = null
+    )
+    {
+        ArgumentNullException.ThrowIfNull(initializeNative);
+        ArgumentNullException.ThrowIfNull(terminateNative);
+        _terminateNative = terminateNative;
+        _playNative = playNative;
+        _stopNative = stopNative;
+
+        // DI resolves this during startup, so a missing native audio stack must not throw
+        // here: the exception would unwind out of the app before a window ever shows. Play
+        // already treats PortAudio failing at call time as a no-op with a trace line.
+        try
+        {
+            initializeNative();
+            _portAudioReady = true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            Trace.WriteLine($"[AudioPlaybackService] PortAudio unavailable: {ex.Message}");
+        }
     }
 
     public string? CurrentFile { get; private set; }
@@ -33,7 +64,11 @@ public sealed class AudioPlaybackService : IDisposable
     public void Dispose()
     {
         Stop();
-        EnsurePortAudioTerminated();
+        // Only balance the reference count we actually took.
+        if (_portAudioReady)
+        {
+            _terminateNative();
+        }
     }
 
     // ReSharper disable once UnusedMember.Global — public API (pre-flight playback check); not currently called in-tree.
@@ -44,6 +79,12 @@ public sealed class AudioPlaybackService : IDisposable
 
     public void Play(string audioFileName)
     {
+        if (_playNative is not null)
+        {
+            _playNative(audioFileName);
+            return;
+        }
+
         if (ResolveAudioPath(audioFileName) is not { } path || !File.Exists(path))
         {
             return;
@@ -65,6 +106,7 @@ public sealed class AudioPlaybackService : IDisposable
 
         if (toggleOff)
         {
+            _stopNative?.Invoke();
             NotifyPlaybackChanged();
             return;
         }
@@ -92,7 +134,7 @@ public sealed class AudioPlaybackService : IDisposable
                         channelCount = Channels,
                         sampleFormat = SampleFormat.Float32,
                         suggestedLatency = outputInfo.defaultLowOutputLatency,
-                        hostApiSpecificStreamInfo = IntPtr.Zero
+                        hostApiSpecificStreamInfo = IntPtr.Zero,
                     };
 
                     _stream = new PaStream(
@@ -131,6 +173,7 @@ public sealed class AudioPlaybackService : IDisposable
         }
 
         DisposeStream(stream);
+        _stopNative?.Invoke();
         NotifyPlaybackChanged();
     }
 

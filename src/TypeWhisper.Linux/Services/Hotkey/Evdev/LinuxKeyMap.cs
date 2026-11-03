@@ -33,7 +33,7 @@ internal static class LinuxKeyMap
             KeyRightalt => ModifierMask.RightAlt,
             KeyLeftmeta => ModifierMask.LeftMeta,
             KeyRightmeta => ModifierMask.RightMeta,
-            _ => ModifierMask.None
+            _ => ModifierMask.None,
         };
     }
 
@@ -141,7 +141,7 @@ internal static class LinuxKeyMap
             KeyLeftmeta => KeyCode.VcLeftMeta,
             KeyRightmeta => KeyCode.VcRightMeta,
 
-            _ => null
+            _ => null,
         };
     }
 }

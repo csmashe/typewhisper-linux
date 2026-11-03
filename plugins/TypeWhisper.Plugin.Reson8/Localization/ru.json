@@ -14,6 +14,18 @@
   "Settings.ApiKeyValidWithModels": "API-ключ действителен. Загружено своих моделей: {0}.",
   "Settings.ApiKeyValidShort": "API-ключ действителен.",
   "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
+  "Settings.InvalidApiKeyCharacters": "API-ключ содержит перевод строки или другой управляющий символ.",
+  "Settings.InvalidBaseUrl": "Введите абсолютную базовую URL http:// или https:// без учётных данных, параметров запроса и фрагмента.",
+  "Settings.InvalidAuthHeader": "Введите допустимое имя HTTP-заголовка для своего заголовка авторизации.",
+  "Settings.ServerUnreachable": "Не удалось связаться с сервером Reson8. Проверьте подключение и базовую URL.",
+  "Settings.ServerRedirected": "Сервер Reson8 перенаправил запрос. Укажите конечный адрес в качестве базовой URL.",
+  "Settings.CustomModelsRefreshFailed": "API-ключ действителен, но обновить свои модели не удалось ({0}). Ранее загруженные модели сохранены.",
+  "Settings.RefreshReasonStatus": "HTTP {0}",
+  "Settings.RefreshReasonUnreachable": "сервер недоступен",
+  "Settings.RefreshReasonInvalid": "недопустимый ответ",
+  "Settings.SettingsChangedDuringValidation": "Настройки изменились во время проверки. Проверьте ещё раз.",
+  "Settings.SelectedModelUnavailable": "Выбранная своя модель Reson8 не загружена для этого API-ключа и сервера. Выполните проверку, чтобы обновить свои модели, или выберите стандартную модель.",
+  "Settings.UnavailableModelOption": "{0} (недоступна)",
   "Manifest.Name": "Reson8",
   "Manifest.Description": "Облачная транскрипция через API распознавания речи Reson8 с потоковой передачей WebSocket в реальном времени. Требуется API-ключ."
 }

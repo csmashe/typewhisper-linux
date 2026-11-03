@@ -1,4 +1,3 @@
-using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using SherpaOnnx;
@@ -21,7 +20,9 @@ namespace TypeWhisper.Plugin.SherpaOnnx;
 internal static class SherpaOnnxNativeRuntime
 {
     private const int RtldNow = 0x002;
+    private const int RtldNoLoad = 0x004;
     private const int RtldGlobal = 0x100;
+    private const string CApiSoName = "libsherpa-onnx-c-api.so";
 
     // Loaded RTLD_GLOBAL ahead of the C API so its undefined references resolve.
     // The CUDA math libs (cudart/cublas/cufft/curand/cudnn) are preloaded
@@ -42,16 +43,18 @@ internal static class SherpaOnnxNativeRuntime
     // (→ CPU fallback) instead of a crash.
     // internal (not private) so a regression test can assert the CUDA provider is
     // never reintroduced here (see the §6 invariant in the comment above).
+    // ReSharper disable once InconsistentNaming -- internal static field is part of the test-observable API; PascalCase intended.
     internal static readonly string[] PreloadOrder =
     [
         "libonnxruntime_providers_shared.so",
         "libonnxruntime.so",
-        "libsherpa-onnx-cxx-api.so"
+        "libsherpa-onnx-cxx-api.so",
     ];
 
-    private static readonly object Sync = new();
-    private static bool _resolverRegistered;
-    private static string? _cudaRuntimeDirectory;
+    private static readonly Lock s_sync = new();
+    private static bool s_resolverRegistered;
+    private static string? s_cudaRuntimeDirectory;
+    private static IntPtr s_resolvedCApi;
 
     /// <summary>
     ///     Registers the import resolver once. Safe (and cheap) to call even on the
@@ -61,16 +64,16 @@ internal static class SherpaOnnxNativeRuntime
     /// </summary>
     public static void RegisterResolver()
     {
-        lock (Sync)
+        lock (s_sync)
         {
-            if (_resolverRegistered)
+            if (s_resolverRegistered)
                 return;
 
             NativeLibrary.SetDllImportResolver(
                 typeof(OfflineRecognizer).Assembly,
                 ResolveNativeLibrary
             );
-            _resolverRegistered = true;
+            s_resolverRegistered = true;
         }
     }
 
@@ -84,15 +87,15 @@ internal static class SherpaOnnxNativeRuntime
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             throw new ArgumentException("Runtime directory is required.", nameof(runtimeDirectory));
 
-        lock (Sync)
+        lock (s_sync)
         {
-            if (!_resolverRegistered)
+            if (!s_resolverRegistered)
             {
                 NativeLibrary.SetDllImportResolver(
                     typeof(OfflineRecognizer).Assembly,
                     ResolveNativeLibrary
                 );
-                _resolverRegistered = true;
+                s_resolverRegistered = true;
             }
 
             foreach (var soname in PreloadOrder)
@@ -102,6 +105,7 @@ internal static class SherpaOnnxNativeRuntime
                     continue;
 
                 var handle = dlopen(path, RtldNow | RtldGlobal);
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (handle == IntPtr.Zero)
                 {
                     var error = Marshal.PtrToStringAnsi(dlerror());
@@ -115,7 +119,7 @@ internal static class SherpaOnnxNativeRuntime
             // Point the resolver at the GPU dir only after every dependency loaded.
             // If a preload above threw, the resolver stays on the CPU runtime so an
             // Auto fallback gets a genuine CPU load rather than the half-wired GPU one.
-            _cudaRuntimeDirectory = runtimeDirectory;
+            s_cudaRuntimeDirectory = runtimeDirectory;
         }
     }
 
@@ -125,14 +129,35 @@ internal static class SherpaOnnxNativeRuntime
         DllImportSearchPath? searchPath
     )
     {
-        var runtimeDirectory = _cudaRuntimeDirectory;
+        var runtimeDirectory = s_cudaRuntimeDirectory;
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             return IntPtr.Zero; // CPU path: let the default loader find the nuget runtime.
 
         var fileName = ToSoFileName(libraryName);
         var candidate = Path.Join(runtimeDirectory, fileName);
-        return File.Exists(candidate) ? NativeLibrary.Load(candidate) : IntPtr.Zero;
+        if (!File.Exists(candidate))
+            return IntPtr.Zero;
+        var handle = NativeLibrary.Load(candidate);
+        if (fileName == CApiSoName)
+            Interlocked.CompareExchange(ref s_resolvedCApi, handle, IntPtr.Zero);
+        return handle;
     }
+
+    /// <summary>
+    ///     The C API copy the managed binding is bound to: the one this resolver loaded on
+    ///     the CUDA path, otherwise the copy the default loader already has in the process.
+    ///     Never loads a new copy; zero when none is loaded.
+    /// </summary>
+    internal static IntPtr GetLoadedCApi() =>
+        SelectLoadedCApi(
+            Volatile.Read(ref s_resolvedCApi),
+            () => OperatingSystem.IsLinux() ? dlopen(CApiSoName, RtldNow | RtldNoLoad) : IntPtr.Zero
+        );
+
+    // NativeLibrary.Load(name, assembly, ...) bypasses SetDllImportResolver, so it can't
+    // be used to find the resolver's copy.
+    internal static IntPtr SelectLoadedCApi(IntPtr resolverLoaded, Func<IntPtr> alreadyLoaded) =>
+        resolverLoaded != IntPtr.Zero ? resolverLoaded : alreadyLoaded();
 
     // The managed binding P/Invokes the bare name "sherpa-onnx-c-api"; map any
     // requested name to its Linux soname form (lib<name>.so) so we can look it up
@@ -147,9 +172,13 @@ internal static class SherpaOnnxNativeRuntime
         return name;
     }
 
+    // Kept as DllImport (Linux-only libc interop): CharSet.Ansi marshals as UTF-8 here, and
+    // LibraryImport would need AllowUnsafeBlocks for the string marshalling for no real gain.
+#pragma warning disable SYSLIB1054, CA2101
     [DllImport("libdl.so.2", CharSet = CharSet.Ansi)]
     private static extern IntPtr dlopen(string fileName, int flags);
 
     [DllImport("libdl.so.2")]
     private static extern IntPtr dlerror();
+#pragma warning restore SYSLIB1054, CA2101
 }

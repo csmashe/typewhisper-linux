@@ -7,7 +7,7 @@ public class PluginManifestTests
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     [Fact]
@@ -21,6 +21,8 @@ public class PluginManifestTests
                                 "minHostVersion": "1.0.0",
                                 "author": "Test Author",
                                 "description": "A test plugin for unit tests",
+                                "networkAccess": "userControlled",
+                                "categories": ["transcription", "llm", "tts"],
                                 "assemblyName": "TestPlugin.dll",
                                 "pluginClass": "TestPlugin.MyPlugin"
                             }
@@ -35,6 +37,11 @@ public class PluginManifestTests
         Assert.Equal("1.0.0", manifest.MinHostVersion);
         Assert.Equal("Test Author", manifest.Author);
         Assert.Equal("A test plugin for unit tests", manifest.Description);
+        Assert.Equal(PluginNetworkAccess.UserControlled, manifest.NetworkAccess);
+        Assert.Equal(
+            [PluginCategory.Transcription, PluginCategory.Llm, PluginCategory.Tts],
+            manifest.Categories
+        );
         Assert.Equal("TestPlugin.dll", manifest.AssemblyName);
         Assert.Equal("TestPlugin.MyPlugin", manifest.PluginClass);
     }
@@ -63,6 +70,58 @@ public class PluginManifestTests
         Assert.Null(manifest.MinHostVersion);
         Assert.Null(manifest.Author);
         Assert.Null(manifest.Description);
+        Assert.Null(manifest.NetworkAccess);
+        Assert.Null(manifest.Categories);
+        Assert.Null(manifest.IsLocal);
+    }
+
+    [Fact]
+    public void Deserialize_LegacyFieldsRemainReadableAndCategoryMapsToSet()
+    {
+        const string json = """
+                            {
+                                "id": "com.example.legacy",
+                                "name": "Legacy",
+                                "version": "1.0.0",
+                                "category": "post-processing",
+                                "isLocal": false,
+                                "assemblyName": "Legacy.dll",
+                                "pluginClass": "Legacy.Plugin"
+                            }
+                            """;
+
+        var manifest = JsonSerializer.Deserialize<PluginManifest>(json, s_jsonOptions);
+
+        Assert.NotNull(manifest);
+        Assert.Equal("post-processing", manifest.Category);
+        Assert.Equal([PluginCategory.PostProcessing], manifest.Categories);
+        Assert.False(manifest.IsLocal);
+        Assert.Null(manifest.NetworkAccess);
+    }
+
+    [Theory]
+    [InlineData("networkAccess", "\"satellite\"")]
+    [InlineData("categories", "[\"transcription\", \"telepathy\"]")]
+    public void Deserialize_InvalidNewEnumValue_Throws(
+        string property,
+        string value
+    )
+    {
+        var json =
+            $$"""
+              {
+                  "id": "com.example.invalid",
+                  "name": "Invalid",
+                  "version": "1.0.0",
+                  "{{property}}": {{value}},
+                  "assemblyName": "Invalid.dll",
+                  "pluginClass": "Invalid.Plugin"
+              }
+              """;
+
+        Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<PluginManifest>(json, s_jsonOptions)
+        );
     }
 
     [Fact]
@@ -75,9 +134,11 @@ public class PluginManifestTests
             Version = "3.0.0",
             Author = "Me",
             Description = "Test roundtrip",
+            NetworkAccess = PluginNetworkAccess.Mixed,
+            Categories = [PluginCategory.Llm, PluginCategory.Tts],
             AssemblyName = "RT.dll",
             PluginClass = "RT.Plugin",
-            MinHostVersion = "2.0.0"
+            MinHostVersion = "2.0.0",
         };
 
         var json = JsonSerializer.Serialize(original, s_jsonOptions);
@@ -89,6 +150,8 @@ public class PluginManifestTests
         Assert.Equal(original.Version, deserialized.Version);
         Assert.Equal(original.Author, deserialized.Author);
         Assert.Equal(original.Description, deserialized.Description);
+        Assert.Equal(original.NetworkAccess, deserialized.NetworkAccess);
+        Assert.Equal(original.Categories, deserialized.Categories);
         Assert.Equal(original.AssemblyName, deserialized.AssemblyName);
         Assert.Equal(original.PluginClass, deserialized.PluginClass);
         Assert.Equal(original.MinHostVersion, deserialized.MinHostVersion);
@@ -144,7 +207,7 @@ public class PluginManifestTests
             Name = "Eq",
             Version = "1.0.0",
             AssemblyName = "Eq.dll",
-            PluginClass = "Eq.Plugin"
+            PluginClass = "Eq.Plugin",
         };
 
         var b = new PluginManifest
@@ -153,7 +216,7 @@ public class PluginManifestTests
             Name = "Eq",
             Version = "1.0.0",
             AssemblyName = "Eq.dll",
-            PluginClass = "Eq.Plugin"
+            PluginClass = "Eq.Plugin",
         };
 
         Assert.Equal(a, b);
@@ -168,7 +231,7 @@ public class PluginManifestTests
             Name = "Original",
             Version = "1.0.0",
             AssemblyName = "With.dll",
-            PluginClass = "With.Plugin"
+            PluginClass = "With.Plugin",
         };
 
         var modified = original with { Name = "Modified", Version = "2.0.0" };

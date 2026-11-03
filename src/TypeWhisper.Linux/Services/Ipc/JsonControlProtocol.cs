@@ -24,7 +24,16 @@ internal static class JsonControlProtocol
     /// </summary>
     public const int MaxLineBytes = 4 * 1024;
 
-    /// <summary>Current protocol version. Bumped only on breaking changes.</summary>
+    /// <summary>
+    ///     Current protocol version. Bumped only on breaking changes — a widened
+    ///     <c>state</c>/<c>prev</c> vocabulary is additive, so this stays at 1.
+    /// </summary>
+    /// <remarks>
+    ///     <c>state</c>/<c>prev</c> may carry <c>starting</c> alongside <c>idle</c>,
+    ///     <c>recording</c>, <c>transcribing</c>, and <c>injecting</c>: an accepted start
+    ///     reports it only while the orchestrator is otherwise idle — any real active state
+    ///     supersedes it.
+    /// </remarks>
     public const int CurrentVersion = 1;
 
     public const string CmdRecordStart = "record.start";
@@ -33,12 +42,14 @@ internal static class JsonControlProtocol
     public const string CmdRecordCancel = "record.cancel";
     public const string CmdStatus = "status";
 
+    /// <summary>Shows the main window on the page named in <c>page</c> (see <c>--page</c>).</summary>
+    public const string CmdSettingsOpen = "settings.open";
+
     public const string StateIdle = "idle";
+    public const string StateStarting = "starting";
     public const string StateRecording = "recording";
-    // ReSharper disable once UnusedMember.Global  IPC control-protocol state string (status wire vocabulary, mirrors StateIdle/StateRecording); part of the protocol surface even if not emitted in-tree
     public const string StateTranscribing = "transcribing";
 
-    // ReSharper disable once UnusedMember.Global  IPC control-protocol state string (status wire vocabulary, mirrors StateIdle/StateRecording); part of the protocol surface even if not emitted in-tree
     public const string StateInjecting = "injecting";
 
     public const string ErrUnknownCommand = "unknown-command";
@@ -46,6 +57,7 @@ internal static class JsonControlProtocol
     public const string ErrMalformed = "malformed-request";
     public const string ErrLineTooLong = "line-too-long";
     public const string ErrInternal = "internal";
+    public const string ErrUnknownPage = "unknown-page";
 
     public static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -53,7 +65,7 @@ internal static class JsonControlProtocol
         // the documented response shape (camelCase would not match the spec).
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false
+        WriteIndented = false,
     };
 
     public static string SerializeError(string code)
@@ -68,6 +80,14 @@ internal static class JsonControlProtocol
     {
         return JsonSerializer.Serialize(
             new ActionResponse { Version = CurrentVersion, Ok = true, Prev = prev, State = state },
+            JsonOptions
+        );
+    }
+
+    public static string SerializeOk()
+    {
+        return JsonSerializer.Serialize(
+            new ActionResponse { Version = CurrentVersion, Ok = true },
             JsonOptions
         );
     }
@@ -88,6 +108,10 @@ internal static class JsonControlProtocol
 
         [JsonPropertyName("cmd")]
         public string? Command { get; init; }
+
+        /// <summary>The <c>--page</c> value for <see cref="CmdSettingsOpen" />.</summary>
+        [JsonPropertyName("page")]
+        public string? Page { get; init; }
     }
 
     // Serialized to JSON via JsonOptions (reflection); the get accessors are read by the

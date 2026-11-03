@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
+using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
@@ -9,9 +11,12 @@ namespace TypeWhisper.Linux.Services;
 ///     stores them in the configured memory plugin. Facts are queried at
 ///     prompt-processing time to inject relevant context into LLM requests.
 /// </summary>
-public sealed class MemoryService
+public sealed partial class MemoryService
 {
     private const int MinTextLength = 30;
+    internal const int MaxRecalledFacts = 5;
+    internal const int MaxFactLength = 1600;
+
 
     private const string ExtractionPrompt = """
                                             Extract any lasting personal facts from the following transcribed speech.
@@ -37,7 +42,13 @@ public sealed class MemoryService
         _pluginManager = pluginManager;
     }
 
-    public async Task ExtractAndStoreAsync(string text, CancellationToken ct = default)
+    public async Task ExtractAndStoreAsync(
+        string text,
+        ILlmProviderRole llm,
+        string model,
+        LlmCallCapture? capture = null,
+        CancellationToken ct = default
+    )
     {
         if (string.IsNullOrWhiteSpace(text) || text.Length < MinTextLength)
         {
@@ -56,24 +67,16 @@ public sealed class MemoryService
             return;
         }
 
-        var llm = _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
-        // ReSharper disable once UseNullPropagation -- early-return null guard protecting later non-conditional dereferences of llm; there is no member access to fold into a null-conditional, so a rewrite would change control flow.
-        if (llm is null)
-        {
-            return;
-        }
-
-        var model = (llm.SupportedModels.Count > 0 ? llm.SupportedModels[0] : null)?.Id;
-        if (model is null)
-        {
-            return;
-        }
-
         try
         {
             _lastExtraction = DateTime.UtcNow;
 
+            // Record before the call so a mid-request fault is still captured.
+            var provenance = RecordProvenance(capture, llm, model, text);
+
             var result = await llm.ProcessAsync(ExtractionPrompt, text, model, ct);
+            provenance?.ResponseReceived = result;
+
             if (
                 string.IsNullOrWhiteSpace(result)
                 || result.Trim().Equals("NONE", StringComparison.OrdinalIgnoreCase)
@@ -90,7 +93,15 @@ public sealed class MemoryService
 
             foreach (var fact in facts)
             {
-                await memoryPlugin.StoreAsync(fact, ct);
+                try
+                {
+                    await memoryPlugin.StoreAsync(fact, ct);
+                }
+                catch (ArgumentException ex)
+                {
+                    // One fact the plugin rejects (e.g. too long) must not drop the rest.
+                    Debug.WriteLine($"[MemoryService] skipped invalid fact: {ex.Message}");
+                }
             }
         }
         catch (Exception ex)
@@ -99,6 +110,46 @@ public sealed class MemoryService
         }
     }
 
+    // Mirrors PromptProcessingService.RecordProvenance for the extraction call:
+    // records that memory extraction also sent the dictation text to an LLM and
+    // returns the entry so the caller can attach the response (null when capture
+    // is disabled).
+    private LlmCallProvenance? RecordProvenance(
+        LlmCallCapture? capture,
+        ILlmProviderRole provider,
+        string modelId,
+        string userPrompt
+    )
+    {
+        if (capture is null)
+        {
+            return null;
+        }
+
+        var providerId = provider.GetLlmSelectionId();
+        // Look the plugin up by its owning plugin ID: a profile-backed role's
+        // selection ID is the profile's, which matches no manifest ID.
+        var plugin = _pluginManager.GetPlugin(provider.PluginId);
+        var ranLocally = plugin?.Metadata.RanLocally ?? false;
+
+        var provenance = new LlmCallProvenance
+        {
+            Stage = "Memory",
+            SystemPromptSent = ExtractionPrompt,
+            UserPromptSent = userPrompt,
+            ProviderName = provider.ProviderName,
+            ProviderId = providerId,
+            ModelId = modelId,
+            RanLocally = ranLocally,
+            InjectedMemoryContext = null,
+        };
+        capture.Add(provenance);
+        return provenance;
+    }
+
+    /// <summary>
+    ///     Global recall from the first memory plugin; a failing plugin counts as no context.
+    /// </summary>
     public async Task<string?> GetContextAsync(string query, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -115,15 +166,84 @@ public sealed class MemoryService
 
         try
         {
-            var memories = await memoryPlugin.SearchAsync(query, 10, ct);
-            return memories.Count == 0
-                ? null
-                : string.Join("\n", memories.Select(memory => $"- {memory}"));
+            return FormatContext(await memoryPlugin.SearchAsync(query, MaxRecalledFacts, ct));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             Debug.WriteLine($"[MemoryService] context lookup failed: {ex.Message}");
             return null;
         }
     }
+
+    /// <summary>
+    ///     Recall from the profile's chosen source only. When it is unavailable or fails, the
+    ///     prompt action fails (the dictation stays in History) instead of running without it.
+    /// </summary>
+    public async Task<string?> GetContextFromSourceAsync(
+        string query,
+        string sourceId,
+        CancellationToken ct = default
+    )
+    {
+        var source = _pluginManager
+            .GetPlugins<IMemoryStoragePlugin>()
+            .FirstOrDefault(plugin => plugin.PluginId == sourceId);
+        if (source is null)
+        {
+            throw SourceProblem("Memory.SourceUnavailable");
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        IReadOnlyList<string> matches;
+        try
+        {
+            matches = await source.SearchAsync(query, MaxRecalledFacts, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            Debug.WriteLine($"[MemoryService] context lookup failed: {ex.Message}");
+            throw SourceProblem("Memory.SourceFailed", ex);
+        }
+
+        // A source disabled or replaced while it searched must not supply the result.
+        if (
+            !_pluginManager.IsEnabled(sourceId)
+            || !ReferenceEquals(_pluginManager.GetPlugin(sourceId)?.Instance, source)
+        )
+        {
+            throw SourceProblem("Memory.SourceUnavailable");
+        }
+
+        return FormatContext(matches);
+    }
+
+    // A configuration failure, so streaming does not retry it as batch and search the source again.
+    private static PluginRequestException SourceProblem(string key, Exception? inner = null) =>
+        new(
+            Localization.Loc.Instance[key],
+            PluginRequestFailureKind.Configuration,
+            isTransient: false,
+            innerException: inner
+        );
+
+    // At most five facts of at most 1,600 characters, one per line, so a long or multiline
+    // entry cannot crowd out the prompt or pose as a separate fact.
+    internal static string? FormatContext(IReadOnlyList<string> memories)
+    {
+        var lines = memories
+            .Select(memory => Whitespace().Replace(memory, " ").Trim())
+            .Where(memory => memory.Length > 0)
+            .Take(MaxRecalledFacts)
+            .Select(memory => memory.Length > MaxFactLength ? memory[..MaxFactLength] : memory)
+            .Select(memory => $"- {memory}")
+            .ToList();
+        return lines.Count == 0 ? null : string.Join("\n", lines);
+    }
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Whitespace();
 }

@@ -1,4 +1,6 @@
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.AppImport;
 
 namespace TypeWhisper.Core.Interfaces;
 
@@ -12,9 +14,20 @@ public interface IDictionaryService
 {
     IReadOnlyList<DictionaryEntry> Entries { get; }
 
+    /// <summary>Reads the entries and reports whether the read succeeded; an unreadable store yields none.</summary>
+    /// <returns><c>false</c> when the store was unreadable or reset after corruption, not merely empty.</returns>
+    bool TryGetEntries(out IReadOnlyList<DictionaryEntry> entries)
+    {
+        entries = Entries;
+        return true;
+    }
+
     void AddEntry(DictionaryEntry entry);
     // ReSharper disable once UnusedMemberInSuper.Global
     void AddEntries(IEnumerable<DictionaryEntry> entries);
+    /// <summary>Adds a reviewed import's terms in one write, or nothing when the dictionary changed since the review.</summary>
+    DictionaryImportCommitResult CommitReviewedImport(DictionaryImportReview review);
+
     void UpdateEntry(DictionaryEntry entry);
     void DeleteEntry(string id);
     // ReSharper disable once UnusedMemberInSuper.Global
@@ -23,7 +36,15 @@ public interface IDictionaryService
     /// <summary>Applies the enabled corrections to <paramref name="text" /> and returns the rewritten text.</summary>
     string ApplyCorrections(string text);
 
+    /// <summary>
+    ///     Like <see cref="ApplyCorrections" /> but never records usage counts or persists
+    ///     to disk. For the live dictation preview, which can run many times per second on
+    ///     text that may still change or never be inserted (audit §2 M3).
+    /// </summary>
+    string PreviewCorrections(string text);
+
     /// <summary>Comma-separated enabled terms for seeding an STT/LLM prompt, or <c>null</c> when there are none.</summary>
+    // ReSharper disable once UnusedMemberInSuper.Global -- callers hold the concrete service today; kept so every implementer honors the prompt-seeding contract.
     string? GetTermsForPrompt();
 
     /// <summary>Original strings of all enabled term entries (corrections excluded).</summary>
@@ -59,6 +80,40 @@ public interface IDictionaryService
 
     /// <summary>Records a user-confirmed correction so the same mistake is auto-fixed next time.</summary>
     void LearnCorrection(string original, string replacement);
+
+    /// <summary>
+    ///     Silently learns a batch of corrections. New, safe originals are added; an existing
+    ///     entry is only ever updated when its id is listed in <paramref name="replaceableEntryIds" />
+    ///     (session-created entries the caller is self-healing) — every other existing entry is left
+    ///     untouched regardless of source. Returns the entries added or updated so they can be undone.
+    /// </summary>
+    IReadOnlyList<LearnedDictionaryCorrection> LearnCorrections(
+        IEnumerable<CorrectionSuggestion> suggestions,
+        IReadOnlySet<string>? replaceableEntryIds = null
+    );
+
+    /// <summary>Removes correction entries by id (used to undo a learned batch); safe if some no longer exist.</summary>
+    void UndoLearnedCorrections(IEnumerable<LearnedDictionaryCorrection> learnedCorrections);
+
+    /// <summary>
+    ///     Saves reviewed aliases as corrections to <paramref name="term" /> (and the term itself when
+    ///     missing) in one write, or writes nothing. See <see cref="DictionaryAliasSuggestions.PlanSave" />.
+    /// </summary>
+    DictionaryAliasSavePlan SaveSuggestedAliases(string term, IReadOnlyList<string> aliases)
+    {
+        if (!TryGetEntries(out var entries))
+        {
+            return new DictionaryAliasSavePlan(DictionaryAliasSaveStatus.StoreUnavailable, null, []);
+        }
+
+        var plan = DictionaryAliasSuggestions.PlanSave(entries, term, aliases);
+        if (plan.Status == DictionaryAliasSaveStatus.Saved)
+        {
+            AddEntries(plan.Additions);
+        }
+
+        return plan;
+    }
 
     /// <summary>Adds the term pack's entries; idempotent, so re-activating an active pack is a no-op.</summary>
     void ActivatePack(TermPack pack);

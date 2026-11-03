@@ -1,15 +1,24 @@
-using System.Net.Http;
-using System.Net.Http.Headers;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Globalization;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.PluginSDK.WebSockets;
+using TypeWhisper.Plugins.Shared.OpenAi;
 
 namespace TypeWhisper.Plugin.OpenAiCompatible;
 
-public sealed partial class OpenAiCompatiblePlugin
+public sealed class OpenAiCompatiblePlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
+        ILlmProviderEndpoint,
         IPluginSettingsProvider,
         IModelCatalogProvider,
         IPluginLocalizationAware,
@@ -22,42 +31,102 @@ public sealed partial class OpenAiCompatiblePlugin
     // role wrapper below. The default endpoint keeps using the original flat settings
     // keys (baseUrl/api-key/selectedModel/...) so existing single-endpoint setups are
     // unchanged.
+    private const string LlmRequestTimeoutSettingKey = "llmRequestTimeoutSeconds";
+    private int _llmRequestTimeoutSeconds = 300;
+
+    private const string ThinkingModeSettingKey = "thinkingMode";
+    private ThinkingMode _thinkingMode;
+
+    private const string ApiVersionSettingKey = "apiVersion";
+    private const string BatchEndpointSettingKey = "batchEndpoint";
+    private string _apiVersion = "";
+    private string _batchEndpoint = "standard";
+
+    private const string TranscriptionModeSettingKey = "transcriptionMode";
+    private const string RealtimeProtocolSettingKey = "realtimeProtocol";
+    private string _transcriptionMode = "auto";
+    private string _realtimeProtocol = "auto";
+
+    private const string TextApiSettingKey = "textApi";
+    private const string ReasoningEffortSettingKey = "reasoningEffort";
+    private const string TemperatureModeSettingKey = "temperatureMode";
+    private const string TemperatureSettingKey = "temperature";
+    private string _textApi = "chat-completions";
+    private string _reasoningEffort = "";
+    private string _temperatureMode = "provider-default";
+    private double _temperature = 0.3;
+
     private const string AdditionalProfilesSettingKey = "additionalProfiles";
     private const string ProfilesCollectionKey = "profiles";
     private const string ProfileIdPrefix = "openai-compatible-";
 
     private readonly HttpClient _httpClient;
+
+    // A server on this computer is trusted as local (alias suggestions rely on it), so its
+    // requests must not follow a redirect or go through a proxy to another machine.
+    private readonly HttpClient _loopbackHttpClient;
+    private readonly IWebSocketTransportFactory? _transportFactory;
+    private readonly TimeSpan _nonLlmTimeout;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _baseUrl;
-    private string? _selectedModelId;
-    private string? _selectedLlmModelId;
     private List<FetchedModel> _fetchedModels = [];
     private bool _streamResponses = true;
     private readonly List<OpenAiCompatibleProfile> _additionalProfiles = [];
     private readonly Dictionary<string, string?> _additionalApiKeys = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, OpenAiCompatibleProfileRole> _profileRoles =
+        new(StringComparer.Ordinal);
+
+    // Fences fetch-then-apply work for the default endpoint. The revision is an
+    // identity token rather than a value comparison, so A -> B -> A is still a
+    // connection change and an older A response cannot become current again.
+    private readonly Lock _defaultConnectionLock = new();
+    private long _defaultConnectionRevision;
+
+    // Guards _profileRoles: the capability getters populate it lazily (a read that
+    // mutates) while model-selection, catalog refresh, and invalidation remove from it,
+    // and these run on different threads (host capability rebuilds vs. UI/async paths).
+    private readonly Lock _profileRolesLock = new();
 
     public OpenAiCompatiblePlugin()
-        : this(new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+        : this(
+            new HttpClient { Timeout = Timeout.InfiniteTimeSpan },
+            loopbackHttpClient: new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false })
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            })
     {
     }
 
-    internal OpenAiCompatiblePlugin(HttpClient httpClient)
+    internal OpenAiCompatiblePlugin(
+        HttpClient httpClient, TimeSpan? nonLlmTimeout = null, IWebSocketTransportFactory? transportFactory = null,
+        HttpClient? loopbackHttpClient = null)
     {
         _httpClient = httpClient;
+        _loopbackHttpClient = loopbackHttpClient ?? httpClient;
+        _transportFactory = transportFactory;
+        _nonLlmTimeout = nonLlmTimeout ?? TimeSpan.FromMinutes(5);
     }
 
     public string PluginId => "com.typewhisper.openai-compatible";
     public string PluginName => "OpenAI Compatible";
-    public string PluginVersion => "1.0.1";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
-        _baseUrl = host.GetSetting<string>("baseUrl");
-        _selectedModelId = host.GetSetting<string>("selectedModel");
-        _selectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
+        _llmRequestTimeoutSeconds = Math.Clamp(host.GetSetting<int?>(LlmRequestTimeoutSettingKey) ?? 300, 5, 3600);
+        _thinkingMode = ParseThinkingMode(host.GetSetting<string>(ThinkingModeSettingKey));
+        _apiVersion = (host.GetSetting<string>(ApiVersionSettingKey) ?? "").Trim();
+        _batchEndpoint = NormalizeBatchEndpoint(host.GetSetting<string>(BatchEndpointSettingKey));
+        _transcriptionMode = NormalizeTranscriptionMode(host.GetSetting<string>(TranscriptionModeSettingKey));
+        _realtimeProtocol = NormalizeRealtimeProtocol(host.GetSetting<string>(RealtimeProtocolSettingKey));
+        _textApi = NormalizeTextApi(host.GetSetting<string>(TextApiSettingKey));
+        _reasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingKey));
+        _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingKey));
+        _temperature = NormalizeTemperature(host.GetSetting<double?>(TemperatureSettingKey) ?? 0.3);
+        ApiKey = await host.LoadSecretAsync("api-key");
+        BaseUrl = host.GetSetting<string>("baseUrl");
+        SelectedModelId = host.GetSetting<string>("selectedModel");
+        SelectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         var modelsJson = host.GetSetting<string>("fetchedModels");
@@ -92,7 +161,7 @@ public sealed partial class OpenAiCompatiblePlugin
     public string ProviderId => "openai-compatible";
     public string ProviderDisplayName => "Custom Server";
 
-    public bool IsConfigured => !string.IsNullOrEmpty(_baseUrl);
+    public bool IsConfigured => !string.IsNullOrEmpty(BaseUrl);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels
     {
@@ -100,53 +169,146 @@ public sealed partial class OpenAiCompatiblePlugin
         {
             var models = _fetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
 
-            if (models.Count == 0 && !string.IsNullOrEmpty(_selectedModelId))
-                return [new PluginModelInfo(_selectedModelId, _selectedModelId)];
+            if (models.Count == 0 && !string.IsNullOrEmpty(SelectedModelId))
+                return [new PluginModelInfo(SelectedModelId, SelectedModelId)];
 
             return models;
         }
     }
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public void SelectModel(string modelId)
     {
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
-    public bool SupportsTranslation => true;
+    public bool SupportsStreaming => UsesRealtime(_transcriptionMode, SelectedModelId);
+    public bool SupportsTranslation => !SupportsStreaming;
+    public bool SupportsLanguageHints => SupportsStreaming
+        && OpenAiRealtimeStreamingSession.IsLiveModel(SelectedModelId ?? "", _realtimeProtocol);
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
-    public async Task<PluginTranscriptionResult> TranscribeAsync(
+    public Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
         string? language,
         bool translate,
         string? prompt,
         CancellationToken ct
+    ) => TranscribeWithLanguageHintsAsync(wavAudio, LanguageHints(language), translate, prompt, ct);
+
+    // The SDK default would keep only the first hint; forward them all.
+    public Task<PluginTranscriptionResult> TranscribeStreamingWithLanguageHintsAsync(
+        byte[] wavAudio, IReadOnlyList<string> languageHints, bool translate, string? prompt,
+        Func<string, bool> onProgress, CancellationToken ct) =>
+        TranscribeWithLanguageHintsAsync(wavAudio, languageHints, translate, prompt, ct);
+
+    public async Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
+        byte[] wavAudio,
+        IReadOnlyList<string> languageHints,
+        bool translate,
+        string? prompt,
+        CancellationToken ct
     )
     {
-        if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
-        if (string.IsNullOrEmpty(_selectedModelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
+        if (string.IsNullOrEmpty(BaseUrl))
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
+        if (string.IsNullOrEmpty(SelectedModelId))
+            throw new PluginRequestException(Loc.L("Settings.NoTranscriptionModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient,
-            _baseUrl!,
-            _apiKey ?? "",
-            _selectedModelId!,
+        var hints = NormalizeLanguageHints(languageHints);
+        if (SupportsStreaming)
+        {
+            if (translate)
+                throw new PluginRequestException(Loc.L("Settings.RealtimeNoTranslation"), PluginRequestFailureKind.Configuration);
+            return await TranscribeRealtimeAsync(BaseUrl!, _apiVersion, ApiKey, SelectedModelId!, _realtimeProtocol,
+                wavAudio, hints, prompt, ct);
+        }
+
+        var endpoint = BatchUri(BaseUrl!, _apiVersion, _batchEndpoint, SelectedModelId!, translate);
+        return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
+            ClientFor(BaseUrl),
+            BaseUrl!,
+            ApiKey ?? "",
+            SelectedModelId!,
             wavAudio,
-            language,
+            hints.Count > 0 ? hints[0] : null,
             translate,
-            "verbose_json",
-            ct,
-            prompt
-        );
+            _batchEndpoint == "deployment-scoped" || _apiVersion.Length > 0 ? "json" : "verbose_json",
+            prompt,
+            endpointOverride: endpoint,
+            requestHeaders: AuthenticationHeaders(endpoint, ApiKey),
+            ct: token
+        ), ct);
+    }
+
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAsync(LanguageHints(language), ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+        IReadOnlyList<string> languageHints, CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAndPromptAsync(languageHints, null, ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints, string? prompt, CancellationToken ct) =>
+        StartStreamingForEndpointAsync(BaseUrl, _apiVersion, ApiKey, SelectedModelId,
+            _transcriptionMode, _realtimeProtocol, languageHints, prompt, ct);
+
+    private async Task<IStreamingSession> StartStreamingForEndpointAsync(
+        string? baseUrl, string apiVersion, string? apiKey, string? modelId,
+        string transcriptionMode, string realtimeProtocol,
+        IReadOnlyList<string> languageHints, string? prompt, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(modelId))
+            throw new PluginRequestException(Loc.L("Settings.NoTranscriptionModelSelected"), PluginRequestFailureKind.Configuration);
+        if (!UsesRealtime(transcriptionMode, modelId))
+            throw new NotSupportedException();
+        if (string.IsNullOrEmpty(baseUrl))
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
+
+        var endpoint = RealtimeUri(baseUrl, apiVersion);
+        // Server VAD commits per utterance so live partials arrive before the user stops.
+        return await OpenAiRealtimeStreamingSession.ConnectAsync(
+            endpoint, AuthenticationHeaders(endpoint, apiKey), modelId, languageHints, prompt,
+            useServerVad: true, realtimeProtocol, ct, _transportFactory);
+    }
+
+    // Recorded audio on a realtime endpoint goes over the same WebSocket; there is no batch route.
+    private Task<PluginTranscriptionResult> TranscribeRealtimeAsync(
+        string baseUrl, string apiVersion, string? apiKey, string modelId, string realtimeProtocol,
+        byte[] wavAudio, IReadOnlyList<string> languageHints, string? prompt, CancellationToken ct)
+    {
+        var endpoint = RealtimeUri(baseUrl, apiVersion);
+        return RunNonLlmRequestAsync(token => OpenAiRealtimeStreamingSession.TranscribeWavAsync(
+            endpoint, AuthenticationHeaders(endpoint, apiKey), modelId, wavAudio, languageHints,
+            prompt, realtimeProtocol, token, _transportFactory), ct);
+    }
+
+    private static List<string> LanguageHints(string? language) =>
+        language is null ? [] : NormalizeLanguageHints([language]);
+
+    private static List<string> NormalizeLanguageHints(IReadOnlyList<string> languageHints)
+    {
+        var hints = new List<string>();
+        foreach (var hint in languageHints)
+        {
+            var trimmed = hint.Trim();
+            if (string.IsNullOrEmpty(trimmed)
+                || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                || hints.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                continue;
+            hints.Add(trimmed);
+        }
+        return hints;
     }
 
     public string ProviderName => "OpenAI Compatible";
 
-    public bool IsAvailable => IsConfigured && !string.IsNullOrEmpty(_selectedLlmModelId);
+    public bool IsAvailable => IsConfigured && !string.IsNullOrEmpty(SelectedLlmModelId);
+
+    public Uri? LlmEndpoint => EndpointUri(BaseUrl);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels
     {
@@ -154,8 +316,8 @@ public sealed partial class OpenAiCompatiblePlugin
         {
             var models = _fetchedModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList();
 
-            if (models.Count == 0 && !string.IsNullOrEmpty(_selectedLlmModelId))
-                return [new PluginModelInfo(_selectedLlmModelId, _selectedLlmModelId)];
+            if (models.Count == 0 && !string.IsNullOrEmpty(SelectedLlmModelId))
+                return [new PluginModelInfo(SelectedLlmModelId, SelectedLlmModelId)];
 
             return models;
         }
@@ -168,22 +330,36 @@ public sealed partial class OpenAiCompatiblePlugin
         CancellationToken ct
     )
     {
-        if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+        if (string.IsNullOrEmpty(BaseUrl))
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
-        var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
+        var modelId = !string.IsNullOrEmpty(model) ? model : SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient,
-            _baseUrl!,
-            _apiKey ?? "",
-            modelId,
-            systemPrompt,
-            userText,
-            ct
-        );
+        using var timeout = CreateLlmTimeout(_llmRequestTimeoutSeconds, ct);
+        try
+        {
+            if (_textApi == "responses")
+                return StripThinking(await CreateResponsesClient(BaseUrl!, _apiVersion, ApiKey).ProcessAsync(
+                    systemPrompt, userText, modelId, NullIfWhiteSpace(_reasoningEffort), timeout.Token,
+                    _temperatureMode == "custom" && _reasoningEffort.Length == 0 ? _temperature : null));
+
+            return await OpenAiChatHelper.SendChatCompletionAsync(
+                ClientFor(BaseUrl),
+                BaseUrl!,
+                ApiKey ?? "",
+                modelId,
+                systemPrompt,
+                userText,
+                BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature, _apiVersion, ApiKey),
+                timeout.Token
+            );
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+        }
     }
 
     public async IAsyncEnumerable<string> ProcessStreamingAsync(
@@ -193,35 +369,53 @@ public sealed partial class OpenAiCompatiblePlugin
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
     )
     {
-        if (!_streamResponses)
+        if (!_streamResponses || _textApi == "responses")
         {
             yield return await ProcessAsync(systemPrompt, userText, model, ct);
             yield break;
         }
 
-        if (string.IsNullOrEmpty(_baseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+        if (string.IsNullOrEmpty(BaseUrl))
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
-        var modelId = !string.IsNullOrEmpty(model) ? model : _selectedLlmModelId ?? "";
+        var modelId = !string.IsNullOrEmpty(model) ? model : SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
+        using var timeout = CreateLlmTimeout(_llmRequestTimeoutSeconds, ct);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
-            _httpClient,
-            _baseUrl!,
-            _apiKey ?? "",
+            ClientFor(BaseUrl),
+            BaseUrl!,
+            ApiKey ?? "",
             modelId,
             systemPrompt,
             userText,
-            ct
+            BuildRequestOptions(BaseUrl!, _thinkingMode, _temperatureMode, _temperature, _apiVersion, ApiKey),
+            timeout.Token
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
-            yield return delta;
+        await using var enumerator = source.GetAsyncEnumerator(timeout.Token);
+        while (true)
+        {
+            bool hasNext;
+            try
+            {
+                hasNext = await enumerator.MoveNextAsync();
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+            }
+            if (!hasNext)
+                yield break;
+            yield return enumerator.Current;
+        }
     }
 
-    internal string? BaseUrl => _baseUrl;
-    internal string? ApiKey => _apiKey;
+    internal string? BaseUrl { get; private set; }
+
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -231,8 +425,9 @@ public sealed partial class OpenAiCompatiblePlugin
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    internal string? SelectedTranscriptionModelId => _selectedModelId;
-    internal string? SelectedLlmModelId => _selectedLlmModelId;
+    internal string? SelectedTranscriptionModelId => SelectedModelId;
+    internal string? SelectedLlmModelId { get; private set; }
+
     internal IReadOnlyList<FetchedModel> FetchedModels => _fetchedModels;
 
     internal void SetBaseUrl(string url)
@@ -240,31 +435,55 @@ public sealed partial class OpenAiCompatiblePlugin
         // Helpers append "/v1/..." themselves; pasted URLs often already
         // include "/v1", so strip a trailing "/v1" segment to avoid building
         // "/v1/v1/models" and similar paths.
-        var normalized = url.Trim().TrimEnd('/');
-        if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-            normalized = normalized[..^3];
-        _baseUrl = normalized;
-        _host?.SetSetting("baseUrl", normalized);
+        var normalized = NormalizeBaseUrl(url);
+        lock (_defaultConnectionLock)
+        {
+            var changed = !string.Equals(BaseUrl, normalized, StringComparison.Ordinal);
+            BaseUrl = normalized;
+            if (changed)
+            {
+                // Bump and invalidate before the host persist: if the settings write
+                // throws, the new URL must not stay live at the old revision with the
+                // old catalog still applied.
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
+
+            _host?.SetSetting("baseUrl", normalized);
+        }
+
         _host?.NotifyCapabilitiesChanged();
     }
 
     internal async Task SetApiKeyAsync(string key)
     {
-        _apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
+        var apiKey = string.IsNullOrWhiteSpace(key) ? null : key;
+
         if (_host is not null)
         {
-            if (string.IsNullOrWhiteSpace(key))
+            if (apiKey is null)
                 await _host.DeleteSecretAsync("api-key");
             else
-                await _host.StoreSecretAsync("api-key", key);
-
-            _host.NotifyCapabilitiesChanged();
+                await _host.StoreSecretAsync("api-key", apiKey);
         }
+
+        lock (_defaultConnectionLock)
+        {
+            var changed = !string.Equals(ApiKey, apiKey, StringComparison.Ordinal);
+            ApiKey = apiKey;
+            if (changed)
+            {
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
+        }
+
+        _host?.NotifyCapabilitiesChanged();
     }
 
     internal void SelectLlmModel(string modelId)
     {
-        _selectedLlmModelId = modelId;
+        SelectedLlmModelId = modelId;
         _host?.SetSetting("selectedLlmModel", modelId);
     }
 
@@ -277,9 +496,15 @@ public sealed partial class OpenAiCompatiblePlugin
     private static bool ParseBool(string? value) =>
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
-    internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged = true)
+    internal void SetFetchedModels(List<FetchedModel> models, bool notifyCapabilitiesChanged)
     {
+        var selectedModelId = NormalizeModelSelection(SelectedModelId, models);
+        var selectedLlmModelId = NormalizeModelSelection(SelectedLlmModelId, models);
+
         _fetchedModels = models;
+        SelectedModelId = selectedModelId;
+        SelectedLlmModelId = selectedLlmModelId;
+
         try
         {
             var json = JsonSerializer.Serialize(models);
@@ -288,6 +513,10 @@ public sealed partial class OpenAiCompatiblePlugin
         catch
         { /* best effort */
         }
+
+        _host?.SetSetting("selectedModel", selectedModelId);
+        _host?.SetSetting("selectedLlmModel", selectedLlmModelId);
+
         if (notifyCapabilitiesChanged)
             _host?.NotifyCapabilitiesChanged();
     }
@@ -298,61 +527,38 @@ public sealed partial class OpenAiCompatiblePlugin
     // from "couldn't reach/parse the server."
     internal async Task<List<FetchedModel>?> FetchModelsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(_baseUrl))
-            return null;
-
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(_apiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-
-            using var response = await _httpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-                return null;
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-                return null;
-
-            return data.EnumerateArray()
-                .Select(e => new FetchedModel(
-                    e.GetProperty("id").GetString() ?? "",
-                    e.TryGetProperty("owned_by", out var ob) ? ob.GetString() : null
-                ))
-                .Where(m => !string.IsNullOrEmpty(m.Id))
-                .OrderBy(m => m.Id)
-                .ToList();
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return null;
-        }
+        var connection = CaptureDefaultConnection();
+        return await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, connection.ApiVersion, ct);
     }
 
     internal async Task<bool> ValidateConnectionAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrEmpty(_baseUrl))
+        if (string.IsNullOrEmpty(BaseUrl))
             return false;
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_nonLlmTimeout);
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(_apiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            var endpoint = RequestUri(BaseUrl, _apiVersion, "/v1/models");
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            foreach (var (name, value) in AuthenticationHeaders(endpoint, ApiKey))
+                request.Headers.TryAddWithoutValidation(name, value);
 
-            using var response = await _httpClient.SendAsync(request, ct);
+            using var response = await ClientFor(BaseUrl).SendAsync(request, timeout.Token);
             return response.IsSuccessStatusCode;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
+        }
+        catch (OperationCanceledException ex) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.RequestTimedOut"), ex);
         }
         catch
         {
@@ -360,7 +566,15 @@ public sealed partial class OpenAiCompatiblePlugin
         }
     }
 
-    public void Dispose() => _httpClient.Dispose();
+    public void Dispose()
+    {
+        _httpClient.Dispose();
+        if (!ReferenceEquals(_loopbackHttpClient, _httpClient))
+            _loopbackHttpClient.Dispose();
+    }
+
+    private HttpClient ClientFor(string? baseUrl) =>
+        LoopbackEndpoint.IsLoopback(EndpointUri(baseUrl)) ? _loopbackHttpClient : _httpClient;
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
         [
@@ -400,16 +614,36 @@ public sealed partial class OpenAiCompatiblePlugin
                 Description: Loc.L("Settings.StreamResponsesDescription"),
                 Kind: PluginSettingKind.Boolean
             ),
+            BuildLlmRequestTimeoutDefinition(),
+            BuildThinkingModeDefinition(),
+            BuildApiVersionDefinition(),
+            BuildBatchEndpointDefinition(),
+            BuildTranscriptionModeDefinition(),
+            BuildRealtimeProtocolDefinition(),
+            BuildTextApiDefinition(),
+            BuildReasoningEffortDefinition(),
+            BuildTemperatureModeDefinition(),
+            BuildTemperatureDefinition(),
         ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(
             key switch
             {
-                "baseUrl" => _baseUrl,
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
-                "selectedLlmModel" => _selectedLlmModelId,
+                LlmRequestTimeoutSettingKey => _llmRequestTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
+                ThinkingModeSettingKey => FormatThinkingMode(_thinkingMode),
+                ApiVersionSettingKey => _apiVersion,
+                BatchEndpointSettingKey => _batchEndpoint,
+                TranscriptionModeSettingKey => _transcriptionMode,
+                RealtimeProtocolSettingKey => _realtimeProtocol,
+                TextApiSettingKey => _textApi,
+                ReasoningEffortSettingKey => _reasoningEffort,
+                TemperatureModeSettingKey => _temperatureMode,
+                TemperatureSettingKey => _temperature.ToString(CultureInfo.InvariantCulture),
+                "baseUrl" => BaseUrl,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
+                "selectedLlmModel" => SelectedLlmModelId,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -424,19 +658,66 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         switch (key)
         {
+            case LlmRequestTimeoutSettingKey:
+                if (!int.TryParse(value, out var seconds))
+                    throw new ArgumentException(Loc.L("Settings.LlmRequestTimeoutInvalid", 5, 3600));
+                _llmRequestTimeoutSeconds = Math.Clamp(seconds, 5, 3600);
+                _host?.SetSetting(LlmRequestTimeoutSettingKey, _llmRequestTimeoutSeconds);
+                break;
+            case ApiVersionSettingKey:
+            case BatchEndpointSettingKey:
+                SetEndpointOption(key, value);
+                break;
+            case TranscriptionModeSettingKey:
+                _transcriptionMode = NormalizeTranscriptionMode(value);
+                _host?.SetSetting(TranscriptionModeSettingKey, _transcriptionMode);
+                _host?.NotifyCapabilitiesChanged();
+                break;
+            case RealtimeProtocolSettingKey:
+                _realtimeProtocol = NormalizeRealtimeProtocol(value);
+                _host?.SetSetting(RealtimeProtocolSettingKey, _realtimeProtocol);
+                _host?.NotifyCapabilitiesChanged();
+                break;
+            case TextApiSettingKey:
+                _textApi = NormalizeTextApi(value);
+                _host?.SetSetting(TextApiSettingKey, _textApi);
+                break;
+            case ReasoningEffortSettingKey:
+                _reasoningEffort = NormalizeReasoningEffort(value);
+                _host?.SetSetting(ReasoningEffortSettingKey, _reasoningEffort);
+                break;
+            case TemperatureModeSettingKey:
+                _temperatureMode = NormalizeTemperatureMode(value);
+                _host?.SetSetting(TemperatureModeSettingKey, _temperatureMode);
+                break;
+            case TemperatureSettingKey:
+                if (!TryParseTemperature(value, out var temperature))
+                    throw new ArgumentException(Loc.L("Settings.TemperatureInvalid"));
+                _temperature = temperature;
+                _host?.SetSetting(TemperatureSettingKey, _temperature);
+                break;
+            case ThinkingModeSettingKey:
+                _thinkingMode = ParseThinkingMode(value);
+                _host?.SetSetting(ThinkingModeSettingKey, FormatThinkingMode(_thinkingMode));
+                break;
             case "baseUrl":
                 SetBaseUrl(value ?? string.Empty);
                 break;
             case "api-key":
                 await SetApiKeyAsync(value ?? string.Empty);
                 break;
+            // Only honor a selection that exists in the authoritative catalog. On the
+            // host's full-form save, an earlier baseUrl/api-key change clears the catalog
+            // and both selections, but the form still carries the previous selection in
+            // these later fields; restoring it unconditionally would re-pair the new
+            // endpoint with a stale model. A genuine dropdown pick is always in-catalog.
             case "selectedModel":
-                if (!string.IsNullOrWhiteSpace(value))
-                    SelectModel(value);
+                if (IsKnownModel(value))
+                    SelectModel(value!);
                 break;
             case "selectedLlmModel":
-                if (!string.IsNullOrWhiteSpace(value))
-                    SelectLlmModel(value);
+                if (IsKnownModel(value))
+                    SelectLlmModel(value!);
                 break;
             case LlmStreamingSettings.StreamResponsesSettingKey:
                 SetStreamResponses(ParseBool(value));
@@ -444,24 +725,343 @@ public sealed partial class OpenAiCompatiblePlugin
         }
     }
 
+    internal enum ThinkingMode { ProviderDefault, Off, On }
+
+    internal static ThinkingMode ParseThinkingMode(string? value) => value switch
+    {
+        "off" => ThinkingMode.Off,
+        "on" => ThinkingMode.On,
+        _ => ThinkingMode.ProviderDefault,
+    };
+
+    internal static string FormatThinkingMode(ThinkingMode mode) => mode switch
+    {
+        ThinkingMode.Off => "off",
+        ThinkingMode.On => "on",
+        _ => "default",
+    };
+
+    private async Task<T> RunNonLlmRequestAsync<T>(Func<CancellationToken, Task<T>> request, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_nonLlmTimeout);
+        try
+        {
+            return await request(timeout.Token);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.RequestTimedOut"), ex);
+        }
+    }
+
+    private static CancellationTokenSource CreateLlmTimeout(int seconds, CancellationToken ct)
+    {
+        var source = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        source.CancelAfter(TimeSpan.FromSeconds(seconds));
+        return source;
+    }
+
+    private PluginSettingDefinition BuildLlmRequestTimeoutDefinition() => new(
+        Key: LlmRequestTimeoutSettingKey,
+        Label: Loc.L("Settings.LlmRequestTimeout"),
+        Description: Loc.L("Settings.LlmRequestTimeoutHelp", 5, 3600, 300),
+        Placeholder: "300",
+        Kind: PluginSettingKind.Text);
+
+    private PluginSettingDefinition BuildThinkingModeDefinition() => new(
+        Key: ThinkingModeSettingKey,
+        Label: Loc.L("Settings.ThinkingMode"),
+        Description: Loc.L("Settings.ThinkingModeDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("default", Loc.L("Settings.ThinkingModeDefault")),
+            new PluginSettingOption("off", Loc.L("Settings.ThinkingModeOff")),
+            new PluginSettingOption("on", Loc.L("Settings.ThinkingModeOn")),
+        ]);
+
+    internal static bool UsesRealtime(string transcriptionMode, string? modelId) => transcriptionMode switch
+    {
+        "realtime" => true,
+        "batch" => false,
+        _ => IsModelFamily(modelId, OpenAiRealtimeStreamingSession.LiveModelId)
+            || IsModelFamily(modelId, OpenAiRealtimeStreamingSession.LegacyModelId),
+    };
+
+    private static bool IsModelFamily(string? modelId, string family) =>
+        modelId is not null && (modelId.Equals(family, StringComparison.OrdinalIgnoreCase)
+            || modelId.StartsWith(family + "-", StringComparison.OrdinalIgnoreCase));
+
+    internal static Uri RealtimeUri(string baseUrl, string apiVersion)
+    {
+        var endpoint = RequestUri(baseUrl, apiVersion, "/v1/realtime");
+        var builder = new UriBuilder(endpoint)
+        {
+            Scheme = endpoint.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
+            Port = endpoint.IsDefaultPort ? -1 : endpoint.Port,
+            Query = endpoint.Query.Length > 0
+                ? endpoint.Query[1..] + "&intent=transcription"
+                : "intent=transcription",
+        };
+        return builder.Uri;
+    }
+
+    private static string NormalizeTranscriptionMode(string? value) =>
+        value is "batch" or "realtime" ? value : "auto";
+
+    private static string NormalizeRealtimeProtocol(string? value) =>
+        value is "live" or "whisper" ? value : "auto";
+
+    private PluginSettingDefinition BuildTranscriptionModeDefinition() => new(
+        Key: TranscriptionModeSettingKey,
+        Label: Loc.L("Settings.TranscriptionMode"),
+        Description: Loc.L("Settings.TranscriptionModeDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("auto", Loc.L("Settings.TranscriptionModeAuto")),
+            new PluginSettingOption("batch", Loc.L("Settings.TranscriptionModeBatch")),
+            new PluginSettingOption("realtime", Loc.L("Settings.TranscriptionModeRealtime")),
+        ]);
+
+    private PluginSettingDefinition BuildRealtimeProtocolDefinition() => new(
+        Key: RealtimeProtocolSettingKey,
+        Label: Loc.L("Settings.RealtimeProtocol"),
+        Description: Loc.L("Settings.RealtimeProtocolDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("auto", Loc.L("Settings.RealtimeProtocolAuto")),
+            new PluginSettingOption("live", Loc.L("Settings.RealtimeProtocolLive")),
+            new PluginSettingOption("whisper", Loc.L("Settings.RealtimeProtocolWhisper")),
+        ]);
+
+    internal static Uri RequestUri(string baseUrl, string apiVersion, string path)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new PluginRequestException("Base URL must be an absolute http:// or https:// URL.", PluginRequestFailureKind.Configuration);
+
+        var endpoint = baseUrl.TrimEnd('/') + "/" + path.TrimStart('/');
+        var version = apiVersion.Trim();
+        if (version.Length > 0)
+            endpoint += "?api-version=" + Uri.EscapeDataString(version);
+        return new Uri(endpoint);
+    }
+
+    internal static bool IsDatedApiVersion(string apiVersion) =>
+        apiVersion.Length >= 10
+        && DateOnly.TryParseExact(apiVersion.AsSpan(0, 10), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
+
+    internal static Uri BatchUri(string baseUrl, string apiVersion, string batchEndpoint, string modelId, bool translate)
+    {
+        var route = translate ? "translations" : "transcriptions";
+        if (batchEndpoint != "deployment-scoped")
+            return RequestUri(baseUrl, apiVersion, $"/v1/audio/{route}");
+        if (!IsDatedApiVersion(apiVersion))
+            throw new PluginRequestException(
+                "Deployment-scoped transcription requires a dated API version, such as 2025-03-01-preview.",
+                PluginRequestFailureKind.Configuration);
+        return RequestUri(baseUrl, apiVersion, $"/deployments/{Uri.EscapeDataString(modelId)}/audio/{route}");
+    }
+
+    internal static IReadOnlyDictionary<string, string> AuthenticationHeaders(Uri uri, string? key)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(key))
+            return headers;
+        headers["Authorization"] = $"Bearer {key}";
+        if (uri.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith(".openai.azure.us", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase))
+            headers["api-key"] = key;
+        return headers;
+    }
+
+    private OpenAiResponsesClient CreateResponsesClient(string baseUrl, string apiVersion, string? apiKey)
+    {
+        var endpoint = RequestUri(baseUrl, apiVersion, "/v1/responses");
+        return new OpenAiResponsesClient(ClientFor(baseUrl), endpoint, AuthenticationHeaders(endpoint, apiKey));
+    }
+
+    private static string NormalizeBatchEndpoint(string? value) =>
+        value == "deployment-scoped" ? "deployment-scoped" : "standard";
+
+    private void SetEndpointOption(string key, string? value)
+    {
+        lock (_defaultConnectionLock)
+        {
+            var apiVersion = key == ApiVersionSettingKey ? (value ?? "").Trim() : _apiVersion;
+            var batchEndpoint = key == BatchEndpointSettingKey ? NormalizeBatchEndpoint(value) : _batchEndpoint;
+            // The host saves apiVersion before batchEndpoint, so the pair is checked once the
+            // later field arrives; ValidateAsync and BatchUri still catch a stale partial state.
+            if (key == BatchEndpointSettingKey && batchEndpoint == "deployment-scoped" && !IsDatedApiVersion(apiVersion))
+                throw new ArgumentException(Loc.L("Settings.ApiVersionRequired"));
+            var changed = apiVersion != _apiVersion || batchEndpoint != _batchEndpoint;
+            _apiVersion = apiVersion;
+            _batchEndpoint = batchEndpoint;
+            if (changed)
+            {
+                _defaultConnectionRevision++;
+                SetFetchedModels([], notifyCapabilitiesChanged: false);
+            }
+            _host?.SetSetting(key, key == ApiVersionSettingKey ? _apiVersion : _batchEndpoint);
+        }
+        _host?.NotifyCapabilitiesChanged();
+    }
+
+    private PluginSettingDefinition BuildApiVersionDefinition() => new(
+        Key: ApiVersionSettingKey,
+        Label: Loc.L("Settings.ApiVersion"),
+        Description: Loc.L("Settings.ApiVersionDescription"),
+        Kind: PluginSettingKind.Text);
+
+    private PluginSettingDefinition BuildBatchEndpointDefinition() => new(
+        Key: BatchEndpointSettingKey,
+        Label: Loc.L("Settings.BatchEndpoint"),
+        Description: Loc.L("Settings.BatchEndpointDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("standard", Loc.L("Settings.BatchEndpointStandard")),
+            new PluginSettingOption("deployment-scoped", Loc.L("Settings.BatchEndpointDeployment")),
+        ]);
+
+    private static string NormalizeTextApi(string? value) =>
+        value == "responses" ? "responses" : "chat-completions";
+
+    // Compatible servers may inline <think> blocks; the chat path strips them inside OpenAiChatHelper.
+    private static string StripThinking(string text)
+    {
+        var stripped = ThinkingBlockFilter.Strip(text).Trim();
+        if (stripped.Length == 0)
+            throw new PluginRequestException(
+                "The provider returned only reasoning content and no final answer.",
+                PluginRequestFailureKind.EmptyResponse);
+        return stripped;
+    }
+
+    private static string NormalizeReasoningEffort(string? value) => value switch
+    {
+        "low" or "medium" or "high" or "xhigh" or "max" => value,
+        _ => "",
+    };
+
+    private static string NormalizeTemperatureMode(string? value) =>
+        value == "custom" ? "custom" : "provider-default";
+
+    private static double NormalizeTemperature(double value) =>
+        double.IsFinite(value) && value is >= 0 and <= 2 ? value : 0.3;
+
+    private static bool TryParseTemperature(string? value, out double temperature) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out temperature)
+        && double.IsFinite(temperature) && temperature is >= 0 and <= 2;
+
+    private PluginSettingDefinition BuildTextApiDefinition() => new(
+        Key: TextApiSettingKey,
+        Label: Loc.L("Settings.TextApi"),
+        Description: Loc.L("Settings.TextApiDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("chat-completions", Loc.L("Settings.TextApiChatCompletions")),
+            new PluginSettingOption("responses", Loc.L("Settings.TextApiResponses")),
+        ]);
+
+    private PluginSettingDefinition BuildReasoningEffortDefinition() => new(
+        Key: ReasoningEffortSettingKey,
+        Label: Loc.L("Settings.ReasoningEffort"),
+        Description: Loc.L("Settings.ReasoningEffortDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("", Loc.L("Settings.ReasoningEffortDefault")),
+            new PluginSettingOption("low", Loc.L("Settings.ReasoningEffortLow")),
+            new PluginSettingOption("medium", Loc.L("Settings.ReasoningEffortMedium")),
+            new PluginSettingOption("high", Loc.L("Settings.ReasoningEffortHigh")),
+            new PluginSettingOption("xhigh", Loc.L("Settings.ReasoningEffortXHigh")),
+            new PluginSettingOption("max", Loc.L("Settings.ReasoningEffortMax")),
+        ]);
+
+    private PluginSettingDefinition BuildTemperatureModeDefinition() => new(
+        Key: TemperatureModeSettingKey,
+        Label: Loc.L("Settings.TemperatureMode"),
+        Description: Loc.L("Settings.TemperatureModeDescription"),
+        Kind: PluginSettingKind.Dropdown,
+        Options:
+        [
+            new PluginSettingOption("provider-default", Loc.L("Settings.TemperatureProviderDefault")),
+            new PluginSettingOption("custom", Loc.L("Settings.TemperatureCustom")),
+        ]);
+
+    private PluginSettingDefinition BuildTemperatureDefinition() => new(
+        Key: TemperatureSettingKey,
+        Label: Loc.L("Settings.TemperatureValue"),
+        Description: Loc.L("Settings.TemperatureValueDescription"),
+        Placeholder: "0.3",
+        Kind: PluginSettingKind.Text);
+
+    private static OpenAiChatRequestOptions BuildRequestOptions(
+        string baseUrl, ThinkingMode mode, string temperatureMode, double temperature, string apiVersion, string? apiKey)
+    {
+        // The endpoint's context window is unknown (often a small self-hosted model), so keep
+        // the fixed output cap; a cut-off answer now surfaces as a truncation error instead.
+        var endpoint = RequestUri(baseUrl, apiVersion, "/v1/chat/completions");
+        var baseOptions = new OpenAiChatRequestOptions
+        {
+            RequestUri = endpoint,
+            RequestHeaders = AuthenticationHeaders(endpoint, apiKey),
+            ProviderName = "OpenAI Compatible",
+            ScaleOutputTokens = false,
+            Temperature = temperatureMode == "custom" ? temperature : null,
+        };
+
+        if (mode == ThinkingMode.ProviderDefault)
+            return baseOptions;
+
+        if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            && string.Equals(uri.Host, "api.deepinfra.com", StringComparison.OrdinalIgnoreCase))
+            return baseOptions with { ReasoningEffort = mode == ThinkingMode.On ? "high" : "none" };
+
+        // No single control is universal: cloud endpoints read `thinking`, while vLLM and
+        // llama.cpp read `chat_template_kwargs.enable_thinking`. Local servers ignore the other.
+        var enabled = mode == ThinkingMode.On;
+        return baseOptions with
+        {
+            AdditionalBodyFields = new Dictionary<string, object?>
+            {
+                ["thinking"] = new { type = enabled ? "enabled" : "disabled" },
+                ["chat_template_kwargs"] = new { enable_thinking = enabled },
+            },
+        };
+    }
+
+    private bool IsKnownModel(string? modelId) =>
+        !string.IsNullOrWhiteSpace(modelId)
+        && _fetchedModels.Any(m => string.Equals(m.Id, modelId, StringComparison.Ordinal));
+
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_baseUrl))
+        var connection = CaptureDefaultConnection();
+        if (string.IsNullOrWhiteSpace(connection.BaseUrl))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterBaseUrl"));
 
-        var valid = await ValidateConnectionAsync(ct);
-        if (!valid)
+        if (connection.BatchEndpoint == "deployment-scoped" && !IsDatedApiVersion(connection.ApiVersion))
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiVersionRequired"));
+
+        var models = await FetchModelsForAsync(connection.BaseUrl, connection.ApiKey, connection.ApiVersion, ct);
+        var isCurrent = TryApplyDefaultCatalog(
+            connection,
+            models,
+            onlyIfChanged: false,
+            out var applied
+        );
+        if (!isCurrent || models is null)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.CouldNotConnect"));
 
-        var models = await FetchModelsAsync(ct) ?? [];
-        SetFetchedModels(models, notifyCapabilitiesChanged: false);
-
-        if (string.IsNullOrWhiteSpace(_selectedModelId) && models.Count > 0)
-            SelectModel(models[0].Id);
-        if (string.IsNullOrWhiteSpace(_selectedLlmModelId) && models.Count > 0)
-            SelectLlmModel(models[0].Id);
-
-        _host?.NotifyCapabilitiesChanged();
+        if (applied)
+            _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(
             true,
@@ -469,57 +1069,152 @@ public sealed partial class OpenAiCompatiblePlugin
         );
     }
 
-    // IModelCatalogProvider: read-only model-list refresh for dropdown-open.
-    // Only the model catalog is touched — no connection-validation message, no
-    // asset downloads, no auto-selecting a model. Keeps the cached list on a
-    // transient failure (FetchModelsAsync returns null) so an unreachable
-    // endpoint doesn't empty the dropdown, but honors a successful empty
-    // response (empty list) so a server that legitimately dropped all its
-    // models clears the cache.
+    // IModelCatalogProvider: model-list refresh for dropdown-open. A successful
+    // response is authoritative for both the catalog and selections; a transient
+    // failure leaves all three untouched.
     public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
     {
-        if (!string.IsNullOrEmpty(_baseUrl))
+        var changed = false;
+        var connection = CaptureDefaultConnection();
+        if (!string.IsNullOrEmpty(connection.BaseUrl))
         {
-            var models = await FetchModelsAsync(ct);
-            if (models is not null && CatalogChanged(models, _fetchedModels))
-                SetFetchedModels(models);
+            var models = await FetchModelsBestEffortAsync(connection.BaseUrl, connection.ApiKey, connection.ApiVersion, ct);
+            TryApplyDefaultCatalog(connection, models, onlyIfChanged: true, out var applied);
+            changed = applied;
         }
 
         // Refresh additional profiles on the same dropdown-open path so their
         // catalogs don't go stale when a server adds or removes models after the
         // profile was first saved.
-        var anyProfileChanged = false;
+        var changedProfileIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var profile in _additionalProfiles.Where(p => !string.IsNullOrEmpty(p.BaseUrl)))
         {
-            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
-            if (models is null || !CatalogChanged(models, profile.FetchedModels))
+            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), profile.ApiVersion, ct);
+            if (models is null || !ProfileCatalogStateChanged(profile, models))
                 continue;
 
-            profile.FetchedModels = models;
-            anyProfileChanged = true;
+            ApplyProfileCatalog(profile, models);
+            changedProfileIds.Add(profile.Id);
         }
 
-        if (anyProfileChanged)
-            PersistAdditionalProfiles(notify: true);
+        if (changedProfileIds.Count > 0)
+        {
+            PersistAdditionalProfiles(notify: false);
+            lock (_profileRolesLock)
+            {
+                foreach (var id in changedProfileIds)
+                    _profileRoles.Remove(id);
+            }
+
+            changed = true;
+        }
+
+        if (changed)
+            _host?.NotifyCapabilitiesChanged();
     }
 
     private static bool CatalogChanged(List<FetchedModel> fetched, List<FetchedModel> current) =>
-        fetched.Count != current.Count
-        || !fetched.Select(m => m.Id).SequenceEqual(current.Select(m => m.Id));
+        !fetched.SequenceEqual(current);
+
+    private DefaultConnectionSnapshot CaptureDefaultConnection()
+    {
+        lock (_defaultConnectionLock)
+        {
+            return new DefaultConnectionSnapshot(BaseUrl, ApiKey, _apiVersion, _batchEndpoint, _defaultConnectionRevision);
+        }
+    }
+
+    // A null catalog is a fetch failure. It still passes through the revision
+    // check so validation can distinguish a current failure from a stale result.
+    private bool TryApplyDefaultCatalog(
+        DefaultConnectionSnapshot connection,
+        List<FetchedModel>? models,
+        bool onlyIfChanged,
+        out bool applied
+    )
+    {
+        lock (_defaultConnectionLock)
+        {
+            applied = false;
+            if (connection.Revision != _defaultConnectionRevision)
+                return false;
+
+            if (models is null || (onlyIfChanged && !DefaultCatalogStateChanged(models)))
+                return true;
+
+            SetFetchedModels(models, notifyCapabilitiesChanged: false);
+            applied = true;
+            return true;
+        }
+    }
+
+    private bool DefaultCatalogStateChanged(List<FetchedModel> models) =>
+        CatalogChanged(models, _fetchedModels)
+        || !string.Equals(
+            SelectedModelId,
+            NormalizeModelSelection(SelectedModelId, models),
+            StringComparison.Ordinal
+        )
+        || !string.Equals(
+            SelectedLlmModelId,
+            NormalizeModelSelection(SelectedLlmModelId, models),
+            StringComparison.Ordinal
+        );
+
+    private static bool ProfileCatalogStateChanged(
+        OpenAiCompatibleProfile profile,
+        List<FetchedModel> models
+    ) =>
+        CatalogChanged(models, profile.FetchedModels)
+        || !string.Equals(
+            profile.SelectedModelId,
+            NormalizeModelSelection(profile.SelectedModelId, models),
+            StringComparison.Ordinal
+        )
+        || !string.Equals(
+            profile.SelectedLlmModelId,
+            NormalizeModelSelection(profile.SelectedLlmModelId, models),
+            StringComparison.Ordinal
+        );
+
+    private static void ApplyProfileCatalog(
+        OpenAiCompatibleProfile profile,
+        List<FetchedModel> models
+    )
+    {
+        profile.SelectedModelId = NormalizeModelSelection(profile.SelectedModelId, models);
+        profile.SelectedLlmModelId = NormalizeModelSelection(profile.SelectedLlmModelId, models);
+        profile.FetchedModels = models;
+    }
+
+    private static string? NormalizeModelSelection(
+        string? selectedModelId,
+        List<FetchedModel> models
+    )
+    {
+        if (models.Count == 0)
+            return null;
+
+        return !string.IsNullOrWhiteSpace(selectedModelId)
+            && models.Any(m => string.Equals(m.Id, selectedModelId, StringComparison.Ordinal))
+                ? selectedModelId
+                : models[0].Id;
+    }
 
     private List<PluginSettingOption>? BuildModelOptions()
     {
         var models = _fetchedModels.Select(m => new PluginSettingOption(m.Id, m.Id)).ToList();
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (models.Count == 0)
         {
-            if (!string.IsNullOrWhiteSpace(_selectedModelId))
-                models.Add(new PluginSettingOption(_selectedModelId, _selectedModelId));
+            if (!string.IsNullOrWhiteSpace(SelectedModelId))
+                models.Add(new PluginSettingOption(SelectedModelId, SelectedModelId));
             if (
-                !string.IsNullOrWhiteSpace(_selectedLlmModelId)
-                && models.All(m => m.Value != _selectedLlmModelId)
+                !string.IsNullOrWhiteSpace(SelectedLlmModelId)
+                && models.All(m => m.Value != SelectedLlmModelId)
             )
-                models.Add(new PluginSettingOption(_selectedLlmModelId, _selectedLlmModelId));
+                models.Add(new PluginSettingOption(SelectedLlmModelId, SelectedLlmModelId));
         }
 
         return models.Count > 0 ? models : null;
@@ -530,19 +1225,19 @@ public sealed partial class OpenAiCompatiblePlugin
     // endpoints, each surfaced as its own selectable transcription engine / LLM
     // provider via OpenAiCompatibleProfileRole and the selection-identity scheme.
 
-    public IReadOnlyList<ITranscriptionEnginePlugin> AdditionalTranscriptionEngines =>
+    public IReadOnlyList<ITranscriptionEngineRole> AdditionalTranscriptionEngines =>
         _additionalProfiles
-            .Select(p => (ITranscriptionEnginePlugin)new OpenAiCompatibleProfileRole(this, p.Id))
+            .Select(ITranscriptionEngineRole (profile) => GetProfileRole(profile.Id))
             .ToList();
 
-    public IReadOnlyList<ILlmProviderPlugin> AdditionalLlmProviders =>
+    public IReadOnlyList<ILlmProviderRole> AdditionalLlmProviders =>
         _additionalProfiles
-            .Select(p => (ILlmProviderPlugin)new OpenAiCompatibleProfileRole(this, p.Id))
+            .Select(ILlmProviderRole (profile) => GetProfileRole(profile.Id))
             .ToList();
 
     public IReadOnlyList<PluginCollectionDefinition> GetCollectionDefinitions() =>
         [
-            new PluginCollectionDefinition(
+            new(
                 Key: ProfilesCollectionKey,
                 Label: Loc.L("Settings.ProfilesLabel"),
                 Description: Loc.L("Settings.ProfilesDescription"),
@@ -567,6 +1262,16 @@ public sealed partial class OpenAiCompatiblePlugin
                         "selectedLlmModel", Loc.L("Settings.LlmModel"),
                         Description: Loc.L("Settings.ProfileLlmModelDescription"),
                         Kind: PluginSettingKind.Text),
+                    BuildLlmRequestTimeoutDefinition(),
+                    BuildThinkingModeDefinition(),
+                    BuildApiVersionDefinition(),
+                    BuildBatchEndpointDefinition(),
+                    BuildTranscriptionModeDefinition(),
+                    BuildRealtimeProtocolDefinition(),
+                    BuildTextApiDefinition(),
+                    BuildReasoningEffortDefinition(),
+                    BuildTemperatureModeDefinition(),
+                    BuildTemperatureDefinition(),
                     new PluginSettingDefinition("__id", "__id", Kind: PluginSettingKind.Text),
                 ],
                 ItemLabelFieldKey: "name",
@@ -592,6 +1297,16 @@ public sealed partial class OpenAiCompatiblePlugin
                     ["api-key"] = null,
                     ["selectedModel"] = p.SelectedModelId,
                     ["selectedLlmModel"] = p.SelectedLlmModelId,
+                    [LlmRequestTimeoutSettingKey] = p.LlmRequestTimeoutSeconds.ToString(CultureInfo.InvariantCulture),
+                    [ThinkingModeSettingKey] = FormatThinkingMode(ParseThinkingMode(p.ThinkingMode)),
+                    [ApiVersionSettingKey] = p.ApiVersion,
+                    [BatchEndpointSettingKey] = p.BatchEndpoint,
+                    [TranscriptionModeSettingKey] = p.TranscriptionMode,
+                    [RealtimeProtocolSettingKey] = p.RealtimeProtocol,
+                    [TextApiSettingKey] = p.TextApi,
+                    [ReasoningEffortSettingKey] = p.ReasoningEffort,
+                    [TemperatureModeSettingKey] = p.TemperatureMode,
+                    [TemperatureSettingKey] = p.Temperature.ToString(CultureInfo.InvariantCulture),
                     ["__id"] = p.Id,
                 }
             ))
@@ -631,59 +1346,137 @@ public sealed partial class OpenAiCompatiblePlugin
                     false, $"Profile '{label}': base URL must be an absolute http:// or https:// URL.");
             }
 
+            var apiVersion = (Get(item, ApiVersionSettingKey) ?? "").Trim();
+            var batchEndpoint = NormalizeBatchEndpoint(Get(item, BatchEndpointSettingKey));
+            if (batchEndpoint == "deployment-scoped" && !IsDatedApiVersion(apiVersion))
+                return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiVersionRequired"));
+
             var id = NormalizeProfileId(Get(item, "__id"), seenIds);
 
-            var key = Get(item, "api-key");
-            var keyChanged = !string.IsNullOrWhiteSpace(key);
-            if (keyChanged)
-                keyUpdates[id] = key!.Trim();
+            var submittedKey = Get(item, "api-key");
+            var key = NullIfWhiteSpace(submittedKey);
+            var storedKey = GetProfileApiKey(id);
+            var keyChanged = false;
+            if (submittedKey is not null)
+            {
+                if (key is null)
+                {
+                    if (storedKey is not null)
+                    {
+                        keyUpdates[id] = null;
+                        keyChanged = true;
+                    }
+                }
+                else if (!string.Equals(storedKey, key, StringComparison.Ordinal))
+                {
+                    keyUpdates[id] = key;
+                    keyChanged = true;
+                }
+            }
 
-            // Preserve the fetched model catalog only when the endpoint is unchanged.
-            // A changed base URL (or updated credentials) can point at a different
-            // server, so drop the stale catalog and let the refetch below repopulate
-            // it — otherwise the profile would keep advertising the previous server's
-            // model IDs to dictation and prompt selection.
+            // A changed endpoint (base URL or credentials) may point at a different
+            // server, so drop the stale catalog and this save's submitted selections
+            // rather than pair the new endpoint with the previous server's model IDs.
             var hadProfile = previousById.TryGetValue(id, out var prev);
-            var endpointUnchanged = hadProfile
-                && !keyChanged
-                && string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal);
+            var endpointChanged = hadProfile
+                && (keyChanged
+                    || !string.Equals(prev!.BaseUrl, baseUrl, StringComparison.Ordinal)
+                    || !string.Equals(prev.ApiVersion, apiVersion, StringComparison.Ordinal)
+                    || !string.Equals(prev.BatchEndpoint, batchEndpoint, StringComparison.Ordinal));
+            var preserveCatalog = hadProfile && !endpointChanged;
+            var selectedModelId = endpointChanged
+                ? null
+                : NullIfWhiteSpace(Get(item, "selectedModel"));
+            var selectedLlmModelId = endpointChanged
+                ? null
+                : NullIfWhiteSpace(Get(item, "selectedLlmModel"));
+
+            var timeoutValue = Get(item, LlmRequestTimeoutSettingKey);
+            var timeoutSeconds = prev?.LlmRequestTimeoutSeconds ?? 300;
+            if (!string.IsNullOrWhiteSpace(timeoutValue) && !int.TryParse(timeoutValue, out timeoutSeconds))
+                return new PluginSettingsValidationResult(false, Loc.L("Settings.LlmRequestTimeoutInvalid", 5, 3600));
+
+            var temperatureValue = Get(item, TemperatureSettingKey);
+            var temperature = prev?.Temperature ?? 0.3;
+            if (!string.IsNullOrWhiteSpace(temperatureValue) && !TryParseTemperature(temperatureValue, out temperature))
+                return new PluginSettingsValidationResult(false, Loc.L("Settings.TemperatureInvalid"));
 
             newProfiles.Add(new OpenAiCompatibleProfile
             {
                 Id = id,
                 Name = name.Length == 0 ? "Custom Server" : name,
                 BaseUrl = baseUrl,
-                SelectedModelId = NullIfWhiteSpace(Get(item, "selectedModel")),
-                SelectedLlmModelId = NullIfWhiteSpace(Get(item, "selectedLlmModel")),
-                FetchedModels = endpointUnchanged ? prev!.FetchedModels : [],
+                ApiVersion = apiVersion,
+                BatchEndpoint = batchEndpoint,
+                TranscriptionMode = NormalizeTranscriptionMode(Get(item, TranscriptionModeSettingKey)),
+                RealtimeProtocol = NormalizeRealtimeProtocol(Get(item, RealtimeProtocolSettingKey)),
+                SelectedModelId = selectedModelId,
+                SelectedLlmModelId = selectedLlmModelId,
+                LlmRequestTimeoutSeconds = timeoutSeconds,
+                ThinkingMode = FormatThinkingMode(ParseThinkingMode(Get(item, ThinkingModeSettingKey))),
+                TextApi = NormalizeTextApi(Get(item, TextApiSettingKey)),
+                ReasoningEffort = NormalizeReasoningEffort(Get(item, ReasoningEffortSettingKey)),
+                TemperatureMode = NormalizeTemperatureMode(Get(item, TemperatureModeSettingKey)),
+                Temperature = temperature,
+                FetchedModels = preserveCatalog ? prev!.FetchedModels : [],
             });
         }
 
-        // Do the fallible host secret-store writes before swapping the shared
-        // profile set, so a failure here can't leave _additionalProfiles half
-        // updated. Each _additionalApiKeys mutation is paired with its host op,
-        // so the cache stays consistent with the store even on a mid-loop throw.
-        if (_host is not null)
+        // Secrets and profile metadata are separate writes and the host store has no multi-key
+        // transaction. Persisting a rotated key but not the endpoint it belongs to would, after a
+        // restart, send the new credential to the profile's previous URL — so every committed step
+        // records its inverse and any failure replays them in reverse. Compensation goes through
+        // the same store, so a persistent failure (read-only mount, disk full) can still leave the
+        // two out of step; that is logged, and closing it needs an atomic multi-key host API.
+        var previousProfiles = _additionalProfiles.ToList();
+        var undo = new List<Func<Task>>();
+        try
         {
-            foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
+            if (_host is not null)
             {
-                await _host.DeleteSecretAsync(SecretKeyFor(removedId));
-                _additionalApiKeys.Remove(removedId);
+                foreach (var removedId in previousById.Keys.Where(k => !seenIds.Contains(k)))
+                    await ApplyProfileSecretAsync(removedId, null, undo);
+
+                foreach (var (id, key) in keyUpdates)
+                    await ApplyProfileSecretAsync(id, key, undo);
             }
 
-            foreach (var (id, key) in keyUpdates)
+            _additionalProfiles.Clear();
+            _additionalProfiles.AddRange(newProfiles);
+            undo.Add(() =>
             {
-                await _host.StoreSecretAsync(SecretKeyFor(id), key!);
-                _additionalApiKeys[id] = key;
+                _additionalProfiles.Clear();
+                _additionalProfiles.AddRange(previousProfiles);
+                PersistAdditionalProfiles(notify: false);
+                return Task.CompletedTask;
+            });
+
+            // State is now persisted; the best-effort model fetch below may fail or be
+            // cancelled, but that must not revert the saved profiles.
+            PersistAdditionalProfiles(notify: false);
+        }
+        catch
+        {
+            for (var i = undo.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    await undo[i]();
+                }
+                catch (Exception rollbackFailure)
+                {
+                    // Nothing better to try: report the original failure, not this one.
+                    _host?.Log(
+                        PluginLogLevel.Error,
+                        $"Could not roll back a profile save: {rollbackFailure.Message}"
+                    );
+                }
             }
+
+            throw;
         }
 
-        _additionalProfiles.Clear();
-        _additionalProfiles.AddRange(newProfiles);
-
-        // State is now persisted; the best-effort model fetch below may fail or be
-        // cancelled, but that must not revert the saved profiles.
-        PersistAdditionalProfiles(notify: false);
+        InvalidateChangedProfileRoles(previousById, keyUpdates.Keys);
 
         // Best-effort: populate model catalogs so prompts/dictation can list each
         // profile's models. New profiles and profiles whose endpoint changed have an
@@ -691,14 +1484,59 @@ public sealed partial class OpenAiCompatiblePlugin
         // existing catalog and is skipped.
         foreach (var profile in _additionalProfiles.Where(p => p.FetchedModels.Count == 0))
         {
-            var models = await FetchModelsForAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), ct);
+            var models = await FetchModelsBestEffortAsync(profile.BaseUrl, GetProfileApiKey(profile.Id), profile.ApiVersion, ct);
             if (models is not null)
-                profile.FetchedModels = models;
+                ApplyProfileCatalog(profile, models);
         }
 
-        PersistAdditionalProfiles(notify: true);
+        PersistAdditionalProfiles(notify: false);
+        InvalidateChangedProfileRoles(previousById, keyUpdates.Keys);
+        _host?.NotifyCapabilitiesChanged();
 
         return new PluginSettingsValidationResult(true, $"Saved {_additionalProfiles.Count} profile(s).");
+    }
+
+    /// <summary>
+    ///     Writes one profile's API key (<paramref name="key" /> null deletes it) and appends the
+    ///     inverse operation to <paramref name="undo" />. The cache mutation stays paired with the
+    ///     host op so the two can never disagree, in either direction.
+    /// </summary>
+    private async Task ApplyProfileSecretAsync(
+        string id,
+        string? key,
+        List<Func<Task>> undo)
+    {
+        var host = _host!;
+        var secretKey = SecretKeyFor(id);
+        var hadPrevious = _additionalApiKeys.TryGetValue(id, out var previous);
+
+        if (key is null)
+        {
+            await host.DeleteSecretAsync(secretKey);
+            _additionalApiKeys.Remove(id);
+        }
+        else
+        {
+            await host.StoreSecretAsync(secretKey, key);
+            _additionalApiKeys[id] = key;
+        }
+
+        undo.Add(async () =>
+        {
+            if (hadPrevious && previous is not null)
+            {
+                await host.StoreSecretAsync(secretKey, previous);
+                _additionalApiKeys[id] = previous;
+            }
+            else
+            {
+                await host.DeleteSecretAsync(secretKey);
+                if (hadPrevious)
+                    _additionalApiKeys[id] = null;
+                else
+                    _additionalApiKeys.Remove(id);
+            }
+        });
     }
 
     internal string ProfileDisplayName(string id) => FindAdditional(id)?.DisplayName ?? "Custom Server";
@@ -706,6 +1544,11 @@ public sealed partial class OpenAiCompatiblePlugin
     internal bool ProfileConfigured(string id) => !string.IsNullOrEmpty(FindAdditional(id)?.BaseUrl);
 
     internal bool ProfileLlmAvailable(string id) => ProfileConfigured(id) && ProfileLlmModels(id).Count > 0;
+
+    internal Uri? ProfileLlmEndpoint(string id) => EndpointUri(FindAdditional(id)?.BaseUrl);
+
+    private static Uri? EndpointUri(string? baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) ? uri : null;
 
     internal string? ProfileSelectedModel(string id) => FindAdditional(id)?.SelectedModelId;
 
@@ -741,14 +1584,38 @@ public sealed partial class OpenAiCompatiblePlugin
         if (profile is null)
             return;
 
-        profile.SelectedModelId = string.IsNullOrWhiteSpace(modelId) ? null : modelId.Trim();
+        var selectedModelId = string.IsNullOrWhiteSpace(modelId) ? null : modelId.Trim();
+        if (string.Equals(profile.SelectedModelId, selectedModelId, StringComparison.Ordinal))
+            return;
+
+        profile.SelectedModelId = selectedModelId;
+        lock (_profileRolesLock)
+        {
+            _profileRoles.Remove(id);
+        }
+
         PersistAdditionalProfiles(notify: false);
+    }
+
+    internal bool ProfileSupportsStreaming(string id) => FindAdditional(id) is { } profile
+        && UsesRealtime(profile.TranscriptionMode, profile.SelectedModelId);
+
+    internal bool ProfileSupportsLanguageHints(string id) => FindAdditional(id) is { } profile
+        && UsesRealtime(profile.TranscriptionMode, profile.SelectedModelId)
+        && OpenAiRealtimeStreamingSession.IsLiveModel(profile.SelectedModelId ?? "", profile.RealtimeProtocol);
+
+    internal Task<IStreamingSession> StartStreamingForProfileAsync(
+        string id, IReadOnlyList<string> languageHints, string? prompt, CancellationToken ct)
+    {
+        var profile = RequireAdditional(id);
+        return StartStreamingForEndpointAsync(profile.BaseUrl, profile.ApiVersion, GetProfileApiKey(id),
+            profile.SelectedModelId, profile.TranscriptionMode, profile.RealtimeProtocol, languageHints, prompt, ct);
     }
 
     internal async Task<PluginTranscriptionResult> TranscribeForProfileAsync(
         string id,
         byte[] wavAudio,
-        string? language,
+        IReadOnlyList<string> languageHints,
         bool translate,
         string? prompt,
         CancellationToken ct
@@ -756,22 +1623,34 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
         if (string.IsNullOrEmpty(profile.SelectedModelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoTranscriptionModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoTranscriptionModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiTranscriptionHelper.TranscribeAsync(
-            _httpClient,
+        var hints = NormalizeLanguageHints(languageHints);
+        if (UsesRealtime(profile.TranscriptionMode, profile.SelectedModelId))
+        {
+            if (translate)
+                throw new PluginRequestException(Loc.L("Settings.RealtimeNoTranslation"), PluginRequestFailureKind.Configuration);
+            return await TranscribeRealtimeAsync(profile.BaseUrl, profile.ApiVersion, GetProfileApiKey(id),
+                profile.SelectedModelId!, profile.RealtimeProtocol, wavAudio, hints, prompt, ct);
+        }
+
+        var endpoint = BatchUri(profile.BaseUrl, profile.ApiVersion, profile.BatchEndpoint, profile.SelectedModelId!, translate);
+        return await RunNonLlmRequestAsync(token => OpenAiTranscriptionHelper.TranscribeAsync(
+            ClientFor(profile.BaseUrl),
             profile.BaseUrl,
             GetProfileApiKey(id) ?? "",
             profile.SelectedModelId!,
             wavAudio,
-            language,
+            hints.Count > 0 ? hints[0] : null,
             translate,
-            "verbose_json",
-            ct,
-            prompt
-        );
+            profile.BatchEndpoint == "deployment-scoped" || profile.ApiVersion.Length > 0 ? "json" : "verbose_json",
+            prompt,
+            endpointOverride: endpoint,
+            requestHeaders: AuthenticationHeaders(endpoint, GetProfileApiKey(id)),
+            ct: token
+        ), ct);
     }
 
     internal async Task<string> ProcessForProfileAsync(
@@ -784,21 +1663,35 @@ public sealed partial class OpenAiCompatiblePlugin
     {
         var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
-        return await OpenAiChatHelper.SendChatCompletionAsync(
-            _httpClient,
-            profile.BaseUrl,
-            GetProfileApiKey(id) ?? "",
-            modelId,
-            systemPrompt,
-            userText,
-            ct
-        );
+        using var timeout = CreateLlmTimeout(profile.LlmRequestTimeoutSeconds, ct);
+        try
+        {
+            if (profile.TextApi == "responses")
+                return StripThinking(await CreateResponsesClient(profile.BaseUrl, profile.ApiVersion, GetProfileApiKey(id)).ProcessAsync(
+                    systemPrompt, userText, modelId, NullIfWhiteSpace(profile.ReasoningEffort), timeout.Token,
+                    profile is { TemperatureMode: "custom", ReasoningEffort.Length: 0 } ? profile.Temperature : null));
+
+            return await OpenAiChatHelper.SendChatCompletionAsync(
+                ClientFor(profile.BaseUrl),
+                profile.BaseUrl,
+                GetProfileApiKey(id) ?? "",
+                modelId,
+                systemPrompt,
+                userText,
+                BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature, profile.ApiVersion, GetProfileApiKey(id)),
+                timeout.Token
+            );
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+        }
     }
 
     // Mirrors the default endpoint's streaming behavior for an additional profile:
@@ -813,60 +1706,227 @@ public sealed partial class OpenAiCompatiblePlugin
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct
     )
     {
-        if (!_streamResponses)
+        var profile = RequireAdditional(id);
+        if (!_streamResponses || profile.TextApi == "responses")
         {
             yield return await ProcessForProfileAsync(id, systemPrompt, userText, model, ct);
             yield break;
         }
 
-        var profile = RequireAdditional(id);
         if (string.IsNullOrEmpty(profile.BaseUrl))
-            throw new InvalidOperationException(Loc.L("Settings.ServerUrlNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ServerUrlNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = !string.IsNullOrEmpty(model) ? model : profile.SelectedLlmModelId ?? "";
         if (string.IsNullOrEmpty(modelId))
-            throw new InvalidOperationException(Loc.L("Settings.NoLlmModelSelected"));
+            throw new PluginRequestException(Loc.L("Settings.NoLlmModelSelected"), PluginRequestFailureKind.Configuration);
 
+        using var timeout = CreateLlmTimeout(profile.LlmRequestTimeoutSeconds, ct);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
-            _httpClient,
+            ClientFor(profile.BaseUrl),
             profile.BaseUrl,
             GetProfileApiKey(id) ?? "",
             modelId,
             systemPrompt,
             userText,
-            ct
+            BuildRequestOptions(profile.BaseUrl, ParseThinkingMode(profile.ThinkingMode), profile.TemperatureMode, profile.Temperature, profile.ApiVersion, GetProfileApiKey(id)),
+            timeout.Token
         );
 
-        await foreach (var delta in source.WithCancellation(ct))
-            yield return delta;
+        await using var enumerator = source.GetAsyncEnumerator(timeout.Token);
+        while (true)
+        {
+            bool hasNext;
+            try
+            {
+                hasNext = await enumerator.MoveNextAsync();
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                throw new TimeoutException(Loc.L("Settings.LlmRequestTimedOut"), ex);
+            }
+            if (!hasNext)
+                yield break;
+            yield return enumerator.Current;
+        }
     }
 
     private async Task LoadAdditionalProfilesAsync(IPluginHostServices host)
     {
+        var previousById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var previousApiKeys = new Dictionary<string, string?>(_additionalApiKeys, StringComparer.Ordinal);
         _additionalProfiles.Clear();
         _additionalApiKeys.Clear();
 
-        var stored = host.GetSetting<List<OpenAiCompatibleProfile>>(AdditionalProfilesSettingKey) ?? [];
+        // Nullable elements deliberately: the persisted JSON is user-editable and the deserializer
+        // ignores the declared types, so nulls reach us — and an NRE here fails activation with no
+        // way back through the UI.
+        var stored = host.GetSetting<List<OpenAiCompatibleProfile?>>(AdditionalProfilesSettingKey) ?? [];
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var repaired = false;
+        var secretMigrations = new List<(string OldId, string NewId)>();
+        var claimedLegacyIds = new HashSet<string>(StringComparer.Ordinal);
+        var assignedIds = new string?[stored.Count];
 
-        foreach (var profile in stored.Where(p => p is not null))
+        // Reserve IDs that are already stored in their final form for the profiles
+        // holding them, before repairing anything else. A padded or malformed
+        // neighbour would otherwise normalize onto an ID another profile owns
+        // outright and inherit its secret, sending that credential to a different
+        // endpoint. Order within the file must not decide who keeps an exact ID.
+        for (var i = 0; i < stored.Count; i++)
         {
-            profile.Id = NormalizeProfileId(profile.Id, seen);
+            var storedId = stored[i]?.Id;
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- profiles are JSON-deserialized from persisted settings, so Id arrives null despite its non-nullable annotation.
+            if (storedId is not null
+                && string.Equals(storedId, storedId.Trim(), StringComparison.Ordinal)
+                && IsValidProfileId(storedId)
+                && seen.Add(storedId))
+            {
+                assignedIds[i] = storedId;
+            }
+        }
+
+        for (var i = 0; i < stored.Count; i++)
+        {
+            // A null element is dropped below, so it must not consume an ID another
+            // profile could keep.
+            if (stored[i] is not null)
+                assignedIds[i] ??= NormalizeProfileId(stored[i]!.Id, seen);
+        }
+
+        for (var i = 0; i < stored.Count; i++)
+        {
+            var profile = stored[i];
+            if (profile is null)
+                continue;
+
+            var oldRawId = profile.Id;
+            var normalizedId = assignedIds[i]!;
+
+            // A missing ID addresses the same secret key as an empty one, so both
+            // legacy forms share a single claim. Secrets are addressed by the exact
+            // stored ID, so a duplicate shares a key with the profile that kept the ID
+            // only when the raw IDs match; a padded or malformed variant addresses a
+            // key of its own.
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- same JSON-deserialized null as above; the fallback is what makes a missing ID share the empty ID's secret key.
+            var legacyId = oldRawId ?? "";
+            var sharesKeeperSecretKey = IsValidProfileId(legacyId) && seen.Contains(legacyId);
+            if (!string.Equals(oldRawId, normalizedId, StringComparison.Ordinal))
+            {
+                repaired = true;
+
+                // Exactly one profile may claim a legacy key: the keeper owns a shared
+                // one, and a repeated raw ID is ambiguous, so only its first claimant
+                // migrates. Copying it again would hand one credential to a second,
+                // possibly unrelated, base URL. Every other legacy key is orphaned by
+                // the repair, so move its secret before retiring the old key.
+                if (!sharesKeeperSecretKey && claimedLegacyIds.Add(legacyId))
+                    secretMigrations.Add((legacyId, normalizedId));
+            }
+
+            profile.Id = normalizedId;
 
             profile.Name = string.IsNullOrWhiteSpace(profile.Name) ? "Custom Server" : profile.Name.Trim();
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the annotation states the C# contract; the deserializer that produced this value ignores it.
             profile.BaseUrl = NormalizeBaseUrl(profile.BaseUrl ?? "");
+
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- the deserializer that produced this value ignores the annotation.
+            var apiVersion = (profile.ApiVersion ?? "").Trim();
+            var batchEndpoint = NormalizeBatchEndpoint(profile.BatchEndpoint);
+            repaired |= profile.ApiVersion != apiVersion || profile.BatchEndpoint != batchEndpoint;
+            profile.ApiVersion = apiVersion;
+            profile.BatchEndpoint = batchEndpoint;
+
+            var transcriptionMode = NormalizeTranscriptionMode(profile.TranscriptionMode);
+            var realtimeProtocol = NormalizeRealtimeProtocol(profile.RealtimeProtocol);
+            repaired |= profile.TranscriptionMode != transcriptionMode || profile.RealtimeProtocol != realtimeProtocol;
+            profile.TranscriptionMode = transcriptionMode;
+            profile.RealtimeProtocol = realtimeProtocol;
+
+            var textApi = NormalizeTextApi(profile.TextApi);
+            var reasoningEffort = NormalizeReasoningEffort(profile.ReasoningEffort);
+            var temperatureMode = NormalizeTemperatureMode(profile.TemperatureMode);
+            var temperature = NormalizeTemperature(profile.Temperature);
+            // ReSharper disable once CompareOfFloatsByEqualityOperator -- exact stored value; any difference means a repair.
+            repaired |= profile.TextApi != textApi || profile.ReasoningEffort != reasoningEffort
+                || profile.TemperatureMode != temperatureMode || profile.Temperature != temperature;
+            profile.TextApi = textApi;
+            profile.ReasoningEffort = reasoningEffort;
+            profile.TemperatureMode = temperatureMode;
+            profile.Temperature = temperature;
+
             profile.SelectedModelId = NullIfWhiteSpace(profile.SelectedModelId);
             profile.SelectedLlmModelId = NullIfWhiteSpace(profile.SelectedLlmModelId);
-            profile.FetchedModels = (profile.FetchedModels ?? [])
-                .Where(m => !string.IsNullOrWhiteSpace(m.Id))
+
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- same reason as BaseUrl above.
+            IEnumerable<FetchedModel?> fetched = profile.FetchedModels ?? [];
+            profile.FetchedModels = fetched
+                .Where(m => !string.IsNullOrWhiteSpace(m?.Id))
+                .Select(m => m!)
                 .ToList();
 
             _additionalProfiles.Add(profile);
+        }
 
+        var migratedOldSecretKeys = new List<string>();
+        foreach (var (oldId, newId) in secretMigrations)
+        {
+            var oldSecretKey = SecretKeyFor(oldId);
+            var keyToMigrate = await host.LoadSecretAsync(oldSecretKey);
+            if (string.IsNullOrEmpty(keyToMigrate))
+                continue;
+
+            // A destination that already holds a secret is the credential the
+            // repaired ID has been using, and the legacy entry is the stale copy.
+            // Overwriting it and then retiring the old key would destroy the
+            // working credential, so leave both entries alone.
+            var newSecretKey = SecretKeyFor(newId);
+            if (!string.IsNullOrEmpty(await host.LoadSecretAsync(newSecretKey)))
+                continue;
+
+            // Keep every old key until all fallible stores and the repaired
+            // profile-list write succeed. A later failure then leaves every
+            // legacy credential addressable through the still-persisted IDs.
+            await host.StoreSecretAsync(newSecretKey, keyToMigrate);
+            migratedOldSecretKeys.Add(oldSecretKey);
+        }
+
+        foreach (var profile in _additionalProfiles)
+        {
             var key = await host.LoadSecretAsync(SecretKeyFor(profile.Id));
             if (!string.IsNullOrEmpty(key))
                 _additionalApiKeys[profile.Id] = key;
         }
+
+        if (repaired)
+            host.SetSetting(AdditionalProfilesSettingKey, _additionalProfiles);
+
+        // The migration is durable once the repaired list is written, so retiring the
+        // legacy keys is cleanup: a failure here must not fail activation, and the
+        // next activation sees valid IDs with nothing left to migrate.
+        foreach (var oldSecretKey in migratedOldSecretKeys)
+        {
+            try
+            {
+                await host.DeleteSecretAsync(oldSecretKey);
+            }
+            catch (Exception ex)
+            {
+                host.Log(
+                    PluginLogLevel.Warning,
+                    $"Failed to retire a migrated legacy secret: {ex.Message}");
+            }
+        }
+
+        var changedApiKeyIds = previousApiKeys
+            .Keys.Union(_additionalApiKeys.Keys, StringComparer.Ordinal)
+            .Where(id =>
+                !string.Equals(
+                    previousApiKeys.GetValueOrDefault(id),
+                    _additionalApiKeys.GetValueOrDefault(id),
+                    StringComparison.Ordinal
+                )
+            );
+        InvalidateChangedProfileRoles(previousById, changedApiKeyIds);
     }
 
     private void PersistAdditionalProfiles(bool notify)
@@ -876,26 +1936,45 @@ public sealed partial class OpenAiCompatiblePlugin
             _host?.NotifyCapabilitiesChanged();
     }
 
+    private async Task<List<FetchedModel>?> FetchModelsBestEffortAsync(
+        string? baseUrl, string? apiKey, string apiVersion, CancellationToken ct)
+    {
+        try
+        {
+            return await FetchModelsForAsync(baseUrl, apiKey, apiVersion, ct);
+        }
+        catch (TimeoutException ex)
+        {
+            ct.ThrowIfCancellationRequested();
+            _host?.Log(PluginLogLevel.Warning, $"Model catalog refresh timed out: {ex.Message}");
+            return null;
+        }
+    }
+
     private async Task<List<FetchedModel>?> FetchModelsForAsync(
         string? baseUrl,
         string? apiKey,
+        string apiVersion,
         CancellationToken ct
     )
     {
         if (string.IsNullOrEmpty(baseUrl))
             return null;
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_nonLlmTimeout);
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/models");
-            if (!string.IsNullOrEmpty(apiKey))
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            var endpoint = RequestUri(baseUrl, apiVersion, "/v1/models");
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            foreach (var (name, value) in AuthenticationHeaders(endpoint, apiKey))
+                request.Headers.TryAddWithoutValidation(name, value);
 
-            using var response = await _httpClient.SendAsync(request, ct);
+            using var response = await ClientFor(baseUrl).SendAsync(request, timeout.Token);
             if (!response.IsSuccessStatusCode)
                 return null;
 
-            var json = await response.Content.ReadAsStringAsync(ct);
+            var json = await response.Content.ReadAsStringAsync(timeout.Token);
             using var doc = JsonDocument.Parse(json);
 
             if (!doc.RootElement.TryGetProperty("data", out var data))
@@ -910,9 +1989,17 @@ public sealed partial class OpenAiCompatiblePlugin
                 .OrderBy(m => m.Id)
                 .ToList();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
+        }
+        catch (OperationCanceledException ex) when (timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(Loc.L("Settings.RequestTimedOut"), ex);
         }
         catch
         {
@@ -921,12 +2008,79 @@ public sealed partial class OpenAiCompatiblePlugin
     }
 
     private static string? Get(PluginCollectionItem item, string key) =>
-        item.Values.TryGetValue(key, out var value) ? value : null;
+        item.Values.GetValueOrDefault(key);
 
     private static string SecretKeyFor(string profileId) => $"api-key.{profileId}";
 
     private string? GetProfileApiKey(string id) =>
-        _additionalApiKeys.TryGetValue(id, out var key) ? key : null;
+        _additionalApiKeys.GetValueOrDefault(id);
+
+    private OpenAiCompatibleProfileRole GetProfileRole(string id)
+    {
+        lock (_profileRolesLock)
+        {
+            // ReSharper disable once InvertIf -- standard get-or-add shape; inverting would duplicate the return.
+            if (!_profileRoles.TryGetValue(id, out var role))
+            {
+                role = new OpenAiCompatibleProfileRole(this, id);
+                _profileRoles.Add(id, role);
+            }
+
+            return role;
+        }
+    }
+
+    private void InvalidateChangedProfileRoles(
+        Dictionary<string, OpenAiCompatibleProfile> previousById,
+        IEnumerable<string> changedSecretIds
+    )
+    {
+        var changedSecrets = changedSecretIds.ToHashSet(StringComparer.Ordinal);
+        var currentById = _additionalProfiles.ToDictionary(p => p.Id, StringComparer.Ordinal);
+
+        lock (_profileRolesLock)
+        {
+            foreach (var id in _profileRoles.Keys.ToList())
+            {
+                if (
+                    !previousById.TryGetValue(id, out var previous)
+                    || !currentById.TryGetValue(id, out var current)
+                    || changedSecrets.Contains(id)
+                    || !ProfilesEqual(previous, current)
+                )
+                {
+                    _profileRoles.Remove(id);
+                }
+            }
+        }
+    }
+
+    private static bool ProfilesEqual(
+        OpenAiCompatibleProfile left,
+        OpenAiCompatibleProfile right
+    )
+    {
+        return string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+            && string.Equals(left.BaseUrl, right.BaseUrl, StringComparison.Ordinal)
+            && string.Equals(left.SelectedModelId, right.SelectedModelId, StringComparison.Ordinal)
+            && string.Equals(
+                left.SelectedLlmModelId,
+                right.SelectedLlmModelId,
+                StringComparison.Ordinal
+            )
+            && left.LlmRequestTimeoutSeconds == right.LlmRequestTimeoutSeconds
+            && ParseThinkingMode(left.ThinkingMode) == ParseThinkingMode(right.ThinkingMode)
+            && string.Equals(left.ApiVersion, right.ApiVersion, StringComparison.Ordinal)
+            && string.Equals(left.BatchEndpoint, right.BatchEndpoint, StringComparison.Ordinal)
+            && string.Equals(left.TranscriptionMode, right.TranscriptionMode, StringComparison.Ordinal)
+            && string.Equals(left.RealtimeProtocol, right.RealtimeProtocol, StringComparison.Ordinal)
+            && string.Equals(left.TextApi, right.TextApi, StringComparison.Ordinal)
+            && string.Equals(left.ReasoningEffort, right.ReasoningEffort, StringComparison.Ordinal)
+            && string.Equals(left.TemperatureMode, right.TemperatureMode, StringComparison.Ordinal)
+            // ReSharper disable once CompareOfFloatsByEqualityOperator -- exact stored values; any difference must invalidate the cached role.
+            && left.Temperature == right.Temperature
+            && left.FetchedModels.SequenceEqual(right.FetchedModels);
+    }
 
     private OpenAiCompatibleProfile? FindAdditional(string id) =>
         _additionalProfiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
@@ -950,10 +2104,7 @@ public sealed partial class OpenAiCompatiblePlugin
     private string NormalizeProfileId(string? rawId, HashSet<string> taken)
     {
         var id = (rawId ?? "").Trim();
-        if (id.Length == 0
-            || id.Contains(':')
-            || !id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal)
-            || taken.Contains(id))
+        if (!IsValidProfileId(id) || taken.Contains(id))
         {
             id = CreateProfileId(taken);
         }
@@ -961,6 +2112,11 @@ public sealed partial class OpenAiCompatiblePlugin
         taken.Add(id);
         return id;
     }
+
+    private static bool IsValidProfileId(string id) =>
+        id.Length > 0
+        && !id.Contains(':')
+        && id.StartsWith(ProfileIdPrefix, StringComparison.Ordinal);
 
     private string CreateProfileId(HashSet<string> taken)
     {
@@ -978,19 +2134,27 @@ public sealed partial class OpenAiCompatiblePlugin
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    // Stateless wrapper that presents one additional profile as a standalone
+    private readonly record struct DefaultConnectionSnapshot(
+        string? BaseUrl,
+        string? ApiKey,
+        string ApiVersion,
+        string BatchEndpoint,
+        long Revision
+    );
+
+    // Cached wrapper that presents one additional profile as a standalone
     // transcription engine / LLM provider. Its selection identity is the profile
     // ID; PluginId stays the owner's so host lookups (enable-state, settings)
-    // still resolve to the real plugin.
+    // still resolve to the real plugin. The owner is its only lifetime authority.
     private sealed class OpenAiCompatibleProfileRole(OpenAiCompatiblePlugin owner, string profileId)
-        : ITranscriptionEnginePlugin,
-            ILlmProviderPlugin,
+        : ITranscriptionEngineRole,
+            ITranscriptionLanguageSelectionCapabilities,
+            ILlmProviderRole,
+            ILlmProviderEndpoint,
             ITranscriptionEngineSelectionIdentity,
             ILlmProviderSelectionIdentity
     {
         public string PluginId => owner.PluginId;
-        public string PluginName => owner.PluginName;
-        public string PluginVersion => owner.PluginVersion;
         public string TranscriptionSelectionId => profileId;
         public string LlmSelectionId => profileId;
         public string ProviderId => profileId;
@@ -998,14 +2162,26 @@ public sealed partial class OpenAiCompatiblePlugin
         public bool IsConfigured => owner.ProfileConfigured(profileId);
         public IReadOnlyList<PluginModelInfo> TranscriptionModels => owner.ProfileTranscriptionModels(profileId);
         public string? SelectedModelId => owner.ProfileSelectedModel(profileId);
-        public bool SupportsTranslation => true;
+        public bool SupportsStreaming => owner.ProfileSupportsStreaming(profileId);
+        public bool SupportsTranslation => !SupportsStreaming;
+        public bool SupportsLanguageHints => owner.ProfileSupportsLanguageHints(profileId);
+
+        public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+            owner.StartStreamingForProfileAsync(profileId, LanguageHints(language), null, ct);
+
+        public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+            IReadOnlyList<string> languageHints, CancellationToken ct) =>
+            owner.StartStreamingForProfileAsync(profileId, languageHints, null, ct);
+
+        public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+            IReadOnlyList<string> languageHints, string? prompt, CancellationToken ct) =>
+            owner.StartStreamingForProfileAsync(profileId, languageHints, prompt, ct);
+        public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+        public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
         public string ProviderName => owner.ProfileDisplayName(profileId);
         public bool IsAvailable => owner.ProfileLlmAvailable(profileId);
+        public Uri? LlmEndpoint => owner.ProfileLlmEndpoint(profileId);
         public IReadOnlyList<PluginModelInfo> SupportedModels => owner.ProfileLlmModels(profileId);
-
-        public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
-
-        public Task DeactivateAsync() => Task.CompletedTask;
 
         public void SelectModel(string modelId) => owner.SelectProfileModel(profileId, modelId);
 
@@ -1015,7 +2191,20 @@ public sealed partial class OpenAiCompatiblePlugin
             bool translate,
             string? prompt,
             CancellationToken ct
-        ) => owner.TranscribeForProfileAsync(profileId, wavAudio, language, translate, prompt, ct);
+        ) => owner.TranscribeForProfileAsync(profileId, wavAudio, LanguageHints(language), translate, prompt, ct);
+
+        public Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
+            byte[] wavAudio,
+            IReadOnlyList<string> languageHints,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        ) => owner.TranscribeForProfileAsync(profileId, wavAudio, languageHints, translate, prompt, ct);
+
+        public Task<PluginTranscriptionResult> TranscribeStreamingWithLanguageHintsAsync(
+            byte[] wavAudio, IReadOnlyList<string> languageHints, bool translate, string? prompt,
+            Func<string, bool> onProgress, CancellationToken ct) =>
+            owner.TranscribeForProfileAsync(profileId, wavAudio, languageHints, translate, prompt, ct);
 
         public Task<string> ProcessAsync(
             string systemPrompt,
@@ -1031,7 +2220,6 @@ public sealed partial class OpenAiCompatiblePlugin
             CancellationToken ct
         ) => owner.ProcessStreamingForProfileAsync(profileId, systemPrompt, userText, model, ct);
 
-        public void Dispose() { }
     }
 }
 
@@ -1047,11 +2235,45 @@ public sealed class OpenAiCompatibleProfile
     /// <summary>Base server URL without a trailing /v1 suffix.</summary>
     public string BaseUrl { get; set; } = "";
 
+    /// <summary>Optional API version query parameter.</summary>
+    public string ApiVersion { get; set; } = "";
+
+    /// <summary>Batch route: "standard" or "deployment-scoped".</summary>
+    public string BatchEndpoint { get; set; } = "standard";
+
+    /// <summary>Transcription transport: "auto", "batch", or "realtime".</summary>
+    public string TranscriptionMode { get; set; } = "auto";
+
+    /// <summary>Realtime protocol: "auto", "live", or "whisper".</summary>
+    public string RealtimeProtocol { get; set; } = "auto";
+
     /// <summary>Optional default transcription model ID.</summary>
     public string? SelectedModelId { get; set; }
 
     /// <summary>Optional default LLM model ID.</summary>
     public string? SelectedLlmModelId { get; set; }
+
+    /// <summary>LLM request timeout in seconds; defaults to 300 and is clamped to 5–3600.</summary>
+    public int LlmRequestTimeoutSeconds
+    {
+        get;
+        set => field = Math.Clamp(value, 5, 3600);
+    } = 300;
+
+    /// <summary>Thinking mode for this profile ("default", "off", "on"); null means provider default.</summary>
+    public string? ThinkingMode { get; init; }
+
+    /// <summary>Text API: "chat-completions" (default) or "responses".</summary>
+    public string TextApi { get; set; } = "chat-completions";
+
+    /// <summary>Responses reasoning effort; empty uses the provider default.</summary>
+    public string ReasoningEffort { get; set; } = "";
+
+    /// <summary>Temperature mode: "provider-default" (omit) or "custom".</summary>
+    public string TemperatureMode { get; set; } = "provider-default";
+
+    /// <summary>Custom temperature from 0 to 2.</summary>
+    public double Temperature { get; set; } = 0.3;
 
     /// <summary>Models fetched from the provider. API keys are never stored here.</summary>
     public List<FetchedModel> FetchedModels { get; set; } = [];

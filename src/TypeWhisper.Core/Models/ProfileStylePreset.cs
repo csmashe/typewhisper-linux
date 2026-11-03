@@ -10,5 +10,5 @@ public enum ProfileStylePreset
     CasualMessage,
     Developer,
     TerminalSafe,
-    MeetingNotes
+    MeetingNotes,
 }

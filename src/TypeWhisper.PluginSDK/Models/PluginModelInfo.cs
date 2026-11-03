@@ -38,4 +38,15 @@ public sealed record PluginModelInfo(string Id, string DisplayName)
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public int LanguageCount { get; init; }
+
+    /// <summary>
+    ///     Whether this model can translate audio to English, or null when the engine does not
+    ///     declare it per model. A host rejects a translate task for a model that declares
+    ///     <c>false</c> before loading it; undeclared models keep the engine-level
+    ///     <see cref="ITranscriptionEngineRole.SupportsTranslation" /> behavior.
+    /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public bool? SupportsTranslation { get; init; }
 }

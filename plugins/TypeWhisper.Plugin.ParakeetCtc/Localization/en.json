@@ -1,0 +1,4 @@
+{
+  "Manifest.Name": "Parakeet CTC Vocabulary",
+  "Manifest.Description": "Local acoustic vocabulary rescoring using the Parakeet 110M English CTC head."
+}

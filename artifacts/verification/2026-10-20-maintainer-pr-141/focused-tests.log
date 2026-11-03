@@ -1,0 +1,15 @@
+  Determining projects to restore...
+  Restored /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/TypeWhisper.Linux.csproj (in 163 ms).
+  Restored /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Linux.Tests/TypeWhisper.Linux.Tests.csproj (in 163 ms).
+  5 of 7 projects are up-to-date for restore.
+  TypeWhisper.Core -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Core/bin/Release/net10.0/TypeWhisper.Core.dll
+  TypeWhisper.ProcessTestChild -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.ProcessTestChild/bin/Release/net10.0/TypeWhisper.ProcessTestChild.dll
+  TypeWhisper.PluginSDK -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.PluginSDK/bin/Release/net10.0/TypeWhisper.PluginSDK.dll
+  TypeWhisper.TranscriptionWorkerProbe -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.TranscriptionWorkerProbe/bin/Release/net10.0/TypeWhisper.TranscriptionWorkerProbe.dll
+  TypeWhisper.Plugin.Webhook -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Webhook/bin/Release/net10.0/TypeWhisper.Plugin.Webhook.dll
+  TypeWhisper.Linux -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper.dll
+  TypeWhisper.Linux.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll
+Test run for /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+
+Passed!  - Failed:     0, Passed:    38, Skipped:     0, Total:    38, Duration: 5 s - TypeWhisper.Linux.Tests.dll (net10.0)

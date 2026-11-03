@@ -1,9 +1,17 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
+using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.Core.Services.SpokenFormatting;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Hotkey.Evdev;
+using TypeWhisper.Linux.Services.SpokenCommand;
+using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -20,8 +28,6 @@ internal sealed record RecordingContext(
     string? AppProcess,
     string? AppTitle,
     string? AppUrl,
-    string? ScreenContext,
-    string? ClipboardContext,
     string? WindowId,
     Profile? Profile,
     string RecoveredPartialPreview,
@@ -29,17 +35,58 @@ internal sealed record RecordingContext(
     bool StreamingFaulted,
     string? StreamingProviderId,
     string? StreamingModelId,
-    string? StreamingLanguageHint,
+    LanguageSelection StreamingLanguageSelection,
+    IReadOnlyList<string> StreamingLanguageHints,
     CancellationToken CancelToken
-);
+)
+{
+    public string? ScreenContext { get; init; }
+    public string? ClipboardContext { get; init; }
+    public LockedFocusTarget? LockedFocusField { get; init; }
 
-public sealed class DictationOrchestrator : IDisposable
+    /// <summary>The window focused at recording start, used to catch a focus move when there is no xdotool <see cref="WindowId" />.</summary>
+    public ActiveWindowSnapshot? TargetWindow { get; init; }
+
+    /// <summary>Wayland can't activate an XWayland <see cref="WindowId" />, so focus is checked through <see cref="TargetWindow" /> there.</summary>
+    public bool IsWaylandSession { get; init; }
+
+    /// <summary>The AT-SPI field focused at recording start, used to catch a focus move to another field of the same window.</summary>
+    public AtSpiElementRef? TargetField { get; init; }
+
+    public OverlayPresentationToken? OverlayToken { get; init; }
+    public string? TranscriptionTaskUsed { get; init; }
+    public string? StreamingDetectedLanguage { get; init; }
+
+    /// <summary>
+    ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
+    ///     for this run (history saving or the provenance setting is off), so the
+    ///     pipeline records nothing and pays no cost.
+    /// </summary>
+    public LlmCallCapture? Capture { get; init; }
+    public LiveCleanupDraft? LiveCleanup { get; init; }
+
+    /// <summary>Keeps a run that is not a live dictation (text API) out of the Dictation status.</summary>
+    public bool SuppressStatus { get; init; }
+}
+
+internal enum ToggleGateCloseOutcome
+{
+    Unknown,
+    Idle,
+    TimedOut,
+}
+
+public sealed partial class DictationOrchestrator : IDisposable
 {
     // Treat a second toggle within this gap as spurious, not intentional: covers
     // (1) key autorepeat and (2) in-app hook + desktop gsettings shortcut both
     // firing for the same press (~0.1s apart). 350ms is above both but below a
     // deliberate tap-tap.
     private static readonly TimeSpan s_toggleDebounce = TimeSpan.FromMilliseconds(350);
+
+    // Bound the wait for the toggle gate during session-loss teardown so a stuck start/stop can't
+    // hang the lock handler; long enough to outlast a normal StartAsync's synchronous setup.
+    private static readonly TimeSpan s_sessionLossGateTimeout = TimeSpan.FromSeconds(5);
 
     // Hard cap on each captured reference-context source (screen / clipboard). Keeps token
     // cost small; the injection-safe framing re-caps at the same size in PromptProcessingService.
@@ -50,52 +97,82 @@ public sealed class DictationOrchestrator : IDisposable
     private static readonly TimeSpan s_clipboardContextBudget = TimeSpan.FromMilliseconds(1000);
 
     private readonly ActiveWindowService _activeWindow;
+    private readonly ActionPluginExecutionHost _actionPluginExecutionHost;
     private readonly AudioRecordingService _audio;
     private readonly IAudioDuckingService _audioDucking;
     private readonly LlmCleanupService _cleanup;
+    private readonly Lock _liveCleanupLock = new();
+    private LiveCleanupDraft? _liveCleanupDraft;
+    private int _liveCleanupSessionVersion;
     private readonly SystemCommandAvailabilityService _commands;
     private readonly IDictionaryService _dictionary;
     private readonly IErrorLogService _errorLog;
     private readonly IDetectionFailureTracker _failureTracker;
     private readonly IHistoryService _history;
+    private readonly IUsageStatisticsService? _usageStatistics;
+    private readonly IDiagnosticsReporter? _diagnostics;
+    private readonly DictationTelemetryTracker _telemetry;
     private readonly HotkeyService _hotkey;
     private readonly IdeFileReferenceService _ideFileReferences;
-    private readonly HashSet<int> _inFlightSessions = [];
+    private readonly DictationInFlightSessionTracker _inFlightTracker = new();
+    private readonly DictationInsertionOrderGate _insertionOrder = new();
     private readonly IMediaPauseService _mediaPause;
     private readonly MemoryService _memory;
     private readonly ModelManagerService _models;
+    private readonly OverlayCoordinator _overlayCoordinator;
     private readonly Lock _overlayStateLock = new();
     private readonly StreamingTranscriptState _partialTranscriptState = new();
     private readonly IPostProcessingPipeline _pipeline;
+    private readonly SpokenFormattingStrategyResolver _spokenFormattingResolver;
+    private readonly SpokenFormattingService _spokenFormatting;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
     private readonly PromptProcessingService _promptProcessing;
     private readonly RecentTranscriptionsService _recentTranscriptions;
     private readonly Lock _recordingSessionLock = new();
+    private readonly ISessionActivityMonitor _sessionActivityMonitor;
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
     private readonly ISnippetService _snippets;
     private readonly SoundFeedbackService _soundFeedback;
     private readonly SpeechFeedbackService _speechFeedback;
+    private readonly TargetAppCorrectionLearningService _targetAppLearning;
     private readonly TextInsertionService _textInsertion;
 
     // The debounce check-and-write must be atomic: two threads (hook + IPC) can
     // both read the stale timestamp and both pass the gap check. DateTime can't
     // be volatile, so a lock is required.
     private readonly Lock _toggleDebounceLock = new();
-    private readonly SemaphoreSlim _toggleGate = new(1, 1);
+    private readonly DictationToggleGate _toggleGate = new();
     private readonly ITranslationService _translation;
     private readonly IVocabularyBoostingService _vocabularyBoosting;
+    private readonly IVocabularyRescoringService _vocabularyRescoring;
+    private AudioRecordingService.AudioCaptureSession? _audioCaptureSession;
     private CancellationTokenSource? _activeDictationCts;
+
+    // Cancels an in-flight spoken command (its LLM stream + typing). Distinct from
+    // _activeDictationCts, which only covers the recording/transcription phase and is nulled once
+    // recording stops — a command runs after that, so it needs its own Escape-reachable source.
+    // Holds the NEWEST command (what Escape targets); _activeCommandCtsSet holds them all.
+    private CancellationTokenSource? _activeCommandCts;
+
+    // Guarded by itself. Two dictations stopped in quick succession can reach spoken-command
+    // processing concurrently; a session-loss discard must cancel all of them so an older command
+    // can never keep synthesizing selection-copy or streamed typing behind the lock screen.
+    private readonly HashSet<CancellationTokenSource> _activeCommandCtsSet = [];
     private EventHandler? _cancelHandler;
+    private EventHandler? _sessionActivityHandler;
     private volatile bool _cancelRequested;
-    private bool _disposed;
+
+    private volatile bool _disposed;
+    private int _disposeStarted;
     private EventHandler<string>? _hookFailedHandler;
     private bool _initialized;
     private string? _lastPublishedPartialText;
     private DateTime _lastSpeechDetectedAtUtc;
     private DateTime _lastToggleUtc = DateTime.MinValue;
     private DictationOverlayState _overlayState = DictationOverlayState.Hidden;
+    private OverlayPresentationToken _overlayToken;
     private CancellationTokenSource? _partialTranscriptionCts;
     private Task? _partialTranscriptionTask;
     private string? _recordingAppProcess;
@@ -105,10 +182,11 @@ public sealed class DictationOrchestrator : IDisposable
     private string? _recordingScreenContext;
     private Profile? _recordingProfile;
 
-    // Monotonically incremented per StartAsync. The active-window snapshot task
-    // captures this at start and guards every write behind it; a late snapshot
-    // (after AwaitRecordingSnapshotAsync timed out) drops its writes rather
-    // than corrupting the next dictation's context.
+    // Monotonically incremented when a start reserves ownership, when a stop
+    // relinquishes it, and when session-loss rollback invalidates startup. The
+    // active-window snapshot task captures this at start and guards every write
+    // behind it; a late snapshot (after AwaitRecordingSnapshotAsync timed out)
+    // drops its writes rather than corrupting the next dictation's context.
     private int _recordingSession;
     private Task? _recordingSnapshotTask;
     private DateTime _recordingStart;
@@ -116,13 +194,21 @@ public sealed class DictationOrchestrator : IDisposable
     private bool _silenceStopRequested;
     private EventHandler? _startHandler;
     private EventHandler? _stopHandler;
+    private EventHandler? _discardHandler;
     private StreamingTranscriptionCoordinator? _streamingCoordinator;
-    private string? _streamingLanguageHint;
+    private IReadOnlyList<string> _streamingLanguageHints = [];
+    private LanguageSelection _streamingLanguageSelection = LanguageSelection.Automatic;
     private string? _streamingModelId;
     private string? _streamingProviderId;
     private CancellationTokenSource? _streamingStartupCts;
 
+    private readonly IAtSpiEventClient? _atSpiClient;
+    private LockedFocusTarget? _recordingLockedField;
+    private ActiveWindowSnapshot? _recordingTargetWindow;
+    private AtSpiElementRef? _recordingTargetField;
+
     private EventHandler? _toggleHandler;
+    private int _toggleGateCloseOutcome;
 
     public DictationOrchestrator(
         HotkeyService hotkey,
@@ -142,6 +228,7 @@ public sealed class DictationOrchestrator : IDisposable
         IDictionaryService dictionary,
         ISnippetService snippets,
         IVocabularyBoostingService vocabularyBoosting,
+        IVocabularyRescoringService vocabularyRescoring,
         LlmCleanupService cleanup,
         IPostProcessingPipeline pipeline,
         ITranslationService translation,
@@ -150,10 +237,22 @@ public sealed class DictationOrchestrator : IDisposable
         RecentTranscriptionsService recentTranscriptions,
         IdeFileReferenceService ideFileReferences,
         SystemCommandAvailabilityService commands,
+        TargetAppCorrectionLearningService targetAppLearning,
         IDetectionFailureTracker failureTracker,
-        IErrorLogService errorLog
+        IErrorLogService errorLog,
+        ISessionActivityMonitor sessionActivityMonitor,
+        ActionPluginExecutionHost actionPluginExecutionHost,
+        OverlayCoordinator overlayCoordinator,
+        IAtSpiEventClient? atSpiClient = null,
+        IUsageStatisticsService? usageStatistics = null,
+        SpokenFormattingStrategyResolver? spokenFormattingResolver = null,
+        SpokenFormattingService? spokenFormatting = null,
+        IDiagnosticsReporter? diagnostics = null
     )
     {
+        _diagnostics = diagnostics;
+        _telemetry = new DictationTelemetryTracker(diagnostics);
+        _atSpiClient = atSpiClient;
         _hotkey = hotkey;
         _audio = audio;
         _sessionAudioFiles = sessionAudioFiles;
@@ -164,6 +263,7 @@ public sealed class DictationOrchestrator : IDisposable
         _mediaPause = mediaPause;
         _models = models;
         _history = history;
+        _usageStatistics = usageStatistics;
         _settings = settings;
         _activeWindow = activeWindow;
         _profiles = profiles;
@@ -171,19 +271,29 @@ public sealed class DictationOrchestrator : IDisposable
         _dictionary = dictionary;
         _snippets = snippets;
         _vocabularyBoosting = vocabularyBoosting;
+        _vocabularyRescoring = vocabularyRescoring;
         _cleanup = cleanup;
         _pipeline = pipeline;
+        var rulesLoader = new SpokenFormattingRulesLoader();
+        _spokenFormattingResolver = spokenFormattingResolver
+            ?? new SpokenFormattingStrategyResolver(new SpokenFormattingProfileStore(settings), rulesLoader);
+        _spokenFormatting = spokenFormatting ?? new SpokenFormattingService(rulesLoader);
         _translation = translation;
         _promptProcessing = promptProcessing;
         _memory = memory;
         _recentTranscriptions = recentTranscriptions;
         _ideFileReferences = ideFileReferences;
         _commands = commands;
+        _targetAppLearning = targetAppLearning;
         _failureTracker = failureTracker;
         _errorLog = errorLog;
+        _sessionActivityMonitor = sessionActivityMonitor;
+        _actionPluginExecutionHost = actionPluginExecutionHost;
+        _overlayCoordinator = overlayCoordinator;
+        _overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
     }
 
-    public bool IsRecording => _audio.IsRecording;
+    public bool IsRecording => _audio.IsRecordingOwnedBy(_audioCaptureSession);
 
     /// <summary>
     ///     Current pipeline phase for <c>typewhisper status</c>. The audio
@@ -194,7 +304,7 @@ public sealed class DictationOrchestrator : IDisposable
     {
         get
         {
-            if (_audio.IsRecording)
+            if (IsRecording)
             {
                 return "recording";
             }
@@ -209,14 +319,41 @@ public sealed class DictationOrchestrator : IDisposable
         }
     }
 
+    internal static Func<string, string>? CreateSpokenFormatter(
+        SpokenFormattingService service, ResolvedSpokenFormattingStrategy? strategy) =>
+        strategy is { Strategy: SpokenFormattingStrategy.FallbackOnly, RulesAvailable: true, LanguageCode: { } language }
+            ? text => service.Normalize(text, language)
+            : null;
+
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
+        var toggleGateIdle = CloseToggleGateForDispose(
+            (ToggleGateCloseOutcome)Volatile.Read(ref _toggleGateCloseOutcome),
+            // ReSharper disable once AccessToDisposedClosure -- invoked synchronously here,
+            // strictly before the unconditional gate dispose at the end of this method.
+            () => MarkDisposedThenCloseToggleGate(
+                _toggleGate,
+                s_sessionLossGateTimeout,
+                () => _disposed = true
+            )
+        );
+        Volatile.Write(
+            ref _toggleGateCloseOutcome,
+            toggleGateIdle
+                ? (int)ToggleGateCloseOutcome.Idle
+                : (int)ToggleGateCloseOutcome.TimedOut
+        );
+        if (!toggleGateIdle)
+        {
+            Trace.WriteLine(
+                "[Dictation] Dispose timed out waiting for the toggle gate; proceeding with cleanup and leaving the live gate undisposed."
+            );
+        }
 
         if (_toggleHandler is not null)
         {
@@ -233,6 +370,11 @@ public sealed class DictationOrchestrator : IDisposable
             _hotkey.DictationStopRequested -= _stopHandler;
         }
 
+        if (_discardHandler is not null)
+        {
+            _hotkey.DictationDiscardRequested -= _discardHandler;
+        }
+
         if (_cancelHandler is not null)
         {
             _hotkey.CancelRequested -= _cancelHandler;
@@ -243,37 +385,19 @@ public sealed class DictationOrchestrator : IDisposable
             _hotkey.HookFailed -= _hookFailedHandler;
         }
 
-        // Stop any active recording and undo ducking/media-pause before teardown
-        // so the user isn't left with a muted system after exit.
-        if (_audio.IsRecording)
+        if (_sessionActivityHandler is not null)
         {
-            try
-            {
-                _audio.StopRecording();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.Message}");
-            }
-
-            try
-            {
-                _audioDucking.RestoreAudio();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.Message}");
-            }
-
-            try
-            {
-                _mediaPause.ResumeMedia();
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.Message}");
-            }
+            _sessionActivityMonitor.InputAllowedChanged -= _sessionActivityHandler;
         }
+
+        var captureSession = _audioCaptureSession;
+        StopCaptureAndRestoreSystemAudio(
+            _audio,
+            captureSession,
+            _audioDucking,
+            _mediaPause
+        );
+        Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
 
         ShutdownPartialTranscriptionSession();
 
@@ -285,12 +409,8 @@ public sealed class DictationOrchestrator : IDisposable
         _streamingStartupCts = null;
         _streamingProviderId = null;
         _streamingModelId = null;
-        _streamingLanguageHint = null;
-        if (disposingCoordinator is not null)
-        {
-            _audio.LiveFrameSink = null;
-        }
-
+        _streamingLanguageSelection = LanguageSelection.Automatic;
+        _streamingLanguageHints = [];
         var streamingTeardown = TeardownStreamingSessionAsync(
             disposingCoordinator,
             disposingStartupCts,
@@ -303,7 +423,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Streaming teardown on dispose failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Streaming teardown on dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
 
         try
@@ -312,10 +432,113 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Snapshot shutdown failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+        }
+
+        // The gate's Dispose is self-guarding (idempotent, no-ops while busy), so calling it
+        // unconditionally also covers a gate that went idle during the teardown waits above
+        // after the bounded close had already timed out.
+        lock (_liveCleanupLock)
+        {
+            _liveCleanupDraft?.Dispose();
+            _liveCleanupDraft = null;
         }
 
         _toggleGate.Dispose();
+    }
+
+    internal async Task<bool> CloseToggleGateAsync()
+    {
+        return await CloseToggleGateAsync(
+                s_sessionLossGateTimeout,
+                () => _disposed = true,
+                _toggleGate.CloseAsync,
+                outcome => Volatile.Write(ref _toggleGateCloseOutcome, (int)outcome)
+            )
+            .ConfigureAwait(false);
+    }
+
+    internal static async Task<bool> CloseToggleGateAsync(
+        TimeSpan budget,
+        Action markDisposed,
+        Func<TimeSpan, Task<bool>> closeToggleGateAsync,
+        Action<ToggleGateCloseOutcome> recordOutcome
+    )
+    {
+        // This mark must precede the asynchronous wait: the current gate owner may still be in
+        // startup feedback and will revalidate this state before opening the microphone.
+        markDisposed();
+        var idle = await closeToggleGateAsync(budget).ConfigureAwait(false);
+        recordOutcome(idle ? ToggleGateCloseOutcome.Idle : ToggleGateCloseOutcome.TimedOut);
+        return idle;
+    }
+
+    internal static bool CloseToggleGateForDispose(
+        ToggleGateCloseOutcome recordedOutcome,
+        Func<bool> closeWhenUnrecorded
+    )
+    {
+        return recordedOutcome switch
+        {
+            ToggleGateCloseOutcome.Idle => true,
+            ToggleGateCloseOutcome.TimedOut => false,
+            _ => closeWhenUnrecorded(),
+        };
+    }
+
+    internal static void StopCaptureAndRestoreSystemAudio(
+        AudioRecordingService audio,
+        AudioRecordingService.AudioCaptureSession? captureSession,
+        IAudioDuckingService audioDucking,
+        IMediaPauseService mediaPause
+    )
+    {
+        if (captureSession is not null)
+        {
+            try
+            {
+                audio.StopRecording(captureSession);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] StopRecording during dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+            }
+        }
+
+        try
+        {
+            audioDucking.RestoreAudio();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] RestoreAudio during dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+        }
+
+        try
+        {
+            mediaPause.ResumeMedia();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] ResumeMedia during dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+        }
+    }
+
+    private static bool MarkDisposedThenCloseToggleGate(
+        DictationToggleGate toggleGate,
+        TimeSpan budget,
+        Action markDisposed
+    )
+    {
+        // This mark must precede the bounded wait: the current gate owner may still be in
+        // startup feedback and will revalidate this state before opening the microphone.
+        markDisposed();
+        return toggleGate.CloseAsync(budget).GetAwaiter().GetResult();
+    }
+
+    internal static bool IsCaptureStartAllowed(bool disposed, bool inputAllowed)
+    {
+        return !disposed && inputAllowed;
     }
 
     public void Initialize()
@@ -327,9 +550,38 @@ public sealed class DictationOrchestrator : IDisposable
 
         // Lambdas (not method groups): StartAsync/ToggleAsync have optional parameters
         // that prevent zero-arg method-group conversion.
+        // Start the AT-SPI focus listener now (when enabled) so it has captured the
+        // target field's focus before the user dictates into it.
+        _targetAppLearning.Initialize();
+
+        // Arm the session-activity monitor so the StartAsync/insertion lock guards observe real
+        // lock state on every backend. The evdev backend also initializes it (idempotent), but on
+        // X11/SharpHook or Wayland-without-evdev nothing else would, leaving IsInputAllowed stuck
+        // at its default-true and the guards inert. Fire-and-forget: a slow/absent system bus must
+        // not block startup, and an absent logind just leaves the legacy input-allowed fallback.
+        FireAndLog(
+            () => _sessionActivityMonitor.InitializeAsync(CancellationToken.None),
+            nameof(ISessionActivityMonitor.InitializeAsync)
+        );
+
+        // Subscribe directly so a lock aborts an active recording on EVERY backend. The evdev
+        // backend raises DictationDiscardRequested on lock, but SharpHook (all X11 sessions and the
+        // Wayland fallback) does not; without this, a toggle recording started before the lock would
+        // keep capturing behind the lock screen because the start/insertion guards only block new work.
+        _sessionActivityHandler = (_, _) =>
+        {
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                FireAndLog(AbortForSessionLossAsync, nameof(AbortForSessionLossAsync));
+            }
+        };
+        _sessionActivityMonitor.InputAllowedChanged += _sessionActivityHandler;
+
         _toggleHandler = (_, _) => FireAndLog(() => ToggleAsync(), nameof(ToggleAsync));
         _startHandler = (_, _) => FireAndLog(() => StartAsync(), nameof(StartAsync));
         _stopHandler = (_, _) => FireAndLog(StopAsync, nameof(StopAsync));
+        _discardHandler = (_, _) =>
+            FireAndLog(AbortForSessionLossAsync, nameof(AbortForSessionLossAsync));
         _cancelHandler = (_, _) => FireAndLog(CancelAsync, nameof(CancelAsync));
         _hookFailedHandler = (_, message) =>
         {
@@ -343,6 +595,7 @@ public sealed class DictationOrchestrator : IDisposable
         _hotkey.DictationToggleRequested += _toggleHandler;
         _hotkey.DictationStartRequested += _startHandler;
         _hotkey.DictationStopRequested += _stopHandler;
+        _hotkey.DictationDiscardRequested += _discardHandler;
         _hotkey.CancelRequested += _cancelHandler;
         _hotkey.HookFailed += _hookFailedHandler;
         try
@@ -354,13 +607,21 @@ public sealed class DictationOrchestrator : IDisposable
             _hotkey.DictationToggleRequested -= _toggleHandler;
             _hotkey.DictationStartRequested -= _startHandler;
             _hotkey.DictationStopRequested -= _stopHandler;
+            _hotkey.DictationDiscardRequested -= _discardHandler;
             _hotkey.CancelRequested -= _cancelHandler;
             _hotkey.HookFailed -= _hookFailedHandler;
+            if (_sessionActivityHandler is not null)
+            {
+                _sessionActivityMonitor.InputAllowedChanged -= _sessionActivityHandler;
+            }
+
             _toggleHandler = null;
             _startHandler = null;
             _stopHandler = null;
+            _discardHandler = null;
             _cancelHandler = null;
             _hookFailedHandler = null;
+            _sessionActivityHandler = null;
             throw;
         }
 
@@ -380,7 +641,7 @@ public sealed class DictationOrchestrator : IDisposable
             _lastToggleUtc = now;
         }
 
-        if (_audio.IsRecording)
+        if (IsRecording)
         {
             await StopAsync();
         }
@@ -400,76 +661,286 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     public async Task CancelAsync()
     {
-        // Cancel the in-flight async work first so a long-running TranscribeAsync
-        // or pipeline call begins unwinding immediately, even if we have to
-        // wait for the toggle gate below.
-        var cts = _activeDictationCts;
-        if (cts is not null)
-        {
-            try
-            {
-                await cts.CancelAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                /* StopAsync just disposed it — nothing to cancel. */
-            }
-        }
+        await CancelInFlightWorkAsync().ConfigureAwait(false);
 
         // If we're still recording, route through StopAsync with the cancel
         // flag set. StopAsync owns the toggle gate and the recording-cleanup
-        // ordering; piggy-backing on it keeps the lifecycle consistent.
-        if (_audio.IsRecording)
+        // ordering; piggy-backing on it keeps the lifecycle consistent. Pass the
+        // cancel intent explicitly so a racing StartAsync that clears the shared
+        // _cancelRequested flag between here and the gate probe can't downgrade
+        // this discard to a normal save.
+        if (IsRecording)
         {
             _cancelRequested = true;
-            await StopAsync();
+            await StopAsync(cancelRequested: true);
+        }
+    }
+
+    /// <summary>
+    ///     Orders optional startup feedback ahead of capture. Feedback is best
+    ///     effort; the permission check and capture result remain exact.
+    /// </summary>
+    internal static async Task<TCapture?> StartCaptureAfterFeedbackAsync<TCapture>(
+        bool soundFeedbackEnabled,
+        Func<IStartupFeedbackReservation> reserveStartupFeedback,
+        Func<Task> playStartSoundAsync,
+        Func<IStartupFeedbackReservation, Task> announceRecordingStartedAsync,
+        Func<bool> isInputAllowed,
+        Func<TCapture?> startCapture,
+        Action<TCapture> onCaptureOpened
+    )
+        where TCapture : class
+    {
+        var startupFeedback = reserveStartupFeedback();
+        try
+        {
+            try
+            {
+                await startupFeedback.StopPriorPlaybackAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Could not finish prior speech before capture: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+            }
+
+            try
+            {
+                if (soundFeedbackEnabled)
+                {
+                    // start.wav is already ordered by this startup lane and is
+                    // the non-TTS bypass of the ordinary-feedback reservation.
+                    await playStartSoundAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    await announceRecordingStartedAsync(startupFeedback).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] Optional recording-start feedback failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+            }
+
+            // The cue adds bounded work while the startup gate is held. Revalidate
+            // immediately before opening capture so a lock during feedback wins.
+            if (!isInputAllowed())
+            {
+                return null;
+            }
+
+            var capture = startCapture();
+            if (capture is not null)
+            {
+                // Claim the generation before releasing the reservation. Otherwise
+                // a prior session can pass its ownership check in the release-to-claim gap.
+                onCaptureOpened(capture);
+            }
+
+            return capture;
+        }
+        finally
+        {
+            startupFeedback.Dispose();
         }
     }
 
     public async Task<int> StartAsync(string? forcedProfileId = null)
     {
-        if (!await _toggleGate.WaitAsync(0))
+        if (!_toggleGate.TryBeginStartup(() => _cancelRequested = false))
         {
             return 0;
         }
 
-        int startedSessionId;
+        var startupReserved = false;
+        var startedSessionId = 0;
+        var telemetryStartedSessionId = 0;
+        DictationDeferredStop pendingStop;
         try
         {
-            if (_audio.IsRecording)
+            startupReserved = _inFlightTracker.TryBeginStartup();
+            if (!startupReserved)
             {
-                return 0;
+                // A history retry can hold the tracker for many seconds; say so instead of
+                // dropping the hotkey press on the floor.
+                Trace.WriteLine("[Dictation] Start rejected: another dictation or retry is in flight.");
+                var busyMessage = Localization.Loc.Instance["History.RetryBusy"];
+                ReportStatus(busyMessage);
+                ShowFeedback(busyMessage, true);
+                goto StartupComplete;
             }
 
-            _audio.WhisperModeEnabled = _settings.Current.WhisperModeEnabled;
+            if (IsRecording)
+            {
+                goto StartupComplete;
+            }
 
-            // Start capturing immediately — user may already be speaking (especially PTT).
-            _recordingStart = DateTime.UtcNow;
-            _lastSpeechDetectedAtUtc = _recordingStart;
-            _silenceStopRequested = false;
+            // Reject starts while the session is locked/inactive: the HTTP API and control socket
+            // call StartAsync directly, bypassing the hotkey path, and the discard event only
+            // aborts work already in flight. Checked under the gate so a concurrent session-loss
+            // discard (which holds the gate across its stop) can't slip its transition between
+            // this check and opening the microphone.
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                Trace.WriteLine("[Dictation] Start rejected: session locked or inactive.");
+                goto StartupComplete;
+            }
+
+            // A profile hotkey forces a specific profile; resolve it synchronously (exactly once —
+            // matching twice could let the startup decisions and the recorded match disagree if the
+            // profile set changes mid-start) so the guard below and the streaming/language
+            // decisions don't use the stale _recordingProfile from the previous session. The
+            // background snapshot task still runs for the context-match path.
+            MatchResult? startupForcedMatch = null;
+            var startupProfile = _recordingProfile;
+            if (forcedProfileId is not null)
+            {
+                var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
+                if (forcedMatch.Kind == MatchKind.ManualOverride)
+                {
+                    startupForcedMatch = forcedMatch;
+                    startupProfile = forcedMatch.Profile;
+                }
+            }
+
+            // Forced-profile (profile hotkey) starts only: an ordinary start matches its profile in
+            // the background snapshot, after the microphone is already open, so startupProfile is
+            // null here and this guard is a no-op. Where the profile IS known up front, a prompt
+            // action is required post-processing (RequireLlmSuccess) and a provider that cannot
+            // serve it costs the whole dictation, so refuse before the microphone runs. A provider
+            // problem found after a context match still surfaces the same specific message (see
+            // RunPromptActionAsync and the transcription-failure handler) and, once the recovery
+            // branch merges, is kept as a failed dictation holding its raw text.
+            var promptActionProblem = DescribeProfilePromptActionProviderProblem(
+                startupProfile,
+                _promptActions.EnabledActions,
+                _promptProcessing
+            );
+            if (promptActionProblem is not null)
+            {
+                ReportStatus(promptActionProblem);
+                ShowFeedback(promptActionProblem, true);
+                goto StartupComplete;
+            }
+
+            // Same for a translate task the forced profile's model cannot run; an ordinary
+            // start is checked once its profile settles.
+            var startupTranslationRejection = startupForcedMatch is null
+                ? null
+                : DescribeTranslationRejection(startupProfile, _settings.Current, _models);
+            if (startupTranslationRejection is not null)
+            {
+                ReportStatus(startupTranslationRejection);
+                ShowFeedback(startupTranslationRejection, true);
+                goto StartupComplete;
+            }
+
+            // One immutable view controls cue arbitration and the initial capture
+            // mode even if settings change while the bounded cue is playing.
+            var startupSettings = _settings.Current;
+            var inputRejectedAfterCue = false;
+            int? claimedSessionId = null;
+            AudioRecordingService.AudioCaptureSession? captureSession;
             try
             {
-                _audio.StartRecording();
+                captureSession = await StartCaptureAfterFeedbackAsync(
+                    startupSettings.SoundFeedbackEnabled,
+                    _speechFeedback.ReserveStartupFeedback,
+                    () => _soundFeedback.PlayRecordingStartedAsync(),
+                    startupFeedback => _speechFeedback.AnnounceRecordingStartedAsync(
+                        startupSettings.SpokenFeedbackEnabled,
+                        startupFeedback
+                    ),
+                    () =>
+                    {
+                        // Disposal can restore system audio and stop capture while the
+                        // bounded cue is still pending; never open a new capture session
+                        // once shutdown has begun.
+                        var allowed = IsCaptureStartAllowed(
+                            _disposed,
+                            _sessionActivityMonitor.IsInputAllowed
+                        );
+                        inputRejectedAfterCue = !allowed;
+                        return allowed;
+                    },
+                    () => _audio.TryStartRecording(startupSettings.WhisperModeEnabled),
+                    _ =>
+                    {
+                        // Must not throw: the capture is already open and the helper
+                        // would surface the exception before rollback could run.
+                        lock (_recordingSessionLock)
+                        {
+                            claimedSessionId = ++_recordingSession;
+                        }
+                    }
+                );
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Failed to start recording: {ex}");
+                Trace.WriteLine($"[Dictation] Failed to start recording: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}\n{ex.StackTrace}");
                 var message = BuildRecordingStartFailureMessage(ex);
                 ReportStatus(message);
                 ShowFeedback(message, true);
-                return 0;
+                goto StartupComplete;
             }
 
-            if (!_audio.IsRecording)
+            if (captureSession is null)
             {
-                var message = BuildRecordingStartFailureMessage(null);
+                if (inputRejectedAfterCue)
+                {
+                    Trace.WriteLine(
+                        "[Dictation] Start rejected: session locked or inactive during feedback."
+                    );
+                    goto StartupComplete;
+                }
+
+                var message = _audio.IsCaptureReserved
+                    ? Localization.Loc.Instance["Overlay.RecordStartFailedRecorderActive"]
+                    : BuildRecordingStartFailureMessage(null);
                 ReportStatus(message);
                 ShowFeedback(message, true);
-                return 0;
+                goto StartupComplete;
+            }
+
+            // The claim callback runs for every non-null capture, so a missing id
+            // here is a helper-contract break — fail loudly rather than running the
+            // session as id 0.
+            var sessionId =
+                claimedSessionId
+                ?? throw new InvalidOperationException(
+                    "Capture opened without a claimed recording session id."
+                );
+
+            var overlayToken = _overlayCoordinator.Acquire(OverlayRequester.Dictation);
+            lock (_overlayStateLock)
+            {
+                _overlayToken = overlayToken;
+            }
+
+            _audioCaptureSession = captureSession;
+            _recordingStart = DateTime.UtcNow;
+            telemetryStartedSessionId = sessionId;
+            _telemetry.Begin(sessionId);
+            _telemetry.Tag(sessionId, "mode", startupSettings.Mode.ToString());
+            _telemetry.Tag(sessionId, "cleanup.level", startupSettings.CleanupLevel.ToString());
+            _telemetry.Tag(sessionId, "profile.used", "false");
+            _lastSpeechDetectedAtUtc = _recordingStart;
+            _silenceStopRequested = false;
+
+            // AT-SPI only runs with correction-learning consent; the focused field also guards delivery
+            // against a focus move within the same window.
+            var trackFocusedField = startupSettings.TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
+            var captureLockedField = trackFocusedField
+                && startupSettings is { AutoPaste: true, LockPasteToFocusedField: true };
+            AtSpiElementRef? initialFocusedElement;
+            lock (_recordingSessionLock)
+            {
+                _recordingWindowId = _activeWindow.GetActiveWindowId();
+                initialFocusedElement = trackFocusedField ? _atSpiClient!.CurrentFocusedElement : null;
+                _recordingLockedField = captureLockedField ? new LockedFocusTarget(null) : null;
             }
 
             // Set overlay to "Recording…" after the stream is confirmed open but
-            // before slow startup work (playerctl, sound). On Wayland the earlier
+            // before slow startup work (playerctl). On Wayland the earlier
             // ordering made the stale feedback bubble linger until after PauseMedia.
             SetOverlayState(state =>
                 // ReSharper disable once WithExpressionModifiesAllMembers -- `with` preserves any future-added state members; intentional even though all current members are set.
@@ -479,63 +950,55 @@ public sealed class DictationOrchestrator : IDisposable
                     ShowFeedback = false,
                     FeedbackIsError = false,
                     FeedbackText = null,
+                    ActionResultUrl = null,
+                    NotificationIconName = null,
+                    FeedbackDurationMilliseconds = null,
                     PartialText = null,
                     LlmResponseText = null,
                     IsRecording = true,
                     StatusText = Localization.Loc.Instance["Dictation.StatusRecording"],
                     ActiveProfileName = null,
                     ActiveAppName = null,
-                    SessionStartedAtUtc = DateTime.UtcNow
+                    SessionStartedAtUtc = DateTime.UtcNow,
                 }
             );
 
             try
             {
-                if (_settings.Current.AudioDuckingEnabled)
+                if (startupSettings.AudioDuckingEnabled)
                 {
-                    _audioDucking.DuckAudio(_settings.Current.AudioDuckingLevel);
+                    _audioDucking.DuckAudio(startupSettings.AudioDuckingLevel);
                 }
 
-                if (_settings.Current.PauseMediaDuringRecording)
+                if (startupSettings.PauseMediaDuringRecording)
                 {
                     _mediaPause.PauseMedia();
                 }
 
-                if (_settings.Current.SoundFeedbackEnabled)
-                {
-                    _soundFeedback.PlayRecordingStarted();
-                }
-
-                _speechFeedback.AnnounceRecordingStarted();
                 RecordingStateChanged?.Invoke(this, true);
                 // Bump the session version once per recording; both the polling loop
                 // and the streaming coordinator share this version. Bumping twice
                 // would immediately invalidate the streaming session.
                 var sessionVersion = _partialTranscriptState.StartSession();
-
-                var startupSettings = _settings.Current;
-                // A profile hotkey forces a specific profile; resolve it
-                // synchronously here so streaming/language decisions don't use the
-                // stale _recordingProfile from the previous session. The background
-                // snapshot task still runs for the context-match path.
-                var startupProfile = _recordingProfile;
-                if (forcedProfileId is not null)
+                lock (_liveCleanupLock)
                 {
-                    var forcedMatch = _profiles.MatchProfile(null, null, forcedProfileId);
-                    if (forcedMatch.Kind == MatchKind.ManualOverride)
-                    {
-                        startupProfile = forcedMatch.Profile;
-                    }
+                    _liveCleanupDraft?.Dispose();
+                    _liveCleanupDraft = null;
+                    _liveCleanupSessionVersion = sessionVersion;
                 }
 
-                var startupLanguage =
-                    startupProfile?.InputLanguage ?? startupSettings.Language;
-                // ReSharper disable once InlineTemporaryVariable -- named local kept for readability over inlining into the pattern match.
-                var startupLanguageHint =
-                    startupLanguage is { Length: > 0 } lang && lang != "auto"
-                        ? lang
-                        : null;
+                var languageHints = LanguageSelectionResolver.ResolveHints(startupProfile, startupSettings);
                 var startupPlugin = _models.ActiveTranscriptionPlugin;
+                var startupLanguageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
+                if (startupPlugin is not null)
+                {
+                    (startupLanguageSelection, languageHints) = startupPlugin.ResolveEffectiveLanguage(
+                        startupLanguageSelection,
+                        languageHints
+                    );
+                }
+                _streamingLanguageSelection = startupLanguageSelection;
+                _streamingLanguageHints = languageHints;
                 var startupMode = LinuxLiveTranscriptionStartupPolicy.Select(
                     startupSettings, startupPlugin);
                 // Streaming doesn't support translation; skip the WebSocket when
@@ -554,18 +1017,23 @@ public sealed class DictationOrchestrator : IDisposable
                 )
                 {
                     StartStreamingTranscriptionSession(
-                        startupPlugin, startupLanguageHint, sessionVersion);
+                        startupPlugin,
+                        startupLanguageSelection,
+                        languageHints,
+                        sessionVersion,
+                        captureSession
+                    );
                 }
 
                 // Always start the partial loop — it drives silence-auto-stop.
                 // When streaming is active, the in-loop policy short-circuits
                 // PollPartialTranscriptOnceAsync so polling stays a no-op.
-                StartPartialTranscriptionSession(sessionVersion);
+                StartPartialTranscriptionSession(sessionVersion, captureSession);
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Post-start setup failed: {ex}");
-                RollBackStartedRecording();
+                Trace.WriteLine($"[Dictation] Post-start setup failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}\n{ex.StackTrace}");
+                RollBackStartedRecording(captureSession);
                 _ = await StopPartialTranscriptionSessionAsync();
                 var faultedCoordinator = _streamingCoordinator;
                 var faultedStartupCts = _streamingStartupCts;
@@ -573,8 +1041,8 @@ public sealed class DictationOrchestrator : IDisposable
                 _streamingStartupCts = null;
                 _streamingProviderId = null;
                 _streamingModelId = null;
-                _streamingLanguageHint = null;
-                _audio.LiveFrameSink = null;
+                _streamingLanguageSelection = LanguageSelection.Automatic;
+                _streamingLanguageHints = [];
                 _ = await TeardownStreamingSessionAsync(
                     faultedCoordinator,
                     faultedStartupCts,
@@ -587,7 +1055,6 @@ public sealed class DictationOrchestrator : IDisposable
             // Arm the per-dictation CTS after setup succeeds. CancelAsync uses
             // this to abort an in-flight pipeline; Escape is armed here so it
             // only fires while a dictation is live.
-            _cancelRequested = false;
             _activeDictationCts = new CancellationTokenSource();
             _hotkey.IsCancelShortcutEnabled = true;
 
@@ -595,17 +1062,20 @@ public sealed class DictationOrchestrator : IDisposable
             // near-immediate StopAsync can observe and await it. The Task.Run
             // only commits results if the session is still active — protecting
             // the next dictation from late writes after the 500ms timeout.
-            int sessionId;
+            // Begin stays late so a post-capture setup exception cannot leave a phantom in-flight
+            // session. That failure still consumes the generation reserved above: ids stay
+            // monotonic (all the gate needs), and a predecessor's overlay feedback stays rejected
+            // past the rollback's hide — matching session-loss rollback, which double-increments.
             lock (_recordingSessionLock)
             {
-                sessionId = ++_recordingSession;
-                _inFlightSessions.Add(sessionId);
+                _inFlightTracker.Begin(sessionId);
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
                 _recordingAppUrl = null;
+                _recordingTargetWindow = null;
+                _recordingTargetField = null;
                 _recordingScreenContext = null;
                 _recordingClipboardContext = null;
-                _recordingWindowId = _activeWindow.GetActiveWindowId();
                 _recordingProfile = null;
             }
 
@@ -619,23 +1089,39 @@ public sealed class DictationOrchestrator : IDisposable
                 string? appUrl = null;
                 var initialMatch = MatchResult.NoMatch;
                 Profile? matchedProfile = null;
+                // Applied before the snapshot attempt: a manual override bypasses window/URL
+                // context entirely, so it must survive a snapshot timeout or provider failure.
+                if (startupForcedMatch is not null)
+                {
+                    initialMatch = startupForcedMatch;
+                    matchedProfile = startupForcedMatch.Profile;
+                }
+
+                using var initialCts = new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(500)
+                );
+                var lockedFieldTask = CaptureLockedFieldAsync(
+                    captureLockedField,
+                    initialFocusedElement,
+                    initialCts.Token
+                );
+
                 try
                 {
                     // 50ms was too tight: xdotool's chain (window-id + title +
                     // pid → ProcessName) is three sequential subprocesses that
                     // can exceed 500ms. Runs in the background so it doesn't
                     // add user-visible latency.
-                    using var initialCts = new CancellationTokenSource(
-                        TimeSpan.FromMilliseconds(500)
-                    );
                     initialSnap = await _activeWindow
                         .GetActiveWindowSnapshotAsync(initialCts.Token)
                         .ConfigureAwait(false);
                     appProcess = initialSnap?.ProcessName;
                     appTitle = initialSnap?.Title;
-                    // A forced profile id yields MatchKind.ManualOverride, bypassing window/URL context.
-                    initialMatch = _profiles.MatchProfile(appProcess, null, forcedProfileId);
-                    matchedProfile = initialMatch.Profile;
+                    if (matchedProfile is null)
+                    {
+                        initialMatch = _profiles.MatchProfile(appProcess, null, forcedProfileId);
+                        matchedProfile = initialMatch.Profile;
+                    }
 
                     if (initialSnap is null)
                     {
@@ -646,7 +1132,7 @@ public sealed class DictationOrchestrator : IDisposable
                                 "kde" => "kwin",
                                 "hyprland" => "hyprland",
                                 "sway" => "sway",
-                                _ => "xdotool"
+                                _ => "xdotool",
                             },
                             "No active-window provider returned a snapshot"
                         );
@@ -659,9 +1145,11 @@ public sealed class DictationOrchestrator : IDisposable
                 catch (Exception ex)
                 {
                     Trace.WriteLine(
-                        $"[Dictation] Initial active-window snapshot failed: {ex.Message}"
+                        $"[Dictation] Initial active-window snapshot failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                     );
                 }
+
+                var lockedField = await lockedFieldTask.ConfigureAwait(false);
 
                 bool committed;
                 lock (_recordingSessionLock)
@@ -669,9 +1157,12 @@ public sealed class DictationOrchestrator : IDisposable
                     committed = _recordingSession == sessionId;
                     if (committed)
                     {
+                        _recordingLockedField = lockedField;
                         _recordingAppProcess = appProcess;
                         _recordingAppTitle = appTitle;
                         _recordingAppUrl = appUrl;
+                        _recordingTargetWindow = initialSnap;
+                        _recordingTargetField = initialFocusedElement;
                         _recordingProfile = matchedProfile;
                     }
                 }
@@ -684,9 +1175,12 @@ public sealed class DictationOrchestrator : IDisposable
                     return;
                 }
 
-                _audio.WhisperModeEnabled =
-                    matchedProfile?.WhisperModeOverride ?? _settings.Current.WhisperModeEnabled;
-                SetOverlayState(state =>
+                _audio.TrySetWhisperMode(
+                    captureSession,
+                    matchedProfile?.WhisperModeOverride
+                    ?? _settings.Current.WhisperModeEnabled
+                );
+                SetOverlayState(overlayToken, state =>
                     state with { ActiveProfileName = matchedProfile?.Name, ActiveAppName = appTitle }
                 );
                 _models.PluginManager.EventBus.Publish(
@@ -704,10 +1198,7 @@ public sealed class DictationOrchestrator : IDisposable
                 //     opt-out, not just dropping the data afterward).
                 // Either way the task is awaited before the snapshot task returns, so the stop
                 // ceiling covers it. Zero cost when both toggles are off (the common case).
-                var isBrowserWindow = ActiveWindowService.IsSupportedBrowserWindow(
-                    appProcess,
-                    appTitle
-                );
+                var isBrowserWindow = ActiveWindowService.IsSupportedBrowserWindow(initialSnap);
                 Task? contextCaptureTask = null;
                 if (!isBrowserWindow)
                 {
@@ -733,17 +1224,19 @@ public sealed class DictationOrchestrator : IDisposable
                     using var deferredCts = new CancellationTokenSource(
                         TimeSpan.FromMilliseconds(4000)
                     );
-                    var deferredUrl = await Task.Run(
-                            () => _activeWindow.GetBrowserUrl(false),
-                            deferredCts.Token
-                        )
-                        .ConfigureAwait(false);
+                    // Bound to the recording-start snapshot so the title fallback can't
+                    // come from a window focused later.
+                    var deferredUrl = initialSnap is null
+                        ? null
+                        : await Task.Run(
+                                () => _activeWindow.GetBrowserUrlForSnapshot(initialSnap),
+                                deferredCts.Token
+                            )
+                            .ConfigureAwait(false);
 
                     if (!string.IsNullOrWhiteSpace(deferredUrl))
                     {
-                        // The URL comes from the currently focused window, which may
-                        // have changed. Re-snapshot and only commit if we're on the
-                        // same window, to avoid binding to an unrelated tab/window.
+                        // The walk reads the live address bar: commit only if the recording-start tab is still in front.
                         ActiveWindowSnapshot? verifySnap = null;
                         try
                         {
@@ -761,15 +1254,15 @@ public sealed class DictationOrchestrator : IDisposable
                             // Verification snapshot is best-effort; fall through to the initial snapshot.
                         }
 
-                        if (
-                            initialSnap is null
-                            || verifySnap is null
-                            || !IsSameWindow(initialSnap, verifySnap)
-                        )
+                        if (!IsSameWindowAndTab(initialSnap, verifySnap))
                         {
                             Trace.WriteLine(
-                                "[Dictation] Deferred URL discarded — focused window changed mid-capture."
+                                "[Dictation] Deferred URL discarded — focused window or tab changed mid-capture."
                             );
+                            if (initialSnap is not null)
+                            {
+                                _activeWindow.ForgetBrowserUrl(initialSnap, deferredUrl);
+                            }
                         }
                         else
                         {
@@ -807,13 +1300,15 @@ public sealed class DictationOrchestrator : IDisposable
                                         _recordingProfile = rematch.Profile;
                                     }
 
-                                    SetOverlayState(state =>
+                                    SetOverlayState(overlayToken, state =>
                                         state with { ActiveProfileName = rematch.Profile.Name }
                                     );
 
-                                    _audio.WhisperModeEnabled =
+                                    _audio.TrySetWhisperMode(
+                                        captureSession,
                                         rematch.Profile.WhisperModeOverride
-                                        ?? _settings.Current.WhisperModeEnabled;
+                                        ?? _settings.Current.WhisperModeEnabled
+                                    );
                                 }
                             }
                         }
@@ -822,7 +1317,7 @@ public sealed class DictationOrchestrator : IDisposable
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.Message}");
+                    Trace.WriteLine($"[Dictation] Deferred URL re-match failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 }
 
                 // Browser windows deferred their capture to here so the URL rematch's final
@@ -859,42 +1354,304 @@ public sealed class DictationOrchestrator : IDisposable
                 await AwaitContextCaptureAsync(contextCaptureTask).ConfigureAwait(false);
             });
             _recordingSnapshotTask = recordingSnapshotTask;
+
+            // Final in-gate re-check: a lock can land during the slow synchronous setup above, and
+            // while StartAsync holds the gate a concurrent session-loss discard times out and bails
+            // without stopping audio — so tear the just-started recording down here. Mirrors the
+            // full post-start-failure teardown so no streaming coordinator, live-frame sink,
+            // partial loop or late snapshot survives to send buffered audio or repopulate state.
+            if (!_sessionActivityMonitor.IsInputAllowed)
+            {
+                Trace.WriteLine("[Dictation] Session locked during start; rolling back recording.");
+
+                // Every step is isolated (as in Dispose): a throw from one must not skip the rest.
+                // Clearing the session id with a coordinator still attached would report the
+                // dictation finished while buffered audio kept flowing behind the lock screen.
+                try
+                {
+                    RollBackStartedRecording(captureSession);
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Recording rollback on lock failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+                }
+
+                try
+                {
+                    _ = await StopPartialTranscriptionSessionAsync();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Partial-loop stop on lock failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+                }
+
+                StreamingTranscriptionCoordinator? rolledBackCoordinator;
+                CancellationTokenSource? rolledBackStartupCts;
+                lock (_recordingSessionLock)
+                {
+                    // Advance the generation so the background snapshot task drops its writes and
+                    // never publishes RecordingStartedEvent or restores stale profile fields.
+                    _recordingSession++;
+                    rolledBackCoordinator = _streamingCoordinator;
+                    rolledBackStartupCts = _streamingStartupCts;
+                    _streamingCoordinator = null;
+                    _streamingStartupCts = null;
+                    _streamingProviderId = null;
+                    _streamingModelId = null;
+                    _streamingLanguageSelection = LanguageSelection.Automatic;
+                    _streamingLanguageHints = [];
+                }
+
+                // No explicit live-frame-sink detach here: the sink is session-scoped and
+                // StopRecording above already cleared it during the rollback.
+                try
+                {
+                    _ = await TeardownStreamingSessionAsync(
+                        rolledBackCoordinator,
+                        rolledBackStartupCts,
+                        false,
+                        CancellationToken.None
+                    );
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[Dictation] Streaming teardown on lock failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+                }
+
+                _hotkey.IsCancelShortcutEnabled = false;
+                _activeDictationCts?.Dispose();
+                _activeDictationCts = null;
+                _telemetry.Finish(startedSessionId, "canceled");
+                ClearSessionInFlight(startedSessionId);
+                startedSessionId = 0;
+            }
+
+            // ReSharper disable once BadControlBracesIndent -- the `goto StartupComplete` label is deliberately deindented; the brace-indent nit is a byproduct of that layout.
+        StartupComplete:;
+        }
+        catch
+        {
+            _telemetry.Finish(telemetryStartedSessionId, "failed");
+            throw;
         }
         finally
         {
-            _toggleGate.Release();
+            if (startupReserved)
+                _inFlightTracker.EndStartup();
+            pendingStop = _toggleGate.CompleteStartupAndRelease();
+        }
+
+        if (pendingStop.HasPendingStop)
+        {
+            await ForwardDeferredStopAsync(pendingStop);
         }
 
         return startedSessionId;
     }
 
-    public async Task StopAsync()
+    // Honors a stop queued while this startup held the gate. Restore _cancelRequested *before*
+    // re-acquiring so an ordinary stop that wins the release-window race still folds in the discard
+    // intent instead of saving audio the user canceled. If another startup holds the gate, the stop
+    // is re-queued (cancel intent intact) and that startup honors it.
+    private async Task ForwardDeferredStopAsync(DictationDeferredStop deferredStop)
     {
-        if (!await _toggleGate.WaitAsync(0))
+        if (deferredStop.WasCancel)
+        {
+            _cancelRequested = true;
+        }
+
+        if (_toggleGate.TryAcquireForStop(deferredStop.WasCancel) != DictationStopGateResult.Acquired)
         {
             return;
         }
 
+        await StopWhileHoldingGateAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Discards any active recording because the login session became inactive/locked. Unlike
+    ///     <see cref="StopAsync" /> it forces the cancel/discard path so audio is dropped without
+    ///     transcription or text insertion — synthesized paste/type must not reach the lock screen.
+    /// </summary>
+    public async Task AbortForSessionLossAsync()
+    {
+        _cancelRequested = true;
+
+        // Cancel in-flight transcription / spoken command(s) / insertion first: the session can lock
+        // after StopAsync already stopped capture and released its gate, in which case the stop
+        // below is a no-op but a completed transcription could still type into the lock screen.
+        await CancelInFlightWorkAsync(cancelAllCommands: true).ConfigureAwait(false);
+
+        // Unlike StopAsync's non-blocking probe, block (bounded) for the gate so a discard isn't
+        // silently dropped while a start/stop is mid-flight. Keep the gate across the stop (rather
+        // than release/reacquire) so a concurrent start can't slip in and record behind the lock.
+        if (!await _toggleGate.WaitAsync(s_sessionLossGateTimeout).ConfigureAwait(false))
+        {
+            Trace.WriteLine(_toggleGate.IsClosed
+                ? "[Dictation] Session-loss discard refused because the toggle gate is closed."
+                : "[Dictation] Session-loss discard timed out waiting for the current toggle-gate owner.");
+            return;
+        }
+
+        // _cancelRequested makes the stop discard the audio without transcription or insertion.
+        _cancelRequested = true;
+        await StopWhileHoldingGateAsync().ConfigureAwait(false);
+    }
+
+    // Cancels the spoken-command source(s) first (they run after recording stops) then the
+    // recording source, so a long-running command or transcription unwinds immediately.
+    // cancelAllCommands widens the scope from the newest command (Escape/IPC cancel) to all of them.
+    private async Task CancelInFlightWorkAsync(bool cancelAllCommands = false)
+    {
+        if (!await CancelRecoveryAndDrainAsync().ConfigureAwait(false))
+            Trace.WriteLine("[Dictation] Recovery did not drain; continuing cancellation of in-flight work.");
+
+        CancellationTokenSource[] commandSources;
+        if (cancelAllCommands)
+        {
+            lock (_activeCommandCtsSet)
+            {
+                commandSources = [.. _activeCommandCtsSet];
+            }
+        }
+        else
+        {
+            var newest = _activeCommandCts;
+            commandSources = newest is null ? [] : [newest];
+        }
+
+        foreach (var commandCts in commandSources)
+        {
+            try
+            {
+                await commandCts.CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                /* command already finished and disposed it */
+            }
+        }
+
+        var cts = _activeDictationCts;
+        if (cts is not null)
+        {
+            try
+            {
+                await cts.CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                /* StopAsync just disposed it — nothing to cancel. */
+            }
+        }
+    }
+
+    public Task StopAsync()
+    {
+        // External stops carry no cancel intent of their own; the private overload folds any
+        // in-flight discard in via _cancelRequested.
+        return StopAsync(cancelRequested: false);
+    }
+
+    internal static void ReportShortSpeechDiscardOutcome(
+        LinuxShortSpeechDecision discardReason,
+        RecordingContext recordingContext,
+        Action<RecordingContext, string> reportStatus,
+        Action<RecordingContext, string, bool, bool> showFeedback
+    )
+    {
+        // ReSharper disable once SwitchExpressionHandlesSomeKnownEnumValuesWithExceptionInDefault -- only discard outcomes are reportable; the default arm rejects the rest by design.
+        var messageKey = discardReason switch
+        {
+            LinuxShortSpeechDecision.DiscardTooShort => "Overlay.TooShort",
+            LinuxShortSpeechDecision.DiscardNoSpeech => "Overlay.NoSpeech",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(discardReason),
+                discardReason,
+                "Only discard outcomes can be reported."
+            ),
+        };
+        var message = Localization.Loc.Instance[messageKey];
+
+        reportStatus(recordingContext, message);
+        showFeedback(recordingContext, message, true, false);
+    }
+
+    private async Task StopAsync(bool cancelRequested)
+    {
+        // Fold both intent sources into the gate so a stop deferred behind an in-progress startup
+        // keeps its discard semantics even if a racing start clears the shared _cancelRequested flag.
+        var wasCancel = cancelRequested || _cancelRequested;
+        if (_toggleGate.TryAcquireForStop(wasCancel) != DictationStopGateResult.Acquired)
+        {
+            return;
+        }
+
+        // Owning the gate directly: make the shared flag agree with the intent so teardown discards.
+        if (wasCancel)
+        {
+            _cancelRequested = true;
+        }
+
+        await StopWhileHoldingGateAsync().ConfigureAwait(false);
+    }
+
+    // Runs the stop teardown assuming the caller already owns _toggleGate; the finally releases it.
+    private async Task StopWhileHoldingGateAsync()
+    {
         var earlyCleanupDone = false;
         var wasRecording = false;
         var gateReleased = false;
         CancellationTokenSource? snapshotCts = null;
+        LiveCleanupDraft? stoppedLiveCleanup = null;
+        int? insertionOrderSessionId = null;
+        int? telemetrySessionId = null;
         try
         {
-            if (!_audio.IsRecording)
+            var captureSession = _audioCaptureSession;
+            if (!_audio.IsRecordingOwnedBy(captureSession))
             {
                 return;
             }
 
             wasRecording = true;
+            telemetrySessionId = _recordingSession;
 
             // Snapshot and clear the cancel flag now that we own the gate.
             var canceledThisStop = _cancelRequested;
             _cancelRequested = false;
 
-            // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
-            var wav = await _audio.StopRecordingAsync();
+            byte[] wav;
+            Exception? captureStopFault = null;
+            try
+            {
+                // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
+                wav = await _audio.StopRecordingAsync(captureSession!);
+            }
+            catch (Exception ex)
+            {
+                // Finish the normal teardown first; the post-stop pipeline then fails the session.
+                wav = [];
+                captureStopFault = ex;
+            }
+            finally
+            {
+                Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
+            }
+
+            // Capture ends with the microphone; streaming finalization below is measured on its own.
+            if (telemetrySessionId is { } capturedSessionId)
+            {
+                _telemetry.EndCapture(capturedSessionId);
+            }
+
             var recoveredPartialPreview = await StopPartialTranscriptionSessionAsync();
+            lock (_liveCleanupLock)
+            {
+                stoppedLiveCleanup = _liveCleanupDraft;
+                _liveCleanupDraft = null;
+                stoppedLiveCleanup?.StopScheduling();
+            }
 
             // Restore ducking/media BEFORE awaiting the background snapshot: that wait can now
             // run up to 5 s (browser URL + deferred reference-context capture), and the user has
@@ -928,6 +1685,7 @@ public sealed class DictationOrchestrator : IDisposable
             StreamingTranscriptionCoordinator? stoppedStreamingCoordinator;
             CancellationTokenSource? stoppedStreamingStartupCts;
             RecordingContext recordingContext;
+            var learningConsent = _settings.Current.TargetAppCorrectionLearningEnabled;
             lock (_recordingSessionLock)
             {
                 var stoppedSessionId = _recordingSession;
@@ -936,12 +1694,14 @@ public sealed class DictationOrchestrator : IDisposable
                 stoppedStreamingStartupCts = _streamingStartupCts;
                 var stoppedStreamingProviderId = _streamingProviderId;
                 var stoppedStreamingModelId = _streamingModelId;
-                var stoppedStreamingLanguageHint = _streamingLanguageHint;
+                var stoppedLanguageSelection = _streamingLanguageSelection;
+                var stoppedLanguageHints = _streamingLanguageHints;
                 _streamingCoordinator = null;
                 _streamingStartupCts = null;
                 _streamingProviderId = null;
                 _streamingModelId = null;
-                _streamingLanguageHint = null;
+                _streamingLanguageSelection = LanguageSelection.Automatic;
+                _streamingLanguageHints = [];
 
                 // Re-gate the captured context on the final (possibly URL-rematched) profile's
                 // toggles so a rematch to a profile that disables a source drops that source.
@@ -958,8 +1718,6 @@ public sealed class DictationOrchestrator : IDisposable
                     _recordingAppProcess,
                     _recordingAppTitle,
                     _recordingAppUrl,
-                    finalScreenContext,
-                    finalClipboardContext,
                     _recordingWindowId,
                     _recordingProfile,
                     recoveredPartialPreview,
@@ -967,9 +1725,27 @@ public sealed class DictationOrchestrator : IDisposable
                     false,
                     stoppedStreamingProviderId,
                     stoppedStreamingModelId,
-                    stoppedStreamingLanguageHint,
+                    stoppedLanguageSelection,
+                    stoppedLanguageHints,
                     snapshotCts?.Token ?? CancellationToken.None
-                );
+                )
+                {
+                    ScreenContext = finalScreenContext,
+                    ClipboardContext = finalClipboardContext,
+                    // Read WITHOUT _overlayStateLock on purpose: this runs under
+                    // _recordingSessionLock, and taking _overlayStateLock here would invert
+                    // the _overlayStateLock -> _recordingSessionLock order the transient
+                    // feedback gate takes (a real deadlock). The toggle gate's fences
+                    // already order this read against the acquire.
+                    OverlayToken = _overlayToken,
+                    LiveCleanup = stoppedLiveCleanup,
+                    // Consent withdrawn mid-recording means the captured element must not be touched again.
+                    // TextInsertionService re-checks consent right before it touches the element.
+                    LockedFocusField = learningConsent ? _recordingLockedField : null,
+                    TargetWindow = _recordingTargetWindow,
+                    IsWaylandSession = _commands.IsWaylandSession,
+                    TargetField = learningConsent ? _recordingTargetField : null,
+                };
 
                 _recordingAppProcess = null;
                 _recordingAppTitle = null;
@@ -977,169 +1753,281 @@ public sealed class DictationOrchestrator : IDisposable
                 _recordingScreenContext = null;
                 _recordingClipboardContext = null;
                 _recordingWindowId = null;
+                _recordingLockedField = null;
+                _recordingTargetWindow = null;
+                _recordingTargetField = null;
                 _recordingProfile = null;
                 _recordingStart = default;
             }
 
-            if (stoppedStreamingCoordinator is not null)
-            {
-                _audio.LiveFrameSink = null;
-            }
+            _telemetry.Tag(recordingContext.SessionId, "profile.used",
+                recordingContext.Profile is not null ? "true" : "false");
 
             // Release the gate now that capture is torn down and context is
             // snapshotted. A new StartAsync can record while transcription runs.
+            // Reserve this session's insertion-order slot before releasing the
+            // gate so reservations happen in strict session-start order — a new
+            // StartAsync's own future stop cannot reach this point until this one
+            // has passed it (audit §2 H3).
+            _insertionOrder.Reserve(recordingContext.SessionId);
+            insertionOrderSessionId = recordingContext.SessionId;
+
             _toggleGate.Release();
             gateReleased = true;
 
-            if (canceledThisStop)
-            {
-                // User hit Escape while still recording: clean up audio/media
-                // (already done above) and surface "Canceled" without saving
-                // the WAV or running transcription.
-                SetOverlayState(state =>
-                    state with
-                    {
-                        IsOverlayVisible = true,
-                        ShowFeedback = true,
-                        FeedbackText = Localization.Loc.Instance["Overlay.Canceled"],
-                        FeedbackIsError = false,
-                        IsRecording = false,
-                        StatusText = Localization.Loc.Instance["Overlay.Canceled"],
-                        PartialText = null,
-                        SessionStartedAtUtc = null
-                    }
-                );
-                StatusMessage?.Invoke(this, "Canceled");
-                _models.PluginManager.EventBus.Publish(
-                    new RecordingStoppedEvent
-                    {
-                        DurationSeconds = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(
-                            wav
-                        )
-                    }
-                );
-                _ = await TeardownStreamingSessionAsync(
-                    stoppedStreamingCoordinator,
-                    stoppedStreamingStartupCts,
-                    false,
-                    CancellationToken.None
-                );
-                FinalizeSession(recordingContext.SessionId, "canceled", "Canceled");
-                return;
-            }
-
-            SetOverlayState(state =>
-                state with
-                {
-                    IsOverlayVisible = true,
-                    ShowFeedback = false,
-                    FeedbackText = null,
-                    FeedbackIsError = false,
-                    IsRecording = false,
-                    StatusText = Localization.Loc.Instance["Overlay.Processing"],
-                    SessionStartedAtUtc = null
-                }
-            );
-            var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
-            _models.PluginManager.EventBus.Publish(
-                new RecordingStoppedEvent { DurationSeconds = duration }
-            );
-
-            var shortSpeechDecision = LinuxDictationShortSpeechPolicy.Classify(
-                duration,
-                LinuxDictationShortSpeechPolicy.ComputePeakLevel(wav),
-                _settings.Current.TranscribeShortQuietClipsAggressively
-            );
-
-            // Transcribe intentionally falls through to the normal transcription path below.
-            // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
-            switch (shortSpeechDecision)
-            {
-                case LinuxShortSpeechDecision.DiscardTooShort:
-                    SetOverlayState(state =>
-                        state with
-                        {
-                            IsOverlayVisible = true,
-                            ShowFeedback = true,
-                            FeedbackText = Localization.Loc.Instance["Overlay.TooShort"],
-                            FeedbackIsError = true,
-                            IsRecording = false,
-                            StatusText = Localization.Loc.Instance["Overlay.TooShort"],
-                            PartialText = null
-                        }
-                    );
-                    StatusMessage?.Invoke(this, "Too short");
-                    _ = await TeardownStreamingSessionAsync(
-                        stoppedStreamingCoordinator,
-                        stoppedStreamingStartupCts,
-                        false,
-                        CancellationToken.None
-                    );
-                    FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
-                    return;
-                case LinuxShortSpeechDecision.DiscardNoSpeech:
-                    SetOverlayState(state =>
-                        state with
-                        {
-                            IsOverlayVisible = true,
-                            ShowFeedback = true,
-                            FeedbackText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                            FeedbackIsError = true,
-                            IsRecording = false,
-                            StatusText = Localization.Loc.Instance["Overlay.NoSpeech"],
-                            PartialText = null
-                        }
-                    );
-                    StatusMessage?.Invoke(this, "No speech detected");
-                    _ = await TeardownStreamingSessionAsync(
-                        stoppedStreamingCoordinator,
-                        stoppedStreamingStartupCts,
-                        false,
-                        CancellationToken.None
-                    );
-                    FinalizeSession(recordingContext.SessionId, "discarded", "No speech detected");
-                    return;
-            }
-
-            // Streaming finalize must run BEFORE pad/save so the EOF grace-window
-            // flush captures any trailing partials. Read fault state from the
-            // just-torn-down coordinator, never from a shared field a racing
-            // StartAsync could have reset.
-            if (stoppedStreamingCoordinator is not null)
-            {
-                var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
-                var (streamingFinalText, streamingFaulted) = await TeardownStreamingSessionAsync(
-                    stoppedStreamingCoordinator,
-                    stoppedStreamingStartupCts,
-                    true,
-                    streamingCancelToken
-                );
-                recordingContext = recordingContext with
-                {
-                    StreamingFinalText = streamingFinalText, StreamingFaulted = streamingFaulted
-                };
-            }
-
-            wav = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(wav, duration);
-            duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
-
-            var path = _sessionAudioFiles.SaveDictationCapture(wav);
-            RecordingCaptured?.Invoke(this, path);
-            Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
-
+            // Single terminal guard (audit §2 H1): every post-stop step below
+            // can throw, and the session id must leave `_inFlightTracker` no
+            // matter which step fails — `RunAsync`'s finally is the chokepoint
+            // that guarantees that. The catch below additionally turns an
+            // otherwise-silent failure (e.g. disk-full saving the WAV, a
+            // throwing RecordingCaptured subscriber) into a published "failed"
+            // terminal and visible overlay feedback instead of leaving
+            // IsSessionInFlight stuck true and the overlay on "Processing…"
+            // forever.
             try
             {
-                await TranscribeAndInsertAsync(wav, path, duration, recordingContext);
+                await _inFlightTracker.RunAsync(recordingContext.SessionId, async () =>
+                {
+                    if (canceledThisStop)
+                    {
+                        // User hit Escape while still recording: clean up audio/media
+                        // (already done above) and surface "Canceled" without saving
+                        // the WAV or running transcription.
+                        SetOverlayState(recordingContext, state =>
+                            state with
+                            {
+                                IsOverlayVisible = true,
+                                ShowFeedback = true,
+                                FeedbackText = Localization.Loc.Instance["Overlay.Canceled"],
+                                FeedbackIsError = false,
+                                ActionResultUrl = null,
+                                NotificationIconName = null,
+                                FeedbackDurationMilliseconds = null,
+                                IsRecording = false,
+                                StatusText = Localization.Loc.Instance["Overlay.Canceled"],
+                                PartialText = null,
+                                SessionStartedAtUtc = null,
+                            }
+                        );
+                        StatusMessage?.Invoke(this, "Canceled");
+                        _models.PluginManager.EventBus.Publish(
+                            new RecordingStoppedEvent
+                            {
+                                DurationSeconds = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(
+                                    wav
+                                ),
+                            }
+                        );
+                        _ = await TeardownStreamingSessionAsync(
+                            stoppedStreamingCoordinator,
+                            stoppedStreamingStartupCts,
+                            false,
+                            CancellationToken.None
+                        );
+                        FinalizeSession(recordingContext.SessionId, "canceled", "Canceled");
+                        return;
+                    }
+
+                    if (captureStopFault is not null)
+                    {
+                        _models.PluginManager.EventBus.Publish(
+                            new RecordingStoppedEvent { DurationSeconds = 0 }
+                        );
+                        _ = await TeardownStreamingSessionAsync(
+                            stoppedStreamingCoordinator,
+                            stoppedStreamingStartupCts,
+                            false,
+                            CancellationToken.None
+                        );
+                        ExceptionDispatchInfo.Throw(captureStopFault);
+                    }
+
+                    SetOverlayState(recordingContext, state =>
+                        state with
+                        {
+                            IsOverlayVisible = true,
+                            ShowFeedback = false,
+                            FeedbackText = null,
+                            FeedbackIsError = false,
+                            ActionResultUrl = null,
+                            NotificationIconName = null,
+                            FeedbackDurationMilliseconds = null,
+                            IsRecording = false,
+                            StatusText = Localization.Loc.Instance["Overlay.Processing"],
+                            SessionStartedAtUtc = null,
+                        }
+                    );
+                    var duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
+                    _telemetry.Measure(recordingContext.SessionId, "audio.duration_s", duration, "second");
+                    _models.PluginManager.EventBus.Publish(
+                        new RecordingStoppedEvent { DurationSeconds = duration }
+                    );
+
+                    var shortSpeechDecision = LinuxDictationShortSpeechPolicy.Classify(
+                        duration,
+                        LinuxDictationShortSpeechPolicy.ComputePeakLevel(wav),
+                        _settings.Current.TranscribeShortQuietClipsAggressively
+                    );
+
+                    // Transcribe intentionally falls through to the normal transcription path below.
+                    // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
+                    switch (shortSpeechDecision)
+                    {
+                        case LinuxShortSpeechDecision.DiscardTooShort:
+                            ReportShortSpeechDiscardOutcome(
+                                LinuxShortSpeechDecision.DiscardTooShort,
+                                recordingContext,
+                                ReportStatus,
+                                ShowFeedback
+                            );
+                            _ = await TeardownStreamingSessionAsync(
+                                stoppedStreamingCoordinator,
+                                stoppedStreamingStartupCts,
+                                false,
+                                CancellationToken.None
+                            );
+                            FinalizeSession(recordingContext.SessionId, "discarded", "Too short");
+                            return;
+                        case LinuxShortSpeechDecision.DiscardNoSpeech:
+                            ReportShortSpeechDiscardOutcome(
+                                LinuxShortSpeechDecision.DiscardNoSpeech,
+                                recordingContext,
+                                ReportStatus,
+                                ShowFeedback
+                            );
+                            _ = await TeardownStreamingSessionAsync(
+                                stoppedStreamingCoordinator,
+                                stoppedStreamingStartupCts,
+                                false,
+                                CancellationToken.None
+                            );
+                            FinalizeSession(
+                                recordingContext.SessionId,
+                                "discarded",
+                                "No speech detected"
+                            );
+                            return;
+                    }
+
+                    // Streaming finalize must run BEFORE pad/save so the EOF grace-window
+                    // flush captures any trailing partials. Read fault state from the
+                    // just-torn-down coordinator, never from a shared field a racing
+                    // StartAsync could have reset.
+                    if (stoppedStreamingCoordinator is not null)
+                    {
+                        var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
+                        var streamingFinalizeOperation =
+                            _telemetry.Child(recordingContext.SessionId, "streaming.finalize");
+                        var (streamingFinalText, streamingFaulted, streamingDetectedLanguage) =
+                            await TeardownStreamingSessionAsync(
+                                stoppedStreamingCoordinator,
+                                stoppedStreamingStartupCts,
+                                true,
+                                streamingCancelToken
+                            );
+                        streamingFinalizeOperation?.Finish(
+                            streamingFaulted ? DiagnosticsOutcome.Failed : DiagnosticsOutcome.Ok
+                        );
+                        recordingContext = recordingContext with
+                        {
+                            StreamingFinalText = streamingFinalText,
+                            StreamingFaulted = streamingFaulted,
+                            StreamingDetectedLanguage = streamingDetectedLanguage,
+                        };
+                    }
+
+                    // Keep the recorded (pre-padding) length: PadWavForFinalTranscription adds ~0.3s of
+                    // silence, which would push a borderline-short silent clip past the hallucination filter's
+                    // duration cutoff and let a stock "Thank you." artifact through.
+                    var recordedDuration = duration;
+                    wav = LinuxDictationShortSpeechPolicy.PadWavForFinalTranscription(
+                        wav,
+                        duration
+                    );
+                    duration = LinuxDictationShortSpeechPolicy.ComputeDurationSeconds(wav);
+
+                    // The text matters more than the recording: when the capture cannot be written,
+                    // transcription continues from memory.
+                    var path = _sessionAudioFiles.TrySaveDictationCapture(wav, out var saveFailure);
+                    if (path is null)
+                    {
+                        _errorLog.AddEntry(
+                            $"Dictation audio could not be saved ({saveFailure?.GetType().Name}); transcription continues without a recording to retry from.",
+                            ErrorCategory.Recording
+                        );
+                    }
+                    else
+                    {
+                        RecordingCaptured?.Invoke(this, path);
+                        Trace.WriteLine($"[Dictation] Captured → {path} ({wav.Length} bytes)");
+                    }
+
+                    await TranscribeAndInsertAsync(
+                        wav,
+                        path,
+                        duration,
+                        recordedDuration,
+                        recordingContext
+                    );
+                });
             }
-            finally
+            catch (Exception ex) when (
+                ClassifyPostStopTerminal(ex, recordingContext.CancelToken) == "canceled"
+            )
             {
-                // Guarantee the session leaves the in-flight set even on early
-                // exception or cancel before a terminal status is published.
-                ClearSessionInFlight(recordingContext.SessionId);
+                Trace.WriteLine("[Dictation] Post-stop pipeline canceled before completion.");
+                PublishSessionTerminal(recordingContext.SessionId, "canceled", "Canceled");
+            }
+            catch (Exception ex)
+            {
+                // Reached only for a step BEFORE TranscribeAndInsertAsync's own
+                // try/catch chain (a failed capture stop, streaming teardown, WAV
+                // padding, capture persistence, the RecordingCaptured event), or a
+                // rethrow from its `await using` lease disposal. Either way the session must
+                // not stay "in_progress" forever (audit §2 H1).
+                CaptureDiagnostic(ex, "dictation.post-stop",
+                    recordingContext.StreamingProviderId, recordingContext.StreamingModelId);
+                var safeMessage = SanitizeForDisplay(ex.Message, recordingContext.StreamingFinalText, recordingContext.RecoveredPartialPreview);
+                Trace.WriteLine($"[Dictation] Post-stop pipeline failed before completion: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
+                // Publish the terminal result FIRST: RunAsync's finally has
+                // already dropped the id from the in-flight set, so a throw from
+                // any log/UI callback below must not stop the "failed" result
+                // from being recorded — otherwise the session would poll as
+                // not_found forever, defeating audit §2 H1.
+                PublishSessionTerminal(recordingContext.SessionId, "failed", safeMessage);
+                _errorLog.AddEntry(
+                    $"Dictation capture could not be saved or transcribed ({safeMessage}).",
+                    ErrorCategory.Recording
+                );
+                ReportStatus(
+                    recordingContext,
+                    Localization.Loc.Instance["Overlay.CaptureSaveFailed"]
+                );
+                ShowFeedback(
+                    recordingContext,
+                    Localization.Loc.Instance["Overlay.CaptureSaveFailed"],
+                    true
+                );
             }
         }
         finally
         {
+            if (telemetrySessionId is { } terminalSessionId)
+            {
+                _telemetry.Finish(terminalSessionId, DiagnosticsOutcome.Aborted);
+            }
+
+            // Safety net: every early-discard branch above and every early return
+            // in TranscribeAndInsertAsync that never reaches the insertion call
+            // must still release this session's insertion-order slot, or a
+            // successor blocked in WaitForTurnAsync would wait forever. Release is
+            // idempotent, so this is a no-op on the common path, which already
+            // released around the insertion call.
+            if (insertionOrderSessionId is { } reservedSessionId)
+            {
+                _insertionOrder.Release(reservedSessionId);
+            }
+
             // Restore ducking/media only when there was an active recording and
             // the normal cleanup path didn't already run (earlyCleanupDone).
             if (wasRecording && !earlyCleanupDone)
@@ -1159,10 +2047,12 @@ public sealed class DictationOrchestrator : IDisposable
                 catch (Exception ex)
                 {
                     Trace.WriteLine(
-                        $"[Dictation] Active dictation CTS dispose failed: {ex.Message}"
+                        $"[Dictation] Active dictation CTS dispose failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                     );
                 }
             }
+
+            stoppedLiveCleanup?.Dispose();
 
             if (!gateReleased)
             {
@@ -1181,11 +2071,16 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     public bool IsSessionInFlight(int sessionId)
     {
-        lock (_recordingSessionLock)
-        {
-            return _inFlightSessions.Contains(sessionId);
-        }
+        return _inFlightTracker.Contains(sessionId);
     }
+
+    /// <summary>
+    ///     True while any dictation is starting, recording or still delivering its text, so
+    ///     another insertion could race its clipboard snapshot and restore.
+    /// </summary>
+    // The in-flight set clears when the result is published, before the text is inserted;
+    // the insertion-order slot is held until insertion finishes.
+    public bool HasDictationInFlight => _inFlightTracker.HasActivity || _insertionOrder.HasPending;
 
     /// <summary>
     ///     Maps an overlay StatusText to one of the <c>typewhisper status</c>
@@ -1235,6 +2130,36 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     /// <summary>
+    ///     The localized reason the profile's prompt action cannot run, or null when it can (or when
+    ///     the profile binds no prompt action). Exposed internally for unit testing.
+    /// </summary>
+    internal static string? DescribeProfilePromptActionProviderProblem(
+        Profile? profile,
+        IReadOnlyList<PromptAction> enabledActions,
+        PromptProcessingService promptProcessing
+    )
+    {
+        var action = ResolveAutoPromptAction(profile?.PromptActionId, enabledActions);
+        return action is null
+            ? null
+            : promptProcessing.TryDescribeSelectedProviderProblem(action.ProviderOverride);
+    }
+
+    /// <summary>
+    ///     The localized refusal for a translate task (the profile's, else the global one) on
+    ///     the effective model, or null when the task is transcribe or the model can run it.
+    /// </summary>
+    internal static string? DescribeTranslationRejection(
+        Profile? profile,
+        AppSettings settings,
+        ModelManagerService models
+    ) =>
+        string.Equals(profile?.SelectedTask ?? settings.TranscriptionTask, "translate",
+            StringComparison.OrdinalIgnoreCase)
+            ? models.GetTranslationRejection(profile?.TranscriptionModelOverride ?? settings.SelectedModelId)
+            : null;
+
+    /// <summary>
     ///     Selects the raw text for post-processing, falling back to the
     ///     streaming live preview when batch transcription returned nothing.
     ///     Exposed internally for unit testing.
@@ -1263,6 +2188,138 @@ public sealed class DictationOrchestrator : IDisposable
         return "";
     }
 
+    /// <summary>
+    ///     Null when <paramref name="usedPreviewFallback" /> is true: that text came from
+    ///     the live preview, which already ran the side-effect-free PreviewCorrections on
+    ///     every tick — re-running ApplyCorrections here would re-persist usage stats and,
+    ///     since corrections aren't guaranteed idempotent, transform the text a second
+    ///     time (audit §2 M3).
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static Func<string, string>? SelectFinalDictionaryCorrector(
+        bool usedPreviewFallback,
+        Func<string, string> applyCorrections
+    )
+    {
+        return usedPreviewFallback ? null : applyCorrections;
+    }
+
+    // Only an engine with native hints streams over several languages; any other engine received
+    // just the primary.
+    internal static bool StreamedSeveralLanguages(bool engineSupportsLanguageHints, int hintCount) =>
+        engineSupportsLanguageHints && hintCount > 1;
+
+    internal static string? ResolveStreamingResultLanguage(
+        string? streamingDetectedLanguage,
+        bool streamedSeveralLanguages,
+        string? configuredLanguage
+    ) => streamingDetectedLanguage ?? (streamedSeveralLanguages ? null : configuredLanguage);
+
+    // Streaming text stands in for the batch call only when it was produced for this engine,
+    // language selection and hint list, no translation task is requested and — since a stream
+    // over several languages may report no language, which the translation step needs to decide
+    // whether the text already is the target — no translation target is set for such a stream.
+    internal static bool CanReuseStreamingText(
+        string? streamingFinalText,
+        bool streamingFaulted,
+        bool engineMatches,
+        LanguageSelection streamingSelection,
+        IReadOnlyList<string> streamingHints,
+        LanguageSelection selection,
+        IReadOnlyList<string> hints,
+        bool translate,
+        bool engineSupportsLanguageHints,
+        string? translationTarget
+    ) =>
+        !string.IsNullOrWhiteSpace(streamingFinalText)
+        && !streamingFaulted
+        && engineMatches
+        && streamingSelection == selection
+        && streamingHints.SequenceEqual(hints, StringComparer.OrdinalIgnoreCase)
+        && !translate
+        && (
+            !StreamedSeveralLanguages(engineSupportsLanguageHints, hints.Count)
+            || string.IsNullOrWhiteSpace(translationTarget)
+        );
+
+    /// <summary>
+    ///     Resolves the language post-processing should treat the transcript as.
+    ///     "en" only when a translate task was requested AND the engine supports
+    ///     translation — engines with <c>SupportsTranslation=false</c> ignore the
+    ///     translate task and return source-language text; otherwise the detected
+    ///     (else configured) source language (audit §2 M1).
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static string? ResolvePostProcessingSourceLanguage(
+        string? detectedLanguage,
+        string? configuredLanguage,
+        bool translateRequested,
+        bool engineSupportsTranslation
+    )
+    {
+        var engineTranslatedToEnglish = translateRequested && engineSupportsTranslation;
+        return engineTranslatedToEnglish ? "en" : detectedLanguage ?? configuredLanguage;
+    }
+
+    internal static ResolvedSpokenFormattingStrategy ResolveSpokenFormattingStrategy(
+        SpokenFormattingStrategyResolver resolver,
+        string? engineId,
+        string? modelId,
+        IReadOnlyList<string> languageHints,
+        string? postProcessingLanguage,
+        bool engineTranslated,
+        SpokenFormattingStrategy globalDefault)
+    {
+        // Engine translation makes the transcript language authoritative over source-language hints.
+        return resolver.Resolve(engineId, modelId,
+            engineTranslated && postProcessingLanguage is not null ? [postProcessingLanguage] : languageHints,
+            postProcessingLanguage, globalDefault);
+    }
+
+    /// <summary>
+    ///     True when a prompt action explicitly names a target action plugin but
+    ///     no loaded plugin matches (disabled, removed, or renamed) — unlike "no
+    ///     action plugin configured", which still falls through to plain text
+    ///     insertion. An explicit-but-missing destination must fail with a routing
+    ///     error, not silently substitute another destination (audit §2 M2).
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static bool IsActionPluginTargetUnavailable(
+        string? targetActionPluginId,
+        bool actionPluginResolved
+    )
+    {
+        return !string.IsNullOrWhiteSpace(targetActionPluginId) && !actionPluginResolved;
+    }
+
+    /// <summary>
+    ///     True when a profile explicitly names a prompt action but no automatic action
+    ///     resolves (disabled, removed, or manual-only). An unavailable action must fail
+    ///     with a routing error rather than silently insert unprocessed text.
+    ///     Exposed internally for unit testing.
+    /// </summary>
+    internal static bool IsPromptActionUnavailable(string? promptActionId, bool promptActionResolved)
+    {
+        return !string.IsNullOrWhiteSpace(promptActionId) && !promptActionResolved;
+    }
+
+    /// <summary>
+    ///     Classifies a thrown insertion/action exception into the InsertionResult that
+    ///     should be recorded in Recents/History instead of silently dropping the
+    ///     transcription (audit §2 M6). Exposed internally for unit testing.
+    /// </summary>
+    internal static InsertionResult ClassifyThrownInsertionFailure(bool viaActionPlugin)
+    {
+        return viaActionPlugin ? InsertionResult.ActionFailed : InsertionResult.Failed;
+    }
+
+    internal static bool IsInsertionFailure(InsertionResult insertion, bool threw)
+    {
+        return threw || insertion is InsertionResult.Failed or InsertionResult.ActionFailed
+            or InsertionResult.ActionUnavailable or InsertionResult.MissingClipboardTool
+            or InsertionResult.MissingPasteTool;
+    }
+
     public event EventHandler<string>? RecordingCaptured; // arg = WAV file path
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? TranscriptionCompleted;
@@ -1279,22 +2336,57 @@ public sealed class DictationOrchestrator : IDisposable
 
     private async Task TranscribeAndInsertAsync(
         byte[] wav,
-        string wavPath,
+        string? wavPath,
         double duration,
+        double recordedDuration,
         RecordingContext context
     )
     {
+        context = context with { TranscriptionTaskUsed = ResolveTranscriptionTask(context) };
         var cancelToken = context.CancelToken;
+        string? rawText = null;
+        string? finalText = null;
+        string? failurePrompt = null;
+
+        // Attach an LLM-provenance sink only when it will actually be persisted:
+        // capture piggybacks history storage, so both toggles must be on. Left
+        // null otherwise, so the prompt chokepoint records (and costs) nothing.
+        if (_settings.Current is { SaveToHistoryEnabled: true, CaptureLlmProvenance: true })
+        {
+            context = context with { Capture = new LlmCallCapture() };
+        }
+
         var effectiveModelId =
             context.Profile?.TranscriptionModelOverride ?? _settings.Current.SelectedModelId;
+
+        // The task and model are only final once the profile has settled, so an ordinary start
+        // can only be refused here, before the model loads. The capture stays in history for retry.
+        if (context.TranscriptionTaskUsed == "translate"
+            && _models.GetTranslationRejection(effectiveModelId) is { } translationRejection)
+        {
+            Trace.WriteLine($"[Dictation] Model '{effectiveModelId}' cannot translate; transcription refused.");
+            AddFailedHistoryRecord(context, wavPath, duration, "", TranscriptionRecordStatus.TranscriptionFailed,
+                translationRejection, _models.GetTranscriptionPlugin(effectiveModelId)?.ProviderId ?? "unknown",
+                effectiveModelId);
+            ReportStatus(context, translationRejection);
+            ShowFeedback(context, translationRejection, true);
+            PublishSessionTerminal(context.SessionId, "failed", translationRejection);
+            return;
+        }
 
         // Exclusive lease serializes model-load + transcribe so a concurrent
         // dictation cannot swap the plugin's native model mid-flight. Held for
         // the whole method; `await using` releases on every early return.
         ModelManagerService.TranscriptionLease lease;
+        _telemetry.Tag(context.SessionId, "engine.model", TelemetryNames.SanitizeModelId(effectiveModelId));
+        var modelLoadOperation = _telemetry.Child(context.SessionId, "model.load");
         try
         {
-            lease = await _models.AcquireTranscriptionAsync(effectiveModelId, cancelToken);
+            lease = await _models.AcquireTranscriptionAsync(
+                effectiveModelId,
+                cancellationToken: cancelToken
+            );
+            modelLoadOperation?.Finish(DiagnosticsOutcome.Ok);
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
@@ -1306,16 +2398,21 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
+            CaptureDiagnostic(ex, "dictation.model-load", modelId: effectiveModelId);
+            AddFailedHistoryRecord(context, wavPath, duration, "", TranscriptionRecordStatus.TranscriptionFailed,
+                ex.Message, _models.ActiveTranscriptionPlugin?.ProviderId ?? "unknown", effectiveModelId);
+            var safeMessage = SanitizeForDisplay(ex.Message, rawText, finalText, failurePrompt,
+                context.StreamingFinalText, context.RecoveredPartialPreview);
             Trace.WriteLine(
-                $"[Dictation] Failed to load effective model '{effectiveModelId}': {ex}"
+                $"[Dictation] Failed to load effective model '{effectiveModelId}': {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}"
             );
             _errorLog.AddEntry(
-                $"Transcription model '{effectiveModelId}' failed to load: {ex.Message}",
+                $"Transcription model '{effectiveModelId}' failed to load: {safeMessage}",
                 ErrorCategory.Transcription
             );
-            ReportStatus(context, $"Failed to load configured model: {ex.Message}");
+            ReportStatus(context, $"Failed to load configured model: {safeMessage}");
             ShowFeedback(context, "Model load failed.", true);
-            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+            PublishSessionTerminal(context.SessionId, "failed", safeMessage);
             return;
         }
 
@@ -1327,29 +2424,38 @@ public sealed class DictationOrchestrator : IDisposable
         // race a concurrent dictation's model swap.
         var engineProviderId = plugin.ProviderId;
         var engineModelId = plugin.SelectedModelId;
+        _telemetry.Tag(context.SessionId, "engine.provider", engineProviderId);
+        _telemetry.Tag(context.SessionId, "engine.model", TelemetryNames.SanitizeModelId(engineModelId));
+        var engineSupportsTranslation = plugin.SupportsTranslation;
 
         ReportStatus(context, $"Transcribing via {plugin.ProviderDisplayName}…");
 
         var transcriptionCompletedPublished = false;
         try
         {
-            var effectiveLanguage = context.Profile?.InputLanguage ?? _settings.Current.Language;
-            // ReSharper disable once InlineTemporaryVariable -- named local kept for readability over inlining into the pattern match.
-            var languageHint =
-                effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
+            // Resolve here, not at startup: the active-window snapshot settles
+            // context.Profile asynchronously, so a matched profile's
+            // InputLanguage is only known once the recording has stopped.
+            var resolvedHints = LanguageSelectionResolver.ResolveHints(context.Profile, _settings.Current);
+            var (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(
+                LanguageSelectionResolver.ResolvePrimary(resolvedHints),
+                resolvedHints
+            );
+            var configuredLanguage = languageSelection.LanguageTag;
             var translate = string.Equals(
-                context.Profile?.SelectedTask ?? _settings.Current.TranscriptionTask,
+                ResolveTranscriptionTask(context),
                 "translate",
                 StringComparison.OrdinalIgnoreCase
             );
 
             PluginTranscriptionResult? result;
+            var transcribeOperation = _telemetry.Child(context.SessionId, "transcribe");
             try
             {
                 // Reject streaming if the engine or language changed mid-session
                 // (profile override resolved post-start, or global vs. profile
-                // InputLanguage mismatch). Also reject when translate is requested —
-                // streaming doesn't support it.
+                // InputLanguage mismatch). Also reject when translate is
+                // requested — streaming doesn't support it.
                 var streamingEngineMatches =
                     context.StreamingProviderId is not null
                     && string.Equals(
@@ -1362,43 +2468,74 @@ public sealed class DictationOrchestrator : IDisposable
                         plugin.SelectedModelId,
                         StringComparison.Ordinal
                     );
-                var streamingLanguageMatches = string.Equals(
-                    context.StreamingLanguageHint,
-                    languageHint,
-                    StringComparison.Ordinal
+                var streamedSeveralLanguages = StreamedSeveralLanguages(
+                    plugin.SupportsLanguageHints,
+                    languageHints.Count
                 );
-
                 if (
-                    !string.IsNullOrWhiteSpace(context.StreamingFinalText)
-                    && !context.StreamingFaulted
-                    && streamingEngineMatches
-                    && streamingLanguageMatches
-                    && !translate
+                    CanReuseStreamingText(
+                        context.StreamingFinalText,
+                        context.StreamingFaulted,
+                        streamingEngineMatches,
+                        context.StreamingLanguageSelection,
+                        context.StreamingLanguageHints,
+                        languageSelection,
+                        languageHints,
+                        translate,
+                        plugin.SupportsLanguageHints,
+                        context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage
+                    )
                 )
                 {
-                    // Clean streaming result — skip the redundant batch call.
+                    // Streaming finalized cleanly within its deadlines — skip
+                    // the redundant batch call.
                     result = new PluginTranscriptionResult(
                         context.StreamingFinalText!,
-                        languageHint,
+                        ResolveStreamingResultLanguage(
+                            context.StreamingDetectedLanguage,
+                            streamedSeveralLanguages,
+                            configuredLanguage
+                        ),
                         DurationSeconds: duration
                     );
+                    if (streamedSeveralLanguages)
+                    {
+                        // The stream could be any hinted language, so post-processing and
+                        // readback get no configured language either; the hints stay
+                        // available to them as candidates.
+                        configuredLanguage = null;
+                    }
                 }
                 else
                 {
-                    // Streaming faulted or produced nothing — fall back to batch
-                    // on the captured WAV. The audio tap is non-destructive so
-                    // the WAV is complete regardless of streaming state.
+                    // Streaming faulted, timed out, or produced nothing — fall
+                    // back to batch on the captured WAV. The audio tap is
+                    // non-destructive so the WAV is complete regardless of
+                    // streaming state.
                     result = await plugin.TranscribeAsync(
                         wav,
-                        languageHint,
+                        languageSelection,
+                        languageHints,
                         translate,
-                        null,
+                        TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
                         cancelToken
                     );
+                    // Trim before the preview fallback and gates so they see the remaining text.
+                    // Honor the aggressive short-clip setting like the two gates below.
+                    if (!_settings.Current.TranscribeShortQuietClipsAggressively)
+                    {
+                        var trimmedResult = TerminalHallucinationTrimmer.Trim(result);
+                        if (!ReferenceEquals(result, trimmedResult))
+                        {
+                            Trace.WriteLine("[Dictation] Stripped trailing Whisper hallucination segment.");
+                        }
+                        result = trimmedResult;
+                    }
                 }
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
+                transcribeOperation?.Finish(DiagnosticsOutcome.Cancelled);
                 Trace.WriteLine("[Dictation] Transcription canceled by user.");
                 ReportStatus(context, "Canceled");
                 ShowFeedback(context, "Canceled", false, true);
@@ -1407,25 +2544,35 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Transcription failed: {ex}");
+                transcribeOperation?.Finish(DiagnosticsOutcome.Failed);
+                CaptureDiagnostic(ex, "dictation.transcribe", engineProviderId, engineModelId);
+                AddFailedHistoryRecord(context, wavPath, duration, "", TranscriptionRecordStatus.TranscriptionFailed,
+                    LanguageSelectionUiMessage.From(ex), engineProviderId, engineModelId);
+                var userMessage = SanitizeForDisplay(LanguageSelectionUiMessage.From(ex), rawText, finalText, failurePrompt, context.StreamingFinalText, context.RecoveredPartialPreview);
+                var diagnosticMessage = TraceTranscriptionFailure(ex, context, rawText, finalText, failurePrompt);
                 _errorLog.AddEntry(
-                    $"Transcription failed via {plugin.ProviderDisplayName} ({engineModelId}): {ex.Message}",
+                    $"Transcription failed via {plugin.ProviderDisplayName} ({engineModelId}): {diagnosticMessage}",
                     ErrorCategory.Transcription
                 );
                 _models.PluginManager.EventBus.Publish(
                     new TranscriptionFailedEvent
                     {
-                        ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle
+                        ErrorMessage = diagnosticMessage, ModelId = engineModelId, AppName = context.AppTitle,
                     }
                 );
-                ReportStatus(context, $"Transcription failed: {ex.Message}");
-                _speechFeedback.AnnounceError(ex.Message);
-                ShowFeedback(context, "Transcription failed.", true);
-                PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+                var failureMessage = $"Transcription failed: {userMessage}";
+                ReportStatus(context, failureMessage);
+                TryPublishSessionSpeechFeedback(
+                    context,
+                    () => _speechFeedback.BeginAnnounceError(userMessage)
+                );
+                ShowFeedback(context, failureMessage, true);
+                PublishSessionTerminal(context.SessionId, "failed", userMessage);
                 return;
             }
             finally
             {
+                transcribeOperation?.Finish(DiagnosticsOutcome.Ok);
                 // Release the model lock now so a concurrent dictation isn't
                 // blocked by post-processing, insertion, and history below.
                 // ReSharper disable once DisposeOnUsingVariable -- intentional early dispose to release the lock; the using re-dispose at scope end is idempotent.
@@ -1433,7 +2580,13 @@ public sealed class DictationOrchestrator : IDisposable
             }
 
             // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- result comes from a plugin transcription call whose non-null annotation may not hold.
-            var rawText = SelectRawTextWithPreviewFallback(
+            _telemetry.Tag(context.SessionId, "language", result?.DetectedLanguage
+                ?? LanguageSelectionResolver.ResolveOrAutomatic(
+                    context.Profile?.InputLanguage, _settings.Current.Language).LanguageTag
+                ?? "auto");
+
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- result comes from a plugin transcription call whose non-null annotation may not hold.
+            rawText = SelectRawTextWithPreviewFallback(
                 result?.Text,
                 context.RecoveredPartialPreview,
                 out var usedPreviewFallback
@@ -1461,6 +2614,8 @@ public sealed class DictationOrchestrator : IDisposable
             // Skip the no-speech guard when the preview fallback fired: the
             // streaming session captured real words, so the engine's no-speech
             // verdict on the empty batch pass is exactly what the fallback recovers.
+            // A compound boolean guard reads clearer as an if than as a switch.
+            // ReSharper disable once ConvertIfStatementToSwitchStatement
             if (
                 !usedPreviewFallback
                 && result?.NoSpeechProbability is > 0.8f
@@ -1473,128 +2628,191 @@ public sealed class DictationOrchestrator : IDisposable
                 return;
             }
 
-            var pipelineContext = new PostProcessingContext
-            {
-                SourceLanguage = result?.DetectedLanguage ?? languageHint,
-                ActiveAppName = context.AppTitle,
-                ActiveAppProcessName = context.AppProcess,
-                ProfileName = context.Profile?.Name,
-                AudioDurationSeconds = duration
-            };
-
-            var promptAction = ResolvePromptAction(context);
-            if (context.Profile is not null)
+            // Whisper's stock silence artifacts ("Thank you.") slip past the no-speech gate above.
+            // Scope this to engines that report a no-speech probability — it's a Whisper-family
+            // signal, and applying it when the engine returns null (as many non-Whisper plugins do)
+            // would discard short real dictations like "you" or "bye" as hallucinations. Honor the
+            // aggressive short-clip setting too, exactly as the no-speech gate above does.
+            if (!usedPreviewFallback
+                && !_settings.Current.TranscribeShortQuietClipsAggressively
+                && result?.NoSpeechProbability is not null
+                && WhisperHallucinationFilter.IsLikelyHallucination(
+                    rawText,
+                    recordedDuration,
+                    result.NoSpeechProbability))
             {
                 Trace.WriteLine(
-                    $"[Dictation] Matched profile '{context.Profile.Name}' "
-                    + $"(process='{context.AppProcess ?? "<unknown>"}', "
-                    + $"url='{context.AppUrl ?? "<unknown>"}', "
-                    + $"promptAction='{promptAction?.Name ?? "<none>"}')."
+                    $"[Dictation] Discarded likely Whisper hallucination ('{rawText}', {recordedDuration:0.00}s)."
                 );
+                ReportStatus(context, "No speech detected.");
+                ShowFeedback(context, "No speech detected.", true);
+                PublishSessionTerminal(context.SessionId, "discarded", "No speech detected.");
+                return;
+            }
 
-                if (
-                    !string.IsNullOrWhiteSpace(context.Profile.PromptActionId)
-                    && promptAction is null
+            // Spoken command mode: a dictation that opens with the keyphrase is an
+            // instruction, not text to type. Route it to the LLM before cleanup so the
+            // command is neither mangled by post-processing nor typed literally.
+            if (
+                _settings.Current.CommandModeEnabled
+                && SpokenCommandKeyphrase.TryStrip(
+                    rawText,
+                    _settings.Current.CommandKeyphrase,
+                    out var spokenCommand
                 )
+            )
+            {
+                // Spoken commands insert through their own path (one-shot or
+                // streamed-while-typing), not the InsertTextAsync/
+                // ExecuteActionPluginAsync boundary this gate orders — their
+                // delivery is out of scope for audit §2 H3. Release now rather
+                // than hold a waiting successor for the whole LLM+typing round
+                // trip.
+                _insertionOrder.Release(context.SessionId);
+                var outcome = await RunSpokenCommandAsync(spokenCommand, context, cancelToken);
+                // A spoken command is still a dictation the user issued: always record
+                // statistics, and add a history entry only when history saving is enabled
+                // (with the LLM request/response captured on context.Capture) so it appears
+                // in the History list and Inspect panel like any other.
+                // RawText is the source the command acted on (selected text for an
+                // edit, the command itself for a create), so the raw→final diff reads
+                // "source → result".
+                if (outcome is not null)
                 {
-                    // Fail early before building the pipeline — no point running
-                    // lower-priority steps on a transcript we'll reject anyway.
-                    var message =
-                        $"Prompt action for profile '{context.Profile.Name}' is disabled or missing.";
-                    Trace.WriteLine(
-                        $"[Dictation] {message} actionId='{context.Profile.PromptActionId}'."
+                    AddSpokenCommandHistoryRecord(
+                        context,
+                        outcome.SourceText,
+                        outcome.Result,
+                        duration,
+                        result,
+                        wavPath,
+                        engineProviderId,
+                        engineModelId,
+                        outcome.InsertionStatus
                     );
-                    ReportStatus(context, message);
-                    throw new InvalidOperationException(message);
+                    _telemetry.Measure(context.SessionId, "transcript.chars", outcome.Result.Length, "none");
+                    _telemetry.Finish(context.SessionId, "ok");
+                }
+                else
+                {
+                    // A null outcome is a delivery failure; command failures already published a
+                    // terminal state, which makes this a no-op for them.
+                    _telemetry.Finish(context.SessionId, "insertion_failed");
+                }
+
+                return;
+            }
+
+            var postProcessingLanguage = ResolvePostProcessingSourceLanguage(
+                result?.DetectedLanguage,
+                configuredLanguage,
+                translate,
+                engineSupportsTranslation
+            );
+
+            var promptAction = ResolvePromptAction(context);
+            var promptActionId = context.Profile?.PromptActionId;
+            var promptActionUnavailable = IsPromptActionUnavailable(promptActionId, promptAction is not null);
+            if (promptActionUnavailable)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Configured prompt action '{promptActionId}' is unavailable "
+                    + "(disabled, removed, or manual-only) — routing as a failure instead of falling back to ordinary text insertion."
+                );
+            }
+            failurePrompt = promptAction?.SystemPrompt;
+            var translationTarget = context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
+            var cleanupLevel = ResolveCleanupLevel(context, promptAction);
+            _telemetry.Tag(context.SessionId, "cleanup.level", cleanupLevel.ToString());
+            var recordingId = Guid.NewGuid();
+            var timings = usedPreviewFallback ? [] : result?.TokenTimings ?? [];
+            var rescoreEligible = _vocabularyRescoring.IsEligible(
+                timings, translate, engineProviderId, engineModelId
+            );
+            var pipelineText = rawText;
+            if (rescoreEligible)
+            {
+                var rescoreOperation = _telemetry.Child(context.SessionId, "vocabulary_rescore");
+                try
+                {
+                    // Timings align against the engine text, so artifact cleanup re-runs afterwards.
+                    var refined = await _vocabularyRescoring.RefineAsync(
+                        new VocabularyRescoringInput(
+                            recordingId,
+                            result?.Text ?? rawText,
+                            wav,
+                            timings,
+                            translate,
+                            engineProviderId,
+                            engineModelId
+                        ),
+                        cancelToken
+                    );
+                    rescoreOperation?.Finish(
+                        refined.Error is null ? DiagnosticsOutcome.Ok : DiagnosticsOutcome.Failed
+                    );
+                    if (refined.Error is not null)
+                        Trace.WriteLine("[VocabularyRescoring] " + refined.Error);
+                    if (refined.Applied)
+                        pipelineText = LinuxDictationFinalTextPolicy.SelectRawText(refined.Text);
+                    // The service re-checks eligibility; a model or settings change in between
+                    // must not leave the text booster disabled as well.
+                    rescoreEligible = refined.Eligible;
+                }
+                catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
+                {
+                    rescoreOperation?.Finish(DiagnosticsOutcome.Cancelled);
+                    ReportStatus(context, "Canceled");
+                    ShowFeedback(context, "Canceled", false, true);
+                    PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
+                    return;
                 }
             }
 
-            var translationTarget =
-                context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
-            var cleanupLevel = ResolveCleanupLevel(context, promptAction);
-            var referenceContext = BuildReferenceContext(context);
-
-            var pluginProcessors = _models
-                .PluginManager.PostProcessors.Select(processor => new PluginPostProcessor(
-                    processor.Priority,
-                    (text, token) => processor.ProcessAsync(text, pipelineContext, token)
-                ))
-                .ToList();
-
+            var postProcessOperation = _telemetry.Child(context.SessionId, "post_process");
+            var stepTimings = new List<(string Name, TimeSpan Elapsed)>();
             var pipelineResult = await _pipeline.ProcessAsync(
-                rawText,
-                new PipelineOptions
-                {
-                    NormalizeSpokenLineBreaks = true,
-                    NormalizeSpokenPunctuation = true,
-                    AppFormatter = AppFormatterService.Format,
-                    TargetProcessName = context.AppProcess,
-                    DictionaryCorrector = _dictionary.ApplyCorrections,
-                    VocabularyBooster = _settings.Current.VocabularyBoostingEnabled
-                        ? _vocabularyBoosting.Apply
-                        : null,
-                    CleanupHandler =
-                        cleanupLevel == CleanupLevel.None
-                            ? null
-                            : (text, token) =>
-                                _cleanup.CleanAsync(
-                                    text,
-                                    cleanupLevel,
-                                    message =>
-                                    {
-                                        ReportStatus(context, message);
-                                        return Task.CompletedTask;
-                                    },
-                                    referenceContext,
-                                    token
-                                ),
-                    SnippetExpander = text =>
-                        _snippets.ApplySnippets(text, profileId: context.Profile?.Id),
-                    LlmHandler = promptAction is not null
-                        ? (text, token) => RunPromptActionAsync(context, promptAction, text, token)
-                        : null,
-                    RequireLlmSuccess = promptAction is not null,
-                    TranslationHandler = !string.IsNullOrWhiteSpace(translationTarget)
-                        ? (text, source, target, token) =>
-                            _translation.TranslateAsync(text, source, target, token)
-                        : null,
-                    TranslationTarget = string.IsNullOrWhiteSpace(translationTarget)
-                        ? null
-                        : translationTarget,
-                    EffectiveSourceLanguage = languageHint,
-                    DetectedLanguage = result?.DetectedLanguage,
-                    PluginPostProcessors = pluginProcessors,
-                    StatusCallback = status =>
-                    {
-                        ReportStatus(
-                            context,
-                            status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
-                        );
-                        return Task.CompletedTask;
-                    }
-                },
+                pipelineText,
+                BuildPipelineOptions(
+                    context, duration, postProcessingLanguage, configuredLanguage,
+                    languageHints, translate, engineSupportsTranslation, usedPreviewFallback,
+                    rescoreEligible, engineProviderId, engineModelId, stepTimings
+                ),
                 cancelToken
             );
 
+            postProcessOperation?.Finish(DiagnosticsOutcome.Ok);
+            foreach (var (stepName, elapsed) in stepTimings)
+            {
+                _telemetry.Measure(
+                    context.SessionId,
+                    $"post_process.{TelemetryNames.MeasurementSegment(stepName)}_ms",
+                    elapsed.TotalMilliseconds,
+                    "millisecond"
+                );
+            }
             var commandResult = VoiceCommandParser.Parse(pipelineResult.Text);
-            var finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
+            finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
+            _telemetry.Measure(context.SessionId, "transcript.chars", finalText.Length, "none");
 
             TranscriptionCompleted?.Invoke(this, finalText);
-            // The orchestrator has full language context (detection, profile /
-            // global input language, translate task, and the actual
-            // post-processing step outcomes), so it resolves the readback
-            // language itself and opts out of SpeechFeedbackService's
-            // configured-language fallback.
-            _speechFeedback.AnnounceTranscriptionComplete(
-                finalText,
-                LinuxDictationReadbackLanguagePolicy.Resolve(
-                    result?.DetectedLanguage,
-                    effectiveLanguage,
-                    translate,
-                    translationTarget,
-                    pipelineResult.Steps
-                ),
-                false
+            // The orchestrator has the effective language entering post-processing,
+            // the capability-gated translate task, and the actual step outcomes,
+            // so it resolves the readback language itself and opts out of
+            // SpeechFeedbackService's configured-language fallback.
+            TryPublishSessionSpeechFeedback(
+                context,
+                () => _speechFeedback.BeginAnnounceTranscriptionComplete(
+                    finalText,
+                    LinuxDictationReadbackLanguagePolicy.Resolve(
+                        postProcessingLanguage,
+                        configuredLanguage,
+                        translate && engineSupportsTranslation,
+                        translationTarget,
+                        pipelineResult.Steps
+                    ),
+                    false
+                )
             );
             _models.PluginManager.EventBus.Publish(
                 new TranscriptionCompletedEvent
@@ -1608,7 +2826,7 @@ public sealed class DictationOrchestrator : IDisposable
                     ProfileName = context.Profile?.Name,
                     AppName = context.AppTitle,
                     AppProcessName = context.AppProcess,
-                    Url = context.AppUrl
+                    Url = context.AppUrl,
                 }
             );
             PublishSessionResult(
@@ -1626,13 +2844,40 @@ public sealed class DictationOrchestrator : IDisposable
             transcriptionCompletedPublished = true;
 
             var actionPlugin = ResolveActionPlugin(promptAction);
+            var actionPluginUnavailable = IsActionPluginTargetUnavailable(
+                promptAction?.TargetActionPluginId,
+                actionPlugin is not null
+            );
+            if (actionPluginUnavailable)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Configured action plugin target "
+                    + $"'{promptAction?.TargetActionPluginId}' is unavailable (disabled, removed, "
+                    + "or renamed) — routing as a failure instead of falling back to ordinary text "
+                    + "insertion (audit §2 M2)."
+                );
+            }
+
+            // Wait for every earlier-started session to finish inserting first
+            // (audit §2 H3) — but only around the delivery call itself, not the
+            // transcription/post-processing above, which stays concurrent. Ahead of the
+            // status/focus handoff below so a queued session doesn't announce "Inserting…" and
+            // take focus minutes before it can deliver. Cancellation here flows to the pipeline's
+            // own handler, and the terminal safety net still releases this session's slot.
+            await _insertionOrder.WaitForTurnAsync(context.SessionId, cancelToken)
+                .ConfigureAwait(false);
 
             // Yield focus before any synthesized keystroke: on Wayland a
             // visible overlay can still hold keyboard focus, and ydotool's
             // virtual keyboard fires Ctrl+V to whatever has focus. wtype on
             // GNOME/KDE was always compositor-rejected, so this was latent
             // until the ydotool backend was added.
-            if (actionPlugin is null && !commandResult.CancelInsertion)
+            if (
+                actionPlugin is null
+                && !actionPluginUnavailable
+                && !promptActionUnavailable
+                && !commandResult.CancelInsertion
+            )
             {
                 // Surface the inject phase so `typewhisper status` reports
                 // `injecting` while a long transcript is still being typed.
@@ -1646,35 +2891,86 @@ public sealed class DictationOrchestrator : IDisposable
             // unpadded finalText.
             var insertionText = DictationInsertionTextFormatter.TextForInsertion(finalText);
 
+            var insertionOperation = _telemetry.Child(context.SessionId, "insert");
+            var insertionStrategy = ResolveInsertionStrategy(context.AppProcess);
+            insertionOperation?.SetTag("insertion.strategy", insertionStrategy.ToString());
             InsertionResult insertion;
+            ActionPluginExecutionResult? actionExecutionResult = null;
+            var insertionThrew = false;
+            var enterSuppressed = false;
             try
             {
-                insertion =
-                    commandResult.CancelInsertion
-                        ? InsertionResult.NoText
-                        : actionPlugin is null
-                            ? await _textInsertion.InsertTextAsync(
-                                new TextInsertionRequest(
-                                    insertionText,
-                                    _settings.Current.AutoPaste,
-                                    context.WindowId,
-                                    context.AppProcess,
-                                    context.AppTitle,
-                                    commandResult.AutoEnter,
-                                    ResolveInsertionStrategy(context.AppProcess)
-                                )
-                            )
-                            : await ExecuteActionPluginAsync(
-                                actionPlugin,
-                                context,
-                                finalText,
-                                rawText,
-                                result?.DetectedLanguage,
-                                cancelToken
-                            );
+                // Final lock check before synthesizing any keystroke, re-evaluated
+                // AFTER the insertion-order wait above. A normal stop nulls
+                // _activeDictationCts and releases the gate before transcription
+                // finishes, and the wait can span an arbitrary predecessor (up to
+                // the fail-open backstop), so a lock landing during transcription
+                // OR while queued cannot reach that token — this authoritative
+                // check keeps synthesized paste/type off the lock screen.
+                if (!_sessionActivityMonitor.IsInputAllowed)
+                {
+                    _telemetry.Finish(context.SessionId, "canceled");
+                    Trace.WriteLine("[Dictation] Insertion suppressed: session locked or inactive.");
+                    ReportStatus(context, "Canceled");
+                    ShowFeedback(context, "Canceled", false, true);
+                    return;
+                }
+
+                if (commandResult.CancelInsertion)
+                {
+                    insertion = InsertionResult.NoText;
+                }
+                else if (actionPluginUnavailable || promptActionUnavailable)
+                {
+                    insertion = InsertionResult.ActionUnavailable;
+                }
+                else if (actionPlugin is not null)
+                {
+                    insertionOperation?.SetTag("insertion.kind", "action");
+                    actionExecutionResult = await ExecuteActionPluginAsync(
+                        actionPlugin,
+                        context,
+                        finalText,
+                        rawText,
+                        result?.DetectedLanguage,
+                        cancelToken
+                    );
+                    insertion = actionExecutionResult.Success
+                        ? InsertionResult.ActionHandled
+                        : InsertionResult.ActionFailed;
+                }
+                else
+                {
+                    var autoPaste = _settings.Current.AutoPaste;
+                    var autoEnter = commandResult.AutoEnter;
+                    // A prompt's LLM round trip gives the user time to click into another field,
+                    // so its result needs a verified field, not just the same window.
+                    var promptRan = pipelineResult.Steps.Any(step =>
+                        string.Equals(step.Name, PostProcessingStepNames.Llm, StringComparison.OrdinalIgnoreCase));
+                    if ((autoPaste || autoEnter) && !await IsDeliveryTargetStillFocusedAsync(context, promptRan))
+                    {
+                        enterSuppressed = autoEnter;
+                        autoPaste = false;
+                        autoEnter = false;
+                    }
+
+                    insertion = await _textInsertion.InsertTextAsync(
+                        new TextInsertionRequest(
+                            insertionText,
+                            autoPaste,
+                            context.WindowId,
+                            context.AppProcess,
+                            context.AppTitle,
+                            autoEnter,
+                            insertionStrategy,
+                            context.LockedFocusField
+                        )
+                    );
+                }
             }
             catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
             {
+                _telemetry.Finish(context.SessionId, "canceled");
                 Trace.WriteLine(
                     $"[Dictation] Action canceled by user "
                     + $"(action='{actionPlugin?.ActionId ?? "<none>"}')."
@@ -1685,56 +2981,100 @@ public sealed class DictationOrchestrator : IDisposable
             }
             catch (Exception ex)
             {
+                CaptureDiagnostic(ex, "dictation.insert", engineProviderId, engineModelId);
                 // Insertion/action failures must NOT republish the dictation
                 // as a transcription failure — TranscriptionCompletedEvent has
                 // already fired. Surface a separate insertion-failure status.
+                var safeMessage = SanitizeForDisplay(ex.Message, rawText, finalText, failurePrompt,
+                    context.StreamingFinalText, context.RecoveredPartialPreview);
                 Trace.WriteLine(
                     $"[Dictation] Text insertion/action failed (target='{context.AppProcess}', "
-                    + $"action='{actionPlugin?.ActionId ?? "<none>"}'): {ex}"
+                    + $"action='{actionPlugin?.ActionId ?? "<none>"}'): {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}"
                 );
-                ReportStatus(context, $"Insertion failed: {ex.Message}");
+                ReportStatus(context, $"Insertion failed: {safeMessage}");
                 ShowFeedback(context, "Insertion failed.", true);
-                return;
+                insertion = ClassifyThrownInsertionFailure(actionPlugin is not null);
+                insertionThrew = true;
+            }
+            finally
+            {
+                _insertionOrder.Release(context.SessionId);
             }
 
-            var completionMessage = insertion switch
-            {
-                InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 =>
-                    "Pressed Enter.",
-                InsertionResult.Pasted or InsertionResult.Typed =>
-                    $"Typed {finalText.Length} char(s).",
-                InsertionResult.CopiedToClipboard => ClipboardFallbackMessage(),
-                InsertionResult.ActionHandled => "Action completed.",
-                InsertionResult.ActionFailed => "Action failed.",
-                InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
-                InsertionResult.MissingPasteTool =>
-                    $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
-                InsertionResult.Failed =>
-                    "Text insertion failed. Dictated text could not be copied or pasted.",
-                InsertionResult.NoText when commandResult.CancelInsertion => "Dictation canceled.",
-                _ => "Done."
-            };
-            var isError =
-                insertion
-                    is InsertionResult.Failed
-                    or InsertionResult.ActionFailed
-                    or InsertionResult.MissingClipboardTool
-                    or InsertionResult.MissingPasteTool;
-            var isCanceled =
-                insertion is InsertionResult.NoText && commandResult.CancelInsertion;
-            ReportStatus(context, completionMessage);
-            ShowFeedback(context, completionMessage, isError, isCanceled);
+            insertionOperation?.SetTag("insertion.result", insertion.ToString());
+            var insertionFailed = IsInsertionFailure(insertion, insertionThrew);
+            insertionOperation?.Finish(insertionFailed ? DiagnosticsOutcome.Failed : DiagnosticsOutcome.Ok);
 
-            if (
-                insertion
-                is InsertionResult.Pasted
-                or InsertionResult.Typed
-                or InsertionResult.CopiedToClipboard
-            )
+            if (!insertionThrew)
             {
-                _models.PluginManager.EventBus.Publish(
-                    new TextInsertedEvent { Text = insertionText, AppName = context.AppTitle }
-                );
+                var completionMessage = actionExecutionResult?.Message ?? insertion switch
+                {
+                    InsertionResult.Pasted when commandResult.AutoEnter && finalText.Length == 0 =>
+                        "Pressed Enter.",
+                    InsertionResult.Pasted or InsertionResult.Typed =>
+                        $"Typed {finalText.Length} char(s).",
+                    InsertionResult.CopiedToClipboard =>
+                        ClipboardFallbackMessage(context.AppProcess),
+                    InsertionResult.ActionHandled => "Action completed.",
+                    InsertionResult.ActionFailed => "Action failed.",
+                    InsertionResult.ActionUnavailable => promptActionUnavailable
+                        ? "Configured prompt action is unavailable." : "Action destination unavailable.",
+                    InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+                    InsertionResult.MissingPasteTool =>
+                        $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
+                    InsertionResult.Failed when _textInsertion.LastTypingDeliveredPartialText =>
+                        "Text insertion failed partway through typing. Some of the dictated text may "
+                        + "already be in the target app — check before dictating again.",
+                    InsertionResult.Failed =>
+                        "Text insertion failed. Dictated text could not be copied or pasted.",
+                    InsertionResult.NoText when commandResult.CancelInsertion =>
+                        "Dictation canceled.",
+                    InsertionResult.NoText when enterSuppressed =>
+                        "Enter not sent: focus moved off the dictation's field.",
+                    _ => "Done.",
+                };
+                var isError =
+                    insertion
+                        is InsertionResult.Failed
+                        or InsertionResult.ActionFailed
+                        or InsertionResult.ActionUnavailable
+                        or InsertionResult.MissingClipboardTool
+                        or InsertionResult.MissingPasteTool;
+                var isCanceled =
+                    insertion is InsertionResult.NoText && commandResult.CancelInsertion;
+                ReportStatus(context, completionMessage);
+                if (actionExecutionResult is not null)
+                {
+                    ShowActionFeedback(context, actionExecutionResult);
+                }
+                else
+                {
+                    ShowFeedback(context, completionMessage, isError, isCanceled);
+                }
+
+                if (
+                    insertion
+                    is InsertionResult.Pasted
+                    or InsertionResult.Typed
+                    or InsertionResult.CopiedToClipboard
+                )
+                {
+                    _models.PluginManager.EventBus.Publish(
+                        new TextInsertedEvent { Text = insertionText, AppName = context.AppTitle }
+                    );
+                }
+
+                if (ShouldArmTargetAppLearning(insertion, actionPlugin, insertionText))
+                {
+                    // Fire-and-forget: arm a bounded tracking window on the field that just
+                    // received the text, so a follow-up type-over is learned silently. Mirrors
+                    // the memory-extraction hook below — never blocks the dictation path.
+                    // ReSharper disable once MethodSupportsCancellation -- background arm; not tied to the dictation token.
+                    FireAndLog(
+                        () => _targetAppLearning.ArmAsync(insertionText),
+                        "target-app correction learning"
+                    );
+                }
             }
 
             var transcriptionId = Guid.NewGuid().ToString();
@@ -1748,34 +3088,57 @@ public sealed class DictationOrchestrator : IDisposable
                 context.AppProcess
             );
 
-            // Write to history last so stats reflect the just-completed capture.
-            if (_settings.Current.SaveToHistoryEnabled)
+            // Memory extraction is itself an LLM call. When provenance capture is
+            // active, run it (awaited) before writing history so its request is
+            // recorded on the entry; otherwise keep it fire-and-forget so the
+            // common path isn't delayed by the extraction round-trip.
+            if (_settings.Current.MemoryEnabled && !insertionThrew
+                && _promptProcessing.TryResolveDefaultProvider() is var (memoryLlm, memoryModel))
             {
-                AddHistoryRecord(
-                    context,
-                    transcriptionId,
-                    timestamp,
-                    rawText,
-                    finalText,
-                    duration,
-                    result,
-                    wavPath,
-                    insertion,
-                    pipelineResult,
-                    cleanupLevel,
-                    engineProviderId,
-                    engineModelId
-                );
+                if (context.Capture is not null)
+                {
+                    try
+                    {
+                        // ReSharper disable once MethodSupportsCancellation -- best-effort memory extraction; awaited only to record its provenance before history, deliberately not tied to the recording's cancellation token (mirrors the fire-and-forget sibling below).
+                        await _memory.ExtractAndStoreAsync(finalText, memoryLlm, memoryModel, context.Capture);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Extraction is best-effort; never let it fail the dictation.
+                        Trace.WriteLine($"[Dictation] memory extraction failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message, rawText, finalText, failurePrompt, context.StreamingFinalText, context.RecoveredPartialPreview)}");
+                    }
+                }
+                else
+                {
+                    // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
+                    FireAndLog(() => _memory.ExtractAndStoreAsync(finalText, memoryLlm, memoryModel), "memory extraction");
+                }
             }
 
-            if (_settings.Current.MemoryEnabled)
-            {
-                // ReSharper disable once MethodSupportsCancellation -- fire-and-forget background memory extraction; intentionally not tied to a cancellation token.
-                FireAndLog(() => _memory.ExtractAndStoreAsync(finalText), "memory extraction");
-            }
+            // Always record statistics and add a history entry only when history saving
+            // is enabled, last so stats reflect the just-completed capture
+            // (and any memory-extraction provenance recorded above).
+            AddHistoryRecord(
+                context,
+                transcriptionId,
+                timestamp,
+                rawText,
+                finalText,
+                duration,
+                result,
+                wavPath,
+                insertion,
+                pipelineResult,
+                cleanupLevel,
+                engineProviderId,
+                engineModelId,
+                promptActionUnavailable
+            );
+            _telemetry.Finish(context.SessionId, insertionFailed ? "insertion_failed" : "ok");
         }
         catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
         {
+            _telemetry.Finish(context.SessionId, "canceled");
             // User pressed Escape while the post-processing pipeline (LLM
             // cleanup, translation, plugin processors) was running. Surface
             // "Canceled" rather than a transcription failure regardless of
@@ -1790,32 +3153,82 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex) when (!transcriptionCompletedPublished)
         {
+            CaptureDiagnostic(ex, "dictation.post-process", engineProviderId, engineModelId);
+            _telemetry.Finish(context.SessionId, "failed");
+            AddFailedHistoryRecord(context, wavPath, duration, rawText ?? "", TranscriptionRecordStatus.ProcessingFailed,
+                ex.Message, engineProviderId, engineModelId, failurePrompt);
             // Failures before TranscriptionCompletedEvent fires (post-processing,
             // voice-command parsing) surface as transcription failures.
-            Trace.WriteLine($"[Dictation] Post-transcription processing failed: {ex}");
+            var safeMessage = SanitizeForDisplay(ex.Message, rawText, finalText, failurePrompt,
+                context.StreamingFinalText, context.RecoveredPartialPreview);
+            Trace.WriteLine($"[Dictation] Post-transcription processing failed: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
             _models.PluginManager.EventBus.Publish(
                 new TranscriptionFailedEvent
                 {
-                    ErrorMessage = ex.Message, ModelId = engineModelId, AppName = context.AppTitle
+                    ErrorMessage = safeMessage, ModelId = engineModelId, AppName = context.AppTitle,
                 }
             );
-            ReportStatus(context, $"Transcription failed: {ex.Message}");
-            _speechFeedback.AnnounceError(ex.Message);
-            var feedbackText = ex is InvalidOperationException ? ex.Message : "Transcription failed.";
+            ReportStatus(context, $"Transcription failed: {safeMessage}");
+            TryPublishSessionSpeechFeedback(
+                context,
+                () => _speechFeedback.BeginAnnounceError(safeMessage)
+            );
+            var feedbackText = ex is InvalidOperationException ? safeMessage : "Transcription failed.";
             ShowFeedback(context, feedbackText, true);
-            PublishSessionTerminal(context.SessionId, "failed", ex.Message);
+            PublishSessionTerminal(context.SessionId, "failed", safeMessage);
         }
         catch (Exception ex)
         {
+            CaptureDiagnostic(ex, "dictation.bookkeeping", engineProviderId, engineModelId);
+            _telemetry.Finish(context.SessionId, "failed");
             // Something after TranscriptionCompletedEvent threw (e.g. history
             // persistence). Don't republish a Failed event for an already-announced
             // dictation.
-            Trace.WriteLine($"[Dictation] Post-completion bookkeeping failed: {ex}");
+            Trace.WriteLine($"[Dictation] Post-completion bookkeeping failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message, rawText, finalText, failurePrompt)}\n{ex.StackTrace}");
         }
-        finally
+    }
+
+    private void CaptureDiagnostic(
+        Exception exception, string operation, string? providerId = null, string? modelId = null)
+    {
+        if (exception is OperationCanceledException)
         {
-            _models.ScheduleAutoUnload();
+            return;
         }
+        var tags = new Dictionary<string, string>();
+        if (providerId is not null)
+        {
+            tags["engine.provider"] = providerId;
+        }
+        if (modelId is not null)
+        {
+            tags["engine.model"] = TelemetryNames.SanitizeModelId(modelId);
+        }
+        try
+        {
+            _diagnostics?.CaptureException(exception, operation, tags);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Telemetry] Error capture failed: {ex.Message}");
+        }
+    }
+
+    internal static string TraceTranscriptionFailure(
+        Exception exception, RecordingContext context, string? rawText, string? finalText, string? prompt)
+    {
+        var message = SanitizeForDisplay(exception.Message,
+            rawText, finalText, prompt, context.StreamingFinalText, context.RecoveredPartialPreview);
+        Trace.WriteLine($"[Dictation] Transcription failed: {exception.GetType().Name}: {message}\n{exception.StackTrace}");
+        return message;
+    }
+
+    internal static string ClassifyPostStopTerminal(
+        Exception _,
+        CancellationToken callerToken
+    )
+    {
+        return callerToken.IsCancellationRequested ? "canceled" : "failed";
     }
 
     private PromptAction? ResolvePromptAction(RecordingContext context)
@@ -1836,50 +3249,811 @@ public sealed class DictationOrchestrator : IDisposable
             Trace.WriteLine($"[Dictation] {message}");
             ReportStatus(context, message);
 
-            var pump = new LlmStreamPump(accumulated =>
-            {
-                SetOverlayState(state => state with { LlmResponseText = accumulated });
-                _models.PluginManager.EventBus.Publish(
-                    new LlmResponseTokenEvent
+            var retryBudget = new LlmRequestRetryBudget();
+            var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
+                _promptProcessing.ProcessStreamingAsync(promptAction, text, context.Capture, token,
+                    retryBudget: retryBudget, memorySourceId: context.Profile?.MemorySourceId),
+                () => _promptProcessing.ProcessAsync(
+                    promptAction,
+                    text,
+                    context.Capture,
+                    token,
+                    retryBudget: retryBudget,
+                    memorySourceId: context.Profile?.MemorySourceId
+                ),
+                accumulated =>
+                {
+                    // Match ReportStatus(context,...)/ShowFeedback(context,...): a
+                    // newer session that has taken over the overlay must not have its
+                    // LlmResponseText clobbered by an older session's still-running
+                    // prompt action (audit §2 H3). The event still publishes
+                    // unconditionally for non-overlay observers.
+                    if (IsContextStillOwningOverlay(context))
                     {
-                        AccumulatedText = accumulated, StepName = PostProcessingStepNames.Llm
-                    });
-            });
+                        SetOverlayState(
+                            context,
+                            state => state with { LlmResponseText = accumulated }
+                        );
+                    }
 
-            var streamed = await pump.RunAsync(
-                _promptProcessing.ProcessStreamingAsync(promptAction, text, token),
-                token);
-
-            // Streaming→batch fallback: retry with the batch path when the pump
-            // faulted OR yielded nothing (proxy EOF, empty 200). ReceivedAnyChunk
-            // distinguishes a legitimately empty single-chunk result from a silent
-            // empty stream — the single chunk is already a completed ProcessAsync call.
-            var result = pump.Faulted || !pump.ReceivedAnyChunk
-                ? await _promptProcessing.ProcessAsync(promptAction, text, token)
-                : streamed;
-
+                    _models.PluginManager.EventBus.Publish(
+                        new LlmResponseTokenEvent
+                        {
+                            AccumulatedText = accumulated,
+                            StepName = PostProcessingStepNames.Llm,
+                        }
+                    );
+                },
+                token
+            );
             _models.PluginManager.EventBus.Publish(
                 new LlmResponseTokenEvent
                 {
                     AccumulatedText = result,
                     IsFinal = true,
-                    Faulted = pump.Faulted,
-                    StepName = PostProcessingStepNames.Llm
+                    Faulted = streamFaulted,
+                    StepName = PostProcessingStepNames.Llm,
                 });
 
             return result;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex)
         {
-            var message = $"Prompt action '{promptAction.Name}' failed: {ex.Message}";
-            Trace.WriteLine($"[Dictation] {message}");
+            var sanitized = SanitizeForDisplay(ex.Message, text, promptAction.SystemPrompt);
+            var message = $"Prompt action '{promptAction.Name}' failed: {sanitized}";
+            Trace.WriteLine($"[Dictation] {ex.GetType().Name}: {message}");
             ReportStatus(context, message);
+            throw ex is PluginRequestException failure
+                ? new PluginRequestException(sanitized,
+                    failure.FailureKind, failure.HttpStatusCode, failure.RetryAfter, failure.IsTransient)
+                : new InvalidOperationException(sanitized);
+        }
+    }
+
+    internal static async Task<PromptActionStreamOutcome> RunPromptActionStreamWithFallbackAsync(
+        IAsyncEnumerable<string> source,
+        Func<Task<string>> runBatch,
+        Action<string> onAccumulated,
+        CancellationToken token
+    )
+    {
+        var pump = new LlmStreamPump(onAccumulated);
+        var streamed = await pump.RunAsync(source, token);
+        pump.ThrowIfNonRetryableFault();
+
+        // Once output has started, restarting as batch could duplicate work. Before the
+        // first token, only request-shape or unclassified failures may use compatibility
+        // fallback despite being non-transient; authentication and explicit no-retry
+        // failures must retain the provider's decision.
+        if (pump.Failure is { } failure
+            && (pump.ReceivedAnyChunk || failure is PluginRequestException
+            {
+                IsTransient: false,
+                FailureKind: not (PluginRequestFailureKind.InvalidRequest or PluginRequestFailureKind.Unknown),
+            }))
+            ExceptionDispatchInfo.Capture(failure).Throw();
+
+        var result = pump.Faulted || !pump.ReceivedAnyChunk
+            ? await runBatch()
+            : streamed;
+        return new PromptActionStreamOutcome(result, pump.Faulted);
+    }
+
+    internal sealed record PromptActionStreamOutcome(string Text, bool StreamFaulted);
+
+    // A weak model handed a non-generative command sometimes echoes an empty container instead of
+    // refusing; never type that into the app.
+    private static bool IsTrivialCommandResult(string result)
+    {
+        var trimmed = result.Trim();
+        return trimmed is "{}" or "[]" or "\"\"" or "''" or "``" or "null";
+    }
+
+    private static string BuildCreateSystemPrompt()
+    {
+        return """
+               You carry out a spoken instruction and produce text to insert at the user's cursor.
+               The user's message is that instruction. Follow it directly and concisely, and produce
+               ONLY the resulting text — no preamble, no surrounding quotes, no explanation, and no
+               markdown code fences.
+               """;
+    }
+
+    /// <summary>
+    ///     Handles a keyphrase-prefixed spoken command: routes edit-vs-create by whether text is
+    ///     selected, then transforms the selection or generates new text, streaming the result
+    ///     straight onto the page. Escape aborts mid-flight via <see cref="_activeCommandCts" />.
+    /// </summary>
+    private async Task<SpokenCommandOutcome?> RunSpokenCommandAsync(
+        string command,
+        RecordingContext context,
+        CancellationToken cancelToken
+    )
+    {
+        // Recording's CTS is nulled and Escape disarmed by now, so give the command its own linked
+        // source and re-arm Escape so a long stream/typing pass can be cancelled. Register in the
+        // set so a session-loss discard cancels this command even if a newer one overwrites the
+        // Escape-target field.
+        using var commandCts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken);
+        lock (_activeCommandCtsSet)
+        {
+            _activeCommandCtsSet.Add(commandCts);
+        }
+
+        _activeCommandCts = commandCts;
+        _hotkey.IsCancelShortcutEnabled = true;
+        var commandToken = commandCts.Token;
+        string? failureInput = null;
+        string? failureOutput = null;
+        string? failurePrompt = null;
+
+        try
+        {
+            // Reject a spoken command born after the session locked, WITHOUT synthesizing any
+            // keystroke into the lock screen. Registering commandCts before this check makes it
+            // atomic against a concurrent session-loss discard: a discard landing after
+            // registration cancels commandCts (caught here), one landing before is caught by this
+            // IsInputAllowed read. Inside the try so the ownership-aware finally (set removal +
+            // conditional Escape disarm) still runs.
+            if (!_sessionActivityMonitor.IsInputAllowed || commandToken.IsCancellationRequested)
+            {
+                Trace.WriteLine("[Dictation] Spoken command suppressed: session locked or inactive.");
+                PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
+                return null;
+            }
+
+            if (_promptProcessing.HasNoProviderForRequest(_settings.Current.SpokenCommandLlmProvider))
+            {
+                var noProvider = Localization.Loc.Instance["Command.NoProvider"];
+                ReportStatus(context, noProvider);
+                ShowFeedback(context, noProvider, true);
+                PublishSessionTerminal(context.SessionId, "failed", noProvider);
+                return null;
+            }
+
+            ReportStatus(context, Localization.Loc.Instance["Command.Thinking"]);
+
+            // Match a saved transform action by name first — pure, no side effects, safe before any
+            // clipboard probe. A matched action IS an in-place transform, so it needs a selection to
+            // operate on just as an explicit "fix this" would — UNLESS the command opens with a
+            // creation verb ("write an email to Bob" incidentally shares words with a "Write Email"
+            // prompt). That's a from-scratch request, so let it create rather than forcing a selection
+            // probe and failing with "Nothing highlighted". An explicit selection cue still wins.
+            var matchedAction = SpokenCommandActionMatcher.Match(command, CommandTransformActions());
+            var wantsSelection =
+                (matchedAction is not null && !SpokenCommandIntent.OpensWithCreationVerb(command))
+                || SpokenCommandIntent.RefersToSelection(command);
+
+            // The guard above ran before the match, on the spoken-command selection; a matched
+            // saved action brings its own override. Re-check with the selection that will actually
+            // serve the request, before the clipboard probe and the provider call.
+            var commandProviderProblem = _promptProcessing.TryDescribeSelectedProviderProblem(
+                wantsSelection && matchedAction is not null
+                    ? matchedAction.ProviderOverride
+                    : _settings.Current.SpokenCommandLlmProvider
+            );
+            if (commandProviderProblem is not null)
+            {
+                ReportStatus(context, commandProviderProblem);
+                ShowFeedback(context, commandProviderProblem, true);
+                PublishSessionTerminal(context.SessionId, "failed", commandProviderProblem);
+                return null;
+            }
+
+            PromptAction action;
+            string input;
+            bool wrapInput;
+            Func<Task<bool>>? selectionStillTargeted = null;
+            if (wantsSelection)
+            {
+                // Only an edit/transform needs the selection. Capturing it synthesizes a copy, so
+                // probe here and nowhere else — a pure create command must never fire a copy keystroke
+                // at the focused app. Terminals map plain Ctrl+C to SIGINT, so the probe uses
+                // Ctrl+Shift+C there (and still can't read a TUI editor's internal selection).
+                var targetIsTerminal = TextInsertionService.IsTerminalApp(context.AppProcess);
+                // Focus may have moved during transcription: a copy chord sent now would read another
+                // app's selection and hand it to the provider. Unverifiable targets keep the old probe;
+                // their result still only reaches the clipboard.
+                if (CanVerifyTargetWindow(context) && !await IsVerifiedTargetFocusedAsync(context))
+                {
+                    var moved = Localization.Loc.Instance["Command.FocusMoved"];
+                    ReportStatus(context, moved);
+                    ShowFeedback(context, moved, false);
+                    PublishSessionTerminal(context.SessionId, "discarded", moved);
+                    return null;
+                }
+
+                var selectedText = await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal);
+                if (string.IsNullOrWhiteSpace(selectedText))
+                {
+                    // Transform intent with nothing selected has nowhere to land — hint and stop. A
+                    // matched saved action lands here too: with no selection it has nothing to work on.
+                    // Terminal TUI editors (Neovim, less, …) keep the selection internal, so the copy
+                    // probe legitimately comes back empty — say that instead of "Nothing highlighted".
+                    var nothing = targetIsTerminal
+                        ? Localization.Loc.Instance["Command.NoTerminalSelection"]
+                        : Localization.Loc.Instance["Command.NothingHighlighted"];
+                    ReportStatus(context, nothing);
+                    ShowFeedback(context, nothing, false);
+                    PublishSessionTerminal(context.SessionId, "discarded", nothing);
+                    return null;
+                }
+
+                // Matched saved action, else an ad-hoc transform of the selection. Edit wraps the
+                // selection as untrusted data.
+                action = matchedAction
+                         ?? BuildTransientCommandAction(
+                             "spoken-command-edit",
+                             TransformSelectionService.BuildTransformPrompt(selectedText, command)
+                         );
+                input = selectedText;
+                wrapInput = true;
+                // Re-probe before replacing: another field no longer copies the same text. Only probe
+                // a confirmed window — the copy chord would interrupt a terminal.
+                selectionStillTargeted = async () =>
+                    CanVerifyTargetWindow(context)
+                    && await IsVerifiedTargetFocusedAsync(context).ConfigureAwait(false)
+                    && string.Equals(
+                        await _textInsertion.CaptureSelectedTextAsync(targetIsTerminal).ConfigureAwait(false),
+                        selectedText,
+                        StringComparison.Ordinal
+                    );
+            }
+            else
+            {
+                // Create sends the command unwrapped as an instruction and never touches the
+                // clipboard, so it fires no Ctrl+C (SIGINT) at the focused app.
+                action = BuildTransientCommandAction(
+                    "spoken-command-create",
+                    BuildCreateSystemPrompt()
+                );
+                input = command;
+                wrapInput = false;
+            }
+
+            Trace.WriteLine(
+                $"[Command] routing wantsSelection={wantsSelection} "
+                + $"matchedSaved={matchedAction is not null} action={action.Id}"
+            );
+
+            var applyingStatus = matchedAction is not null
+                ? Localization.Loc.Instance.GetString("Command.ApplyingPrompt", matchedAction.Name)
+                : Localization.Loc.Instance["Command.ApplyingOneOff"];
+            ReportStatus(context, applyingStatus);
+
+            // Streaming types each chunk directly, so it may only run where that matches what the
+            // one-shot insert would do: auto-paste on, a non-terminal target, and either the user
+            // forced DirectTyping or an Auto target the app policy already types into (browsers,
+            // Codex). A terminal result must be generated in one pass because a later stream chunk
+            // can introduce a newline; the one-shot insertion can then safely paste multiline text
+            // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
+            // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
+            // through that one-shot insert. Locked fields also need its exact-focus gate. Auto
+            // also needs a chain that types non-ASCII; ydotool drops it, while the one-shot pastes.
+            failureInput = input;
+            failurePrompt = action.SystemPrompt;
+            var strategy = ResolveInsertionStrategy(context.AppProcess);
+            var canStreamDirectly = _settings.Current.AutoPaste
+                && context.LockedFocusField is null
+                && !TextInsertionService.IsTerminalApp(context.AppProcess)
+                && (strategy is TextInsertionStrategy.DirectTyping
+                    || (strategy is TextInsertionStrategy.Auto
+                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)
+                        && _textInsertion.CanTypeNonAscii));
+
+            if (!canStreamDirectly)
+            {
+                var oneShot = await _promptProcessing
+                    .ProcessAsync(action, input, context.Capture, commandToken, wrapInput,
+                        memorySourceId: context.Profile?.MemorySourceId)
+                    .ConfigureAwait(false);
+                failureOutput = oneShot;
+                if (string.IsNullOrWhiteSpace(oneShot) || IsTrivialCommandResult(oneShot))
+                {
+                    var empty = Localization.Loc.Instance["Command.NoResult"];
+                    ReportStatus(context, empty);
+                    ShowFeedback(context, empty, true);
+                    PublishSessionTerminal(context.SessionId, "failed", empty);
+                    return null;
+                }
+
+                var oneShotInsertion = await CompleteViaOneShotInsertionAsync(context, oneShot, selectionStillTargeted);
+                return SpokenCommandOutcomeFor(input, oneShot, oneShotInsertion);
+            }
+
+            // Keep the named StreamCommandResult: `stream.Text/TypingFailed/TypedAnything` read
+            // clearer than three loose locals and let the state test below use a property pattern.
+            // ReSharper disable once UseDeconstruction
+            var stream = await StreamCommandOntoPageAsync(
+                action,
+                input,
+                wrapInput,
+                context.Profile?.MemorySourceId,
+                context.Capture,
+                context.AppProcess,
+                async () =>
+                {
+                    SetOverlayState(context, state =>
+                        state with
+                        {
+                            IsOverlayVisible = false,
+                            ShowFeedback = false,
+                            FeedbackText = null,
+                            ActionResultUrl = null,
+                            NotificationIconName = null,
+                            FeedbackDurationMilliseconds = null,
+                            LlmResponseText = null,
+                            PartialText = null,
+                        }
+                    );
+                    // Re-activate the window the command was issued from before typing the first
+                    // chunk: a focus change during the LLM round-trip would otherwise send output
+                    // into whatever app is now active. Mirrors the one-shot insert's focus step and
+                    // covers the pre-type yield too (it delays as well). A false result means focus
+                    // couldn't be confirmed, so streaming aborts to the safe one-shot fallback.
+                    if (selectionStillTargeted is not null)
+                    {
+                        return await selectionStillTargeted().ConfigureAwait(false);
+                    }
+
+                    return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
+                           && await IsDeliveryTargetStillFocusedAsync(context, false).ConfigureAwait(false);
+                },
+                commandToken
+            );
+
+            var result = stream.Text;
+            failureOutput = result;
+            if (string.IsNullOrWhiteSpace(result) || IsTrivialCommandResult(result))
+            {
+                var empty = Localization.Loc.Instance["Command.NoResult"];
+                ReportStatus(context, empty);
+                ShowFeedback(context, empty, true);
+                PublishSessionTerminal(context.SessionId, "failed", empty);
+                return null;
+            }
+
+            if (stream.Faulted)
+            {
+                // The provider stream broke mid-way and any output already on the page is truncated.
+                // Report failure instead of a false success and don't publish a ready result.
+                var failed = Localization.Loc.Instance["Command.Failed"];
+                ReportStatus(context, failed);
+                ShowFeedback(context, failed, true);
+                PublishSessionTerminal(context.SessionId, "failed", failed);
+                return null;
+            }
+
+            // Sequential early-return guards read clearer here than a switch on stream.
+            // ReSharper disable once ConvertIfStatementToSwitchStatement
+            if (stream is { TypingFailed: true, TypedAnything: false })
+            {
+                // No chunk ever landed (e.g. no working injection backend): fall back to a single
+                // paste/insert of the whole result and report that outcome instead of a false success.
+                var fallbackInsertion = await CompleteViaOneShotInsertionAsync(context, result, selectionStillTargeted);
+                return SpokenCommandOutcomeFor(input, result, fallbackInsertion);
+            }
+
+            if (stream.TypingFailed)
+            {
+                // Some text landed, then typing broke mid-stream. A one-shot re-insert would
+                // duplicate what's already on the page, so surface the failure rather than retry.
+                var failed = Localization.Loc.Instance["Command.Failed"];
+                ReportStatus(context, failed);
+                ShowFeedback(context, failed, true);
+                PublishSessionTerminal(context.SessionId, "failed", failed);
+                return null;
+            }
+
+            var done = Localization.Loc.Instance["Command.Done"];
+            ReportStatus(context, done);
+            ShowFeedback(context, done, false);
+
+            // Terminal session record so a polling API client resolves instead of looping.
+            PublishSessionResult(
+                new DictationSessionResult(
+                    context.SessionId,
+                    "ready",
+                    result,
+                    null,
+                    null,
+                    0,
+                    null,
+                    null,
+                    done
+                )
+            );
+            _models.PluginManager.EventBus.Publish(
+                new TextInsertedEvent { Text = result, AppName = context.AppTitle }
+            );
+
+            // Streamed directly onto the page, chunk by chunk — a genuine typed insertion.
+            return new SpokenCommandOutcome(input, result, TextInsertionStatus.Typed);
+        }
+        catch (OperationCanceledException) when (commandToken.IsCancellationRequested)
+        {
+            Trace.WriteLine("[Command] Spoken command canceled by user.");
+            ReportStatus(context, "Canceled");
+            ShowFeedback(context, "Canceled", false, true);
+            PublishSessionTerminal(context.SessionId, "canceled", "Canceled");
+        }
+        catch (Exception ex)
+        {
+            var safeMessage = SanitizeForDisplay(ex.Message, command, failureInput, failureOutput, failurePrompt);
+            Trace.WriteLine($"[Command] Spoken command failed: {ex.GetType().Name}: {safeMessage}\n{ex.StackTrace}");
+            ReportStatus(context, $"Command failed: {safeMessage}");
+            ShowFeedback(context, DescribeSpokenCommandFailure(ex, safeMessage), true);
+            PublishSessionTerminal(context.SessionId, "failed", safeMessage);
+        }
+        finally
+        {
+            lock (_activeCommandCtsSet)
+            {
+                _activeCommandCtsSet.Remove(commandCts);
+            }
+
+            if (ReferenceEquals(_activeCommandCts, commandCts))
+            {
+                _activeCommandCts = null;
+            }
+
+            // Don't disarm Escape if a new recording — or a newer overlapping spoken command (its
+            // CTS is still set above) — has taken over the shortcut meanwhile.
+            if (_activeCommandCts is null && _activeDictationCts is null && !IsRecording)
+            {
+                _hotkey.IsCancelShortcutEnabled = false;
+            }
+        }
+
+        // Reached only via a catch (cancel/fail) — no savable result was produced.
+        return null;
+    }
+
+    internal static string DescribeSpokenCommandFailure(Exception ex, string? safeMessage = null) =>
+        ex is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration }
+            ? safeMessage ?? ex.Message
+            : Localization.Loc.Instance["Command.Failed"];
+
+    // Result of a completed spoken command, for the history entry. SourceText is what the LLM
+    // operated on — the selected text for an edit/transform, or the command itself for a create —
+    // so it maps to the entry's RawText and the raw→final diff reads "source → result". Result is
+    // the generated/transformed text that was produced. InsertionStatus is how that result actually
+    // reached the page (typed/pasted/copied), so history records the real label instead of assuming
+    // "Typed".
+    private sealed record SpokenCommandOutcome(
+        string SourceText,
+        string Result,
+        TextInsertionStatus InsertionStatus
+    );
+
+    // Maps a one-shot / fallback insertion to a savable outcome. Only the states where the text
+    // actually reached the user (typed, pasted, or copied to the clipboard) produce a record; a
+    // failed insert (missing tool, Failed, …) returns null so a command that never landed isn't
+    // persisted as a success.
+    private static SpokenCommandOutcome? SpokenCommandOutcomeFor(
+        string source,
+        string result,
+        InsertionResult insertion
+    )
+    {
+        return insertion is InsertionResult.Pasted
+            or InsertionResult.Typed
+            or InsertionResult.CopiedToClipboard
+            ? new SpokenCommandOutcome(source, result, ToTextInsertionStatus(insertion))
+            : null;
+    }
+
+    // Outcome of streaming a spoken-command result onto the page. Text is the full accumulated LLM
+    // output (useful even when typing failed); TypingFailed marks a chunk-injection failure and
+    // TypedAnything whether a successful chunk or part of a failed chunk landed; Faulted marks the
+    // provider stream breaking mid-way after partial output already landed, so the accumulated text
+    // is incomplete.
+    private sealed record StreamCommandResult(
+        string Text,
+        bool TypingFailed,
+        bool TypedAnything,
+        bool Faulted
+    );
+
+    // Types each delta of a spoken-command result onto the page as it streams. Buffers into modest
+    // chunks to limit ydotool invocations; onFirstType runs once, just before the first characters,
+    // and returns whether the target window is focused — a false result aborts typing so the caller
+    // re-inserts via the focus-and-fallback one-shot path instead of typing into the wrong window.
+    private async Task<StreamCommandResult> StreamCommandOntoPageAsync(
+        PromptAction action,
+        string input,
+        bool wrapInput,
+        string? memorySourceId,
+        LlmCallCapture? capture,
+        string? targetProcessName,
+        Func<Task<bool>> onFirstType,
+        CancellationToken token
+    )
+    {
+        var accumulated = new StringBuilder();
+        var buffer = new StringBuilder();
+        var firstTypeDone = false;
+        var typingFailed = false;
+        var typedAnything = false;
+        var streamFaulted = false;
+
+        try
+        {
+            await foreach (var delta in _promptProcessing
+                               .ProcessStreamingAsync(action, input, capture, token, wrapInput,
+                                   memorySourceId: memorySourceId))
+            {
+                if (string.IsNullOrEmpty(delta))
+                {
+                    continue;
+                }
+
+                accumulated.Append(delta);
+                buffer.Append(delta);
+                // Keep accumulating the full result after a typing failure (the caller reuses it for
+                // a one-shot fallback), but stop flushing chunks that can no longer land.
+                if (buffer.Length >= 20 && !typingFailed)
+                {
+                    await FlushAsync();
+                }
+            }
+
+            // Skip the final flush when nothing has been typed yet and the whole result is empty or a
+            // trivial container ("{}"/"null") — the caller reports NoResult, so typing it is worse
+            // than nothing.
+            if (!typingFailed && !(!firstTypeDone && IsWhitespaceOrTrivialResult(accumulated.ToString())))
+            {
+                await FlushAsync();
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // User hit Escape: drop the buffered tail rather than typing it, and never trigger
+            // onFirstType post-cancel (it hides the overlay and refocuses the target window).
             throw;
         }
+        catch (Exception ex)
+        {
+            // Key recovery off whether anything was actually TYPED, not merely accumulated: a short
+            // first delta can still be sitting unflushed in the buffer, so the page is clean and a
+            // full batch retry recovers the whole result. Flushing that buffer first would type a
+            // truncated prefix the retry can't cleanly replace. Once a chunk has landed, the visible
+            // text is a truncated prefix a retry would duplicate, so just mark the stream faulted.
+            streamFaulted = await RecoverSpokenCommandStreamFaultAsync(
+                ex,
+                typedAnything,
+                TryBatchFallbackAsync,
+                token
+            );
+        }
+
+        // Streaming completed but yielded nothing (proxy EOF / empty 200) — the batch endpoint may
+        // still return the result, mirroring the prompt-action path's !ReceivedAnyChunk fallback. An
+        // empty batch here is a genuine NoResult, not a fault, so don't mark the stream faulted.
+        if (!typedAnything && !streamFaulted && accumulated.Length == 0)
+        {
+            await TryBatchFallbackAsync();
+        }
+
+        return new StreamCommandResult(accumulated.ToString(), typingFailed, typedAnything, streamFaulted);
+
+        async Task TypeAsync(string text)
+        {
+            // Once injection has failed, stop typing but let the stream keep accumulating.
+            if (typingFailed)
+            {
+                return;
+            }
+
+            if (!firstTypeDone)
+            {
+                firstTypeDone = true;
+                if (!await onFirstType().ConfigureAwait(false))
+                {
+                    // Target window couldn't be confirmed focused; typing now would land in the wrong
+                    // app. Bail so the caller re-inserts via the focus-and-fallback one-shot path.
+                    typingFailed = true;
+                    return;
+                }
+            }
+
+            var chunk = await _textInsertion
+                .TypeStreamChunkAsync(text, targetProcessName)
+                .ConfigureAwait(false);
+            (typingFailed, typedAnything) = ApplyStreamChunkTypingOutcome(
+                typedAnything,
+                chunk.Succeeded,
+                chunk.DeliveredPartialText
+            );
+        }
+
+        async Task FlushAsync()
+        {
+            if (buffer.Length == 0)
+            {
+                return;
+            }
+
+            await TypeAsync(buffer.ToString());
+            buffer.Clear();
+        }
+
+        // Runs the non-streaming endpoint and types its result. Returns whether it produced anything;
+        // callers replace the (empty or truncated) accumulated text with the batch result.
+        async Task<bool> TryBatchFallbackAsync()
+        {
+            // Pass the capture: this batch retry is a distinct LLM call whose response is
+            // what actually reaches the page and is saved as FinalText, so it must be
+            // recorded too. On this degraded path the Inspect panel then shows both the
+            // faulted/empty streaming attempt and the batch retry that produced the result,
+            // instead of a history entry whose recorded response doesn't match the inserted
+            // text (mirrors the prompt-action streaming→batch fallback).
+            var batch = await _promptProcessing
+                .ProcessAsync(action, input, capture, token, wrapInput, memorySourceId: memorySourceId)
+                .ConfigureAwait(false);
+            if (string.IsNullOrEmpty(batch))
+            {
+                return false;
+            }
+
+            accumulated.Clear();
+            accumulated.Append(batch);
+            // Same guard as the streaming path: never type an empty/trivial container.
+            if (!IsWhitespaceOrTrivialResult(batch))
+            {
+                await TypeAsync(batch);
+            }
+
+            return true;
+        }
+    }
+
+    // TypingFailed is assigned, not OR'd: the flush guards early-return once it is set, so this only
+    // ever runs while no chunk has failed and the write cannot clear a sticky failure. Callers must
+    // not invoke it after a failed chunk.
+    internal static (bool TypingFailed, bool TypedAnything) ApplyStreamChunkTypingOutcome(
+        bool typedAnythingSoFar,
+        bool chunkSucceeded,
+        bool chunkDeliveredPartialText
+    )
+    {
+        return (
+            !chunkSucceeded,
+            typedAnythingSoFar || chunkSucceeded || chunkDeliveredPartialText
+        );
+    }
+
+    internal static async Task<bool> RecoverSpokenCommandStreamFaultAsync(
+        Exception exception,
+        bool typedAnything,
+        Func<Task<bool>> tryBatchFallback,
+        CancellationToken commandToken
+    )
+    {
+        // Caller cancellation wins a race with a provider timeout/fault and must
+        // never start a duplicate batch request.
+        commandToken.ThrowIfCancellationRequested();
+        Trace.WriteLine($"[Command] Streaming insertion faulted: {exception.Message}");
+
+        // A configuration fault (signed-out or uninstalled provider) resolves the same selection
+        // again in the batch path and fails identically; surface it instead of retrying. Other
+        // kinds keep the fallback, which exists for stream-specific failures.
+        if (exception is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
+        {
+            ExceptionDispatchInfo.Capture(exception).Throw();
+        }
+
+        return typedAnything || !await tryBatchFallback();
+    }
+
+    private static bool IsWhitespaceOrTrivialResult(string text)
+    {
+        return string.IsNullOrWhiteSpace(text) || IsTrivialCommandResult(text);
+    }
+
+    // Fallback when streaming typing never landed a single chunk (e.g. no injection backend):
+    // insert the whole result in one shot and map the outcome to the same completion messaging the
+    // normal insertion path uses, so a genuine failure is never reported as success.
+    private async Task<InsertionResult> CompleteViaOneShotInsertionAsync(
+        RecordingContext context,
+        string result,
+        Func<Task<bool>>? selectionStillTargeted
+    )
+    {
+        var strategy = ResolveInsertionStrategy(context.AppProcess);
+        var autoPaste = _settings.Current.AutoPaste
+                        && strategy is not TextInsertionStrategy.CopyOnly
+                        && (selectionStillTargeted is null
+                            ? await IsDeliveryTargetStillFocusedAsync(context, false)
+                            : await selectionStillTargeted());
+        var insertion = await _textInsertion.InsertTextAsync(
+            new TextInsertionRequest(
+                result,
+                autoPaste,
+                context.WindowId,
+                context.AppProcess,
+                context.AppTitle,
+                false,
+                strategy,
+                context.LockedFocusField
+            )
+        );
+
+        var completionMessage = insertion switch
+        {
+            InsertionResult.Pasted or InsertionResult.Typed =>
+                Localization.Loc.Instance["Command.Done"],
+            InsertionResult.CopiedToClipboard =>
+                ClipboardFallbackMessage(context.AppProcess),
+            InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
+            InsertionResult.MissingPasteTool =>
+                $"Text insertion failed. {_commands.GetSnapshot().PasteToolInstallHint}",
+            _ => "Text insertion failed. Command result could not be inserted.",
+        };
+        var isError =
+            insertion
+                is not InsertionResult.Pasted
+                and not InsertionResult.Typed
+                and not InsertionResult.CopiedToClipboard;
+        ReportStatus(context, completionMessage);
+        ShowFeedback(context, completionMessage, isError);
+
+        // Terminal session record so a polling API client resolves instead of looping.
+        PublishSessionResult(
+            new DictationSessionResult(
+                context.SessionId,
+                isError ? "failed" : "ready",
+                isError ? string.Empty : result,
+                null,
+                null,
+                0,
+                null,
+                null,
+                completionMessage
+            )
+        );
+
+        if (
+            insertion
+            is InsertionResult.Pasted
+            or InsertionResult.Typed
+            or InsertionResult.CopiedToClipboard
+        )
+        {
+            _models.PluginManager.EventBus.Publish(
+                new TextInsertedEvent { Text = result, AppName = context.AppTitle }
+            );
+        }
+
+        return insertion;
+    }
+
+    // Saved prompt actions eligible for name matching. Action-plugin-backed actions are excluded —
+    // they route output to a plugin, not the in-place transform this flow performs.
+    private List<PromptAction> CommandTransformActions()
+    {
+        return _promptActions
+            .EnabledActions.Where(candidate =>
+                string.IsNullOrWhiteSpace(candidate.TargetActionPluginId)
+            )
+            .ToList();
+    }
+
+    // Transient prompt action for an ad-hoc spoken command, carrying the spoken-command model
+    // override (null falls through to the global default).
+    private PromptAction BuildTransientCommandAction(string id, string systemPrompt)
+    {
+        return new PromptAction
+        {
+            Id = id,
+            Name = "Spoken command",
+            SystemPrompt = systemPrompt,
+            ProviderOverride = _settings.Current.SpokenCommandLlmProvider,
+        };
     }
 
     private CleanupLevel ResolveCleanupLevel(RecordingContext context, PromptAction? promptAction)
@@ -1929,14 +4103,19 @@ public sealed class DictationOrchestrator : IDisposable
             return false;
         }
 
-        // No available LLM provider ⇒ Medium/High cleanup falls back to Light without ever
-        // calling the provider, so the reference context can't be consumed. Don't read it.
-        if (!_promptProcessing.IsAnyProviderAvailable)
+        if (ResolveBaseCleanupLevel(profile) is not (CleanupLevel.Medium or CleanupLevel.High))
         {
             return false;
         }
 
-        return ResolveBaseCleanupLevel(profile) is CleanupLevel.Medium or CleanupLevel.High;
+        try
+        {
+            return _promptProcessing.GetCleanupProviderSelection() is not null;
+        }
+        catch (PluginRequestException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -1946,7 +4125,7 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     private (bool Screen, bool Clipboard) EvaluateReferenceCaptureNeeds(Profile? profile)
     {
-        return !WillLlmCleanupRun(profile)
+        return !_sessionActivityMonitor.IsInputAllowed || !WillLlmCleanupRun(profile)
             ? (false, false)
             : (ResolveScreenContextEnabled(profile), ResolveClipboardContextEnabled(profile));
     }
@@ -1964,6 +4143,11 @@ public sealed class DictationOrchestrator : IDisposable
         string? windowTitle
     )
     {
+        if (!_sessionActivityMonitor.IsInputAllowed)
+        {
+            return;
+        }
+
         // Run the two reads concurrently (independent subprocesses) so the capture is bounded by
         // max(clipboard, screen) ≈ 1 s, not their sum — keeps a post-URL supplementary capture
         // inside the stop wait budget.
@@ -1980,6 +4164,11 @@ public sealed class DictationOrchestrator : IDisposable
         lock (_recordingSessionLock)
         {
             if (_recordingSession != sessionId)
+            {
+                return;
+            }
+
+            if (!_sessionActivityMonitor.IsInputAllowed)
             {
                 return;
             }
@@ -2022,7 +4211,9 @@ public sealed class DictationOrchestrator : IDisposable
         {
             return TruncateReferenceContext(
                 await Task.Run(
-                        () => _activeWindow.GetFocusedScreenContext(windowProcess, windowTitle)
+                        () => _sessionActivityMonitor.IsInputAllowed
+                            ? _activeWindow.GetFocusedScreenContext(windowProcess, windowTitle)
+                            : null
                     )
                     .ConfigureAwait(false)
             );
@@ -2137,39 +4328,64 @@ public sealed class DictationOrchestrator : IDisposable
 
     private TextInsertionStrategy ResolveInsertionStrategy(string? processName)
     {
-        if (string.IsNullOrWhiteSpace(processName))
-        {
-            return TextInsertionStrategy.Auto;
-        }
-
-        var strategies = _settings.Current.AppInsertionStrategies;
-        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- AppInsertionStrategies is JSON-deserialized and can be null when omitted; the guard is defensive.
-        if (strategies is null || strategies.Count == 0)
-        {
-            return TextInsertionStrategy.Auto;
-        }
-
-        var process = ProcessNameNormalizer.Normalize(processName);
-        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- explicit loop with dual-key (raw + normalized) matching is clearer than a LINQ rewrite.
-        foreach (var entry in strategies)
-        {
-            if (
-                string.Equals(entry.Key, processName, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(entry.Key, process, StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return entry.Value;
-            }
-        }
-
-        return TextInsertionStrategy.Auto;
+        return AppInsertionStrategyResolver.Resolve(
+            _settings.Current.AppInsertionStrategies,
+            processName
+        );
     }
 
     private static string ClipboardToolMissingMessage()
     {
-        return Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is { Length: > 0 }
+        return WaylandSessionDetector.HasWaylandDisplay()
             ? "Text insertion failed. Install wl-clipboard to enable clipboard insertion."
             : "Text insertion failed. Install xclip to enable clipboard insertion.";
+    }
+
+    private async Task<LockedFocusTarget?> CaptureLockedFieldAsync(
+        bool enabled,
+        AtSpiElementRef? initialElement,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!enabled)
+        {
+            return null;
+        }
+
+        // Consent withdrawn is feature unavailable (lock off); a stopped client still fails closed.
+        if (!_settings.Current.TargetAppCorrectionLearningEnabled)
+        {
+            Trace.WriteLine("[Dictation] Focus lock skipped: target-app correction learning is off.");
+            return null;
+        }
+
+        if (_atSpiClient?.IsRunning != true)
+        {
+            Trace.WriteLine("[Dictation] Focus lock capture unavailable: accessibility client stopped.");
+            return new LockedFocusTarget(null);
+        }
+
+        try
+        {
+            if (initialElement is null)
+            {
+                Trace.WriteLine("[Dictation] Focus lock capture unavailable: no focused element.");
+                return new LockedFocusTarget(null);
+            }
+
+            if (await _atSpiClient.IsLockableFieldAsync(initialElement.Value, cancellationToken))
+            {
+                return new LockedFocusTarget(initialElement);
+            }
+
+            Trace.WriteLine("[Dictation] Focus lock rejected: field is password, read-only, or unreadable.");
+            return new LockedFocusTarget(null);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Focus lock capture failed: {ex.Message}");
+            return new LockedFocusTarget(null);
+        }
     }
 
     /// <summary>
@@ -2179,10 +4395,27 @@ public sealed class DictationOrchestrator : IDisposable
     ///     which the service sets on the same call that produced this result —
     ///     so we can guide the user to the actual setup gap (e.g. ydotool not
     ///     running) instead of the generic "paste with Ctrl+V" line.
+    ///     Reason-specific guidance wins even in a terminal; the terminal hint
+    ///     (which names the terminal's Ctrl+Shift+V chord) only covers the cases
+    ///     with no actionable diagnosis behind them.
     /// </summary>
-    private string ClipboardFallbackMessage()
+    private string ClipboardFallbackMessage(string? targetProcessName)
     {
-        return _textInsertion.LastFailureReason switch
+        // One snapshot for both the terminal guard and the switch: a concurrent
+        // insertion could change LastFailureReason between the two reads and
+        // produce guidance that matches neither outcome.
+        var failureReason = _textInsertion.LastFailureReason;
+        if (
+            TextInsertionService.IsTerminalApp(targetProcessName)
+            && failureReason
+                is InsertionFailureReason.None
+                or InsertionFailureReason.PasteRetriesExhausted
+        )
+        {
+            return Localization.Loc.Instance["TextInsertion.TerminalClipboardFallback"];
+        }
+
+        return failureReason switch
         {
             InsertionFailureReason.WtypeCompositorUnsupported =>
                 "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
@@ -2190,9 +4423,11 @@ public sealed class DictationOrchestrator : IDisposable
                 "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
             InsertionFailureReason.NoWaylandTypingTool =>
                 $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
+            InsertionFailureReason.LockedFieldUnavailable =>
+                Localization.Loc.Instance["Dictation.LockedFieldGone"],
             InsertionFailureReason.FocusFailed =>
                 "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
-            _ => "Copied to clipboard (paste with Ctrl+V)."
+            _ => "Copied to clipboard (paste with Ctrl+V).",
         };
     }
 
@@ -2217,7 +4452,7 @@ public sealed class DictationOrchestrator : IDisposable
         );
     }
 
-    private async Task<InsertionResult> ExecuteActionPluginAsync(
+    private Task<ActionPluginExecutionResult> ExecuteActionPluginAsync(
         IActionPlugin actionPlugin,
         RecordingContext context,
         string inputText,
@@ -2226,7 +4461,8 @@ public sealed class DictationOrchestrator : IDisposable
         CancellationToken cancelToken
     )
     {
-        var result = await actionPlugin.ExecuteAsync(
+        return _actionPluginExecutionHost.ExecuteAsync(
+            actionPlugin,
             inputText,
             new ActionContext(
                 context.AppTitle,
@@ -2235,25 +4471,30 @@ public sealed class DictationOrchestrator : IDisposable
                 detectedLanguage,
                 rawText
             ),
+            context.AppTitle,
             cancelToken
         );
+    }
 
-        _models.PluginManager.EventBus.Publish(
-            new ActionCompletedEvent
-            {
-                ActionId = actionPlugin.ActionId,
-                Success = result.Success,
-                Message = result.Message,
-                AppName = context.AppTitle
-            }
+    /// <summary>
+    ///     Gate for arming silent target-app correction learning: the feature is enabled,
+    ///     the text went into the field directly (typed or pasted — not a clipboard
+    ///     fallback), it was plain dictation output (no action plugin), and it is short
+    ///     enough to be a normal edit rather than a document dump. AT-SPI availability is
+    ///     checked inside <see cref="TargetAppCorrectionLearningService.ArmAsync" />.
+    /// </summary>
+    private bool ShouldArmTargetAppLearning(
+        InsertionResult insertion,
+        IActionPlugin? actionPlugin,
+        string insertionText
+    )
+    {
+        return TargetAppCorrectionLearningService.ShouldArm(
+            _settings.Current.TargetAppCorrectionLearningEnabled,
+            insertion,
+            actionPlugin is not null,
+            insertionText.Length
         );
-
-        if (!string.IsNullOrWhiteSpace(result.Message))
-        {
-            ReportStatus(context, result.Message);
-        }
-
-        return result.Success ? InsertionResult.ActionHandled : InsertionResult.ActionFailed;
     }
 
     private static void FireAndLog(Func<Task> start, string label)
@@ -2265,7 +4506,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] {label} threw synchronously: {ex.Message}");
+            Trace.WriteLine($"[Dictation] {label} threw synchronously: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
             return;
         }
 
@@ -2327,6 +4568,115 @@ public sealed class DictationOrchestrator : IDisposable
                || name.Contains("headset", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Builds a TranscriptionRecord pre-filled with the fields shared by both history paths
+    // (dictation and spoken command). Callers supply the path-specific values — InsertionStatus,
+    // pipeline flags, IsSpokenCommand, LlmCalls, … — via a `with` expression on the result.
+    private TranscriptionRecord BuildHistoryRecord(
+        RecordingContext context,
+        string id,
+        DateTime timestamp,
+        string rawText,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string? wavPath,
+        string engineUsed,
+        string? modelUsed
+    )
+    {
+        var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
+        var language =
+            result?.DetectedLanguage
+            ?? LanguageSelectionResolver
+                .ResolveOrAutomatic(context.Profile?.InputLanguage, _settings.Current.Language)
+                .LanguageTag;
+
+        return new TranscriptionRecord
+        {
+            Id = id,
+            Timestamp = timestamp,
+            RawText = rawText,
+            FinalText = finalText,
+            AppName = context.AppTitle,
+            AppProcessName = context.AppProcess,
+            AppUrl = context.AppUrl,
+            DurationSeconds = duration,
+            Language = language,
+            ProfileName = context.Profile?.Name,
+            EngineUsed = engine,
+            ModelUsed = modelUsed,
+            AudioFileName = Path.GetFileName(wavPath),
+            TranscriptionTaskUsed = ResolveTranscriptionTask(context),
+        };
+    }
+
+    // Records statistics for a completed spoken command and saves its history entry
+    // when history saving is enabled. RawText is the source text the command acted on
+    // (selected text for an edit, the command itself for a create); FinalText is the
+    // generated/transformed text that was produced, so the raw→final diff reads
+    // "source → result". InsertionStatus is the real result of the insert
+    // (typed/pasted/copied). LlmCalls carries the command's request/response
+    // (context.Capture) so the Inspect panel shows it exactly like a dictation's prompt action.
+    private void AddSpokenCommandHistoryRecord(
+        RecordingContext context,
+        string rawText,
+        string finalText,
+        double duration,
+        PluginTranscriptionResult? result,
+        string? wavPath,
+        string engineUsed,
+        string? modelUsed,
+        TextInsertionStatus insertionStatus
+    )
+    {
+        try
+        {
+            var timestamp =
+                context.RecordingStart == default ? DateTime.UtcNow : context.RecordingStart;
+
+            var record =
+                BuildHistoryRecord(
+                    context,
+                    Guid.NewGuid().ToString(),
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    engineUsed,
+                    modelUsed
+                ) with
+                {
+                    InsertionStatus = insertionStatus,
+                    CleanupLevelUsed = CleanupLevel.None,
+                    PromptActionApplied = true,
+                    IsSpokenCommand = true,
+                    LlmCalls = context.Capture?.Calls ?? [],
+                };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Command] RecordTranscription failed: {ex.Message}");
+            }
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Command] AddSpokenCommandHistoryRecord failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
+        }
+    }
+
+    // Records statistics for a completed dictation and saves its history entry when
+    // history saving is enabled.
     private void AddHistoryRecord(
         RecordingContext context,
         string id,
@@ -2335,42 +4685,35 @@ public sealed class DictationOrchestrator : IDisposable
         string finalText,
         double duration,
         PluginTranscriptionResult? result,
-        string wavPath,
+        string? wavPath,
         InsertionResult insertion,
         PostProcessingResult pipelineResult,
         CleanupLevel cleanupLevel,
         string engineUsed,
-        string? modelUsed
+        string? modelUsed,
+        bool promptActionUnavailable
     )
     {
         try
         {
-            var engine = string.IsNullOrEmpty(engineUsed) ? "unknown" : engineUsed;
-            var language =
-                result?.DetectedLanguage
-                ?? (_settings.Current.Language is { Length: > 0 } l && l != "auto" ? l : null);
-
-            // Reference context is only fed to (and thus "applied" by) a Medium/High LLM cleanup.
             var referenceContextConsumed = cleanupLevel is CleanupLevel.Medium or CleanupLevel.High;
 
-            _history.AddRecord(
-                new TranscriptionRecord
+            var record =
+                BuildHistoryRecord(
+                    context,
+                    id,
+                    timestamp,
+                    rawText,
+                    finalText,
+                    duration,
+                    result,
+                    wavPath,
+                    engineUsed,
+                    modelUsed
+                ) with
                 {
-                    Id = id,
-                    Timestamp = timestamp,
-                    RawText = rawText,
-                    FinalText = finalText,
-                    AppName = context.AppTitle,
-                    AppProcessName = context.AppProcess,
-                    AppUrl = context.AppUrl,
-                    DurationSeconds = duration,
-                    Language = language,
-                    ProfileName = context.Profile?.Name,
-                    EngineUsed = engine,
-                    ModelUsed = modelUsed,
-                    AudioFileName = Path.GetFileName(wavPath),
                     InsertionStatus = ToTextInsertionStatus(insertion),
-                    InsertionFailureReason = InsertionFailureReasonFor(insertion),
+                    InsertionFailureReason = InsertionFailureReasonFor(insertion, promptActionUnavailable),
                     CleanupLevelUsed = cleanupLevel,
                     CleanupApplied = WasPipelineStepChanged(
                         pipelineResult,
@@ -2392,20 +4735,30 @@ public sealed class DictationOrchestrator : IDisposable
                         pipelineResult,
                         PostProcessingStepNames.Translation
                     ),
-                    // Coarse indicators: the context strings are only non-empty when the
-                    // toggle was effective and a Medium/High cleanup consumed them.
-                    ScreenContextApplied =
-                        referenceContextConsumed
+                    ScreenContextApplied = referenceContextConsumed
                         && !string.IsNullOrWhiteSpace(context.ScreenContext),
-                    ClipboardContextApplied =
-                        referenceContextConsumed
-                        && !string.IsNullOrWhiteSpace(context.ClipboardContext)
-                }
-            );
+                    ClipboardContextApplied = referenceContextConsumed
+                        && !string.IsNullOrWhiteSpace(context.ClipboardContext),
+                    LlmCalls = context.Capture?.Calls ?? [],
+                };
+            // Statistics before history: RecordTranscription may still be catching up from history, and a
+            // record persisted first would be imported by that backfill and then counted a second time.
+            try
+            {
+                _usageStatistics?.RecordTranscription(record);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Dictation] RecordTranscription failed: {ex.Message}");
+            }
+            if (_settings.Current.SaveToHistoryEnabled)
+            {
+                _history.AddRecord(record);
+            }
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] AddHistoryRecord failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] AddHistoryRecord failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -2419,10 +4772,11 @@ public sealed class DictationOrchestrator : IDisposable
             InsertionResult.NoText => TextInsertionStatus.NoText,
             InsertionResult.ActionHandled => TextInsertionStatus.ActionHandled,
             InsertionResult.ActionFailed => TextInsertionStatus.ActionFailed,
+            InsertionResult.ActionUnavailable => TextInsertionStatus.ActionUnavailable,
             InsertionResult.MissingClipboardTool => TextInsertionStatus.MissingClipboardTool,
             InsertionResult.MissingPasteTool => TextInsertionStatus.MissingPasteTool,
             InsertionResult.Failed => TextInsertionStatus.Failed,
-            _ => TextInsertionStatus.Unknown
+            _ => TextInsertionStatus.Unknown,
         };
     }
 
@@ -2440,15 +4794,18 @@ public sealed class DictationOrchestrator : IDisposable
         );
     }
 
-    private static string? InsertionFailureReasonFor(InsertionResult insertion)
+    private static string? InsertionFailureReasonFor(InsertionResult insertion, bool promptActionUnavailable)
     {
         return insertion switch
         {
             InsertionResult.ActionFailed => "Action plugin failed.",
+            InsertionResult.ActionUnavailable =>
+                promptActionUnavailable ? "Configured prompt action is unavailable."
+                    : "Configured action plugin destination is unavailable.",
             InsertionResult.MissingClipboardTool => ClipboardToolMissingMessage(),
             InsertionResult.MissingPasteTool => "Automatic paste tool is unavailable.",
             InsertionResult.Failed => "Text insertion failed.",
-            _ => null
+            _ => null,
         };
     }
 
@@ -2456,7 +4813,16 @@ public sealed class DictationOrchestrator : IDisposable
     {
         StatusMessage?.Invoke(this, message);
         SetOverlayState(state =>
-            state with { IsOverlayVisible = true, StatusText = message, ShowFeedback = false, FeedbackText = null }
+            state with
+            {
+                IsOverlayVisible = true,
+                StatusText = message,
+                ShowFeedback = false,
+                FeedbackText = null,
+                ActionResultUrl = null,
+                NotificationIconName = null,
+                FeedbackDurationMilliseconds = null,
+            }
         );
     }
 
@@ -2476,8 +4842,124 @@ public sealed class DictationOrchestrator : IDisposable
         return Task.Delay(90);
     }
 
-    private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)
+    // Without an xdotool window id, TextInsertionService can't re-activate the recording's window,
+    // so a paste would land in whatever is focused now. Compare compositor snapshots instead.
+    internal static bool HasTargetWindowChanged(ActiveWindowSnapshot? captured, ActiveWindowSnapshot? current)
     {
+        // Nothing to compare against: deliver to the focused window as before.
+        if (string.IsNullOrWhiteSpace(captured?.WindowId))
+        {
+            return false;
+        }
+
+        return current is null
+               || !string.Equals(captured.Source, current.Source, StringComparison.Ordinal)
+               || !string.Equals(captured.WindowId, current.WindowId, StringComparison.Ordinal);
+    }
+
+    internal static bool CanVerifyTargetWindow(RecordingContext context)
+    {
+        if (!context.IsWaylandSession)
+        {
+            return !string.IsNullOrEmpty(context.WindowId) || !string.IsNullOrWhiteSpace(context.TargetWindow?.WindowId);
+        }
+
+        // xdotool only sees XWayland windows and keeps reporting the last one after focus moves
+        // to a native window, so only a compositor snapshot can vouch for focus here.
+        return !string.IsNullOrWhiteSpace(context.TargetWindow?.WindowId)
+               && !string.Equals(context.TargetWindow.Source, "xdotool", StringComparison.Ordinal);
+    }
+
+    // requireFieldIdentity: without an AT-SPI field to check, a same-window field move can't be seen,
+    // so the caller would rather copy than paste.
+    private async Task<bool> IsDeliveryTargetStillFocusedAsync(RecordingContext context, bool requireFieldIdentity)
+    {
+        // A locked field is restored through AT-SPI by TextInsertionService, which falls back to
+        // the clipboard itself (with its own reason) when it can't be or none was captured.
+        if (context.LockedFocusField is not null)
+        {
+            return true;
+        }
+
+        return await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false)
+               && IsTargetFieldStillFocused(context, requireFieldIdentity);
+    }
+
+    // Compares the client's tracked focus rather than querying the element: an app without an
+    // accessibility tree leaves the last focus event in place, which still matches while it stays focused.
+    private bool IsTargetFieldStillFocused(RecordingContext context, bool requireFieldIdentity)
+    {
+        if (context.TargetField is not { } field
+            || _atSpiClient?.IsRunning != true
+            || !_settings.Current.TargetAppCorrectionLearningEnabled)
+        {
+            if (requireFieldIdentity)
+            {
+                Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: the dictation's field can't be verified.");
+            }
+
+            return !requireFieldIdentity;
+        }
+
+        if (_atSpiClient.CurrentFocusedElement == field)
+        {
+            return true;
+        }
+
+        Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: focus moved off the dictation's field.");
+        return false;
+    }
+
+    // Re-activates the recording's window where xdotool can, then confirms it holds focus.
+    private async Task<bool> IsVerifiedTargetFocusedAsync(RecordingContext context)
+    {
+        return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
+               && await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsCapturedWindowFocusedAsync(RecordingContext context)
+    {
+        // On X11 TextInsertionService re-activates an xdotool id instead.
+        if ((!context.IsWaylandSession && !string.IsNullOrEmpty(context.WindowId)) || context.TargetWindow is null)
+        {
+            return true;
+        }
+
+        ActiveWindowSnapshot? current = null;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+            current = await _activeWindow.GetActiveWindowSnapshotAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Target window re-check failed: {ex.GetType().Name}");
+        }
+
+        if (!HasTargetWindowChanged(context.TargetWindow, current))
+        {
+            return true;
+        }
+
+        Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: focus moved off the recording's window.");
+        return false;
+    }
+
+    // A tab switch keeps the window ID, so the title is the only tab signal the snapshot has;
+    // a missing title can't prove the tab stayed the same.
+    internal static bool IsSameWindowAndTab(ActiveWindowSnapshot? a, ActiveWindowSnapshot? b)
+    {
+        if (
+            a is null
+            || b is null
+            || string.IsNullOrWhiteSpace(a.Title)
+            || string.IsNullOrWhiteSpace(b.Title)
+            || !string.Equals(a.Title, b.Title, StringComparison.Ordinal)
+        )
+        {
+            return false;
+        }
+
         if (a.WindowId is not null && b.WindowId is not null)
         {
             return string.Equals(a.WindowId, b.WindowId, StringComparison.Ordinal);
@@ -2496,58 +4978,191 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     private void ReportStatus(RecordingContext context, string message)
     {
+        if (context.SuppressStatus)
+        {
+            return;
+        }
+
         StatusMessage?.Invoke(this, message);
         if (!IsContextStillOwningOverlay(context))
         {
             return;
         }
 
-        SetOverlayState(state =>
-            state with { IsOverlayVisible = true, StatusText = message, ShowFeedback = false, FeedbackText = null }
+        SetOverlayState(context, state =>
+            state with
+            {
+                IsOverlayVisible = true,
+                StatusText = message,
+                ShowFeedback = false,
+                FeedbackText = null,
+                ActionResultUrl = null,
+                NotificationIconName = null,
+                FeedbackDurationMilliseconds = null,
+            }
         );
     }
 
-    private void ShowFeedback(string text, bool isError, bool isCanceled = false)
+    private void ShowFeedback(
+        string text,
+        bool isError,
+        bool isCanceled = false,
+        bool playSound = true,
+        ActionPluginExecutionResult? actionResult = null
+    )
     {
-        SetOverlayState(state =>
-            state with
-            {
-                IsOverlayVisible = false,
-                ShowFeedback = true,
-                FeedbackIsError = isError,
-                FeedbackText = text,
-                PartialText = null,
-                LlmResponseText = null,
-                IsRecording = false,
-                ActiveProfileName = null,
-                ActiveAppName = null,
-                SessionStartedAtUtc = null
-            }
-        );
+        SetOverlayState(state => FeedbackState(state, text, isError, actionResult));
 
         // Terminal-outcome cue, matching the Windows build's success/error
         // sounds. ShowFeedback is the single chokepoint every terminal toast
         // flows through, so classify off the caller's intent. Cancellation
         // surfaces with isError=false but is neither success nor failure —
         // callers flag it via isCanceled rather than us sniffing the text
-        // (which varies: "Canceled", "Dictation canceled.", …).
-        if (!_settings.Current.SoundFeedbackEnabled)
+        // (which varies: "Canceled", "Dictation canceled.", …). Transient
+        // (non-dictation) feedback passes playSound: false — its cue is
+        // fire-and-forget and would otherwise outlive the ownership check and
+        // bleed into a microphone a dictation opens moments later.
+        if (!playSound || !_settings.Current.SoundFeedbackEnabled)
         {
             return;
         }
 
-        if (isError)
+        TryRunTerminalFeedback(isError, isCanceled);
+    }
+
+    private void TryRunTerminalFeedback(bool isError, bool isCanceled)
+    {
+        _speechFeedback.TryRunOrdinaryFeedback(() =>
         {
-            _soundFeedback.PlayError();
-        }
-        else if (!isCanceled)
+            if (isError)
+            {
+                _soundFeedback.PlayError();
+            }
+            else if (!isCanceled)
+            {
+                _soundFeedback.PlaySuccess();
+            }
+        });
+    }
+
+    internal static DictationOverlayState FeedbackState(
+        DictationOverlayState state,
+        string text,
+        bool isError,
+        ActionPluginExecutionResult? actionResult = null
+    )
+    {
+        return state with
         {
-            _soundFeedback.PlaySuccess();
+            IsOverlayVisible = false,
+            ShowFeedback = true,
+            FeedbackIsError = isError,
+            FeedbackText = text,
+            ActionResultUrl = actionResult?.Url,
+            NotificationIconName = actionResult?.Icon,
+            FeedbackDurationMilliseconds = actionResult?.DisplayDurationMilliseconds,
+            PartialText = null,
+            LlmResponseText = null,
+            IsRecording = false,
+            ActiveProfileName = null,
+            ActiveAppName = null,
+            SessionStartedAtUtc = null,
+        };
+    }
+
+    /// <summary>
+    ///     True while a dictation owns the overlay, so non-dictation feedback must not
+    ///     clobber that state. Ownership is read from four signals:
+    ///     <list type="bullet">
+    ///         <item>the toggle gate, held through the whole start/stop transition —
+    ///         including before the mic opens, when the pre-capture start-up cue plays —
+    ///         so a toast's cue can't bleed into a recording that's just starting;</item>
+    ///         <item>the audio-capture flag, raised by any consumer of the shared recorder
+    ///         (e.g. transform selection) that bypasses this gate, so a toast (and its cue)
+    ///         never lands on a mic owned by another capture;</item>
+    ///         <item>a visible overlay showing status rather than a terminal toast
+    ///         (<c>IsOverlayVisible &amp;&amp; !ShowFeedback</c>) — covers the post-stop
+    ///         pipeline, including "Inserting…", whose awaited insertion runs after the
+    ///         in-flight tracker has already cleared;</item>
+    ///         <item>the in-flight tracker, covering hand-off between back-to-back
+    ///         dictations.</item>
+    ///     </list>
+    ///     One copy of the gate: every publisher below reads it, so the signals can't
+    ///     drift apart. Callers must hold <c>_overlayStateLock</c>.
+    /// </summary>
+    private bool HasDictationOwningOverlayLocked()
+    {
+        // CurrentCount == 0 means a start or stop owns the gate; reading it takes no
+        // lock, so it cannot invert against _overlayStateLock.
+        var toggleInProgress = _toggleGate.CurrentCount == 0;
+        var overlayOwnedByActiveSession =
+            _overlayState is { IsOverlayVisible: true, ShowFeedback: false };
+        return toggleInProgress
+               || _audio.IsRecording
+               || overlayOwnedByActiveSession
+               || HasActiveOverlayOwningDictation();
+    }
+
+    /// <summary>
+    ///     Publishes non-dictation feedback through the standard overlay state pipeline,
+    ///     skipped while a dictation owns the overlay so a secondary hotkey can't clobber
+    ///     that state — see <see cref="HasDictationOwningOverlayLocked" />.
+    /// </summary>
+    internal bool TryPublishTransientFeedback(string text, bool isError)
+    {
+        lock (_overlayStateLock)
+        {
+            if (!CanPublishTransientFeedback(HasDictationOwningOverlayLocked()))
+            {
+                return false;
+            }
+
+            ShowFeedback(text, isError, playSound: false);
+            return true;
         }
     }
 
     /// <summary>
-    ///     <see cref="ShowFeedback(string, bool, bool)" /> variant that no-ops once a newer dictation has
+    ///     Presents a Prompt Palette action result unless an active dictation owns the overlay.
+    /// </summary>
+    internal bool TryPublishActionFeedback(ActionPluginExecutionResult result)
+    {
+        lock (_overlayStateLock)
+        {
+            if (!CanPublishTransientFeedback(HasDictationOwningOverlayLocked()))
+            {
+                return false;
+            }
+
+            ShowFeedback(
+                result.Message,
+                !result.Success,
+                playSound: false,
+                actionResult: result
+            );
+            return true;
+        }
+    }
+
+    internal static bool CanPublishTransientFeedback(bool hasActiveDictation)
+    {
+        return !hasActiveDictation;
+    }
+
+    private bool HasActiveOverlayOwningDictation()
+    {
+        lock (_recordingSessionLock)
+        {
+            return _recordingSession > 0
+                   && (
+                       _inFlightTracker.Contains(_recordingSession)
+                       || _inFlightTracker.Contains(_recordingSession - 1)
+                   );
+        }
+    }
+
+    /// <summary>
+    ///     <see cref="ShowFeedback(string, bool, bool, bool, ActionPluginExecutionResult)" /> variant that no-ops once a newer dictation has
     ///     taken over the overlay. Prevents the previous recording's terminal
     ///     feedback ("Typed N char(s)", "Transcription failed", "Canceled") from
     ///     hiding the new recording's overlay.
@@ -2564,7 +5179,75 @@ public sealed class DictationOrchestrator : IDisposable
             return;
         }
 
-        ShowFeedback(text, isError, isCanceled);
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, text, isError)
+        );
+        TryRunSessionTerminalFeedback(context, isError, isCanceled);
+    }
+
+    private void ShowActionFeedback(
+        RecordingContext context,
+        ActionPluginExecutionResult result
+    )
+    {
+        if (!IsContextStillOwningOverlay(context))
+        {
+            return;
+        }
+
+        SetOverlayState(
+            context,
+            state => FeedbackState(state, result.Message, !result.Success, result)
+        );
+        TryRunSessionTerminalFeedback(context, !result.Success, isCanceled: false);
+    }
+
+    private void TryRunSessionTerminalFeedback(
+        RecordingContext context,
+        bool isError,
+        bool isCanceled
+    )
+    {
+        if (!_settings.Current.SoundFeedbackEnabled)
+        {
+            return;
+        }
+
+        lock (_recordingSessionLock)
+        {
+            if (!IsSessionStillOwningOverlayLocked(context.SessionId))
+            {
+                return;
+            }
+
+            // Keep the generation check held through the speech-service guard.
+            // Startup claims the next generation before releasing that guard,
+            // so a prior terminal cue linearizes entirely before or after startup.
+            TryRunTerminalFeedback(isError, isCanceled);
+        }
+    }
+
+    private void TryPublishSessionSpeechFeedback(RecordingContext context, Func<Action?> begin)
+    {
+        Action? launch;
+        lock (_recordingSessionLock)
+        {
+            if (!IsSessionStillOwningOverlayLocked(context.SessionId))
+            {
+                return;
+            }
+
+            // Registration (version allocation + request swap) happens under the
+            // session lock so it linearizes with startup's generation claim and
+            // ReserveStartupFeedback, but the launch crosses the TTS provider /
+            // plugin trust boundary and must run after the lock is released — a
+            // hung provider or plugin Stop() must not be able to freeze the
+            // dictation toggle path.
+            launch = begin();
+        }
+
+        launch?.Invoke();
     }
 
     /// <summary>
@@ -2576,29 +5259,42 @@ public sealed class DictationOrchestrator : IDisposable
     /// </summary>
     private bool IsContextStillOwningOverlay(RecordingContext context)
     {
-        int current;
-        lock (_recordingSessionLock)
-        {
-            current = _recordingSession;
-        }
-
-        return current <= context.SessionId + 1;
+        return IsSessionStillOwningOverlay(context.SessionId);
     }
 
-    private void RollBackStartedRecording()
+    // Internal so a test holding only a session id reaches the same arithmetic; keeping one
+    // copy stops a refactor from moving production off the rule the test pins.
+    internal bool IsSessionStillOwningOverlay(int sessionId)
+    {
+        lock (_recordingSessionLock)
+        {
+            return IsSessionStillOwningOverlayLocked(sessionId);
+        }
+    }
+
+    private bool IsSessionStillOwningOverlayLocked(int sessionId)
+    {
+        return _recordingSession <= sessionId + 1;
+    }
+
+    private void RollBackStartedRecording(AudioRecordingService.AudioCaptureSession captureSession)
     {
         try
         {
-            if (_audio.IsRecording)
+            if (_audio.IsRecordingOwnedBy(captureSession))
             {
-                _audio.StopRecording();
+                _audio.StopRecording(captureSession);
             }
         }
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[Dictation] Failed to stop recording during start rollback: {ex.Message}"
+                $"[Dictation] Failed to stop recording during start rollback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
             );
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
         }
 
         try
@@ -2608,7 +5304,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[Dictation] Failed to restore audio during start rollback: {ex.Message}"
+                $"[Dictation] Failed to restore audio during start rollback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
             );
         }
 
@@ -2619,7 +5315,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[Dictation] Failed to resume media during start rollback: {ex.Message}"
+                $"[Dictation] Failed to resume media during start rollback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
             );
         }
 
@@ -2632,18 +5328,42 @@ public sealed class DictationOrchestrator : IDisposable
                 ShowFeedback = false,
                 FeedbackIsError = false,
                 FeedbackText = null,
+                ActionResultUrl = null,
+                NotificationIconName = null,
+                FeedbackDurationMilliseconds = null,
                 PartialText = null,
                 LlmResponseText = null,
                 IsRecording = false,
                 StatusText = Localization.Loc.Instance["Overlay.Ready"],
                 ActiveProfileName = null,
                 ActiveAppName = null,
-                SessionStartedAtUtc = null
+                SessionStartedAtUtc = null,
             }
         );
     }
 
     private void SetOverlayState(Func<DictationOverlayState, DictationOverlayState> updater)
+    {
+        // The current token is read inside the lock so a concurrent re-acquire cannot
+        // slip between the read and the publication.
+        SetOverlayState(token: null, updater);
+    }
+
+    private void SetOverlayState(
+        RecordingContext context,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
+    {
+        if (context.OverlayToken is { } token)
+        {
+            SetOverlayState(token, updater);
+        }
+    }
+
+    private void SetOverlayState(
+        OverlayPresentationToken? token,
+        Func<DictationOverlayState, DictationOverlayState> updater
+    )
     {
         // Serialize updates: SetOverlayState is invoked from the toggle path,
         // the active-window snapshot Task.Run, and the partial-transcription
@@ -2652,12 +5372,36 @@ public sealed class DictationOrchestrator : IDisposable
         // and emit a stale state after a newer one.
         lock (_overlayStateLock)
         {
-            _overlayState = updater(_overlayState);
+            // Derive from the COORDINATOR's slot state, not the _overlayState
+            // mirror: after feedback expiry retires the slot, the mirror still
+            // carries ShowFeedback and republishing from it would resurrect the
+            // expired toast. The mirror becomes a write-behind copy of what was
+            // actually published. Updaters stay pure record-withs, so running
+            // them under the coordinator lock is within Update's contract.
+            DictationOverlayState? published = null;
+            var accepted = _overlayCoordinator.Update(
+                token ?? _overlayToken,
+                current =>
+                {
+                    var next = updater(current);
+                    published = next;
+                    return next;
+                }
+            );
+            if (!accepted || published is null)
+            {
+                return;
+            }
+
+            _overlayState = published;
             OverlayStateChanged?.Invoke(this, _overlayState);
         }
     }
 
-    private void StartPartialTranscriptionSession(int sessionVersion)
+    private void StartPartialTranscriptionSession(
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession
+    )
     {
         _partialTranscriptionCts?.Cancel();
         _partialTranscriptionCts?.Dispose();
@@ -2667,21 +5411,24 @@ public sealed class DictationOrchestrator : IDisposable
         _partialTranscriptionCts = cts;
         // ReSharper disable once MethodSupportsCancellation -- the loop receives cts.Token directly; a Task.Run token would be redundant.
         _partialTranscriptionTask = Task.Run(() =>
-            RunPartialTranscriptionLoopAsync(sessionVersion, cts.Token)
+            RunPartialTranscriptionLoopAsync(sessionVersion, captureSession, cts.Token)
         );
     }
 
     private void StartStreamingTranscriptionSession(
-        ITranscriptionEnginePlugin plugin,
-        string? language,
-        int sessionVersion
+        ITranscriptionEngineRole plugin,
+        LanguageSelection languageSelection,
+        IReadOnlyList<string> languageHints,
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession
     )
     {
         var coordinator = new StreamingTranscriptionCoordinator(
             plugin,
-            language,
+            languageSelection,
+            languageHints,
             sessionVersion,
-            TryPublishPartialTranscript,
+            (version, text) => TryPublishPartialTranscript(version, captureSession, text),
             ex =>
             {
                 // Coordinator already sets its own Faulted flag — just log.
@@ -2689,17 +5436,25 @@ public sealed class DictationOrchestrator : IDisposable
                 // races (rapid stop/start) where a shared field could be
                 // reset by a new dictation before the previous teardown reads it.
                 Trace.WriteLine(
-                    $"[Dictation] Streaming fault: {ex.GetType().Name}: {ex.Message}"
+                    $"[Dictation] Streaming fault: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
-            }
+            },
+            prompt: TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms())
         );
 
         // Wire the audio tap BEFORE StartAsync resolves so frames captured
         // during the connect handshake queue in the coordinator's pending
-        // buffer (1 MB cap, drop-oldest). Detached in
-        // TeardownStreamingSessionAsync.
-        _audio.LiveFrameSink = samples =>
-            coordinator.AcceptAudioFrame(samples, _audio.CaptureSampleRate);
+        // buffer (1 MB cap, drop-oldest). The audio service detaches it at the
+        // token-protected stop boundary.
+        if (
+            !_audio.TrySetLiveFrameSink(
+                captureSession,
+                samples => coordinator.AcceptAudioFrame(samples, _audio.CaptureSampleRate)
+            )
+        )
+        {
+            throw new InvalidOperationException("Audio capture ended before streaming setup.");
+        }
 
         // Owns cancellation of the queued connect handshake. The coordinator
         // creates its own internal _cts inside StartAsync, but if teardown
@@ -2712,17 +5467,12 @@ public sealed class DictationOrchestrator : IDisposable
         _streamingStartupCts = startupCts;
 
         _streamingCoordinator = coordinator;
-        // Capture the engine identity AND language hint bound to this
-        // streaming session so the post-stop path can detect a profile-driven
-        // model swap or language switch (the active-window snapshot resolves
-        // a profile asynchronously, so streaming may have started before the
-        // profile's InputLanguage / TranscriptionModelOverride was known) and
-        // refuse to insert a streaming transcript that was transcribed under
-        // the wrong settings. SelectedModelId is set during plugin activation
-        // and is stable for the recording's duration.
+        // Capture the engine identity bound to this streaming session so the
+        // post-stop path can detect a profile-driven model swap. The same typed
+        // languageSelection instance is retained in the recording context for
+        // either the streaming result or batch fallback.
         _streamingProviderId = plugin.ProviderId;
         _streamingModelId = plugin.SelectedModelId;
-        _streamingLanguageHint = language;
 
         // Fire-and-forget the connect. The coordinator owns its internal CTS
         // and its own Faulted flag once StartAsync runs; before then, our
@@ -2742,13 +5492,13 @@ public sealed class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 Trace.WriteLine(
-                    $"[Dictation] Unexpected streaming start error: {ex.Message}"
+                    $"[Dictation] Unexpected streaming start error: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
             }
         });
     }
 
-    private static async Task<(string? FinalText, bool Faulted)> TeardownStreamingSessionAsync(
+    private static async Task<(string? FinalText, bool Faulted, string? DetectedLanguage)> TeardownStreamingSessionAsync(
         StreamingTranscriptionCoordinator? coordinator,
         CancellationTokenSource? startupCts,
         bool finalize,
@@ -2764,7 +5514,10 @@ public sealed class DictationOrchestrator : IDisposable
         // anyway, so the startup CTS gets implicitly cancelled too.
         if (startupCts is not null && !finalize)
         {
-            try { await startupCts.CancelAsync(); }
+            try
+            {
+                await startupCts.CancelAsync();
+            }
             catch
             {
                 /* ignore */
@@ -2774,7 +5527,7 @@ public sealed class DictationOrchestrator : IDisposable
         if (coordinator is null)
         {
             startupCts?.Dispose();
-            return (null, false);
+            return (null, false, null);
         }
 
         string? finalText = null;
@@ -2785,16 +5538,25 @@ public sealed class DictationOrchestrator : IDisposable
             {
                 finalText = await coordinator.FinalizeAsync(ct);
             }
+            catch (TimeoutException ex)
+            {
+                Trace.WriteLine(
+                    $"[Dictation] Streaming finalize deadline exhausted; "
+                    + $"using complete-WAV batch fallback: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
+                );
+                finalizeThrew = true;
+            }
             catch (Exception ex)
             {
-                Trace.WriteLine($"[Dictation] Streaming finalize error: {ex.Message}");
+                Trace.WriteLine($"[Dictation] Streaming finalize error: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 finalizeThrew = true;
             }
         }
 
+        var detectedLanguage = coordinator.DetectedLanguage;
         await coordinator.DisposeAsync();
         startupCts?.Dispose();
-        return (finalText, coordinator.Faulted || finalizeThrew);
+        return (finalText, coordinator.Faulted || finalizeThrew, detectedLanguage);
     }
 
     private async Task<string> StopPartialTranscriptionSessionAsync()
@@ -2824,7 +5586,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (TimeoutException) { }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Partial transcription shutdown failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
 
         return _partialTranscriptState.StopSession();
@@ -2870,7 +5632,7 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Active-window snapshot wait failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Active-window snapshot wait failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -2896,7 +5658,7 @@ public sealed class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 Trace.WriteLine(
-                    $"[Dictation] Partial transcription dispose wait failed: {ex.Message}"
+                    $"[Dictation] Partial transcription dispose wait failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
             }
         }
@@ -2904,7 +5666,11 @@ public sealed class DictationOrchestrator : IDisposable
         _partialTranscriptState.StopSession();
     }
 
-    private async Task RunPartialTranscriptionLoopAsync(int sessionVersion, CancellationToken ct)
+    private async Task RunPartialTranscriptionLoopAsync(
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession,
+        CancellationToken ct
+    )
     {
         var partialPollInterval = TimeSpan.FromSeconds(3);
         var loopDelay = TimeSpan.FromMilliseconds(250);
@@ -2912,7 +5678,10 @@ public sealed class DictationOrchestrator : IDisposable
 
         try
         {
-            while (!ct.IsCancellationRequested && _audio.IsRecording)
+            while (
+                !ct.IsCancellationRequested
+                && _audio.IsRecordingOwnedBy(captureSession)
+            )
             {
                 if (_audio.HasSpeechEnergy)
                 {
@@ -2929,7 +5698,7 @@ public sealed class DictationOrchestrator : IDisposable
 
                 if (DateTime.UtcNow >= nextPartialPollAtUtc)
                 {
-                    var wav = _audio.GetCurrentBuffer();
+                    var wav = _audio.GetCurrentBuffer(captureSession);
                     // Partials are best-effort/cosmetic. Only poll when a model is
                     // already loaded (never *initiate* a load for a partial), and
                     // use TryAcquire so a partial silently skips when a final
@@ -2946,7 +5715,7 @@ public sealed class DictationOrchestrator : IDisposable
                             ?? _settings.Current.SelectedModelId;
                         await using var lease = await _models.TryAcquireTranscriptionAsync(
                             partialModelId,
-                            ct
+                            cancellationToken: ct
                         );
                         // Local engines poll cheaply; online batch providers
                         // re-upload the whole growing buffer each poll, so they
@@ -2965,6 +5734,7 @@ public sealed class DictationOrchestrator : IDisposable
                                 lease.Plugin,
                                 wav,
                                 sessionVersion,
+                                captureSession,
                                 ct
                             );
                         }
@@ -2979,7 +5749,7 @@ public sealed class DictationOrchestrator : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Partial transcription loop failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Partial transcription loop failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
@@ -3000,52 +5770,60 @@ public sealed class DictationOrchestrator : IDisposable
     }
 
     private async Task PollPartialTranscriptOnceAsync(
-        ITranscriptionEnginePlugin plugin,
+        ITranscriptionEngineRole plugin,
         byte[] wav,
         int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession,
         CancellationToken ct
     )
     {
-        var effectiveLanguage = _recordingProfile?.InputLanguage ?? _settings.Current.Language;
-        // ReSharper disable once InlineTemporaryVariable -- named local kept for readability over inlining into the pattern match.
-        var languageHint =
-            effectiveLanguage is { Length: > 0 } lang && lang != "auto" ? lang : null;
         var translate = string.Equals(
             _recordingProfile?.SelectedTask ?? _settings.Current.TranscriptionTask,
             "translate",
             StringComparison.OrdinalIgnoreCase
         );
+        // Each poll would fail the same way; the final pass reports the refusal once.
+        if (DescribeTranslationRejection(_recordingProfile, _settings.Current, _models) is not null)
+        {
+            return;
+        }
 
         try
         {
+            // Read live: the profile snapshot can land mid-recording, and later
+            // previews should use the matched profile's language.
+            var resolvedHints = LanguageSelectionResolver.ResolveHints(_recordingProfile, _settings.Current);
+            var (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(
+                LanguageSelectionResolver.ResolvePrimary(resolvedHints),
+                resolvedHints
+            );
             var result = await plugin.TranscribeStreamingAsync(
                 wav,
-                languageHint,
+                languageSelection,
+                languageHints,
                 translate,
-                null,
+                TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
                 partial =>
                 {
-                    TryPublishPartialTranscript(sessionVersion, partial);
-                    return !ct.IsCancellationRequested && _audio.IsRecording;
+                    TryPublishPartialTranscript(sessionVersion, captureSession, partial);
+                    return !ct.IsCancellationRequested
+                           && _audio.IsRecordingOwnedBy(captureSession);
                 },
                 ct
             );
 
-            TryPublishPartialTranscript(sessionVersion, result.Text);
+            TryPublishPartialTranscript(sessionVersion, captureSession, result.Text);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] Partial transcription polling failed: {ex.Message}");
+            Trace.WriteLine($"[Dictation] Partial transcription polling failed: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
         }
     }
 
     private void ClearSessionInFlight(int sessionId)
     {
-        lock (_recordingSessionLock)
-        {
-            _inFlightSessions.Remove(sessionId);
-        }
+        _inFlightTracker.End(sessionId);
     }
 
     private void PublishSessionResult(DictationSessionResult result)
@@ -3057,12 +5835,13 @@ public sealed class DictationOrchestrator : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[Dictation] SessionCompleted handler threw: {ex}");
+            Trace.WriteLine($"[Dictation] SessionCompleted handler threw: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}\n{ex.StackTrace}");
         }
     }
 
     private void PublishSessionTerminal(int sessionId, string status, string? message)
     {
+        _telemetry.Finish(sessionId, status);
         PublishSessionResult(
             new DictationSessionResult(
                 sessionId,
@@ -3088,18 +5867,31 @@ public sealed class DictationOrchestrator : IDisposable
         PublishSessionTerminal(sessionId, status, message);
     }
 
-    private void TryPublishPartialTranscript(int sessionVersion, string? text)
+    private void TryPublishPartialTranscript(
+        int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession,
+        string? text
+    )
     {
         if (
             !_partialTranscriptState.TryApplyPolling(
                 sessionVersion,
                 text ?? "",
-                _dictionary.ApplyCorrections,
+                _dictionary.PreviewCorrections,
                 out var partialText
             )
         )
         {
             return;
+        }
+
+        try
+        {
+            ScheduleLiveCleanup(sessionVersion, captureSession, partialText);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Dictation] Live cleanup scheduling failed: {ex.GetType().Name}");
         }
 
         if (string.Equals(_lastPublishedPartialText, partialText, StringComparison.Ordinal))
@@ -3112,14 +5904,89 @@ public sealed class DictationOrchestrator : IDisposable
             new PartialTranscriptionUpdateEvent
             {
                 PartialText = partialText,
-                IsRecording = _audio.IsRecording,
+                IsRecording = _audio.IsRecordingOwnedBy(captureSession),
                 ElapsedSeconds =
                     _recordingStart == default
                         ? 0
-                        : Math.Max(0, (DateTime.UtcNow - _recordingStart).TotalSeconds)
+                        : Math.Max(0, (DateTime.UtcNow - _recordingStart).TotalSeconds),
             }
         );
 
         SetOverlayState(state => state with { PartialText = partialText });
+    }
+    private void ScheduleLiveCleanup(int sessionVersion,
+        AudioRecordingService.AudioCaptureSession captureSession, string rawText)
+    {
+        var settings = _settings.Current;
+        if (!settings.LiveCleanupEnabled) return;
+        // The initial application match and deferred URL match can select None,
+        // Light or a prompt action. Never send provisional global-policy fragments.
+        if (_recordingSnapshotTask?.IsCompletedSuccessfully != true) return;
+        if (!_audio.IsRecordingOwnedBy(captureSession)) return;
+        var profile = _recordingProfile;
+        var action = ResolveAutoPromptAction(profile?.PromptActionId, _promptActions.EnabledActions);
+        var level = profile is null ? settings.CleanupLevel
+            : profile.CleanupLevelOverride ?? ProfileStylePresetService.Resolve(profile.StylePreset).CleanupLevel;
+        var language = LanguageSelectionResolver.ResolveOrAutomatic(profile?.InputLanguage, settings.Language).LanguageTag;
+        if (rawText.Length > 8192 || level < CleanupLevel.Medium || action is not null
+            || (settings.CommandModeEnabled
+                && SpokenCommandKeyphrase.TryStrip(rawText, settings.CommandKeyphrase, out _))
+            || _models.PluginManager.PostProcessors.Any(processor => processor.Priority <= 250)
+            || string.Equals(profile?.SelectedTask ?? settings.TranscriptionTask, "translate", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(profile?.TranslationTarget ?? settings.TranslationTargetLanguage))
+        {
+            lock (_liveCleanupLock)
+            {
+                if (_liveCleanupSessionVersion != sessionVersion) return;
+                _liveCleanupDraft?.Dispose();
+                _liveCleanupDraft = null;
+            }
+            return;
+        }
+        try
+        {
+            var provider = _promptProcessing.GetCleanupProviderSelection();
+            if (provider is null) return;
+            lock (_liveCleanupLock)
+            {
+                if (_liveCleanupSessionVersion != sessionVersion) return;
+                if (_liveCleanupDraft is null || !_liveCleanupDraft.Matches(level, language, provider))
+                {
+                    _liveCleanupDraft?.Dispose();
+                    _liveCleanupDraft = null;
+                    var engine = _models.GetTranscriptionPlugin(profile?.TranscriptionModelOverride ?? settings.SelectedModelId);
+                    if (engine is null) return;
+                    var hints = LanguageSelectionResolver.ResolveHints(profile, settings);
+                    var (selection, effectiveHints) = engine.ResolveEffectiveLanguage(
+                        LanguageSelectionResolver.ResolvePrimary(hints), hints);
+                    var context = new RecordingContext(sessionVersion, default, _recordingAppProcess,
+                        _recordingAppTitle, _recordingAppUrl, null, profile, "", null, false,
+                        null, null, selection, effectiveHints, CancellationToken.None);
+                    var options = BuildPreCleanupOptions(context, language, selection.LanguageTag,
+                        effectiveHints, false, engine.SupportsTranslation, engine.ProviderId, engine.SelectedModelId);
+                    LiveCleanupDraft? newDraft = null;
+                    newDraft = new LiveCleanupDraft(_cleanup, level, language, provider,
+                        async (input, token) =>
+                        {
+                            if (!_settings.Current.LiveCleanupEnabled || !_audio.IsRecordingOwnedBy(captureSession))
+                                throw new OperationCanceledException(token);
+                            return (await _pipeline.ProcessAsync(input, options, token)).Text;
+                        },
+                        (_, output) =>
+                        {
+                            // ReSharper disable once AccessToModifiedClosure -- newDraft is assigned once, before Submit starts work that publishes.
+                            if (ReferenceEquals(_liveCleanupDraft, newDraft) && _settings.Current.LiveCleanupEnabled
+                                && _liveCleanupSessionVersion == sessionVersion && _audio.IsRecordingOwnedBy(captureSession))
+                                SetOverlayState(state => state with { PartialText = output });
+                        });
+                    _liveCleanupDraft = newDraft;
+                }
+                _liveCleanupDraft.Submit(rawText.Trim());
+            }
+        }
+        catch (PluginRequestException)
+        {
+            // Final cleanup reports invalid provider configuration through its normal path.
+        }
     }
 }

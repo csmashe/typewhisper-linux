@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Gladia转录所必需。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.ModelDescription": "选择Gladia模型。",
+  "Settings.NotConfiguredApiKeyRequired": "插件未配置。需要API密钥。",
+  "Manifest.Name": "Gladia",
+  "Manifest.Description": "Gladia语音转文字转录引擎"
+}

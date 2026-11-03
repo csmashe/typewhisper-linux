@@ -5,7 +5,9 @@ using TypeWhisper.Plugin.Cerebras;
 using TypeWhisper.Plugin.Cohere;
 using TypeWhisper.Plugin.Fireworks;
 using TypeWhisper.Plugin.Gemini;
+using TypeWhisper.Plugin.Voxtral;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
@@ -16,6 +18,17 @@ namespace TypeWhisper.PluginSystem.Tests;
 // so the streaming behavior is exercised through a shared driver here.
 public sealed class SharedHelperStreamingCohortTests
 {
+    [Fact]
+    public async Task ProcessStreamingAsync_LengthFinishReason_ThrowsTruncation()
+    {
+        var chunks = new List<string>();
+        const string sse = "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+            + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n";
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => StreamCerebrasSseAsync(sse, chunks));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.Equal(["partial"], chunks);
+    }
+
     [Fact]
     public async Task Cerebras_ProcessStreamingAsync_StreamsDeltas()
     {
@@ -42,7 +55,7 @@ public sealed class SharedHelperStreamingCohortTests
         var (chunks, body, url) = await StreamAsync(h => new FireworksPlugin(h), "apiKey", "fw-test");
 
         Assert.Equal(["Hel", "lo"], chunks);
-        Assert.Equal("https://api.fireworks.ai/v1/chat/completions", url);
+        Assert.Equal("https://api.fireworks.ai/inference/v1/chat/completions", url);
         AssertStreamBody(body, "fw-test");
     }
 
@@ -56,6 +69,16 @@ public sealed class SharedHelperStreamingCohortTests
             "https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions",
             url);
         AssertStreamBody(body, "gemini-test");
+    }
+
+    [Fact]
+    public async Task Voxtral_ProcessStreamingAsync_StreamsDeltas()
+    {
+        var (chunks, body, url) = await StreamAsync(h => new VoxtralPlugin(h), "api-key", "mistral-test");
+
+        Assert.Equal(["Hel", "lo"], chunks);
+        Assert.Equal("https://api.mistral.ai/v1/chat/completions", url);
+        AssertStreamBody(body, "mistral-test");
     }
 
     [Fact]
@@ -75,6 +98,10 @@ public sealed class SharedHelperStreamingCohortTests
         await AssertToggleOffYieldsBulk(h => new GeminiPlugin(h), "api-key");
 
     [Fact]
+    public async Task Voxtral_ProcessStreamingAsync_ToggleOff_YieldsSingleBulkChunk() =>
+        await AssertToggleOffYieldsBulk(h => new VoxtralPlugin(h), "api-key");
+
+    [Fact]
     public async Task ProcessStreamingAsync_ThrowsOnErrorFrameAfterPartialDeltas()
     {
         // A chat-completions stream returns 200 then can fail mid-flight via a
@@ -87,10 +114,11 @@ public sealed class SharedHelperStreamingCohortTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
             "",
             "data: {\"error\":{\"message\":\"server had an error\",\"type\":\"server_error\"}}",
+            "",
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
@@ -111,6 +139,108 @@ public sealed class SharedHelperStreamingCohortTests
 
         Assert.Equal(["Hel"], chunks);
         Assert.Equal("server had an error", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsOnEofAfterPartialDeltasWithoutTerminalFrame()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}",
+            "",
+            "");
+        var chunks = new List<string>();
+
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(
+            () => StreamCerebrasSseAsync(sse, chunks));
+
+        Assert.Equal(["Hel", "lo"], chunks);
+        Assert.Equal("chat completion stream", ex.StreamName);
+        Assert.Equal("[DONE] or a non-empty finish_reason", ex.ExpectedTerminal);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_FinishReasonThenEof_CompletesWithFullText()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
+            "",
+            "");
+        var chunks = new List<string>();
+
+        await StreamCerebrasSseAsync(sse, chunks);
+
+        Assert.Equal(["Hel", "lo"], chunks);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_FinishReasonThenDone_CompletesWithFullText()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
+            "",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var chunks = new List<string>();
+
+        await StreamCerebrasSseAsync(sse, chunks);
+
+        Assert.Equal(["Hel", "lo"], chunks);
+    }
+
+    [Theory]
+    [InlineData("false")]
+    [InlineData("true")]
+    [InlineData("0")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("\"\"")]
+    public async Task ProcessStreamingAsync_NonStringFinishReason_ThrowsIncompleteStream(
+        string finishReasonJson)
+    {
+        // A provider emitting a bogus finish_reason on ordinary chunks must not
+        // count as terminal and mask a truncated stream.
+        var sse = string.Join(
+            "\n",
+            $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"Hel\"}},\"finish_reason\":{finishReasonJson}}}]}}",
+            "",
+            $"data: {{\"choices\":[{{\"delta\":{{\"content\":\"lo\"}},\"finish_reason\":{finishReasonJson}}}]}}",
+            "",
+            "");
+        var chunks = new List<string>();
+
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(
+            () => StreamCerebrasSseAsync(sse, chunks));
+
+        Assert.Equal(["Hel", "lo"], chunks);
+        Assert.Equal("chat completion stream", ex.StreamName);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_EmptyBody_ThrowsIncompleteStream()
+    {
+        // A zero-frame 200 response is not a successful empty completion. Throwing here
+        // makes LlmStreamPump fault, preserving the callers' existing batch-fallback intent.
+        var chunks = new List<string>();
+
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(
+            () => StreamCerebrasSseAsync("", chunks));
+
+        Assert.Empty(chunks);
+        Assert.Equal("chat completion stream", ex.StreamName);
     }
 
     private static void AssertStreamBody(string? body, string expectedModel)
@@ -134,6 +264,7 @@ public sealed class SharedHelperStreamingCohortTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -141,7 +272,7 @@ public sealed class SharedHelperStreamingCohortTests
             capturedUrl = request.RequestUri?.ToString();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -170,7 +301,7 @@ public sealed class SharedHelperStreamingCohortTests
         {
             Content = new StringContent(
                 """{"choices":[{"message":{"content":"bulk"}}]}""",
-                Encoding.UTF8, "application/json")
+                Encoding.UTF8, "application/json"),
         });
 
         var host = new TestPluginHostServices { Secrets = { [secretKey] = "test-key" } };
@@ -192,6 +323,26 @@ public sealed class SharedHelperStreamingCohortTests
         Assert.Equal("bulk", chunks[0]);
     }
 
+    private static async Task StreamCerebrasSseAsync(string sse, List<string> chunks)
+    {
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "test-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new CerebrasPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await foreach (var chunk in sut.ProcessStreamingAsync(
+                           "system", "user", "model", CancellationToken.None))
+        {
+            chunks.Add(chunk);
+        }
+    }
+
     private sealed class CapturingHandler(
         Func<HttpRequestMessage, string?, HttpResponseMessage> responder) : HttpMessageHandler
     {
@@ -210,7 +361,7 @@ public sealed class SharedHelperStreamingCohortTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

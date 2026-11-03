@@ -13,6 +13,22 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+internal static class PresentationDateTime
+{
+    internal static DateTime ToLocal(DateTime timestamp, TimeZoneInfo timeZone)
+    {
+        if (timestamp.Kind == DateTimeKind.Local)
+        {
+            return timestamp;
+        }
+
+        var utcTimestamp = timestamp.Kind == DateTimeKind.Utc
+            ? timestamp
+            : DateTime.SpecifyKind(timestamp, DateTimeKind.Utc);
+        return TimeZoneInfo.ConvertTimeFromUtc(utcTimestamp, timeZone);
+    }
+}
+
 public partial class HistorySectionViewModel : ObservableObject
 {
     // Thousands of entries: rows are materialized in pages and appended on scroll.
@@ -21,8 +37,22 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly IDictionaryService _dictionary;
     private readonly List<TranscriptionRecord> _filtered = [];
     private readonly IHistoryService _history;
+    private readonly Func<string, CancellationToken, Task<TranscriptionRecord>>? _retry;
+    private readonly Dictionary<string, HistoryRecordRow> _rows = [];
+    private readonly HashSet<string> _selectedIds = new(StringComparer.Ordinal);
     private readonly SessionAudioFileService _sessionAudioFiles;
     private readonly ISettingsService _settings;
+    private readonly SpeechFeedbackService? _speech;
+    private HistoryRecordRow? _readingRow;
+    private IManualReadback? _readback;
+    private readonly TimeZoneInfo _timeZone;
+    private readonly Func<DateTime> _utcNow;
+
+    [ObservableProperty]
+    private bool _isSelecting;
+
+    [ObservableProperty]
+    private string _notice = "";
 
     [ObservableProperty]
     private bool _isLoading;
@@ -47,14 +77,43 @@ public partial class HistorySectionViewModel : ObservableObject
         IDictionaryService dictionary,
         ISettingsService settings,
         SessionAudioFileService sessionAudioFiles,
-        AudioPlaybackService audioPlayback
+        AudioPlaybackService audioPlayback,
+        SpeechFeedbackService speech,
+        DictationOrchestrator? recovery = null
+    )
+        : this(
+            history,
+            dictionary,
+            settings,
+            sessionAudioFiles,
+            audioPlayback,
+            TimeZoneInfo.Local,
+            () => DateTime.UtcNow,
+            recovery is null ? null : recovery.RetryFromHistoryAsync,
+            speech
+        ) { }
+
+    internal HistorySectionViewModel(
+        IHistoryService history,
+        IDictionaryService dictionary,
+        ISettingsService settings,
+        SessionAudioFileService sessionAudioFiles,
+        AudioPlaybackService audioPlayback,
+        TimeZoneInfo timeZone,
+        Func<DateTime> utcNow,
+        Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
+        SpeechFeedbackService? speech = null
     )
     {
         _history = history;
+        _speech = speech;
+        _retry = retry;
         _dictionary = dictionary;
         _settings = settings;
         _sessionAudioFiles = sessionAudioFiles;
         _audioPlayback = audioPlayback;
+        _timeZone = timeZone;
+        _utcNow = utcNow;
 
         _history.RecordsChanged += () =>
         {
@@ -64,6 +123,9 @@ public partial class HistorySectionViewModel : ObservableObject
             }
         };
         _audioPlayback.PlaybackStateChanged += () => Dispatcher.UIThread.Post(RefreshPlaybackState);
+        // "All apps" and the date-group headers are computed text; the app filter also compares
+        // against "All apps", so a stale label would stop matching after a language change.
+        Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(Refresh);
         _ = LoadAsync();
     }
 
@@ -72,23 +134,170 @@ public partial class HistorySectionViewModel : ObservableObject
 
     public bool ShowTimeline => !IsLoading && HasVisibleRecords;
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
+
+    // Exposed to entry rows so the Inspect panel can explain an empty prompt list as
+    // "capture is off" (and point at the setting) rather than implying the LLM simply
+    // wasn't used.
+    public bool CaptureLlmProvenanceEnabled => _settings.Current.CaptureLlmProvenance;
     public bool HasVisibleRecords => Groups.Any(group => group.Entries.Count > 0);
     public bool HasMore => _shownCount < _filtered.Count;
 
+    public int SelectedCount => _selectedIds.Count;
+    public bool HasSelection => SelectedCount > 0;
+    public string SelectionButtonText =>
+        Loc.Instance[IsSelecting ? "History.DoneSelecting" : "History.SelectEntries"];
+    public string SelectionSummary => Loc.Instance.GetString("History.SelectedCount", SelectedCount);
+    public bool HasNotice => !string.IsNullOrEmpty(Notice);
+
+    partial void OnNoticeChanged(string value) => OnPropertyChanged(nameof(HasNotice));
+
+    partial void OnIsSelectingChanged(bool value)
+    {
+        if (!value)
+        {
+            _selectedIds.Clear();
+        }
+
+        NotifySelectionChanged();
+    }
+
+    [RelayCommand]
+    private void ToggleSelecting() => IsSelecting = !IsSelecting;
+
+    [RelayCommand]
+    private void SelectAllShown()
+    {
+        _selectedIds.UnionWith(_filtered.Select(record => record.Id));
+        NotifySelectionChanged();
+    }
+
+    public void ClearSelection()
+    {
+        _selectedIds.Clear();
+        NotifySelectionChanged();
+    }
+
+    internal bool IsSelected(HistoryRecordRow row) => _selectedIds.Contains(row.Record.Id);
+
+    internal void SetSelected(HistoryRecordRow row, bool selected)
+    {
+        if (selected)
+        {
+            _selectedIds.Add(row.Record.Id);
+        }
+        else
+        {
+            _selectedIds.Remove(row.Record.Id);
+        }
+
+        NotifySelectionChanged();
+    }
+
+    /// <summary>
+    ///     Snapshots the whole selection, not just the rows the current filter shows, so that
+    ///     delete and export act on exactly the entries the selection count promises.
+    /// </summary>
+    public IReadOnlyList<string> SnapshotSelectedIds() => _history.Records
+        .Where(record => _selectedIds.Contains(record.Id))
+        .OrderByDescending(record => record.Timestamp)
+        .Select(record => record.Id)
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
+    private void NotifySelectionChanged()
+    {
+        foreach (var row in _rows.Values)
+        {
+            row.NotifySelectionChanged();
+        }
+
+        OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(SelectionButtonText));
+        OnPropertyChanged(nameof(SelectionSummary));
+    }
+
+    public async Task<bool> DeleteSelectedAsync(IReadOnlyCollection<string> ids)
+    {
+        foreach (var id in ids)
+        {
+            if (_rows.TryGetValue(id, out var row) && ReferenceEquals(_readingRow, row))
+            {
+                StopReadAloud(row);
+            }
+        }
+
+        // Another path (single delete, retention, the API) may have removed part of the
+        // snapshot while the dialog was open; the notice counts what this delete removed.
+        var present = _history.Records.Count(record => ids.Contains(record.Id));
+        var deleted = await Task.Run(() => _history.TryDeleteRecords(ids));
+        if (deleted)
+        {
+            _selectedIds.ExceptWith(ids);
+            NotifySelectionChanged();
+            Notice = Loc.Instance.GetString("History.DeletedSelected", present);
+        }
+        else
+        {
+            Notice = Loc.Instance["History.DeleteSelectedFailed"];
+        }
+
+        return deleted;
+    }
+
     public void ClearAll()
     {
+        if (_readingRow is { } reading)
+        {
+            StopReadAloud(reading);
+        }
+
         _history.ClearAll();
     }
 
-    public string BuildExportContent(string extension)
+    public string BuildExportContent(
+        string extension,
+        IReadOnlyCollection<string>? selectedIds = null
+    ) => BuildExportContent(extension, selectedIds, out _);
+
+    public string BuildExportContent(
+        string extension,
+        IReadOnlyCollection<string>? selectedIds,
+        out int exportedCount
+    )
     {
-        var visibleRecords = GetVisibleRecords().ToList();
+        List<TranscriptionRecord> visibleRecords;
+        if (selectedIds is { Count: > 0 })
+        {
+            var selected = selectedIds.ToHashSet(StringComparer.Ordinal);
+            var records = _history.Records;
+            if (!selected.IsSubsetOf(records.Select(record => record.Id)))
+            {
+                throw new InvalidOperationException(Loc.Instance["History.ExportSelectionMissing"]);
+            }
+
+            visibleRecords = records
+                .Where(record => selected.Contains(record.Id))
+                .OrderByDescending(record => record.Timestamp)
+                .ToList();
+        }
+        else
+        {
+            visibleRecords = GetVisibleRecords().ToList();
+        }
+
+        // Exports carry only successful transcriptions, so the caller's notice must not
+        // count selected failures that never reach the file.
+        exportedCount = visibleRecords.Count(record =>
+            record.Status == TranscriptionRecordStatus.Succeeded
+        );
+
         return extension.ToLowerInvariant() switch
         {
             ".csv" => _history.ExportToCsv(visibleRecords),
             ".md" => _history.ExportToMarkdown(visibleRecords),
             ".json" => _history.ExportToJson(visibleRecords),
-            _ => _history.ExportToText(visibleRecords)
+            _ => _history.ExportToText(visibleRecords),
         };
     }
 
@@ -135,11 +344,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 }
             }
 
-            Summary = Loc.Instance.GetString(
-                "History.Summary",
-                _history.TotalRecords,
-                _history.TotalWords
-            );
+            UpdateSummary();
         }
         finally
         {
@@ -188,7 +393,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 Id = Guid.NewGuid().ToString(),
                 EntryType = DictionaryEntryType.Term,
                 Original = term,
-                Source = DictionaryEntrySource.Manual
+                Source = DictionaryEntrySource.Manual,
             }
         );
     }
@@ -233,6 +438,15 @@ public partial class HistorySectionViewModel : ObservableObject
         }
     }
 
+    // False when no orchestrator was injected (design-time, tests); rows then hide the button
+    // rather than offering a retry that cannot run.
+    internal bool CanRetry => _retry is not null;
+
+    internal Task<TranscriptionRecord> RetryAsync(string id) =>
+        _retry is null
+            ? throw new InvalidOperationException("No recovery service is available.")
+            : _retry(id, CancellationToken.None);
+
     internal bool HasSessionAudio(TranscriptionRecord record)
     {
         return _sessionAudioFiles.HasAudio(record.AudioFileName);
@@ -247,6 +461,11 @@ public partial class HistorySectionViewModel : ObservableObject
                    record.AudioFileName,
                    StringComparison.OrdinalIgnoreCase
                );
+    }
+
+    internal DateTime ToLocalPresentationTime(DateTime timestamp)
+    {
+        return PresentationDateTime.ToLocal(timestamp, _timeZone);
     }
 
     private async Task LoadAsync()
@@ -278,6 +497,7 @@ public partial class HistorySectionViewModel : ObservableObject
     [RelayCommand]
     private void DeleteRecord(HistoryRecordRow record)
     {
+        StopReadAloud(record);
         _history.DeleteRecord(record.Record.Id);
     }
 
@@ -296,6 +516,68 @@ public partial class HistorySectionViewModel : ObservableObject
         else
         {
             _audioPlayback.Play(record.Record.AudioFileName);
+        }
+    }
+
+    internal bool IsReadingAloud(HistoryRecordRow row)
+    {
+        return ReferenceEquals(_readingRow, row) && _readback?.IsActive == true;
+    }
+
+    [RelayCommand]
+    private void ToggleReadAloud(HistoryRecordRow row)
+    {
+        if (IsReadingAloud(row))
+        {
+            StopReadAloud(row);
+            return;
+        }
+
+        var handle = _speech?.StartReadBack(row.Record.FinalText, row.Record.Language);
+        if (handle is null)
+        {
+            return;
+        }
+
+        _readingRow = row;
+        _readback = handle;
+        RefreshReadAloudState();
+        _ = ObserveReadbackCompletionAsync(handle);
+    }
+
+    internal void StopReadAloud(HistoryRecordRow row)
+    {
+        if (!ReferenceEquals(_readingRow, row))
+        {
+            return;
+        }
+
+        _readback?.Stop();
+        _readback = null;
+        _readingRow = null;
+        RefreshReadAloudState();
+    }
+
+    private async Task ObserveReadbackCompletionAsync(IManualReadback handle)
+    {
+        await handle.Completion.ConfigureAwait(false);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (ReferenceEquals(_readback, handle))
+            {
+                _readback = null;
+                _readingRow = null;
+            }
+
+            RefreshReadAloudState();
+        });
+    }
+
+    private void RefreshReadAloudState()
+    {
+        foreach (var row in _rows.Values)
+        {
+            row.NotifyReadAloudStateChanged();
         }
     }
 
@@ -344,29 +626,61 @@ public partial class HistorySectionViewModel : ObservableObject
 
         _filtered.Clear();
         _filtered.AddRange(GetVisibleRecords());
+        var ids = _history.Records.Select(record => record.Id).ToHashSet(StringComparer.Ordinal);
+        _selectedIds.IntersectWith(ids);
+        foreach (var id in _rows.Keys.Where(id => !ids.Contains(id)).ToList())
+            _rows.Remove(id);
+
+        // Clear-all and retention pruning drop the row along with its stop button,
+        // so its readback must not keep playing with no way to stop it.
+        if (_readingRow is not null && !_rows.ContainsKey(_readingRow.Record.Id))
+        {
+            StopReadAloud(_readingRow);
+        }
+
         _shownCount = 0;
 
         Groups.Clear();
         AppendNextPage();
+        NotifySelectionChanged();
 
-        Summary = Loc.Instance.GetString(
-            "History.Summary",
-            _history.TotalRecords,
-            _history.TotalWords
-        );
+        UpdateSummary();
         OnPropertyChanged(nameof(HasVisibleRecords));
         OnPropertyChanged(nameof(ShowTimeline));
         OnPropertyChanged(nameof(ShowEmptyState));
         OnPropertyChanged(nameof(HasMore));
     }
 
+    /// <summary>
+    ///     The timeline deliberately lists failed records so they can be retried, so the entry
+    ///     count covers every record; words stay the succeeded-only total.
+    /// </summary>
+    private void UpdateSummary()
+    {
+        Summary = Loc.Instance.GetString(
+            "History.Summary",
+            _history.Records.Count,
+            _history.TotalWords
+        );
+    }
+
     private void AppendNextPage()
     {
         var end = Math.Min(_shownCount + PageSize, _filtered.Count);
+        var today = ToLocalPresentationTime(_utcNow()).Date;
         for (var i = _shownCount; i < end; i++)
         {
             var record = _filtered[i];
-            var groupName = ComputeDateGroup(record.Timestamp);
+            if (!_rows.TryGetValue(record.Id, out var row))
+            {
+                row = new HistoryRecordRow(record, this);
+                _rows.Add(record.Id, row);
+            }
+            else
+            {
+                row.Record = record;
+            }
+            var groupName = ComputeDateGroup(row.LocalTimestamp, today);
 
             // Records are newest-first; each record either extends the last group or starts a new one.
             var group =
@@ -377,7 +691,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 Groups.Add(group);
             }
 
-            group.Entries.Add(new HistoryRecordRow(record, this));
+            group.Entries.Add(row);
         }
 
         _shownCount = end;
@@ -406,9 +720,8 @@ public partial class HistorySectionViewModel : ObservableObject
         SelectedAppFilter = AvailableApps.Contains(current) ? current : allApps;
     }
 
-    private static string ComputeDateGroup(DateTime timestamp)
+    private static string ComputeDateGroup(DateTime timestamp, DateTime today)
     {
-        var today = DateTime.Today;
         var date = timestamp.Date;
 
         if (date == today)
@@ -459,24 +772,101 @@ public partial class HistoryRecordRow : ObservableObject
     private bool _isExpanded;
 
     [ObservableProperty]
+    private bool _isInspectorVisible;
+
+    [ObservableProperty]
     private TranscriptionRecord _record;
 
     public HistoryRecordRow(TranscriptionRecord record, HistorySectionViewModel owner)
     {
         _record = record;
         _owner = owner;
+        LocalTimestamp = owner.ToLocalPresentationTime(record.Timestamp);
         SetCorrectionSuggestions(record.PendingCorrectionSuggestions);
+    }
+
+    [ObservableProperty]
+    private bool _isRetrying;
+
+    [ObservableProperty]
+    private string _retryResult = "";
+
+    public bool HasRetryResult => !string.IsNullOrEmpty(RetryResult);
+    public bool HasFailure => Record.Status != TranscriptionRecordStatus.Succeeded;
+
+    /// <summary>True while the row has anything to show below the entry; keeps the panel — and its
+    /// margin — out of the layout of every ordinary row.</summary>
+    public bool ShowRetryPanel => HasFailure || ShowRetry || IsRetrying || HasRetryResult;
+
+    public string? FailureMessage => HasFailure
+        ? FailureMessageSanitizer.Sanitize(Record.FailureMessage, Record.RawText, Record.FinalText)
+          ?? Loc.Instance["Common.UnknownError"]
+        : null;
+    public string StatusBadge => Record.Status switch
+    {
+        TranscriptionRecordStatus.TranscriptionFailed => Loc.Instance["History.StatusTranscriptionFailed"],
+        TranscriptionRecordStatus.ProcessingFailed => Loc.Instance["History.StatusProcessingFailed"],
+        _ => "",
+    };
+    public bool ShowRetry => _owner.CanRetry && HasSessionAudio && (HasFailure || Record.InsertionStatus is
+        TextInsertionStatus.Failed or TextInsertionStatus.ActionFailed or TextInsertionStatus.ActionUnavailable
+        or TextInsertionStatus.MissingClipboardTool or TextInsertionStatus.MissingPasteTool);
+
+    partial void OnRetryResultChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasRetryResult));
+        OnPropertyChanged(nameof(ShowRetryPanel));
+    }
+
+    partial void OnIsRetryingChanged(bool value) => OnPropertyChanged(nameof(ShowRetryPanel));
+
+    [RelayCommand]
+    private async Task RetryAsync()
+    {
+        IsRetrying = true;
+        RetryResult = "";
+        try
+        {
+            Record = await _owner.RetryAsync(Record.Id);
+            RetryResult = Loc.Instance["History.RetryCopied"];
+        }
+        catch (FileNotFoundException)
+        {
+            RetryResult = Loc.Instance["History.RetryAudioMissing"];
+        }
+        catch (OperationCanceledException)
+        {
+            RetryResult = Loc.Instance["History.RetryCanceled"];
+        }
+        catch (Exception ex)
+        {
+            RetryResult = Loc.Instance.GetString("History.RetryFailed",
+                FailureMessageSanitizer.Sanitize(ex.Message, Record.RawText, Record.FinalText)
+                ?? Loc.Instance["Common.UnknownError"]);
+        }
+        finally
+        {
+            IsRetrying = false;
+            OnPropertyChanged(nameof(ShowRetry));
+            OnPropertyChanged(nameof(ShowRetryPanel));
+        }
     }
 
     public ObservableCollection<CorrectionSuggestionRow> CorrectionSuggestions { get; } = [];
 
-    public string TimeLabel => Record.Timestamp.ToString("HH:mm");
+    public DateTime LocalTimestamp { get; private set; }
+    public string TimeLabel => LocalTimestamp.ToString("HH:mm");
     public string DurationLabel => $"{Record.DurationSeconds:F1}s";
     public bool HasProfileName => !string.IsNullOrWhiteSpace(Record.ProfileName);
     public bool HasAppProcessName => !string.IsNullOrWhiteSpace(Record.AppProcessName);
+    public bool IsSpokenCommand => Record.IsSpokenCommand;
     public bool HasLanguage => !string.IsNullOrWhiteSpace(Record.Language);
     public bool HasSessionAudio => _owner.HasSessionAudio(Record);
     public bool IsPlaying => _owner.IsPlaying(Record);
+    public bool IsReadingAloud => _owner.IsReadingAloud(this);
+    public bool HasTranscript => !string.IsNullOrWhiteSpace(Record.FinalText);
+    public string ReadAloudButtonText =>
+        IsReadingAloud ? Loc.Instance["History.StopReading"] : Loc.Instance["History.ReadAloud"];
     public string PlaybackButtonText =>
         IsPlaying ? Loc.Instance["History.Stop"] : Loc.Instance["History.Play"];
     public bool ShowReadOnlyText => IsExpanded && !IsEditing;
@@ -486,6 +876,54 @@ public partial class HistoryRecordRow : ObservableObject
 
     public bool HasCorrectionSuggestions =>
         IsExpanded && !IsEditing && CorrectionSuggestions.Count > 0;
+
+    public bool HasLlmCalls => Record.LlmCalls.Count > 0;
+
+    // Distinguishes "capture is off" (guide the user to the setting) from "capture is
+    // on but this entry genuinely made no LLM call" (e.g. a raw dictation).
+    public string NoLlmCallsMessage =>
+        _owner.CaptureLlmProvenanceEnabled
+            ? Loc.Instance["History.Inspect.NoLlmCalls"]
+            : Loc.Instance["History.Inspect.CaptureOff"];
+
+    public bool ShowRawVsFinal =>
+        !string.Equals(Record.RawText, Record.FinalText, StringComparison.Ordinal);
+
+    public bool HasInspectorContent => HasLlmCalls || ShowRawVsFinal;
+    public bool ShowInspectorToggle => IsExpanded && !IsEditing && HasInspectorContent;
+    public bool ShowInspector =>
+        IsExpanded && !IsEditing && IsInspectorVisible && HasInspectorContent;
+
+    // Cached: a virtualized list recycles containers and re-evaluates these
+    // bindings whenever a row scrolls back into view, so recomputing the LCS diff
+    // and projection every access would be wasteful. Invalidated in
+    // OnRecordChanged when the underlying record is reassigned (e.g. after edit).
+    private IReadOnlyList<DiffSegment>? _rawVsFinalDiffCache;
+    private IReadOnlyList<LlmCallDisplay>? _inspectorCallsCache;
+
+    public IReadOnlyList<DiffSegment> RawVsFinalDiff =>
+        _rawVsFinalDiffCache ??= WordDiff.Compute(Record.RawText, Record.FinalText);
+
+    public IReadOnlyList<LlmCallDisplay> InspectorCalls =>
+        _inspectorCallsCache ??= Record.LlmCalls.Select(call => new LlmCallDisplay(call)).ToList();
+
+    partial void OnRecordChanged(TranscriptionRecord value)
+    {
+        OnPropertyChanged(nameof(HasTranscript));
+        OnPropertyChanged(nameof(HasFailure));
+        OnPropertyChanged(nameof(FailureMessage));
+        OnPropertyChanged(nameof(StatusBadge));
+        OnPropertyChanged(nameof(ShowRetry));
+        OnPropertyChanged(nameof(ShowRetryPanel));
+        OnPropertyChanged(nameof(DurationLabel));
+        LocalTimestamp = _owner.ToLocalPresentationTime(value.Timestamp);
+        _rawVsFinalDiffCache = null;
+        _inspectorCallsCache = null;
+        OnPropertyChanged(nameof(LocalTimestamp));
+        OnPropertyChanged(nameof(TimeLabel));
+        OnPropertyChanged(nameof(RawVsFinalDiff));
+        OnPropertyChanged(nameof(InspectorCalls));
+    }
 
     internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
     {
@@ -498,11 +936,35 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
     }
 
+    public bool IsSelected
+    {
+        get => _owner.IsSelected(this);
+        set
+        {
+            _owner.SetSelected(this, value);
+            OnPropertyChanged();
+        }
+    }
+
+    public bool IsSelecting => _owner.IsSelecting;
+
+    internal void NotifySelectionChanged()
+    {
+        OnPropertyChanged(nameof(IsSelected));
+        OnPropertyChanged(nameof(IsSelecting));
+    }
+
     internal void NotifyPlaybackStateChanged()
     {
         OnPropertyChanged(nameof(HasSessionAudio));
         OnPropertyChanged(nameof(IsPlaying));
         OnPropertyChanged(nameof(PlaybackButtonText));
+    }
+
+    internal void NotifyReadAloudStateChanged()
+    {
+        OnPropertyChanged(nameof(IsReadingAloud));
+        OnPropertyChanged(nameof(ReadAloudButtonText));
     }
 
     partial void OnIsExpandedChanged(bool value)
@@ -514,7 +976,9 @@ public partial class HistoryRecordRow : ObservableObject
         }
         else
         {
+            _owner.StopReadAloud(this);
             IsEditing = false;
+            IsInspectorVisible = false;
             CorrectionSuggestions.Clear();
         }
 
@@ -526,6 +990,11 @@ public partial class HistoryRecordRow : ObservableObject
         NotifyExpansionStateChanged();
     }
 
+    partial void OnIsInspectorVisibleChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowInspector));
+    }
+
     [RelayCommand]
     private void ToggleExpand()
     {
@@ -533,8 +1002,15 @@ public partial class HistoryRecordRow : ObservableObject
     }
 
     [RelayCommand]
+    private void ToggleInspector()
+    {
+        IsInspectorVisible = !IsInspectorVisible;
+    }
+
+    [RelayCommand]
     private void StartEdit()
     {
+        _owner.StopReadAloud(this);
         EditText = Record.FinalText;
         IsEditing = true;
     }
@@ -549,6 +1025,11 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(HasProfileName));
         OnPropertyChanged(nameof(HasAppProcessName));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        // Editing changes the final text, so raw≠final and the diff can change.
+        OnPropertyChanged(nameof(ShowRawVsFinal));
+        OnPropertyChanged(nameof(HasInspectorContent));
+        OnPropertyChanged(nameof(ShowInspectorToggle));
+        OnPropertyChanged(nameof(RawVsFinalDiff));
     }
 
     [RelayCommand]
@@ -567,6 +1048,12 @@ public partial class HistoryRecordRow : ObservableObject
     private void TogglePlayback()
     {
         _owner.TogglePlaybackCommand.Execute(this);
+    }
+
+    [RelayCommand]
+    private void ToggleReadAloud()
+    {
+        _owner.ToggleReadAloudCommand.Execute(this);
     }
 
     [RelayCommand]
@@ -607,6 +1094,8 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowExpandedMeta));
         OnPropertyChanged(nameof(ShowExpandedActions));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
+        OnPropertyChanged(nameof(ShowInspectorToggle));
+        OnPropertyChanged(nameof(ShowInspector));
     }
 }
 
@@ -630,4 +1119,47 @@ public partial class CorrectionSuggestionRow : ObservableObject
 
     private double Confidence { get; }
     public string ConfidenceLabel => Confidence > 0 ? $"{Confidence:P0}" : "";
+}
+
+/// <summary>
+///     Read-only display projection of one <see cref="LlmCallProvenance" /> entry
+///     for the history Inspect panel: localized stage/badge labels plus the raw
+///     prompt text and per-block visibility flags.
+/// </summary>
+public sealed class LlmCallDisplay
+{
+    private readonly LlmCallProvenance _call;
+
+    public LlmCallDisplay(LlmCallProvenance call)
+    {
+        _call = call;
+    }
+
+    public string StageLabel =>
+        _call.Stage switch
+        {
+            "Cleanup" => Loc.Instance["History.Inspect.StageCleanup"],
+            "Translation" => Loc.Instance["History.Inspect.StageTranslation"],
+            "Memory" => Loc.Instance["History.Inspect.StageMemory"],
+            _ => Loc.Instance["History.Inspect.StagePromptAction"],
+        };
+
+    public string ProviderModelLabel => $"{_call.ProviderName} · {_call.ModelId}";
+
+    public bool RanLocally => _call.RanLocally;
+
+    public string NetworkBadgeText =>
+        _call.RanLocally
+            ? Loc.Instance["History.Inspect.StayedLocal"]
+            : Loc.Instance.GetString("History.Inspect.SentToProvider", _call.ProviderName);
+
+    public string SystemPromptSent => _call.SystemPromptSent;
+    public string UserPromptSent => _call.UserPromptSent;
+    public string? InjectedMemoryContext => _call.InjectedMemoryContext;
+    public string? ResponseReceived => _call.ResponseReceived;
+
+    public bool HasSystemPrompt => !string.IsNullOrWhiteSpace(_call.SystemPromptSent);
+    public bool HasUserPrompt => !string.IsNullOrWhiteSpace(_call.UserPromptSent);
+    public bool HasInjectedContext => !string.IsNullOrWhiteSpace(_call.InjectedMemoryContext);
+    public bool HasResponse => !string.IsNullOrWhiteSpace(_call.ResponseReceived);
 }

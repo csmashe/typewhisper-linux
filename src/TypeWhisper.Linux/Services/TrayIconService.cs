@@ -15,20 +15,44 @@ namespace TypeWhisper.Linux.Services;
 public sealed class TrayIconService : IDisposable
 {
     private readonly IProcessRunner _runner;
+    private NativeMenuItem? _copyLastMenuItem;
+    private NativeMenuItem? _dictationMenuItem;
     private bool _disposed;
+    private NativeMenuItem? _exitMenuItem;
+    private NativeMenuItem? _pasteLastMenuItem;
+    private NativeMenuItem? _settingsMenuItem;
+    private bool _iconsRegistered;
     private TrayIcon? _trayIcon;
     private TrayIcons? _trayIcons;
 
     public TrayIconService(IProcessRunner runner)
     {
         _runner = runner;
+        Loc.Instance.LanguageChanged += OnLanguageChanged;
     }
 
     /// <summary>
     ///     Whether a usable system tray was confirmed at <see cref="Initialize" />
-    ///     time. Hiding the window without a tray strands the user (#18).
+    ///     time (or later by <see cref="TryConfirmLateHost" />). Hiding the window
+    ///     without a tray strands the user (#18).
     /// </summary>
     public bool IsTrayAvailable { get; private set; }
+
+    /// <summary>
+    ///     Re-probes for a tray host that registered after <see cref="Initialize" />.
+    ///     Blocks on D-Bus; call off the UI thread.
+    /// </summary>
+    public bool TryConfirmLateHost()
+    {
+        if (IsTrayAvailable || !_iconsRegistered || _disposed || !ProbeTrayAvailable())
+        {
+            return IsTrayAvailable;
+        }
+
+        IsTrayAvailable = true;
+        AvailabilityChanged?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
 
     public void Dispose()
     {
@@ -38,6 +62,7 @@ public sealed class TrayIconService : IDisposable
         }
 
         _disposed = true;
+        Loc.Instance.LanguageChanged -= OnLanguageChanged;
         if (Application.Current is { } app)
         {
             TrayIcon.SetIcons(app, null);
@@ -45,6 +70,10 @@ public sealed class TrayIconService : IDisposable
 
         _trayIcons?.Clear();
         _trayIcon?.Dispose();
+        _dictationMenuItem = null;
+        _settingsMenuItem = null;
+        _exitMenuItem = null;
+        _trayIcon = null;
     }
 
     public void Initialize()
@@ -58,7 +87,7 @@ public sealed class TrayIconService : IDisposable
         {
             _trayIcon = new TrayIcon
             {
-                ToolTipText = "TypeWhisper", IsVisible = true, Menu = BuildMenu(), Icon = LoadIcon()
+                ToolTipText = "TypeWhisper", IsVisible = true, Menu = BuildMenu(), Icon = LoadIcon(),
             };
             _trayIcon.Clicked += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
 
@@ -68,6 +97,7 @@ public sealed class TrayIconService : IDisposable
             {
                 _trayIcons = [_trayIcon];
                 TrayIcon.SetIcons(app, _trayIcons);
+                _iconsRegistered = true;
                 IsTrayAvailable = hostPresent;
             }
         }
@@ -110,7 +140,7 @@ public sealed class TrayIconService : IDisposable
                     "--method",
                     "org.freedesktop.DBus.Properties.Get",
                     "org.kde.StatusNotifierWatcher",
-                    "IsStatusNotifierHostRegistered"
+                    "IsStatusNotifierHostRegistered",
                 ],
                 timeout: TimeSpan.FromSeconds(2)
             )
@@ -120,9 +150,29 @@ public sealed class TrayIconService : IDisposable
         return result.Succeeded && result.StandardOutput.Contains("true", StringComparison.Ordinal);
     }
 
+    /// <summary>Raised on a background thread when a late tray host is confirmed.</summary>
+    public event EventHandler? AvailabilityChanged;
+
     public event EventHandler? ShowSettingsRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler? DictationToggleRequested;
+    public event EventHandler? PasteLastTranscriptionRequested;
+    public event EventHandler? CopyLastTranscriptionRequested;
+
+    internal bool IsMenuBuilt =>
+        _dictationMenuItem is not null
+        && _settingsMenuItem is not null
+        && _exitMenuItem is not null;
+
+    internal IReadOnlyList<string> MenuLabels =>
+        IsMenuBuilt
+            ?
+            [
+                _dictationMenuItem!.Header ?? string.Empty,
+                _settingsMenuItem!.Header ?? string.Empty,
+                _exitMenuItem!.Header ?? string.Empty,
+            ]
+            : [];
 
     private static WindowIcon? LoadIcon()
     {
@@ -160,21 +210,48 @@ public sealed class TrayIconService : IDisposable
     {
         var menu = new NativeMenu();
 
-        var dictate = new NativeMenuItem(Loc.Instance["Tray.ToggleDictation"]);
-        dictate.Click += (_, _) => DictationToggleRequested?.Invoke(this, EventArgs.Empty);
+        _dictationMenuItem = new NativeMenuItem(Loc.Instance["Tray.ToggleDictation"]);
+        _dictationMenuItem.Click += (_, _) =>
+            DictationToggleRequested?.Invoke(this, EventArgs.Empty);
 
-        var settings = new NativeMenuItem(Loc.Instance["Tray.Settings"]);
-        settings.Click += (_, _) => ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
+        _pasteLastMenuItem = new NativeMenuItem(Loc.Instance["Tray.PasteLastTranscription"]);
+        _pasteLastMenuItem.Click += (_, _) =>
+            PasteLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
 
-        var exit = new NativeMenuItem(Loc.Instance["Tray.Exit"]);
-        exit.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
+        _copyLastMenuItem = new NativeMenuItem(Loc.Instance["Tray.CopyLastTranscription"]);
+        _copyLastMenuItem.Click += (_, _) =>
+            CopyLastTranscriptionRequested?.Invoke(this, EventArgs.Empty);
 
-        menu.Add(dictate);
+        _settingsMenuItem = new NativeMenuItem(Loc.Instance["Tray.Settings"]);
+        _settingsMenuItem.Click += (_, _) =>
+            ShowSettingsRequested?.Invoke(this, EventArgs.Empty);
+
+        _exitMenuItem = new NativeMenuItem(Loc.Instance["Tray.Exit"]);
+        _exitMenuItem.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
+
+        menu.Add(_dictationMenuItem);
         menu.Add(new NativeMenuItemSeparator());
-        menu.Add(settings);
+        menu.Add(_pasteLastMenuItem);
+        menu.Add(_copyLastMenuItem);
         menu.Add(new NativeMenuItemSeparator());
-        menu.Add(exit);
+        menu.Add(_settingsMenuItem);
+        menu.Add(new NativeMenuItemSeparator());
+        menu.Add(_exitMenuItem);
 
         return menu;
+    }
+
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (!IsMenuBuilt)
+        {
+            return;
+        }
+
+        _dictationMenuItem!.Header = Loc.Instance["Tray.ToggleDictation"];
+        _pasteLastMenuItem!.Header = Loc.Instance["Tray.PasteLastTranscription"];
+        _copyLastMenuItem!.Header = Loc.Instance["Tray.CopyLastTranscription"];
+        _settingsMenuItem!.Header = Loc.Instance["Tray.Settings"];
+        _exitMenuItem!.Header = Loc.Instance["Tray.Exit"];
     }
 }

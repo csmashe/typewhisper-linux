@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using TypeWhisper.Core.Audio;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -11,16 +13,69 @@ using Timer = System.Timers.Timer;
 
 namespace TypeWhisper.Linux.Services;
 
+public enum ModelDeleteOutcome { Deleted, Busy, Loaded, Failed }
+
+public enum ModelUnloadOutcome { Unloaded, NothingLoaded, OtherEngine, Busy, Failed }
+
+/// <summary>A download stopped through <see cref="ModelManagerService.CancelDownload" />.</summary>
+public sealed class ModelDownloadCanceledException(Exception? innerException)
+    : OperationCanceledException("The model download was canceled.", innerException);
+
 public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 {
     private readonly SystemCommandAvailabilityService? _commands;
     private readonly SemaphoreSlim _modelLock = new(1, 1);
-    private readonly Dictionary<string, ModelStatus> _modelStatuses = new();
+    private readonly ConcurrentDictionary<string, ModelStatus> _modelStatuses = new();
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
     private string? _activeModelId;
+    // Guards _autoUnloadTimer, _autoUnloadGeneration and _disposed. Load/unload/acquire paths
+    // already hold _modelLock, but Dispose() runs on an arbitrary thread and must not block on
+    // that async lock — without its own gate it can race a lease's re-arm and leave a zombie timer.
+    private readonly Lock _timerGate = new();
     private Timer? _autoUnloadTimer;
+    private int _autoUnloadGeneration;
     private bool _disposed;
+    // Serializes status writes with the progress-generation check. Progress<T> posts its
+    // callbacks asynchronously (via the ThreadPool when no SynchronizationContext is
+    // captured), so a callback that already passed a plain pre-check could land after a
+    // terminal SetStatus/ClearStatus and re-insert a stale transient status — e.g. a
+    // permanent phantom "downloading" after a cancel with no operation in flight. The
+    // generation is advanced by every authoritative transition and validated inside the
+    // same lock as the progress write, closing that check-then-write gap.
+    private readonly Lock _statusGate = new();
+    private long _statusGeneration;
+    // Per model, so a download running beside another model's load keeps its progress.
+    private readonly Dictionary<string, long> _statusGenerations = [];
+
+    // A download started without loading runs outside _modelLock so dictation keeps working.
+    // Every download and delete registers here, so two of them never touch one model's files.
+    private readonly Lock _fileOperationGate = new();
+    private readonly Dictionary<string, ModelFileOperation> _fileOperations = [];
+
+    private sealed record ModelFileOperation(
+        CancellationTokenSource? Download,
+        Task<ModelFileOperationOutcome> Completion);
+
+    // What waiters inherit: a CancelDownload or a failed download stops them too. A download whose
+    // own caller gave up ends with neither, so a waiter that still needs the files downloads them.
+    private sealed record ModelFileOperationOutcome(bool Canceled, Exception? Failure)
+    {
+        public static readonly ModelFileOperationOutcome Ended = new(false, null);
+
+        public void ThrowIfStopped()
+        {
+            if (Canceled)
+            {
+                throw new ModelDownloadCanceledException(null);
+            }
+
+            if (Failure is not null)
+            {
+                ExceptionDispatchInfo.Throw(Failure);
+            }
+        }
+    }
 
     public ModelManagerService(
         PluginManager pluginManager,
@@ -40,6 +95,18 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     ///     Returns (success, message).
     /// </summary>
     internal Func<(bool Success, string Message)> CudaRuntimePreflight { get; set; }
+
+    /// <summary>Test seam: true while the idle auto-unload timer is armed and pending.</summary>
+    internal bool IsAutoUnloadArmed
+    {
+        get
+        {
+            lock (_timerGate)
+            {
+                return _autoUnloadTimer is { Enabled: true };
+            }
+        }
+    }
 
     public string? ActiveModelId
     {
@@ -75,7 +142,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public ITranscriptionEnginePlugin? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
+    public ITranscriptionEngineRole? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
 
     /// <summary>
     ///     Resolves the transcription plugin that owns <paramref name="modelId" /> (a
@@ -83,7 +150,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     ///     plugin model or no matching engine is loaded. Lets callers target the engine for
     ///     a specific (e.g. UI-selected) model rather than only the active one.
     /// </summary>
-    public ITranscriptionEnginePlugin? GetTranscriptionPlugin(string? modelId)
+    public ITranscriptionEngineRole? GetTranscriptionPlugin(string? modelId)
     {
         if (modelId is null || !IsPluginModel(modelId))
         {
@@ -94,15 +161,52 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId);
     }
 
-    public void Dispose()
+    /// <summary>
+    ///     Catalog entry for <paramref name="modelId" />, read without selecting or loading the
+    ///     model, or null when the id or its engine is unknown.
+    /// </summary>
+    private PluginModelInfo? GetTranscriptionModelInfo(string? modelId)
     {
-        if (_disposed)
+        if (GetTranscriptionPlugin(modelId) is not { } plugin)
         {
-            return;
+            return null;
         }
 
-        _disposed = true;
-        CancelAutoUnload();
+        var (_, pluginModelId) = ParsePluginModelId(modelId!);
+        return plugin.TranscriptionModels.FirstOrDefault(model => model.Id == pluginModelId);
+    }
+
+    /// <summary>
+    ///     The localized refusal for a translate task on <paramref name="modelId" />, or null when
+    ///     it may run. Only a model that declares it cannot translate is refused; undeclared
+    ///     engines keep ignoring the task.
+    /// </summary>
+    public string? GetTranslationRejection(string? modelId) =>
+        GetTranscriptionModelInfo(modelId) is { SupportsTranslation: false } model
+            ? Localization.Loc.Instance.GetString("Dictation.TranslationUnsupported", model.DisplayName)
+            : null;
+
+    /// <summary>
+    ///     Translation capability of <paramref name="modelId" /> for display: the model's own
+    ///     declaration, else the engine-level flag.
+    /// </summary>
+    public bool SupportsTranslation(string? modelId) =>
+        GetTranscriptionModelInfo(modelId)?.SupportsTranslation
+        ?? GetTranscriptionPlugin(modelId)?.SupportsTranslation == true;
+
+    public void Dispose()
+    {
+        lock (_timerGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            CancelAutoUnloadLocked();
+        }
+
         // _modelLock is intentionally NOT disposed: an outstanding TranscriptionLease or
         // fire-and-forget UnloadModelAsync may Release() after Dispose returns. SemaphoreSlim
         // only requires disposal when AvailableWaitHandle has been accessed (it has not).
@@ -171,6 +275,20 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return plugin.IsConfigured ? ModelStatus.Ready : ModelStatus.NotDownloaded;
     }
 
+    /// <summary>The status an operation recorded, without <see cref="GetStatus" />'s disk check.</summary>
+    public ModelStatus? GetTrackedStatus(string modelId) => _modelStatuses.GetValueOrDefault(modelId);
+
+    internal (string EngineId, string? ModelId)? ResolveTranscriptionIdentity(string? selectedModelId)
+    {
+        if (selectedModelId is null || !IsPluginModel(selectedModelId))
+            return null;
+
+        var (selectionId, modelId) = ParsePluginModelId(selectedModelId);
+        var engine = PluginManager.TranscriptionEngines.FirstOrDefault(
+            engine => engine.GetTranscriptionSelectionId() == selectionId);
+        return engine is null ? null : (engine.ProviderId, modelId);
+    }
+
     public bool IsDownloaded(string modelId)
     {
         if (!IsPluginModel(modelId))
@@ -193,11 +311,253 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             : plugin.IsConfigured;
     }
 
+    public bool IsDownloading(string modelId)
+    {
+        lock (_fileOperationGate)
+        {
+            return _fileOperations.TryGetValue(modelId, out var operation) && operation.Download is not null;
+        }
+    }
+
+    /// <summary>
+    ///     Downloads a model without loading it or taking the model lock, so the loaded model
+    ///     keeps transcribing. Waits for a download or delete of the same model already running.
+    /// </summary>
+    public async Task DownloadModelAsync(string modelId, CancellationToken cancellationToken = default)
+    {
+        if (GetTranscriptionPlugin(modelId) is not { SupportsModelDownload: true } plugin)
+        {
+            throw new ArgumentException($"Model cannot be downloaded: {modelId}");
+        }
+
+        var (_, pluginModelId) = ParsePluginModelId(modelId);
+        await RunDownloadAsync(plugin, modelId, pluginModelId, clearStatusWhenDone: true, cancellationToken);
+    }
+
+    public bool IsAnyModelDownloading
+    {
+        get
+        {
+            lock (_fileOperationGate)
+            {
+                return _fileOperations.Values.Any(operation => operation.Download is not null);
+            }
+        }
+    }
+
+    /// <summary>Stops the running download of <paramref name="modelId" />, whoever started it.</summary>
+    public bool CancelDownload(string modelId)
+    {
+        CancellationTokenSource? download;
+        lock (_fileOperationGate)
+        {
+            download = _fileOperations.GetValueOrDefault(modelId)?.Download;
+        }
+
+        if (download is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            download.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The download finished first.
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Downloads <paramref name="modelId" /> unless it is already on disk. The download that owns
+    ///     the model's slot records its own end state before releasing it; a caller that only waited
+    ///     for another download never writes status, so it cannot overwrite a newer download's.
+    /// </summary>
+    private async Task RunDownloadAsync(
+        ITranscriptionEngineRole plugin,
+        string modelId,
+        string pluginModelId,
+        bool clearStatusWhenDone,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            using var download = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var completion = new TaskCompletionSource<ModelFileOperationOutcome>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!TryBeginFileOperation(modelId, new ModelFileOperation(download, completion.Task), out var running))
+            {
+                (await running.WaitAsync(cancellationToken)).ThrowIfStopped();
+                continue;
+            }
+
+            var outcome = ModelFileOperationOutcome.Ended;
+            try
+            {
+                // Checked inside the slot, so a download that just finished is not repeated.
+                if (plugin.IsModelDownloaded(pluginModelId))
+                {
+                    return;
+                }
+
+                // The generation captured here gates this download's progress callbacks
+                // (see _statusGate): every authoritative transition after this point — the
+                // load's LoadingModel/Ready, Failed, or the cancel path's ClearStatus —
+                // retires stragglers that would otherwise re-stick DownloadingModel.
+                var generation = SetStatus(modelId, ModelStatus.DownloadingModel(0));
+                var progress = new Progress<double>(p =>
+                    SetStatusFromProgress(modelId, generation, ModelStatus.DownloadingModel(p))
+                );
+                await plugin.DownloadModelAsync(pluginModelId, progress, download.Token);
+
+                // A cancellation-ignoring plugin may have finished writing its artifact;
+                // that work is uninterruptible here, so checkpoint before the service
+                // transitions to loading and leave the artifact in place for GetStatus.
+                download.Token.ThrowIfCancellationRequested();
+                // Before the operation ends, so a load waiting on it keeps its own status.
+                if (clearStatusWhenDone)
+                {
+                    ClearStatus(modelId);
+                }
+
+                return;
+            }
+            catch (OperationCanceledException ex)
+                when (download.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                outcome = new ModelFileOperationOutcome(true, null);
+                ClearStatus(modelId);
+                throw new ModelDownloadCanceledException(ex);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Caller-requested cancellation: GetStatus re-derives from the artifact state.
+                ClearStatus(modelId);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Includes an OperationCanceledException nobody requested: per the SDK
+                // cancellation-origin contract that is a dependency fault and records Failed.
+                outcome = new ModelFileOperationOutcome(false, ex);
+                SetStatus(modelId, ModelStatus.Failed(ex.Message));
+                throw;
+            }
+            finally
+            {
+                EndFileOperation(modelId, completion, outcome);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Downloads <paramref name="modelId" />'s files, or waits for a running download or delete of
+    ///     them, before the caller takes <c>_modelLock</c>, so the loaded model stays usable meanwhile.
+    /// </summary>
+    private async Task PrepareModelFilesAsync(string? modelId, CancellationToken cancellationToken)
+    {
+        // A loaded model needs no files checked, which also keeps dictation working when its
+        // storage has gone away since the load.
+        if (modelId is null
+            || modelId == ActiveModelId
+            || GetTranscriptionPlugin(modelId) is not { SupportsModelDownload: true } plugin)
+        {
+            return;
+        }
+
+        var (_, pluginModelId) = ParsePluginModelId(modelId);
+        // Every dictation passes here; skip the slot when nothing is pending.
+        if (plugin.IsModelDownloaded(pluginModelId) && !HasFileOperation(modelId))
+        {
+            return;
+        }
+
+        await RunDownloadAsync(plugin, modelId, pluginModelId, clearStatusWhenDone: true, cancellationToken);
+    }
+
+    private bool HasFileOperation(string modelId)
+    {
+        lock (_fileOperationGate)
+        {
+            return _fileOperations.ContainsKey(modelId);
+        }
+    }
+
+    /// <summary>
+    ///     Waits for a download, load or delete of <paramref name="modelId" /> to end.
+    /// </summary>
+    private async Task WaitForFileOperationAsync(string? modelId, CancellationToken cancellationToken)
+    {
+        if (modelId is null)
+        {
+            return;
+        }
+
+        while (true)
+        {
+            Task<ModelFileOperationOutcome> running;
+            lock (_fileOperationGate)
+            {
+                if (!_fileOperations.TryGetValue(modelId, out var operation))
+                {
+                    return;
+                }
+
+                running = operation.Completion;
+            }
+
+            (await running.WaitAsync(cancellationToken)).ThrowIfStopped();
+        }
+    }
+
+    private bool TryBeginFileOperation(
+        string modelId,
+        ModelFileOperation operation,
+        out Task<ModelFileOperationOutcome> running)
+    {
+        bool begun;
+        lock (_fileOperationGate)
+        {
+            begun = _fileOperations.TryAdd(modelId, operation);
+            running = begun ? Task.FromResult(ModelFileOperationOutcome.Ended) : _fileOperations[modelId].Completion;
+        }
+
+        if (begun && operation.Download is not null)
+        {
+            OnPropertyChanged(nameof(IsDownloading));
+        }
+
+        return begun;
+    }
+
+    private void EndFileOperation(
+        string modelId,
+        TaskCompletionSource<ModelFileOperationOutcome> completion,
+        ModelFileOperationOutcome outcome)
+    {
+        bool wasDownload;
+        lock (_fileOperationGate)
+        {
+            wasDownload = _fileOperations.Remove(modelId, out var operation) && operation.Download is not null;
+        }
+
+        completion.SetResult(outcome);
+        if (wasDownload)
+        {
+            OnPropertyChanged(nameof(IsDownloading));
+        }
+    }
+
     public async Task DownloadAndLoadModelAsync(
         string modelId,
         CancellationToken cancellationToken = default
     )
     {
+        await PrepareModelFilesAsync(modelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -205,20 +565,92 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
         finally
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
         }
     }
 
     public async Task LoadModelAsync(string modelId, CancellationToken cancellationToken = default)
     {
-        await _modelLock.WaitAsync(cancellationToken);
+        while (true)
+        {
+            await WaitForFileOperationAsync(modelId, cancellationToken);
+            await _modelLock.WaitAsync(cancellationToken);
+            // A download that started while this waited for the lock is waited out without it.
+            if (!TryBeginLoad(modelId, out var slot))
+            {
+                _modelLock.Release();
+                continue;
+            }
+
+            try
+            {
+                await LoadModelFilesAsync(modelId, cancellationToken);
+                return;
+            }
+            finally
+            {
+                EndFileOperation(modelId, slot, ModelFileOperationOutcome.Ended);
+                try
+                {
+                    ScheduleAutoUnload();
+                }
+                finally
+                {
+                    _modelLock.Release();
+                }
+            }
+        }
+    }
+
+    private bool TryBeginLoad(string modelId, out TaskCompletionSource<ModelFileOperationOutcome> slot)
+    {
+        slot = new TaskCompletionSource<ModelFileOperationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        return TryBeginFileOperation(modelId, new ModelFileOperation(null, slot.Task), out _);
+    }
+
+    /// <summary>Loads a model without waiting for another operation; returns false when busy.</summary>
+    public async Task<bool> TryLoadModelAsync(string modelId, CancellationToken ct)
+    {
+        if (!await _modelLock.WaitAsync(0, ct))
+        {
+            return false;
+        }
+
+        TaskCompletionSource<ModelFileOperationOutcome>? slot = null;
         try
         {
-            await LoadModelCoreAsync(modelId, cancellationToken);
+            // Claimed under the lock, so a download of this model makes it busy instead of waited for.
+            if (!TryBeginLoad(modelId, out var claimed))
+            {
+                return false;
+            }
+
+            slot = claimed;
+            await LoadModelFilesAsync(modelId, ct);
+            return true;
         }
         finally
         {
-            _modelLock.Release();
+            if (slot is not null)
+            {
+                EndFileOperation(modelId, slot, ModelFileOperationOutcome.Ended);
+            }
+
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
         }
     }
 
@@ -245,23 +677,113 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public void ScheduleAutoUnload()
+    /// <summary>
+    ///     Downloads the model if needed, then loads it without waiting for the model lock; returns
+    ///     false when another download of it is running or the lock is busy.
+    /// </summary>
+    public async Task<bool> TryDownloadAndLoadModelAsync(string modelId, CancellationToken ct)
     {
-        CancelAutoUnload();
-
-        var seconds = _settings.Current.ModelAutoUnloadSeconds;
-        if (seconds <= 0 || ActiveModelId is null)
+        if (IsDownloading(modelId))
         {
-            return;
+            return false;
         }
 
-        _autoUnloadTimer = new Timer(seconds * 1000.0) { AutoReset = false };
-        _autoUnloadTimer.Elapsed += (_, _) =>
+        await PrepareModelFilesAsync(modelId, ct);
+        if (!await _modelLock.WaitAsync(0, ct))
         {
-            Debug.WriteLine($"Auto-unloading model after {seconds}s idle");
-            UnloadModel();
-        };
-        _autoUnloadTimer.Start();
+            return false;
+        }
+
+        try
+        {
+            if (IsDownloading(modelId))
+            {
+                return false;
+            }
+
+            await DownloadAndLoadModelCoreAsync(modelId, ct);
+            return true;
+        }
+        finally
+        {
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Unloads the active model without waiting, or only <paramref name="engine" />'s model when
+    ///     given. The engine check runs under the lock so a concurrent load cannot swap the target.
+    /// </summary>
+    public async Task<(ModelUnloadOutcome Outcome, string? ModelId)> TryUnloadModelAsync(
+        ITranscriptionEngineRole? engine = null)
+    {
+        if (!await _modelLock.WaitAsync(0))
+        {
+            return (ModelUnloadOutcome.Busy, null);
+        }
+
+        try
+        {
+            var modelId = ActiveModelId;
+            if (modelId is null)
+            {
+                return (ModelUnloadOutcome.NothingLoaded, null);
+            }
+
+            if (engine is not null && !ReferenceEquals(engine, ActiveTranscriptionPlugin))
+            {
+                return (ModelUnloadOutcome.OtherEngine, modelId);
+            }
+
+            await UnloadModelCoreAsync();
+            // UnloadModelCoreAsync keeps ActiveModelId when the plugin's teardown fails.
+            return (ActiveModelId is null ? ModelUnloadOutcome.Unloaded : ModelUnloadOutcome.Failed, modelId);
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    private void ScheduleAutoUnload()
+    {
+        var seconds = _settings.Current.ModelAutoUnloadSeconds;
+        var armable = seconds > 0 && ActiveModelId is not null;
+
+        lock (_timerGate)
+        {
+            CancelAutoUnloadLocked();
+
+            // Never arm after disposal: a lease outstanding when Dispose() runs re-arms here on
+            // its DisposeAsync, which would otherwise leave a zombie timer that fires plugin
+            // unloading during or after app teardown.
+            if (_disposed || !armable)
+            {
+                return;
+            }
+
+            // Stop()/Dispose() cannot recall an Elapsed callback already dispatched to the
+            // thread pool, so a superseded timer can still fire after a newer model was loaded.
+            // Each callback carries the generation it was armed with; see
+            // UnloadIfGenerationCurrentAsync for where that is validated.
+            var generation = _autoUnloadGeneration;
+
+            // System.Timers.Timer throws for intervals above int.MaxValue ms, and
+            // ModelAutoUnloadSeconds is a raw setting a corrupt or hand-edited config could push
+            // past that. Every load/lease path runs through here, so a throw must never be possible.
+            var intervalMs = Math.Min(seconds * 1000.0, int.MaxValue);
+            _autoUnloadTimer = new Timer(intervalMs) { AutoReset = false };
+            _autoUnloadTimer.Elapsed += (_, _) =>
+                _ = UnloadIfGenerationCurrentAsync(generation, seconds);
+            _autoUnloadTimer.Start();
+        }
     }
 
     public bool CanDeleteModel(string modelId)
@@ -288,6 +810,41 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         try
         {
             await DeleteModelCoreAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    /// <summary>Deletes a model without waiting, reporting busy or loaded without unloading it.</summary>
+    public async Task<ModelDeleteOutcome> TryDeleteModelAsync(string modelId, CancellationToken ct)
+    {
+        if (!await _modelLock.WaitAsync(0, ct))
+        {
+            return ModelDeleteOutcome.Busy;
+        }
+
+        try
+        {
+            if (ActiveModelId == modelId)
+            {
+                return ModelDeleteOutcome.Loaded;
+            }
+
+            if (!await TryDeleteModelCoreAsync(modelId, ct))
+            {
+                return ModelDeleteOutcome.Busy;
+            }
+
+            if (!IsDownloaded(modelId))
+            {
+                return ModelDeleteOutcome.Deleted;
+            }
+
+            // The plugin swallowed a filesystem failure; let GetStatus re-derive from disk.
+            ClearStatus(modelId);
+            return ModelDeleteOutcome.Failed;
         }
         finally
         {
@@ -367,6 +924,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         CancellationToken cancellationToken = default
     )
     {
+        await PrepareModelFilesAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -374,7 +932,14 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
         finally
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
         }
     }
 
@@ -385,9 +950,11 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     public async Task<TranscriptionLease> AcquireTranscriptionAsync(
         string? modelId = null,
+        bool keepModelWarm = false,
         CancellationToken cancellationToken = default
     )
     {
+        await PrepareModelFilesAsync(modelId ?? _settings.Current.SelectedModelId, cancellationToken);
         await _modelLock.WaitAsync(cancellationToken);
         try
         {
@@ -400,11 +967,19 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 ActiveTranscriptionPlugin
                 ?? throw new InvalidOperationException("No transcription engine loaded.");
 
-            return new TranscriptionLease(_modelLock, plugin);
+            return new TranscriptionLease(_modelLock, plugin, this, keepModelWarm);
         }
         catch
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
+
             throw;
         }
     }
@@ -417,6 +992,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     public async Task<TranscriptionLease?> TryAcquireTranscriptionAsync(
         string? modelId = null,
+        bool keepModelWarm = false,
         CancellationToken cancellationToken = default
     )
     {
@@ -429,23 +1005,39 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             var targetModelId = modelId ?? _settings.Current.SelectedModelId;
             if (
-                string.IsNullOrWhiteSpace(targetModelId)
-                || ActiveModelId != targetModelId
-                || ActiveTranscriptionPlugin is not { } plugin
+                !string.IsNullOrWhiteSpace(targetModelId)
+                && ActiveModelId == targetModelId
+                && ActiveTranscriptionPlugin is { } plugin
             )
             {
-                _modelLock.Release();
-                return null;
+                CancelAutoUnload();
+                return new TranscriptionLease(_modelLock, plugin, this, keepModelWarm);
             }
-
-            CancelAutoUnload();
-            return new TranscriptionLease(_modelLock, plugin);
         }
         catch
         {
-            _modelLock.Release();
+            try
+            {
+                ScheduleAutoUnload();
+            }
+            finally
+            {
+                _modelLock.Release();
+            }
+
             throw;
         }
+
+        try
+        {
+            ScheduleAutoUnload();
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -454,20 +1046,18 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void MigrateSettings()
     {
-        var current = _settings.Current;
-        var changed = false;
-
-        var migratedModelId = MigrateModelId(current.SelectedModelId);
-        if (migratedModelId != current.SelectedModelId)
-        {
-            current = current with { SelectedModelId = migratedModelId };
-            changed = true;
-        }
-
-        if (changed)
-        {
-            _settings.Save(current);
-        }
+        _settings.Update(current =>
+            current with
+            {
+                SelectedModelId = MigrateModelId(current.SelectedModelId),
+                FileTranscriptionModelOverride = MigrateOverrideModelId(
+                    current.FileTranscriptionModelOverride
+                ),
+                WatchFolderModelOverride = MigrateOverrideModelId(
+                    current.WatchFolderModelOverride
+                ),
+            }
+        );
     }
 
     private static string? MigrateModelId(string? modelId)
@@ -482,7 +1072,28 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 "com.typewhisper.sherpa-onnx",
                 "canary-180m-flash"
             ),
-            _ => modelId
+            "plugin:com.typewhisper.voxtral:mistral-whisper" =>
+                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
+            "plugin:com.typewhisper.assemblyai:universal-3-pro" =>
+                GetPluginModelId("com.typewhisper.assemblyai", "universal-3-5-pro"),
+            _ => modelId,
+        };
+    }
+
+    /// <summary>
+    ///     Unlike the global selection, overrides are (engine, model) pairs, so only
+    ///     fully-qualified legacy IDs are rewritten: a bare "mistral-whisper" may belong
+    ///     to a different engine (e.g. an OpenAI-compatible custom model).
+    /// </summary>
+    private static string? MigrateOverrideModelId(string? modelId)
+    {
+        return modelId switch
+        {
+            "plugin:com.typewhisper.voxtral:mistral-whisper" =>
+                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
+            "plugin:com.typewhisper.assemblyai:universal-3-pro" =>
+                GetPluginModelId("com.typewhisper.assemblyai", "universal-3-5-pro"),
+            _ => modelId,
         };
     }
 
@@ -493,8 +1104,10 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         {
             AppSettings.LocalModelAccelerationNvidiaCuda =>
                 TranscriptionAccelerationPreference.NvidiaCuda,
+            AppSettings.LocalModelAccelerationVulkan =>
+                TranscriptionAccelerationPreference.Vulkan,
             AppSettings.LocalModelAccelerationCpu => TranscriptionAccelerationPreference.Cpu,
-            _ => TranscriptionAccelerationPreference.Auto
+            _ => TranscriptionAccelerationPreference.Auto,
         };
     }
 
@@ -546,46 +1159,63 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             PluginManager.TranscriptionEngines.FirstOrDefault(e => e.GetTranscriptionSelectionId() == pluginId)
             ?? throw new ArgumentException($"Unknown plugin: {pluginId}");
 
+        if (plugin.SupportsModelDownload)
+        {
+            // Records its own end state; see RunDownloadAsync.
+            await RunDownloadAsync(plugin, modelId, pluginModelId, clearStatusWhenDone: false, cancellationToken);
+        }
+
         try
         {
-            if (plugin.SupportsModelDownload && !plugin.IsModelDownloaded(pluginModelId))
-            {
-                SetStatus(modelId, ModelStatus.DownloadingModel(0));
-
-                // Progress<T> posts callbacks asynchronously to the captured
-                // SynchronizationContext, so a late download report can run AFTER the load
-                // below sets the terminal Ready status and clobber it with a stale
-                // DownloadingModel(1.0) — leaving the UI pinned at 100% and never flipping to
-                // "Ready". Gate the handler so it no-ops once the download has returned
-                // (mirrors the load-progress gate in LoadModelCoreAsync).
-                var downloadInProgress = true;
-                var progress = new Progress<double>(p =>
-                {
-                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: downloadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
-                    if (!Volatile.Read(ref downloadInProgress))
-                        return;
-                    SetStatus(modelId, ModelStatus.DownloadingModel(p));
-                });
-                try
-                {
-                    await plugin.DownloadModelAsync(pluginModelId, progress, cancellationToken);
-                }
-                finally
-                {
-                    Volatile.Write(ref downloadInProgress, false);
-                }
-            }
-
             await LoadModelCoreAsync(modelId, cancellationToken);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (ModelDownloadCanceledException)
         {
+            // The canceled download already recorded its end state.
+            throw;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller-requested cancellation: drop this operation's transient entry so
+            // GetStatus re-derives from the artifact state.
+            ClearStatus(modelId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Includes an OperationCanceledException whose caller token is NOT requested:
+            // per the SDK cancellation-origin contract that is a dependency fault (e.g. a
+            // stalled third-party download surfacing as a bare TaskCanceledException) and
+            // must record Failed, never clear to an implied Ready.
             SetStatus(modelId, ModelStatus.Failed(ex.Message));
             throw;
         }
     }
 
+    /// <summary>
+    ///     Loads under <c>_modelLock</c> while holding the model's slot, so no download or delete of its
+    ///     files runs meanwhile. Callers have downloaded the files first, so a download that claims the
+    ///     slot in between only finds them on disk and releases it at once.
+    /// </summary>
     private async Task LoadModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
+        TaskCompletionSource<ModelFileOperationOutcome> slot;
+        while (!TryBeginLoad(modelId, out slot))
+        {
+            await WaitForFileOperationAsync(modelId, cancellationToken);
+        }
+
+        try
+        {
+            await LoadModelFilesAsync(modelId, cancellationToken);
+        }
+        finally
+        {
+            EndFileOperation(modelId, slot, ModelFileOperationOutcome.Ended);
+        }
+    }
+
+    private async Task LoadModelFilesAsync(string modelId, CancellationToken cancellationToken)
     {
         if (!IsPluginModel(modelId))
         {
@@ -605,7 +1235,8 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         }
 
         CancelAutoUnload();
-        SetStatus(modelId, ModelStatus.LoadingModel);
+        // The generation gates this load's progress callbacks; see _statusGate.
+        var generation = SetStatus(modelId, ModelStatus.LoadingModel);
         try
         {
             var requestedPreference = GetAccelerationPreference(
@@ -679,31 +1310,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 // UI shows a real progress bar instead of the static LoadingModel spinner
                 // set above; when provisioning finishes (or none is needed) the plugin
                 // reports 1.0 and we drop back to LoadingModel for the native init.
-                //
-                // Progress<T> posts callbacks asynchronously to the captured
-                // SynchronizationContext, so a late report could otherwise run AFTER this
-                // load returns and clobber the terminal Ready status (set below) with a
-                // stale Loading/Downloading one. Gate the handler so it no-ops once the
-                // load has returned.
-                var loadInProgress = true;
                 var loadProgress = new Progress<double>(p =>
-                {
-                    // ReSharper disable once AccessToModifiedClosure -- intentional gate: loadInProgress is flipped under Volatile in the enclosing finally so a late Progress callback no-ops (see comment above).
-                    if (!Volatile.Read(ref loadInProgress))
-                        return;
-                    SetStatus(
+                    SetStatusFromProgress(
                         modelId,
+                        generation,
                         p >= 1.0 ? ModelStatus.LoadingModel : ModelStatus.DownloadingModel(p)
-                    );
-                });
-                try
-                {
-                    await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
-                }
-                finally
-                {
-                    Volatile.Write(ref loadInProgress, false);
-                }
+                    )
+                );
+                await plugin.LoadModelAsync(pluginModelId, loadProgress, cancellationToken);
+
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             plugin.SelectModel(pluginModelId);
@@ -711,8 +1327,15 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ClearStatus(modelId);
+            throw;
+        }
         catch (Exception ex)
         {
+            // Unrequested OperationCanceledException lands here deliberately — a
+            // dependency fault must surface as Failed (cancellation-origin contract).
             SetStatus(modelId, ModelStatus.Failed(ex.Message));
             throw;
         }
@@ -748,20 +1371,87 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
 
         // Unload succeeded: model is gone from memory but still on disk for download-capable
         // plugins, so drop the tracked status and let GetStatus recompute real availability.
-        _modelStatuses.Remove(modelId);
-        OnPropertyChanged(nameof(GetStatus));
+        ClearStatus(modelId);
         ActiveModelId = null;
         _activeModelAccelerationPreference = null;
     }
 
+    /// <summary>
+    ///     Idle-timer unload. Checking the generation before taking <c>_modelLock</c> would not be
+    ///     enough: a load or lease can win the lock in that gap, re-arm, and release — leaving this
+    ///     already-validated callback to unload a model that was just loaded. Every re-arm happens
+    ///     under <c>_modelLock</c>, so validating after acquiring it serializes check and unload.
+    /// </summary>
+    private async Task UnloadIfGenerationCurrentAsync(int generation, int idleSeconds)
+    {
+        await _modelLock.WaitAsync();
+        try
+        {
+            lock (_timerGate)
+            {
+                if (_disposed || generation != _autoUnloadGeneration)
+                {
+                    return;
+                }
+            }
+
+            Debug.WriteLine($"Auto-unloading model after {idleSeconds}s idle");
+            await UnloadModelCoreAsync();
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
     private void CancelAutoUnload()
     {
+        lock (_timerGate)
+        {
+            CancelAutoUnloadLocked();
+        }
+    }
+
+    private void CancelAutoUnloadLocked()
+    {
+        // Bump first: this retires any Elapsed callback already in flight from the timer
+        // being torn down, whether or not a replacement is armed afterwards.
+        _autoUnloadGeneration++;
         _autoUnloadTimer?.Stop();
         _autoUnloadTimer?.Dispose();
         _autoUnloadTimer = null;
     }
 
     private async Task DeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
+        if (!await TryDeleteModelCoreAsync(modelId, cancellationToken))
+        {
+            throw new InvalidOperationException("The model is downloading. Cancel the download first.");
+        }
+    }
+
+    /// <summary>Deletes the model's files, or returns false when a download of them holds the slot.</summary>
+    private async Task<bool> TryDeleteModelCoreAsync(string modelId, CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<ModelFileOperationOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!TryBeginFileOperation(modelId, new ModelFileOperation(null, completion.Task), out _))
+        {
+            return false;
+        }
+
+        try
+        {
+            await DeleteModelFilesAsync(modelId, cancellationToken);
+            return true;
+        }
+        finally
+        {
+            EndFileOperation(modelId, completion, ModelFileOperationOutcome.Ended);
+        }
+    }
+
+    private async Task DeleteModelFilesAsync(string modelId, CancellationToken cancellationToken)
     {
         if (ActiveModelId == modelId)
         {
@@ -827,10 +1517,74 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         return true;
     }
 
-    private void SetStatus(string modelId, ModelStatus status)
+    /// <summary>
+    ///     Authoritative status write from an operation flow (serialized under <c>_modelLock</c>,
+    ///     or per model for downloads). Advances the model's progress generation so every progress
+    ///     callback for it still in flight from before this transition becomes a no-op; returns
+    ///     the new generation for a progress scope opened by this write to capture.
+    /// </summary>
+    private long SetStatus(string modelId, ModelStatus status)
     {
-        _modelStatuses[modelId] = status;
+        long generation;
+        lock (_statusGate)
+        {
+            generation = ++_statusGeneration;
+            _statusGenerations[modelId] = generation;
+            _modelStatuses[modelId] = status;
+        }
+
         OnPropertyChanged(nameof(GetStatus));
+        return generation;
+    }
+
+    private void ClearStatus(string modelId)
+    {
+        bool removed;
+        lock (_statusGate)
+        {
+            // Advance even when there is no entry to remove: a straggling progress
+            // callback must not re-insert a status after this terminal transition.
+            _statusGenerations[modelId] = ++_statusGeneration;
+            removed = _modelStatuses.TryRemove(modelId, out _);
+        }
+
+        if (removed)
+        {
+            OnPropertyChanged(nameof(GetStatus));
+        }
+    }
+
+    /// <summary>
+    ///     Status write from a progress callback: applies only while
+    ///     <paramref name="generation" /> is still current, checked atomically with the
+    ///     write so a straggler can never re-stick a status after its operation's terminal
+    ///     transition. Internal as a test seam (the Progress&lt;T&gt; wrappers delegate here).
+    /// </summary>
+    internal void SetStatusFromProgress(string modelId, long generation, ModelStatus status)
+    {
+        lock (_statusGate)
+        {
+            if (_statusGenerations.GetValueOrDefault(modelId) != generation)
+            {
+                return;
+            }
+
+            _modelStatuses[modelId] = status;
+        }
+
+        OnPropertyChanged(nameof(GetStatus));
+    }
+
+    /// <summary>Test seam: the generation an open progress scope has captured.</summary>
+    internal long CurrentStatusGeneration
+    {
+        get
+        {
+            lock (_statusGate)
+            {
+                return _statusGeneration;
+            }
+        }
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -845,20 +1599,47 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     public sealed class TranscriptionLease : IAsyncDisposable
     {
         private readonly SemaphoreSlim _modelLock;
+        private readonly ModelManagerService _owner;
+        private readonly bool _keepModelWarm;
         private int _released;
 
-        internal TranscriptionLease(SemaphoreSlim modelLock, ITranscriptionEnginePlugin plugin)
+        internal TranscriptionLease(
+            SemaphoreSlim modelLock,
+            ITranscriptionEngineRole plugin,
+            ModelManagerService owner,
+            bool keepModelWarm
+        )
         {
             _modelLock = modelLock;
             Plugin = plugin;
+            _owner = owner;
+            _keepModelWarm = keepModelWarm;
         }
 
         /// <summary>The plugin pinned for the lifetime of this lease.</summary>
-        public ITranscriptionEnginePlugin Plugin { get; }
+        public ITranscriptionEngineRole Plugin { get; }
 
         public ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _released, 1) == 0)
+            if (Interlocked.Exchange(ref _released, 1) != 0)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            // Re-arm (unless the caller asked to keep the model warm) BEFORE releasing
+            // _modelLock: the lock is still held here, so this is the last point at which
+            // touching _autoUnloadTimer is guaranteed serialized against every other
+            // load/unload/acquire path. Never let a caller thread touch the timer after
+            // the lock is released. Release in finally so a scheduling failure can never
+            // strand the lock and deadlock every subsequent load/unload/acquire.
+            try
+            {
+                if (!_keepModelWarm)
+                {
+                    _owner.ScheduleAutoUnload();
+                }
+            }
+            finally
             {
                 _modelLock.Release();
             }
@@ -894,9 +1675,9 @@ internal sealed class NoOpTranscriptionEngine : ITranscriptionEngine
 
 internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
 {
-    private readonly ITranscriptionEnginePlugin _plugin;
+    private readonly ITranscriptionEngineRole _plugin;
 
-    public PluginTranscriptionEngineAdapter(ITranscriptionEnginePlugin plugin)
+    public PluginTranscriptionEngineAdapter(ITranscriptionEngineRole plugin)
     {
         _plugin = plugin;
     }
@@ -919,9 +1700,10 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
     {
         var wavBytes = WavEncoder.Encode(audioSamples);
         var translate = task == TranscriptionTask.Translate;
+        var languageSelection = LanguageSelectionResolver.Resolve(language);
         var result = await _plugin.TranscribeAsync(
             wavBytes,
-            language,
+            languageSelection,
             translate,
             null,
             cancellationToken
@@ -931,7 +1713,7 @@ internal sealed class PluginTranscriptionEngineAdapter : ITranscriptionEngine
             Text = result.Text,
             DetectedLanguage = result.DetectedLanguage,
             Duration = result.DurationSeconds,
-            NoSpeechProbability = result.NoSpeechProbability
+            NoSpeechProbability = result.NoSpeechProbability,
         };
     }
 }

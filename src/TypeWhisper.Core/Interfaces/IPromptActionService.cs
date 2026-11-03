@@ -9,6 +9,14 @@ public interface IPromptActionService
 {
     IReadOnlyList<PromptAction> Actions { get; }
 
+    /// <summary>Reads the actions and reports whether they are stored data.</summary>
+    /// <returns><c>false</c> when the store was reset after corruption, not merely empty.</returns>
+    bool TryGetActions(out IReadOnlyList<PromptAction> actions)
+    {
+        actions = Actions;
+        return true;
+    }
+
     /// <summary>The enabled subset of <see cref="Actions" />, in display order.</summary>
     IReadOnlyList<PromptAction> EnabledActions { get; }
 

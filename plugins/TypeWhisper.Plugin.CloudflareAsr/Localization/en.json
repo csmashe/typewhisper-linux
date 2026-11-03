@@ -1,12 +1,19 @@
 {
   "Settings.AccountId": "Account ID",
-  "Settings.AccountIdDescription": "Required Cloudflare account identifier.",
+  "Settings.AccountIdDescription": "Your 32-character Cloudflare account ID, shown in the Cloudflare dashboard.",
   "Settings.ApiToken": "API token",
-  "Settings.ApiTokenDescription": "Cloudflare API token with Workers AI access.",
+  "Settings.ApiTokenDescription": "Cloudflare API token with Workers AI access to this account.",
   "Settings.TranscriptionModel": "Transcription model",
-  "Settings.ModelDescription": "Choose the Cloudflare ASR model.",
+  "Settings.ModelDescription": "Whisper Large V3 Turbo accepts a chosen spoken language and dictionary terms; Whisper detects the language automatically.",
   "Settings.EnterAccountIdAndApiToken": "Enter both Account ID and API token first.",
-  "Settings.CredentialsSaved": "Credentials saved. Remote validation is not implemented yet.",
+  "Settings.InvalidAccountId": "The Cloudflare account ID must be 32 hexadecimal characters.",
+  "Settings.CredentialsValid": "Account ID and API token are valid for Workers AI.",
+  "Settings.TokenRejected": "Cloudflare rejected the API token for this account. Use a token with Workers AI access to this account.",
+  "Settings.ValidationFailedStatus": "Cloudflare returned HTTP {0}. Check the account ID and API token.",
+  "Settings.InvalidValidationResponse": "Cloudflare returned an unexpected response. Try again.",
+  "Settings.CloudflareUnreachable": "Couldn't reach Cloudflare. Check your connection and try again.",
+  "Settings.SettingsChangedDuringValidation": "The settings changed during validation. Validate again.",
+  "Errors.RecordingTooLarge": "The recording is too large for this Cloudflare model. Use a shorter recording.",
   "Manifest.Name": "Cloudflare ASR",
   "Manifest.Description": "Cloudflare Workers AI Whisper transcription engine"
 }

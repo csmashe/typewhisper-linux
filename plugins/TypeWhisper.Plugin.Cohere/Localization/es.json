@@ -1,12 +1,13 @@
 {
   "Settings.ApiKey": "Clave de API",
-  "Settings.ApiKeyDescription": "Necesaria para las solicitudes al LLM de Cohere.",
+  "Settings.ApiKeyDescription": "Necesaria para la transcripción de Cohere y las solicitudes a Command.",
   "Settings.StreamResponses": "Transmitir respuestas",
   "Settings.StreamResponsesDescription": "Muestra la salida de la acción del prompt token a token a medida que se genera, en lugar de esperar a la respuesta completa.",
   "Settings.EnterApiKey": "Introduce primero una clave de API.",
   "Settings.ApiKeyValid": "La clave de API es válida.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
   "Settings.ApiKeyNotConfigured": "Clave de API no configurada",
+  "Errors.RecordingTooLarge": "La grabación es demasiado grande para Cohere Transcribe (límite de 25 MB). Usa una grabación más corta.",
   "Manifest.Name": "Cohere",
-  "Manifest.Description": "LLM Cohere Command para el procesamiento de prompts"
+  "Manifest.Description": "Cohere Transcribe para voz a texto y LLM Cohere Command para el procesamiento de prompts"
 }

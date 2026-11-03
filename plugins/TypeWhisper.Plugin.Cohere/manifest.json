@@ -1,9 +1,12 @@
 {
   "id": "com.typewhisper.cohere",
   "name": "Cohere",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
-  "description": "Cohere Command LLM for prompt processing",
+  "description": "Cohere Transcribe speech-to-text and Command LLM for prompt processing",
+  "networkAccess": "network",
+  "categories": ["transcription", "llm"],
   "assemblyName": "TypeWhisper.Plugin.Cohere.dll",
   "pluginClass": "TypeWhisper.Plugin.Cohere.CoherePlugin"
 }

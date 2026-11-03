@@ -1,0 +1,10 @@
+{
+  "Settings.NoSpeechThreshold": "无语音阈值",
+  "Settings.NoSpeechThresholdDescription": "0.0到1.0。无语音概率超过此值的片段会被丢弃，以免静音间隙被转录为幻觉短语（通常是“Thank you.”）。值越低，过滤越激进。默认值0.6与whisper.cpp自身的默认值一致。留空则使用默认值。",
+  "Settings.UsingDefaultThreshold": "正在使用默认阈值{0}。",
+  "Settings.ThresholdSet": "阈值已设为{0}。",
+  "Settings.ThresholdInvalid": "无语音阈值必须是0.0到1.0之间的数字。",
+  "Errors.TranslationUnsupported": "{0}无法翻译为英语。请选择Turbo以外的多语言模型，例如Small或Medium。",
+  "Manifest.Name": "whisper.cpp（本地）",
+  "Manifest.Description": "通过whisper.cpp（使用Whisper.net）离线转录"
+}

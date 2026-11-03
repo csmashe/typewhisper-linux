@@ -1,6 +1,6 @@
 {
   "Settings.AcceptLicense": "Entiendo que los pesos del modelo Supertonic 3 están licenciados bajo OpenRAIL-M.",
-  "Settings.Description": "Supertonic se ejecuta de forma local una vez descargados los recursos del modelo. Los pesos del modelo están licenciados por separado bajo OpenRAIL-M.",
+  "Settings.Description": "Supertonic se ejecuta de forma local una vez descargados los archivos del modelo. Los pesos del modelo están licenciados por separado bajo OpenRAIL-M; acepta la licencia y luego descarga los archivos del modelo.",
   "Settings.Voice": "Voz",
   "Settings.VoiceDescription": "Voz de Supertonic (M1–M5 masculina, F1–F5 femenina).",
   "Settings.Speed": "Velocidad del habla",
@@ -15,6 +15,14 @@
   "Settings.Summary": "Voz: {0}; velocidad {1}; pasos {2}; {3}",
   "Settings.StatusReady": "listo",
   "Settings.StatusDownloadRequired": "descarga requerida",
+  "Settings.DownloadRequired": "Los archivos del modelo no están descargados. Usa «Descargar archivos del modelo».",
+  "Settings.DownloadAction": "Descargar archivos del modelo",
+  "Settings.DownloadActionDescription": "Descarga y verifica el modelo Supertonic 3 ({0}). Una descarga interrumpida se reanuda.",
+  "Settings.RemoveAction": "Eliminar archivos del modelo",
+  "Settings.RemoveActionDescription": "Borra los archivos del modelo descargados. Se conservan los ajustes y la aceptación de la licencia.",
+  "Settings.RemoveConfirmation": "¿Eliminar los archivos del modelo Supertonic 3? La respuesta hablada con Supertonic dejará de funcionar hasta que los vuelvas a descargar.",
+  "Settings.Removed": "Archivos del modelo eliminados.",
+  "Settings.RemoveCancelled": "Eliminación cancelada.",
   "Manifest.Name": "Supertonic TTS",
   "Manifest.Description": "Proveedor local de texto a voz Supertonic 3. Descarga los recursos del modelo OpenRAIL-M cuando es necesario y ejecuta la síntesis en el dispositivo con ONNX Runtime."
 }

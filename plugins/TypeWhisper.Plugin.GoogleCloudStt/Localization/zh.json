@@ -1,0 +1,9 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Google Cloud Speech-to-Text所必需。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.ModelDescription": "选择Google Cloud STT模型。",
+  "Settings.NotConfiguredApiKeyRequired": "插件未配置。需要API密钥。",
+  "Manifest.Name": "Google Cloud STT",
+  "Manifest.Description": "使用Google Cloud Speech-to-Text进行转录"
+}

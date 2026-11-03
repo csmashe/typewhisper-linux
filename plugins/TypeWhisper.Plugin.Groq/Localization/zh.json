@@ -1,0 +1,19 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "安全存储，用于Groq转录和LLM请求。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.TranscriptionModelDescription": "选择Groq转录模型。",
+  "Settings.LlmModel": "LLM模型",
+  "Settings.LlmModelFetched": "正在显示从API获取的{0}个Groq LLM模型。",
+  "Settings.LlmModelDefault": "正在使用默认的Groq LLM列表。点击“验证”以测试密钥并刷新当前模型。",
+  "Settings.StreamResponses": "流式响应",
+  "Settings.StreamResponsesDescription": "在生成时逐个token显示提示词操作的输出，而不是等待完整回复。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyInvalid": "API密钥无效。",
+  "Settings.ApiKeyValidFetchedModels": "API密钥有效。已获取{0}个Groq LLM模型。",
+  "Settings.ApiKeyValidSavedModels": "API密钥有效。正在使用已保存/默认的LLM模型。",
+  "Settings.ApiKeyNotConfigured": "未配置API密钥",
+  "Settings.TranslationUnsupported": "{0}不支持翻译。",
+  "Manifest.Name": "Groq",
+  "Manifest.Description": "Groq Whisper转录和Llama翻译"
+}

@@ -1,36 +1,16 @@
+using System.Buffers;
+using System.Text;
 using System.Text.Json;
 
 namespace TypeWhisper.Cli.Output;
 
 /// <summary>
-///     JSON helpers for rendering API responses: scalar property extraction for
-///     the human-readable tables, pretty-printing for <c>--json</c> output, and
-///     error-message extraction from the API's error envelope.
+///     JSON helpers for rendering API responses: pretty-printing for <c>--json</c>
+///     output, and error-message extraction from the API's error envelope.
 /// </summary>
 internal static class JsonFormatting
 {
-    private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
-
-    /// <summary>
-    ///     Returns the scalar value of property <paramref name="name" /> as a string,
-    ///     or <c>""</c> when the property is absent or not a string/number/bool.
-    /// </summary>
-    public static string Prop(JsonElement el, string name)
-    {
-        if (!el.TryGetProperty(name, out var value))
-        {
-            return "";
-        }
-
-        return value.ValueKind switch
-        {
-            JsonValueKind.String => value.GetString() ?? "",
-            JsonValueKind.Number => value.ToString(),
-            JsonValueKind.True => "true",
-            JsonValueKind.False => "false",
-            _ => ""
-        };
-    }
+    private static readonly JsonWriterOptions s_writerOptions = new() { Indented = true };
 
     /// <summary>Re-serializes <paramref name="json" /> indented, returning the input unchanged if it isn't valid JSON.</summary>
     public static string PrettyJson(string json)
@@ -38,7 +18,15 @@ internal static class JsonFormatting
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return JsonSerializer.Serialize(doc.RootElement, s_jsonOptions);
+            // WriteTo rather than JsonSerializer.Serialize: writing an already-parsed
+            // document needs no reflection, so this survives trimming (IL2026).
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(buffer, s_writerOptions))
+            {
+                doc.RootElement.WriteTo(writer);
+            }
+
+            return Encoding.UTF8.GetString(buffer.WrittenSpan);
         }
         catch
         {

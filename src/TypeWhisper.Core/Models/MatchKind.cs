@@ -8,5 +8,5 @@ public enum MatchKind
     App,
     Global,
     ManualOverride,
-    NoMatch
+    NoMatch,
 }

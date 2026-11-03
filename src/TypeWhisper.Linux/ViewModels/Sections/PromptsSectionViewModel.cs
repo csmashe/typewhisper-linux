@@ -2,22 +2,46 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+// MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
+// value parameter is part of the generated signature and cannot be dropped even when ignored here.
+// ReSharper disable UnusedParameterInPartialMethod
 public partial class PromptsSectionViewModel : ObservableObject
 {
+    private readonly IErrorLogService? _errorLog;
     private readonly PluginManager _pluginManager;
+    private readonly IProfileService _profiles;
     private readonly IPromptActionService _prompts;
     private readonly ISettingsService _settings;
+    private readonly HotkeyService _hotkeys;
+
+    [ObservableProperty]
+    private string _errorText = "";
+
+    // Set while hydrating the spoken-command properties from saved settings so the
+    // generated On<Property>Changed hooks don't persist the value straight back.
+    private bool _hydratingCommandSettings;
+
+    [ObservableProperty]
+    private bool _commandModeEnabled;
+
+    [ObservableProperty]
+    private string _commandKeyphrase = AppSettings.DefaultCommandKeyphrase;
 
     [ObservableProperty]
     private string? _editHotkeyKey;
+
+    [ObservableProperty]
+    private string? _hotkeyValidationMessage;
 
     [ObservableProperty]
     private string _editIcon = "\u2728";
@@ -42,10 +66,16 @@ public partial class PromptsSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isCreatingNew;
 
-    // Prevents SelectedEditProvider's setter from persisting the provider
-    // override while RefreshPluginOptions is rebuilding the provider list —
-    // the setter fires when the ComboBox re-selects the current value.
+    // Suppress picker setters while option lists rebuild and the ComboBoxes reselect, so a
+    // transient null selection cannot clear a saved one.
     private bool _isRefreshingProviders;
+    private bool _isSelectingActionPlugin;
+    private bool _isSelectingProvider;
+
+    // Placeholder added for the editor's current unresolvable override, so it can be dropped again
+    // when the editor moves on.
+    private ProviderOption? _synthesizedProviderOption;
+    private ActionPluginOption? _synthesizedActionPluginOption;
 
     [ObservableProperty]
     private PromptAction? _selectedAction;
@@ -55,27 +85,79 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     public PromptsSectionViewModel(
         IPromptActionService prompts,
+        IProfileService profiles,
+        HotkeyService hotkeys,
         PluginManager pluginManager,
-        ISettingsService settings
+        ISettingsService settings,
+        IErrorLogService? errorLog = null
     )
     {
         _prompts = prompts;
+        _profiles = profiles;
+        _hotkeys = hotkeys;
         _pluginManager = pluginManager;
         _settings = settings;
+        _errorLog = errorLog;
+        var lastDefaultLlmProvider = settings.Current.DefaultLlmProvider;
 
         _prompts.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshActions);
         _pluginManager.PluginStateChanged += (_, _) =>
             Dispatcher.UIThread.Post(RefreshPluginOptions);
-        _settings.SettingsChanged += _ =>
-            Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(DefaultLlmProvider)));
+        // Provider option labels ("Use default provider", "unavailable") are computed text.
+        Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            OnPropertyChanged(nameof(Summary));
+            OnPropertyChanged(nameof(PromptsHint));
+            OnPropertyChanged(nameof(ProviderWarningText));
+            OnPropertyChanged(nameof(EditorTitle));
+            RefreshPluginOptions();
+            RefreshActions();
+        });
+        _settings.SettingsChanged += value =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                HydrateCommandSettings(value);
+                if (!string.Equals(lastDefaultLlmProvider, value.DefaultLlmProvider, StringComparison.Ordinal))
+                {
+                    lastDefaultLlmProvider = value.DefaultLlmProvider;
+                    RefreshProviderOptions();
+                }
+                OnPropertyChanged(nameof(DefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
+                OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
+            });
 
+        HydrateCommandSettings(_settings.Current);
         RefreshPluginOptions();
         RefreshActions();
     }
 
     public ObservableCollection<PromptAction> Actions { get; } = [];
     public ObservableCollection<ProviderOption> AvailableProviders { get; } = [];
+    public ObservableCollection<ProviderOption> DefaultProviderOptions { get; } = [];
+    public ObservableCollection<ProviderOption> SpokenCommandProviderOptions { get; } = [];
     public ObservableCollection<ActionPluginOption> ActionPluginOptions { get; } = [];
+
+    public ActionPluginOption? SelectedActionPlugin
+    {
+        get => ActionPluginOptions.FirstOrDefault(option => option.Value == EditTargetActionPluginId);
+        set
+        {
+            // No selected item is a transient picker state, while the explicit "insert
+            // normally" option has a null Value and intentionally clears the saved ID.
+            if (_isRefreshingProviders || value is null)
+                return;
+            _isSelectingActionPlugin = true;
+            try
+            {
+                EditTargetActionPluginId = value.Value;
+            }
+            finally
+            {
+                _isSelectingActionPlugin = false;
+            }
+        }
+    }
 
     public bool HasSelectedAction => SelectedAction is not null || IsCreatingNew;
     public int ActionCount => Actions.Count;
@@ -87,7 +169,10 @@ public partial class PromptsSectionViewModel : ObservableObject
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string PromptsHint => Loc.Instance["Prompts.Hint"];
 
-    public bool ShowProviderWarning => AvailableProviders.Count <= 1;
+    public bool HasError => !string.IsNullOrEmpty(ErrorText);
+
+    public bool ShowProviderWarning =>
+        !AvailableProviders.Any(option => option.Value is not null && !option.IsUnavailable);
     // ReSharper disable once MemberCanBeMadeStatic.Global
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML binding surface; ViewModel properties must be instance members for compiled bindings")]
     public string ProviderWarningText => Loc.Instance["Prompts.ProviderWarning"];
@@ -108,8 +193,25 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            _settings.Save(_settings.Current with { DefaultLlmProvider = value });
+            _settings.Update(current => current with { DefaultLlmProvider = value });
             OnPropertyChanged();
+        }
+    }
+
+    /// <summary>The provider and model used by automatic LLM cleanup and default prompt actions.</summary>
+    public ProviderOption? SelectedDefaultLlmProvider
+    {
+        get => DefaultProviderOptions.FirstOrDefault(option =>
+            string.Equals(option.Value, _settings.Current.DefaultLlmProvider, StringComparison.Ordinal));
+        set
+        {
+            if (_isRefreshingProviders
+                || string.Equals(_settings.Current.DefaultLlmProvider, value?.Value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            DefaultLlmProvider = value?.Value;
         }
     }
 
@@ -130,7 +232,45 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            EditProviderOverride = value?.Value;
+            _isSelectingProvider = true;
+            try
+            {
+                EditProviderOverride = value?.Value;
+            }
+            finally
+            {
+                _isSelectingProvider = false;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Model used for spoken commands. The null "use
+    ///     default" option persists as no override, deferring to <see cref="DefaultLlmProvider" />.
+    /// </summary>
+    public ProviderOption? SelectedSpokenCommandProvider
+    {
+        get =>
+            SpokenCommandProviderOptions.FirstOrDefault(option =>
+                option.Value == _settings.Current.SpokenCommandLlmProvider)
+            ?? SpokenCommandProviderOptions.FirstOrDefault();
+        set
+        {
+            if (_isRefreshingProviders)
+            {
+                return;
+            }
+
+            if (string.Equals(
+                    _settings.Current.SpokenCommandLlmProvider,
+                    value?.Value,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _settings.Update(current => current with { SpokenCommandLlmProvider = value?.Value });
+            OnPropertyChanged();
         }
     }
 
@@ -145,8 +285,61 @@ public partial class PromptsSectionViewModel : ObservableObject
         return _pluginManager.RefreshProviderModelsAsync();
     }
 
+    private void HydrateCommandSettings(AppSettings settings)
+    {
+        _hydratingCommandSettings = true;
+        try
+        {
+            CommandModeEnabled = settings.CommandModeEnabled;
+            CommandKeyphrase = string.IsNullOrWhiteSpace(settings.CommandKeyphrase)
+                ? AppSettings.DefaultCommandKeyphrase
+                : settings.CommandKeyphrase;
+        }
+        finally
+        {
+            _hydratingCommandSettings = false;
+        }
+    }
+
+    partial void OnCommandModeEnabledChanged(bool value)
+    {
+        if (_hydratingCommandSettings || _settings.Current.CommandModeEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { CommandModeEnabled = value });
+    }
+
+    partial void OnCommandKeyphraseChanged(string value)
+    {
+        if (_hydratingCommandSettings)
+        {
+            return;
+        }
+
+        // Guard empty: an unset keyphrase would match every dictation, so fall back to the
+        // default. Normalizing re-enters this hook once with the trimmed value, which persists.
+        var normalized = string.IsNullOrWhiteSpace(value)
+            ? AppSettings.DefaultCommandKeyphrase
+            : value.Trim();
+        if (!string.Equals(normalized, value, StringComparison.Ordinal))
+        {
+            CommandKeyphrase = normalized;
+            return;
+        }
+
+        if (string.Equals(_settings.Current.CommandKeyphrase, normalized, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { CommandKeyphrase = normalized });
+    }
+
     partial void OnSelectedActionChanged(PromptAction? value)
     {
+        HotkeyValidationMessage = null;
         if (value is null)
         {
             if (!IsCreatingNew)
@@ -171,9 +364,123 @@ public partial class PromptsSectionViewModel : ObservableObject
         NotifyStateChanged();
     }
 
+    partial void OnEditHotkeyKeyChanged(string? value)
+    {
+        HotkeyValidationMessage = null;
+    }
+
+    // A missing plugin belongs to the current draft only. Keep its ID selectable without
+    // offering that unavailable plugin when the user opens another prompt.
+    partial void OnEditTargetActionPluginIdChanged(string? value)
+    {
+        if (_isRefreshingProviders)
+            return;
+
+        _isRefreshingProviders = true;
+        try
+        {
+            RefreshActionPluginOption(value);
+        }
+        finally
+        {
+            _isRefreshingProviders = false;
+        }
+        OnPropertyChanged(nameof(SelectedActionPlugin));
+    }
+
+    private void RefreshActionPluginOption(string? value)
+    {
+        if (_synthesizedActionPluginOption is not null
+            && !string.Equals(_synthesizedActionPluginOption.Value, value, StringComparison.Ordinal))
+        {
+            var obsoleteOption = _synthesizedActionPluginOption;
+            if (_isSelectingActionPlugin)
+            {
+                // Avalonia is still committing SelectedItem. Removing a row now invalidates
+                // its selection indices. Only this removal must wait until the commit ends.
+                Dispatcher.UIThread.Post(() => RemoveObsoleteActionPluginOption(obsoleteOption),
+                    DispatcherPriority.Background);
+            }
+            else
+            {
+                RemoveObsoleteActionPluginOption(obsoleteOption);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(value) || ActionPluginOptions.Any(option => option.Value == value))
+            return;
+
+        _synthesizedActionPluginOption = new ActionPluginOption(
+            value, Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", value));
+        ActionPluginOptions.Add(_synthesizedActionPluginOption);
+    }
+
+    private void RemoveObsoleteActionPluginOption(ActionPluginOption option)
+    {
+        // A queued removal must not affect a reopened draft or a relocalized option list.
+        if (!ReferenceEquals(_synthesizedActionPluginOption, option)
+            || string.Equals(option.Value, EditTargetActionPluginId, StringComparison.Ordinal))
+            return;
+
+        ActionPluginOptions.Remove(option);
+        _synthesizedActionPluginOption = null;
+    }
+
+    // Hydrating an action whose override no longer resolves (uninstalled plugin, signed-out CLI)
+    // must not leave the picker showing "Use default provider": the action still carries the
+    // override and would fail on it. The option list only rebuilds on plugin state changes, so
+    // add the placeholder here too — and drop the one synthesized for the previous action, which
+    // otherwise stays listed and selectable for every action visited since the last refresh.
+    partial void OnEditProviderOverrideChanged(string? value)
+    {
+        if (_isRefreshingProviders)
+        {
+            return;
+        }
+
+        if (_synthesizedProviderOption is not null
+            && !string.Equals(_synthesizedProviderOption.Value, value, StringComparison.Ordinal))
+        {
+            var obsoleteOption = _synthesizedProviderOption;
+            if (_isSelectingProvider)
+            {
+                // Avalonia is still committing SelectedItem; removing a row now invalidates its
+                // selection indices.
+                Dispatcher.UIThread.Post(() => RemoveObsoleteProviderOption(obsoleteOption),
+                    DispatcherPriority.Background);
+            }
+            else
+            {
+                RemoveObsoleteProviderOption(obsoleteOption);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(value)
+            && AvailableProviders.All(option =>
+                !string.Equals(option.Value, value, StringComparison.Ordinal)))
+        {
+            _synthesizedProviderOption = MissingSelectionOption(value);
+            AvailableProviders.Add(_synthesizedProviderOption);
+        }
+
+        OnPropertyChanged(nameof(SelectedEditProvider));
+    }
+
+    private void RemoveObsoleteProviderOption(ProviderOption option)
+    {
+        // A queued removal must not affect a reselected option or a rebuilt option list.
+        if (!ReferenceEquals(_synthesizedProviderOption, option)
+            || string.Equals(option.Value, EditProviderOverride, StringComparison.Ordinal))
+            return;
+
+        AvailableProviders.Remove(option);
+        _synthesizedProviderOption = null;
+    }
+
     [RelayCommand]
     private void StartCreate()
     {
+        HotkeyValidationMessage = null;
         IsCreatingNew = true;
         ShowEditor = true;
         SelectedAction = null;
@@ -196,6 +503,41 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
+        var existing = _editingActionId is null
+            ? null
+            : _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
+        if (!IsCreatingNew && existing is null)
+        {
+            return;
+        }
+
+        // Disabled outcomes keep the draft chord unvalidated; the enable gate
+        // (ToggleEnabled here) validates it before it can ever bind.
+        string? hotkeyKey;
+        if (!IsCreatingNew && existing is { IsEnabled: false })
+        {
+            hotkeyKey = string.IsNullOrWhiteSpace(EditHotkeyKey) ? null : EditHotkeyKey;
+        }
+        else
+        {
+            var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
+                EditHotkeyKey,
+                _editingActionId,
+                _prompts.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+
+            hotkeyKey = hotkeyValidation.NormalizedHotkey;
+        }
+
+        EditHotkeyKey = hotkeyKey;
+        HotkeyValidationMessage = null;
+
         if (IsCreatingNew)
         {
             var action = new PromptAction
@@ -206,41 +548,49 @@ public partial class PromptsSectionViewModel : ObservableObject
                 Icon = EditIcon,
                 ProviderOverride = EditProviderOverride,
                 TargetActionPluginId = EditTargetActionPluginId,
-                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
+                HotkeyKey = hotkeyKey,
                 IsManualOnly = EditIsManualOnly,
                 IsEnabled = true,
-                SortOrder = _prompts.Actions.Count
+                SortOrder = _prompts.Actions.Count,
             };
 
-            _prompts.AddAction(action);
+            if (!TryMutate(() => _prompts.AddAction(action), "add a prompt action"))
+            {
+                return;
+            }
+
             RefreshActions();
             SelectById(action.Id);
             return;
         }
 
-        if (_editingActionId is null)
-        {
-            return;
-        }
-
-        var existing = _prompts.Actions.FirstOrDefault(action => action.Id == _editingActionId);
         if (existing is null)
         {
             return;
         }
 
-        _prompts.UpdateAction(
-            existing with
-            {
-                Name = EditName.Trim(),
-                SystemPrompt = EditSystemPrompt.Trim(),
-                Icon = EditIcon,
-                ProviderOverride = EditProviderOverride,
-                TargetActionPluginId = EditTargetActionPluginId,
-                HotkeyKey = NormalizeOptionalString(EditHotkeyKey),
-                IsManualOnly = EditIsManualOnly
-            }
-        );
+        if (
+            !TryMutate(
+                () =>
+                    _prompts.UpdateAction(
+                        existing with
+                        {
+                            Name = EditName.Trim(),
+                            SystemPrompt = EditSystemPrompt.Trim(),
+                            Icon = EditIcon,
+                            ProviderOverride = EditProviderOverride,
+                            TargetActionPluginId = EditTargetActionPluginId,
+                            HotkeyKey = hotkeyKey,
+                            IsManualOnly = EditIsManualOnly,
+                        }
+                    ),
+                "update a prompt action"
+            )
+        )
+        {
+            return;
+        }
+
         RefreshActions();
         SelectById(existing.Id);
     }
@@ -264,7 +614,11 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _prompts.DeleteAction(SelectedAction.Id);
+        if (!TryMutate(() => _prompts.DeleteAction(SelectedAction.Id), "delete a prompt action"))
+        {
+            return;
+        }
+
         RefreshActions();
         SelectedAction = null;
         ShowEditor = false;
@@ -278,8 +632,43 @@ public partial class PromptsSectionViewModel : ObservableObject
             return;
         }
 
-        _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled });
+        if (!action.IsEnabled)
+        {
+            var hotkeyValidation = _hotkeys.ValidatePromptActionHotkeyCandidate(
+                action.HotkeyKey,
+                action.Id,
+                _prompts.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                SelectById(action.Id);
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+        }
+
+        if (
+            !TryMutate(
+                () => _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled }),
+                "toggle a prompt action"
+            )
+        )
+        {
+            return;
+        }
+
         RefreshActions();
+    }
+
+    private static string GetHotkeyValidationMessage(HotkeyCandidateValidationStatus status)
+    {
+        return status switch
+        {
+            HotkeyCandidateValidationStatus.Malformed =>
+                Loc.Instance["Prompts.HotkeyMalformed"],
+            _ => Loc.Instance["Prompts.HotkeyCollision"],
+        };
     }
 
     [RelayCommand]
@@ -301,7 +690,11 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         (orderedIds[index], orderedIds[index - 1]) = (orderedIds[index - 1], orderedIds[index]);
-        _prompts.Reorder(orderedIds);
+        if (!TryMutate(() => _prompts.Reorder(orderedIds), "reorder prompt actions"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
@@ -324,14 +717,22 @@ public partial class PromptsSectionViewModel : ObservableObject
         }
 
         (orderedIds[index], orderedIds[index + 1]) = (orderedIds[index + 1], orderedIds[index]);
-        _prompts.Reorder(orderedIds);
+        if (!TryMutate(() => _prompts.Reorder(orderedIds), "reorder prompt actions"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
     [RelayCommand]
     private void SeedPresets()
     {
-        _prompts.SeedPresets();
+        if (!TryMutate(_prompts.SeedPresets, "seed prompt presets"))
+        {
+            return;
+        }
+
         RefreshActions();
     }
 
@@ -363,10 +764,66 @@ public partial class PromptsSectionViewModel : ObservableObject
         NotifyStateChanged();
     }
 
+    private bool TryMutate(Action mutation, string operation)
+    {
+        try
+        {
+            mutation();
+            ErrorText = "";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PromptsSectionViewModel] Failed to {operation}: {ex}");
+            _errorLog?.AddEntry($"Could not {operation}: {ex.Message}", ErrorCategory.Prompt);
+            ErrorText = Loc.Instance.GetString("Prompts.SaveFailed", ex.Message);
+            RefreshActions();
+            return false;
+        }
+    }
+
+    partial void OnErrorTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasError));
+    }
+
     private void RefreshPluginOptions()
     {
-        var selectedProvider = EditProviderOverride;
         var selectedActionPlugin = EditTargetActionPluginId;
+        RefreshProviderOptions();
+
+        _isRefreshingProviders = true;
+        try
+        {
+            _synthesizedActionPluginOption = null;
+            ActionPluginOptions.Clear();
+            ActionPluginOptions.Add(
+                new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
+            );
+            foreach (
+                var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
+            )
+            {
+                ActionPluginOptions.Add(
+                    new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
+                );
+            }
+
+            RefreshActionPluginOption(selectedActionPlugin);
+        }
+        finally
+        {
+            _isRefreshingProviders = false;
+        }
+
+        OnPropertyChanged(nameof(SelectedActionPlugin));
+    }
+
+    // Rebuilds only the provider pickers, so a provider-setting change never touches the
+    // editor's action-plugin selection.
+    private void RefreshProviderOptions()
+    {
+        var selectedProvider = EditProviderOverride;
 
         _isRefreshingProviders = true;
         try
@@ -374,10 +831,8 @@ public partial class PromptsSectionViewModel : ObservableObject
             // Build the resolved list first to determine whether the "Use default
             // provider" placeholder needs a fallback suffix.
             var resolvedOptions = new List<ProviderOption>();
-            // ReSharper disable once LoopCanBeConvertedToQuery
-            foreach (
-                var provider in _pluginManager.LlmProviders.Where(provider => provider.IsAvailable)
-            )
+            ProviderOption? firstAvailableOption = null;
+            foreach (var provider in _pluginManager.LlmProviders)
             {
                 // Use the provider's selection ID rather than mapping back to a loaded
                 // plugin by reference — additional provider roles (e.g. OpenAI-compatible
@@ -385,82 +840,126 @@ public partial class PromptsSectionViewModel : ObservableObject
                 // lookup would skip them. For normal plugins the selection ID is the
                 // plugin/manifest ID, so existing selections are unchanged.
                 var selectionId = provider.GetLlmSelectionId();
-                // ReSharper disable once LoopCanBeConvertedToQuery
                 foreach (var model in provider.SupportedModels)
                 {
-                    resolvedOptions.Add(
-                        new ProviderOption(
-                            $"plugin:{selectionId}:{model.Id}",
-                            $"{provider.ProviderName} / {model.DisplayName}"
-                        )
+                    // A provider that is installed but not ready (signed out, no key) stays
+                    // listed and labelled — dropping it would silently reset a selection the
+                    // user made, and PromptProcessingService now reports it by name instead
+                    // of falling through to another provider.
+                    var label = $"{provider.ProviderName} / {model.DisplayName}";
+                    var option = new ProviderOption(
+                        $"plugin:{selectionId}:{model.Id}",
+                        provider.IsAvailable
+                            ? label
+                            : Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", label),
+                        !provider.IsAvailable
                     );
+                    resolvedOptions.Add(option);
+                    if (provider.IsAvailable)
+                    {
+                        firstAvailableOption ??= option;
+                    }
                 }
             }
 
-            AvailableProviders.Clear();
-            AvailableProviders.Add(new ProviderOption(null, DefaultProviderPlaceholderLabel(resolvedOptions)));
-            foreach (var option in resolvedOptions)
+            // Each picker owns its missing selection. Editor-only options must never become
+            // global or spoken-command choices.
+            _synthesizedProviderOption = null;
+            ReplaceProviderOptions(DefaultProviderOptions, resolvedOptions,
+                firstAvailableOption is null
+                    ? Loc.Instance["Prompts.AutomaticProvider"]
+                    : Loc.Instance.GetString("Prompts.AutomaticProviderFormat", firstAvailableOption.Label),
+                _settings.Current.DefaultLlmProvider);
+            var defaultLabel = DefaultProviderPlaceholderLabel(resolvedOptions, firstAvailableOption);
+            ReplaceProviderOptions(SpokenCommandProviderOptions, resolvedOptions, defaultLabel,
+                _settings.Current.SpokenCommandLlmProvider);
+            ReplaceProviderOptions(AvailableProviders, resolvedOptions, defaultLabel, null);
+            if (!string.IsNullOrWhiteSpace(selectedProvider)
+                && AvailableProviders.All(option => option.Value != selectedProvider))
             {
-                AvailableProviders.Add(option);
+                _synthesizedProviderOption = MissingSelectionOption(selectedProvider);
+                AvailableProviders.Add(_synthesizedProviderOption);
             }
-
-            EditProviderOverride = AvailableProviders.Any(option =>
-                option.Value == selectedProvider
-            )
-                ? selectedProvider
-                : null;
         }
         finally
         {
             _isRefreshingProviders = false;
         }
 
-        ActionPluginOptions.Clear();
-        ActionPluginOptions.Add(
-            new ActionPluginOption(null, Loc.Instance["Prompts.InsertTextNormally"])
-        );
-        foreach (
-            var actionPlugin in _pluginManager.ActionPlugins.OrderBy(plugin => plugin.ActionName)
-        )
-        {
-            ActionPluginOptions.Add(
-                new ActionPluginOption(actionPlugin.PluginId, actionPlugin.ActionName)
-            );
-        }
-
-        EditTargetActionPluginId = ActionPluginOptions.Any(option =>
-            option.Value == selectedActionPlugin
-        )
-            ? selectedActionPlugin
-            : null;
         OnPropertyChanged(nameof(SelectedEditProvider));
+        OnPropertyChanged(nameof(SelectedDefaultLlmProvider));
+        OnPropertyChanged(nameof(SelectedSpokenCommandProvider));
         OnPropertyChanged(nameof(ShowProviderWarning));
     }
 
-    private string DefaultProviderPlaceholderLabel(IReadOnlyList<ProviderOption> resolvedOptions)
+    // Keeps a saved selection selectable after the provider behind it disappears, so a refresh
+    // never silently rewrites the user's choice.
+    private static void ReplaceProviderOptions(
+        ObservableCollection<ProviderOption> options,
+        IReadOnlyList<ProviderOption> resolvedOptions,
+        string placeholderLabel,
+        string? value)
+    {
+        options.Clear();
+        options.Add(new ProviderOption(null, placeholderLabel));
+        foreach (var option in resolvedOptions)
+        {
+            options.Add(option);
+        }
+        if (string.IsNullOrWhiteSpace(value)
+            || options.Any(option => string.Equals(option.Value, value, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        options.Add(MissingSelectionOption(value));
+    }
+
+    private static ProviderOption MissingSelectionOption(string value)
+    {
+        return new ProviderOption(
+            value,
+            Loc.Instance.GetString(
+                "Prompts.ProviderUnavailableFormat",
+                PromptProcessingService.DescribeSelection(value)
+            ),
+            true
+        );
+    }
+
+    private string DefaultProviderPlaceholderLabel(
+        IReadOnlyList<ProviderOption> resolvedOptions,
+        ProviderOption? firstAvailableOption
+    )
     {
         var baseLabel = Loc.Instance["Prompts.UseDefaultProvider"];
         var configured = _settings.Current.DefaultLlmProvider;
-        var configuredResolves = !string.IsNullOrWhiteSpace(configured)
-                                 && resolvedOptions.Any(option =>
-                                     string.Equals(option.Value, configured, StringComparison.Ordinal));
-        if (configuredResolves)
+        var configuredOption = string.IsNullOrWhiteSpace(configured)
+            ? null
+            : resolvedOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, configured, StringComparison.Ordinal))
+                ?? MissingSelectionOption(configured);
+        if (configuredOption is not null)
         {
-            return baseLabel;
+            // A configured default that can't serve the request is named, not hidden — the
+            // placeholder is the only place the default provider is shown.
+            return configuredOption.IsUnavailable
+                ? Loc.Instance.GetString(
+                    "Prompts.UseDefaultProviderFallback",
+                    baseLabel,
+                    configuredOption.Label
+                )
+                : baseLabel;
         }
 
         // Mirrors PromptProcessingService.ResolveProvider: first available LLM provider.
-        var fallback = _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
-        if (fallback is null)
-        {
-            return baseLabel;
-        }
-
-        var fallbackModel = fallback.SupportedModels.Count > 0 ? fallback.SupportedModels[0] : null;
-        var fallbackLabel = fallbackModel is null
-            ? fallback.ProviderName
-            : $"{fallback.ProviderName} / {fallbackModel.DisplayName}";
-        return Loc.Instance.GetString("Prompts.UseDefaultProviderFallback", baseLabel, fallbackLabel);
+        return firstAvailableOption is null
+            ? baseLabel
+            : Loc.Instance.GetString(
+                "Prompts.UseDefaultProviderFallback",
+                baseLabel,
+                firstAvailableOption.Label
+            );
     }
 
     private void SelectById(string id)
@@ -478,6 +977,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     private void ClearEditor()
     {
+        HotkeyValidationMessage = null;
         _editingActionId = null;
         EditName = "";
         EditSystemPrompt = "";
@@ -486,11 +986,6 @@ public partial class PromptsSectionViewModel : ObservableObject
         EditTargetActionPluginId = null;
         EditHotkeyKey = null;
         EditIsManualOnly = false;
-    }
-
-    private static string? NormalizeOptionalString(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private void NotifyStateChanged()
@@ -507,6 +1002,17 @@ public partial class PromptsSectionViewModel : ObservableObject
     }
 }
 
-public sealed record ProviderOption(string? Value, string Label);
+/// <summary>
+///     One entry of the provider dropdown. IsUnavailable marks a provider that is listed but
+///     cannot serve a request (signed out, missing key, no longer installed).
+/// </summary>
+public sealed record ProviderOption(string? Value, string Label, bool IsUnavailable = false)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Label;
+}
 
-public sealed record ActionPluginOption(string? Value, string Label);
+public sealed record ActionPluginOption(string? Value, string Label)
+{
+    public override string ToString() => Label;
+}

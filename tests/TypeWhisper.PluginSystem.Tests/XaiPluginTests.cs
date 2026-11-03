@@ -1,8 +1,11 @@
 using System.Net;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using TypeWhisper.Plugin.Xai;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 // The CapturingHandler lambdas assert on the outgoing 'request' (method, URI,
@@ -16,6 +19,29 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class XaiPluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<XaiPlugin>();
+
+
+    [Fact]
+    public async Task ProcessAsync_OmitsOutputCapAndRejectsIncompleteTokenLimitedOutput()
+    {
+        var input = string.Concat(Enumerable.Repeat("dictated input ", 1000));
+        using var client = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            // Grok's reasoning tokens count against max_output_tokens, so no cap is sent.
+            Assert.DoesNotContain("max_output_tokens", body!);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+                """{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output_text":"partial"}""") };
+        }));
+        var sut = new XaiPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "key" } });
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.ProcessAsync("system", input, "", CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.OutputTruncated, ex.FailureKind);
+        Assert.False(ex.IsTransient);
+    }
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
@@ -32,7 +58,7 @@ public class XaiPluginTests
 
         Assert.Equal("com.typewhisper.xai", manifest.GetProperty("id").GetString());
         Assert.Equal("xAI / Grok", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm", "tts"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.Xai.dll",
             manifest.GetProperty("assemblyName").GetString()
@@ -61,6 +87,8 @@ public class XaiPluginTests
         Assert.False(sut.SupportsTranslation);
         Assert.Equal("grok-stt", sut.SelectedModelId);
         Assert.Equal(["grok-stt"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal(new DictionaryTermsBudget(MaxTerms: 100, MaxCharsPerTerm: 50), sut.DictionaryTermsBudget);
         Assert.Equal("grok-4.3", sut.SelectedLlmModelId);
         Assert.Equal(["grok-4.3"], sut.SupportedModels.Select(m => m.Id).ToArray());
         Assert.Equal("eve", sut.SelectedVoiceId);
@@ -164,6 +192,7 @@ public class XaiPluginTests
             "data: {\"type\":\"response.completed\"}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -171,7 +200,7 @@ public class XaiPluginTests
             Assert.Equal("https://api.x.ai/v1/responses", request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -249,7 +278,7 @@ public class XaiPluginTests
             "");
         var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
@@ -267,6 +296,129 @@ public class XaiPluginTests
 
         Assert.Equal(["Hel"], chunks);
         Assert.Contains("server overloaded", ex.Message);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenEofPrecedesResponseCompleted()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_ThrowsWhenDonePrecedesResponseCompleted()
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAsync<IncompleteSseStreamException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Equal("xAI stream", ex.StreamName);
+        Assert.Equal("response.completed", ex.ExpectedTerminal);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}""",
+        "output token limit")]
+    [InlineData(
+        """{"type":"response.cancelled","response":{"status":"cancelled","error":{"message":"cancelled upstream"}}}""",
+        "cancelled upstream")]
+    [InlineData(
+        """{"type":"response.canceled","response":{"status":"canceled"}}""",
+        "canceled")]
+    [InlineData(
+        """{"type":"response.completed","response":{"status":"cancelled"}}""",
+        "cancelled")]
+    public async Task ProcessStreamingAsync_ThrowsOnIncompleteOrCancelledTerminalFrame(
+        string terminalPayload,
+        string expectedDetail)
+    {
+        var sse = string.Join(
+            "\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}",
+            "",
+            $"data: {terminalPayload}",
+            "",
+            "data: [DONE]",
+            "",
+            "");
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var chunks = new List<string>();
+        var ex = await Assert.ThrowsAnyAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var chunk in sut.ProcessStreamingAsync(
+                "system", "user", "", CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Equal(["partial"], chunks);
+        Assert.Contains(expectedDetail, ex.Message);
+        if (expectedDetail == "output token limit")
+            Assert.Equal(PluginRequestFailureKind.OutputTruncated, Assert.IsType<PluginRequestException>(ex).FailureKind);
     }
 
     [Fact]
@@ -349,12 +501,150 @@ public class XaiPluginTests
     }
 
     [Fact]
+    public async Task TranscribeAsync_SendsModelAndEachDictionaryTermAsKeyterm()
+    {
+        List<(string Name, string Value)> fields = [];
+        var handler = new CapturingHandler((request, _) =>
+        {
+            fields = ReadFormFields(Assert.IsType<MultipartFormDataContent>(request.Content));
+            return JsonResponse("""{ "text": "TypeWhisper in Washington, D.C." }""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        var tooLong = new string('x', 51);
+        var prompt = PluginTranscriptionPrompt.Encode(
+            "ignored free text",
+            ["Washington, D.C.", "TypeWhisper", tooLong, "typewhisper"]);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt, CancellationToken.None);
+
+        Assert.Equal(("model", "grok-voice-transcribe-2.0"), fields[0]);
+        Assert.Equal(
+            ["Washington, D.C.", "TypeWhisper"],
+            fields.Where(f => f.Name == "keyterm").Select(f => f.Value).ToArray());
+        Assert.Equal("file", fields[^1].Name);
+        Assert.DoesNotContain(fields, f => f.Value.Contains("ignored free text", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_PlainPromptSendsNoKeyterms()
+    {
+        List<(string Name, string Value)> fields = [];
+        var handler = new CapturingHandler((request, _) =>
+        {
+            fields = ReadFormFields(Assert.IsType<MultipartFormDataContent>(request.Content));
+            return JsonResponse("""{ "text": "hello" }""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, "TypeWhisper, Grok", CancellationToken.None);
+
+        Assert.DoesNotContain(fields, f => f.Name == "keyterm");
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_MalformedPromptEnvelopeFailsBeforeSending()
+    {
+        var sent = false;
+        var handler = new CapturingHandler((_, _) =>
+        {
+            sent = true;
+            return JsonResponse("""{ "text": "hello" }""");
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAsync<FormatException>(() => sut.TranscribeAsync(
+            [1, 2, 3], null, translate: false, PluginTranscriptionPrompt.EnvelopePrefix + "{", CancellationToken.None));
+        Assert.False(sent);
+    }
+
+    [Fact]
+    public async Task StartStreamingWithPrompt_MalformedEnvelopeFailsBeforeConnecting()
+    {
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        var sut = new XaiPlugin();
+        await sut.ActivateAsync(host);
+
+        await Assert.ThrowsAsync<FormatException>(() => sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["de"], PluginTranscriptionPrompt.EnvelopePrefix + "[]", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StartStreamingWithPrompt_RequiresApiKey()
+    {
+        var sut = new XaiPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["de"], PluginTranscriptionPrompt.Encode(null, ["TypeWhisper"]), CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.Configuration, ex.FailureKind);
+    }
+
+    [Fact]
+    public void ParseKeyterms_ClipsToTheKeytermBudget()
+    {
+        var terms = Enumerable.Range(0, 120).Select(i => $"term {i}").Prepend(new string('x', 51));
+
+        var keyterms = XaiPlugin.ParseKeyterms(PluginTranscriptionPrompt.Encode(null, terms));
+
+        Assert.Equal(100, keyterms.Count);
+        Assert.Equal("term 0", keyterms[0]);
+        Assert.Equal("term 99", keyterms[^1]);
+    }
+
+    [Fact]
+    public void StreamingKeyterms_KeepTheQueryWithinTheLengthCap()
+    {
+        var terms = Enumerable.Range(0, 100).Select(i => $"{i:D2}" + new string('東', 48)).ToList();
+
+        var limited = XaiPlugin.StreamingKeyterms(XaiPlugin.ParseKeyterms(PluginTranscriptionPrompt.Encode(null, terms)));
+        var uri = XaiStreamingSession.BuildStreamingUri(null, interimResults: true, limited);
+        var keytermQueryLength = uri.Query.Split('&').Where(p => p.StartsWith("keyterm=", StringComparison.Ordinal))
+            .Sum(p => "&".Length + p.Length);
+
+        Assert.InRange(limited.Count, 1, 99);
+        Assert.Equal(terms.Take(limited.Count), limited);
+        Assert.InRange(keytermQueryLength, 1, XaiPlugin.MaxStreamingKeytermsQueryLength);
+    }
+
+    [Fact]
+    public void StreamingKeyterms_KeepsAFullAsciiBudget()
+    {
+        var terms = Enumerable.Range(0, 100).Select(i => $"term {i}").ToList();
+
+        Assert.Equal(terms, XaiPlugin.StreamingKeyterms(terms));
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_SendsModelAndEscapedKeytermsInTheQuery()
+    {
+        var options = await new XaiWebSocketAdapter("xai-key", "de", ["Washington, D.C.", "A&B"])
+            .GetConnectionOptionsAsync(CancellationToken.None);
+
+        var query = options.Uri.Query;
+        Assert.Contains("model=grok-voice-transcribe-2.0", query);
+        Assert.Contains("keyterm=Washington%2C%20D.C.", query);
+        Assert.Contains("keyterm=A%26B", query);
+        Assert.Contains("language=de", query);
+    }
+
+    [Fact]
     public void StreamingSession_BuildsExpectedUriAndExposesAuthHeader()
     {
-        var uri = XaiStreamingSession.BuildStreamingUri("de", interimResults: true);
+        var uri = XaiStreamingSession.BuildStreamingUri("de", interimResults: true, []);
         Assert.Equal("wss", uri.Scheme);
         Assert.Equal("api.x.ai", uri.Host);
         Assert.Equal("/v1/stt", uri.AbsolutePath);
+        Assert.Contains("model=grok-voice-transcribe-2.0", uri.Query);
+        Assert.DoesNotContain("keyterm=", uri.Query);
         Assert.Contains("sample_rate=16000", uri.Query);
         Assert.Contains("encoding=pcm", uri.Query);
         Assert.Contains("interim_results=true", uri.Query);
@@ -365,166 +655,351 @@ public class XaiPluginTests
     }
 
     [Fact]
-    public void TranscriptCollector_EmitsPerSegmentDeltasAndSuppressesCumulativeFinals()
+    public async Task StreamingSession_SendAudioWaitsForTranscriptCreated()
     {
-        // Coordinator contract: every IsFinal=true event appends to
-        // _finalSegments. Cumulative final text would double-append, so the
-        // collector must emit segment deltas only.
+        var socket = new FakeStreamingWebSocket();
+        await using var session =
+            XaiStreamingSession.CreateConnectedSessionForTests(socket);
+
+        var sendTask = session.SendAudioAsync(
+            new byte[] { 1, 2, 3, 4 },
+            CancellationToken.None);
+
+        Assert.False(sendTask.IsCompleted);
+        Assert.Empty(socket.SentFrames);
+
+        socket.EnqueueText("""{"type":"transcript.created"}""");
+
+        await sendTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var sent = Assert.Single(socket.SentFrames);
+        Assert.Equal(WebSocketMessageType.Binary, sent.MessageType);
+        Assert.Equal([1, 2, 3, 4], sent.Payload);
+    }
+
+    [Fact]
+    public async Task StreamingSession_DisposeWithStuckHandshake_CancelsStartupAndReleasesTheSocket()
+    {
+        // The peer never sends transcript.created and never closes, so nothing but disposal can
+        // end the handshake. Disposal must actually tear the socket down, not just stop waiting.
+        var socket = new FakeStreamingWebSocket();
+        var session = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            disposePumpWait: TimeSpan.FromMilliseconds(200)
+        );
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(socket.DisposeCalled);
+        Assert.NotEqual(WebSocketState.Open, socket.State);
+    }
+
+    [Fact]
+    public async Task StreamingSession_ConnectedFactoryWaitsForTranscriptCreated()
+    {
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        Assert.False(connectTask.IsCompleted);
+
+        socket.EnqueueText("""{"type":"transcript.created"}""");
+
+        await using var session = await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(WebSocketState.Open, socket.State);
+    }
+
+    [Theory]
+    [InlineData(false, "before transcript.created")]
+    [InlineData(true, "quota exceeded")]
+    public async Task StreamingSession_CloseOrErrorBeforeReadinessFaultsConnect(
+        bool providerError,
+        string expectedMessage)
+    {
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        if (providerError)
+        {
+            socket.EnqueueText(
+                """{"type":"error","error":{"message":"quota exceeded"}}""");
+        }
+        else
+        {
+            socket.EnqueueClose(
+                WebSocketCloseStatus.EndpointUnavailable,
+                "provider unavailable");
+        }
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await connectTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains(expectedMessage, exception.Message);
+        Assert.True(socket.AbortCalled);
+        Assert.True(socket.DisposeCalled);
+    }
+
+    [Fact]
+    public async Task StreamingSession_CallerCancellationDuringReadinessWaitIsCleanAndTearsDown()
+    {
+        using var startupCts = new CancellationTokenSource();
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            startupCts.Token);
+
+        // ReSharper disable once MethodHasAsyncOverload -- the assertion requires cancellation to be observable immediately.
+        startupCts.Cancel();
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            // ReSharper disable once MethodSupportsCancellation -- must not pass startupCts.Token: it is already canceled here, so WaitAsync would throw before connectTask propagates its own cancellation, hollowing out the token assertion below. The TimeSpan is only a hang guard.
+            async () => await connectTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(startupCts.Token, exception.CancellationToken);
+        Assert.True(socket.AbortCalled);
+        Assert.True(socket.DisposeCalled);
+        Assert.True(socket.ReceiveExited.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task StreamingSession_ReadinessTimeoutFaultsAndTearsDown()
+    {
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromMilliseconds(50),
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(
+            async () => await connectTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains("transcript.created", exception.Message);
+        Assert.True(socket.AbortCalled);
+        Assert.True(socket.DisposeCalled);
+        Assert.True(socket.ReceiveExited.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task StreamingSession_CloseBeforeTranscriptDoneFaultsFinalize()
+    {
+        // Regression: after transcript.created the readiness signal is already
+        // completed, so a graceful Close frame arriving before transcript.done
+        // must still be recorded as a session fault. Otherwise FinalizeAsync
+        // returns cleanly and the coordinator commits the partial transcript
+        // as success instead of falling back to the complete-WAV batch path,
+        // silently truncating dictation.
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+
+        socket.EnqueueText("""{"type":"transcript.created"}""");
+        await using var session = await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // A final segment lands, then FinalizeAsync parks on the terminal wait
+        // (socket still open) before the server closes mid-stream — no
+        // transcript.done ever arrives.
+        socket.EnqueueText(
+            """{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        var finalizeTask = session.FinalizeAsync(CancellationToken.None);
+        socket.EnqueueClose(
+            WebSocketCloseStatus.EndpointUnavailable,
+            "mid-stream disconnect");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await finalizeTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Contains("faulted", exception.Message);
+        Assert.Contains("transcript.done", exception.Message);
+    }
+
+    [Fact]
+    public async Task StreamingSession_DeliversEachUtteranceOnceWithItsTail()
+    {
+        // The coordinator appends every final: the first utterance must keep the words that
+        // only reached speech_final, and the second must not repeat the first.
+        var socket = new FakeStreamingWebSocket();
+        var connectTask = XaiStreamingSession.CreateConnectedSessionForTests(
+            socket,
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None);
+        socket.EnqueueText("""{"type":"transcript.created","id":"s"}""");
+        await using var session = await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var finals = new List<string>();
+        session.TranscriptReceived += e =>
+        {
+            if (e.IsFinal)
+                finals.Add(e.Text);
+        };
+
+        socket.EnqueueText(Partial("hello world", isFinal: true, speechFinal: false, start: 0.0));
+        socket.EnqueueText(Partial("hello world how are you", isFinal: true, speechFinal: true, start: 0.0));
+        socket.EnqueueText(Partial("fine thanks", isFinal: true, speechFinal: false, start: 3.0));
+        socket.EnqueueText(Partial("fine thanks and you", isFinal: true, speechFinal: true, start: 3.0));
+        var finalizeTask = session.FinalizeAsync(CancellationToken.None);
+        // The documented transcript.done carries empty text; the finals are the transcript.
+        socket.EnqueueText("""{"type":"transcript.done","text":"","words":[],"duration":5.2}""");
+        await finalizeTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(["hello world how are you", "fine thanks and you"], finals);
+    }
+
+    [Fact]
+    public void TranscriptCollector_HoldsChunkFinalsAsPreviewUntilTheUtteranceSettles()
+    {
         var collector = new XaiTranscriptCollector();
 
         Assert.Null(collector.ApplyEvent("""{"type":"transcript.created"}"""));
 
-        // Non-final partial: interim text passes through.
-        var interim = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":false,"speech_final":false}""");
-        Assert.NotNull(interim);
-        Assert.Equal("hello", interim.Text);
-        Assert.False(interim.IsFinal);
+        var interim = collector.ApplyEvent(Partial("hello", isFinal: false, speechFinal: false, start: 0.0));
+        Assert.Equal(new StreamingTranscriptEvent("hello", IsFinal: false), interim);
 
-        // First final segment.
-        var seg1 = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello world","is_final":true,"speech_final":false}""");
-        Assert.NotNull(seg1);
-        Assert.Equal("hello world", seg1.Text);
-        Assert.True(seg1.IsFinal);
+        // A locked chunk is not final for the host yet: speech_final will restate it.
+        var chunk = collector.ApplyEvent(Partial("hello world", isFinal: true, speechFinal: false, start: 0.0));
+        Assert.Equal(new StreamingTranscriptEvent("hello world", IsFinal: false), chunk);
 
-        // Second final segment: emits the new segment as a delta (not cumulative).
-        var seg2 = collector.ApplyEvent("""{"type":"transcript.partial","text":"how are you","is_final":true,"speech_final":false}""");
-        Assert.NotNull(seg2);
-        Assert.Equal("how are you", seg2.Text);
+        var nextInterim = collector.ApplyEvent(Partial("how", isFinal: false, speechFinal: false, start: 1.5));
+        Assert.Equal(new StreamingTranscriptEvent("hello world how", IsFinal: false), nextInterim);
 
-        // speech_final=true after per-segment finals is xAI's cumulative
-        // summary — must be suppressed to avoid re-appending.
-        var summary = collector.ApplyEvent("""{"type":"transcript.partial","text":"hello world how are you","is_final":true,"speech_final":true}""");
-        Assert.Null(summary);
+        var utterance = collector.ApplyEvent(Partial("hello world how are you", isFinal: true, speechFinal: true, start: 0.0));
+        Assert.Equal(new StreamingTranscriptEvent("hello world how are you", IsFinal: true), utterance);
 
-        // transcript.done after finals is also cumulative; suppress.
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world how are you","language":"en","duration":1.25}""");
-        Assert.Null(done);
-
-        // FinalResult (used outside the coordinator path) reflects metadata + done text.
+        Assert.Null(collector.ApplyEvent("""{"type":"transcript.done","text":"hello world how are you","duration":1.25}"""));
         var final = collector.FinalResult("en");
         Assert.Equal("hello world how are you", final.Text);
-        Assert.Equal("en", final.DetectedLanguage);
         Assert.Equal(1.25, final.DurationSeconds);
     }
 
     [Fact]
-    public void TranscriptCollector_DoneEmitsSuffixWhenItExtendsPriorFinals()
+    public void TranscriptCollector_KeepsChunksWhenSpeechFinalStartsAfterThem()
     {
-        // Regression: previously the done event was suppressed any time
-        // per-segment finals had arrived, dropping a trailing utterance that
-        // xAI only finalized via transcript.done. Now the done text is
-        // checked against the joined finals — exact match suppresses, but a
-        // strict extension (joined + " " + suffix) emits the suffix as a
-        // delta so the coordinator captures the tail.
+        // A speech_final that starts after the held chunks carries only the tail.
         var collector = new XaiTranscriptCollector();
 
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        collector.ApplyEvent(Partial("first", isFinal: true, speechFinal: false, start: 0.0));
+        var utterance = collector.ApplyEvent(Partial("second", isFinal: true, speechFinal: true, start: 0.8));
 
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","language":"en","duration":0.5}""");
-        Assert.NotNull(done);
-        Assert.Equal("world", done.Text);
-        Assert.True(done.IsFinal);
+        Assert.Equal(new StreamingTranscriptEvent("first second", IsFinal: true), utterance);
+    }
+
+    [Theory]
+    [InlineData("hello world", "hello world, how are you?", "hello world, how are you?")]
+    [InlineData("hello", "hello", "hello")]
+    // Without a word boundary the shared letters are not a restatement.
+    [InlineData("I", "I'm here", "I I'm here")]
+    [InlineData("first", "second", "first second")]
+    public void TranscriptCollector_WithoutTimingsTreatsOnlyAPrefixAsRestated(
+        string chunk,
+        string speechFinal,
+        string expected)
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial(chunk, isFinal: true, speechFinal: false, start: null));
+        var utterance = collector.ApplyEvent(Partial(speechFinal, isFinal: true, speechFinal: true, start: null));
+
+        Assert.Equal(new StreamingTranscriptEvent(expected, IsFinal: true), utterance);
+    }
+
+    [Fact]
+    public void TranscriptCollector_PreservesRepeatedChunks()
+    {
+        // Saying "yes" twice locks two identical chunks; both belong in the utterance.
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("yes", isFinal: true, speechFinal: false, start: 0.0));
+        collector.ApplyEvent(Partial("yes", isFinal: true, speechFinal: false, start: 0.6));
+        var utterance = collector.ApplyEvent(Partial("", isFinal: true, speechFinal: true, start: 1.2));
+
+        Assert.Equal(new StreamingTranscriptEvent("yes yes", IsFinal: true), utterance);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneDeliversUnsettledChunks()
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
+        collector.ApplyEvent(Partial("still talking", isFinal: true, speechFinal: false, start: 1.0));
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"","words":[],"duration":2.0}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("still talking", IsFinal: true), done);
+        Assert.Equal("hello still talking", collector.FinalResult(null).Text);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneEmitsOnlyTextBeyondTheFinals()
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","duration":0.5}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("world", IsFinal: true), done);
+    }
+
+    [Fact]
+    public void TranscriptCollector_DoneJoinsUnsettledChunksWithItsExtension()
+    {
+        var collector = new XaiTranscriptCollector();
+
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: false, start: 0.0));
+
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","duration":0.5}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("hello world", IsFinal: true), done);
     }
 
     [Fact]
     public void TranscriptCollector_DoneSuppressesExactCumulative()
     {
-        // The other half of the extends-prior-finals rule: when done text
-        // matches the joined finals exactly, it's a redundant summary and
-        // must NOT re-emit (would double-append).
         var collector = new XaiTranscriptCollector();
 
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"world","is_final":true,"speech_final":false}""");
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
+        collector.ApplyEvent(Partial("world", isFinal: true, speechFinal: true, start: 1.0));
 
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","language":"en","duration":0.5}""");
-        Assert.Null(done);
+        Assert.Null(collector.ApplyEvent("""{"type":"transcript.done","text":"hello world","duration":0.5}"""));
     }
 
     [Fact]
     public void TranscriptCollector_DoneEmitsAsFinalWhenNoSegmentFinalsArrived()
     {
-        // Edge case: xAI sends transcript.done without preceding per-segment
-        // finals. The done text must reach the coordinator as a single final.
         var collector = new XaiTranscriptCollector();
 
         Assert.Null(collector.ApplyEvent("""{"type":"transcript.created"}"""));
 
-        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"single shot transcript","language":"en","duration":0.5}""");
-        Assert.NotNull(done);
-        Assert.Equal("single shot transcript", done.Text);
-        Assert.True(done.IsFinal);
+        var done = collector.ApplyEvent("""{"type":"transcript.done","text":"single shot transcript","duration":0.5}""");
+
+        Assert.Equal(new StreamingTranscriptEvent("single shot transcript", IsFinal: true), done);
     }
 
     [Fact]
     public void TranscriptCollector_IsTerminalFlipsOnDoneEvent()
     {
-        // The session uses this to unblock FinalizeAsync as soon as xAI
-        // declares the stream complete.
         var collector = new XaiTranscriptCollector();
         Assert.False(collector.IsTerminal);
 
-        collector.ApplyEvent("""{"type":"transcript.partial","text":"hello","is_final":true,"speech_final":false}""");
+        collector.ApplyEvent(Partial("hello", isFinal: true, speechFinal: true, start: 0.0));
         Assert.False(collector.IsTerminal);
 
-        collector.ApplyEvent("""{"type":"transcript.done","text":"hello","language":"en","duration":0.5}""");
+        collector.ApplyEvent("""{"type":"transcript.done","text":"hello","duration":0.5}""");
         Assert.True(collector.IsTerminal);
     }
 
-    [Fact]
-    public void TranscriptCollector_SpeechFinalOnFreshSegmentIsNotSuppressed()
+    private static string Partial(string text, bool isFinal, bool speechFinal, double? start)
     {
-        // speech_final=true alone is NOT a cumulative-summary signal — it's
-        // just an end-of-utterance marker that can appear on a normal final
-        // segment. The cumulative-summary suppression only fires when the
-        // text actually starts with the joined existing finals.
-        var collector = new XaiTranscriptCollector();
-
-        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"first","is_final":true,"speech_final":false}""");
-        Assert.NotNull(first);
-        Assert.Equal("first", first.Text);
-
-        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"second","is_final":true,"speech_final":true}""");
-        Assert.NotNull(second);
-        Assert.Equal("second", second.Text);
-        Assert.True(second.IsFinal);
-    }
-
-    [Fact]
-    public void TranscriptCollector_SpeechFinalPrefixWithoutWordBoundaryIsNotSuppressed()
-    {
-        // Regression: bare StartsWith would suppress a fresh segment that
-        // happens to begin with the same letters as the previous final
-        // (e.g. previous "I", next "I'm here"). The cumulative-summary
-        // suppression must require the prefix to end on a word boundary.
-        var collector = new XaiTranscriptCollector();
-
-        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"I","is_final":true,"speech_final":false}""");
-        Assert.Equal("I", first?.Text);
-
-        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"I'm here","is_final":true,"speech_final":true}""");
-        Assert.NotNull(second);
-        Assert.Equal("I'm here", second.Text);
-        Assert.True(second.IsFinal);
-    }
-
-    [Fact]
-    public void TranscriptCollector_PreservesRepeatedFinalSegments()
-    {
-        // A user genuinely saying the same word twice (e.g. "yes" then "yes")
-        // produces two finalized segments with identical text. Both must
-        // reach the coordinator — exact-text alone is not a retransmission
-        // signal, only cumulative speech_final=true after segment finals is.
-        var collector = new XaiTranscriptCollector();
-
-        var first = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
-        Assert.NotNull(first);
-        Assert.Equal("yes", first.Text);
-
-        var second = collector.ApplyEvent("""{"type":"transcript.partial","text":"yes","is_final":true,"speech_final":false}""");
-        Assert.NotNull(second);
-        Assert.Equal("yes", second.Text);
-        Assert.True(second.IsFinal);
+        var timing = start is { } value
+            ? $",\"start\":{value.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"duration\":0.5"
+            : "";
+        return $$"""{"type":"transcript.partial","text":{{JsonSerializer.Serialize(text)}},"words":[],"is_final":{{(isFinal ? "true" : "false")}},"speech_final":{{(speechFinal ? "true" : "false")}}{{timing}}}""";
     }
 
     [Fact]
@@ -551,7 +1026,7 @@ public class XaiPluginTests
         var sut = new XaiPlugin();
         await sut.ActivateAsync(host);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.StartStreamingAsync(language: null, CancellationToken.None));
 
         Assert.Contains("Settings.NotConfiguredApiKeyRequired", ex.Message);
@@ -593,9 +1068,8 @@ public class XaiPluginTests
     }
 
     [Fact]
-    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesPlaybackFactory()
+    public async Task SpeakAsync_PostsPcmTtsRequestAndUsesHostPcmPlayback()
     {
-        byte[]? playbackBytes = null;
         var handler = new CapturingHandler((request, body) =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -614,21 +1088,19 @@ public class XaiPluginTests
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             };
         });
 
-        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        var playback = new RecordingPcmPlaybackService();
+        var host = new TestPluginHostServices
+        {
+            PcmPlayback = playback,
+            Secrets = { ["api-key"] = "xai-key" },
+        };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(
-            httpClient,
-            pcm =>
-            {
-                playbackBytes = pcm;
-                return new FakeTtsPlaybackSession();
-            },
-            ttsPlaybackAvailableProbe: () => true);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
         sut.SelectVoice("rex");
         sut.SetTtsLowLatency(true);
@@ -637,7 +1109,11 @@ public class XaiPluginTests
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "de"), CancellationToken.None);
 
         Assert.NotNull(session);
-        Assert.Equal([0, 1, 2, 3], playbackBytes);
+        var playbackRequest = Assert.Single(playback.Requests);
+        Assert.Equal([0, 1, 2, 3], playbackRequest.Payload.ToArray());
+        Assert.Equal(24_000, playbackRequest.SampleRate);
+        Assert.Equal(1, playbackRequest.Channels);
+        Assert.Equal(PcmSampleFormat.Signed16LittleEndian, playbackRequest.Format);
     }
 
     [Fact]
@@ -649,14 +1125,14 @@ public class XaiPluginTests
             requestCount++;
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent([0, 1, 2, 3])
+                Content = new ByteArrayContent([0, 1, 2, 3]),
             };
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
         using var httpClient = new HttpClient(handler);
         httpClient.Timeout = TimeSpan.FromSeconds(5);
-        var sut = new XaiPlugin(httpClient, ttsPlaybackAvailableProbe: () => false);
+        var sut = new XaiPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         var session = await sut.SpeakAsync(new TtsSpeakRequest("Read this", "en"), CancellationToken.None);
@@ -683,7 +1159,7 @@ public class XaiPluginTests
                 "selectedVoice",
                 "customVoiceId",
                 "ttsLowLatency",
-                "ttsTextNormalization"
+                "ttsTextNormalization",
             ],
             keys);
     }
@@ -721,7 +1197,7 @@ public class XaiPluginTests
                 "https://api.x.ai/v1/tts/voices" => JsonResponse("""
                     { "voices": [ { "voice_id": "leo", "name": "Leo" } ] }
                     """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
@@ -738,6 +1214,38 @@ public class XaiPluginTests
         Assert.Equal(["leo"], sut.AvailableVoices.Select(v => v.Id).ToArray());
     }
 
+    // The first two bodies are recorded from the live xAI API.
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden,
+        """{"code":"permission-denied","error":"Your newly created team doesn't have any credits or licenses yet. You can purchase those on https://console.x.ai/team/00000000-0000-0000-0000-000000000000."}""",
+        "Settings.ApiKeyNoTeamAccess")]
+    [InlineData(HttpStatusCode.BadRequest,
+        """{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}""",
+        "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.Forbidden,
+        """{"code":"permission-denied","error":"The API key does not have permission to access this endpoint."}""",
+        "Settings.ApiKeyForbidden")]
+    public async Task ValidateAsync_SeparatesUnfundedTeamFromInvalidKey(
+        HttpStatusCode status, string body, string expectedMessage)
+    {
+        var handler = new CapturingHandler((_, _) => new HttpResponseMessage(status)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        });
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "xai-key" } };
+        using var httpClient = new HttpClient(handler);
+        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        var sut = new XaiPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(expectedMessage, result.Message);
+    }
+
     private static JsonElement LoadManifest()
     {
         var basePath = Path.GetFullPath(AppContext.BaseDirectory);
@@ -752,8 +1260,15 @@ public class XaiPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
+
+    // The handler has already buffered the body, so reading each part completes synchronously.
+    private static List<(string Name, string Value)> ReadFormFields(MultipartFormDataContent form) =>
+        form.Select(part => (
+                part.Headers.ContentDisposition?.Name?.Trim('"') ?? "",
+                part.ReadAsStringAsync().GetAwaiter().GetResult()))
+            .ToList();
 
     private sealed class CapturingHandler(
         Func<HttpRequestMessage, string?, HttpResponseMessage> responder) : HttpMessageHandler
@@ -769,11 +1284,178 @@ public class XaiPluginTests
         }
     }
 
+    private abstract record StreamingReceiveItem
+    {
+        public sealed record Frame(
+            byte[] Payload,
+            WebSocketMessageType MessageType,
+            WebSocketCloseStatus? CloseStatus = null,
+            string? CloseDescription = null) : StreamingReceiveItem;
+    }
+
+    private sealed record SentStreamingFrame(
+        byte[] Payload,
+        WebSocketMessageType MessageType);
+
+    private sealed class FakeStreamingWebSocket : WebSocket
+    {
+        private readonly Channel<StreamingReceiveItem> _receives =
+            Channel.CreateUnbounded<StreamingReceiveItem>();
+        private readonly List<SentStreamingFrame> _sentFrames = [];
+        private readonly Lock _sentLock = new();
+        private readonly TaskCompletionSource _receiveExited =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private WebSocketState _state = WebSocketState.Open;
+        private WebSocketCloseStatus? _closeStatus;
+        private string? _closeDescription;
+
+        public IReadOnlyList<SentStreamingFrame> SentFrames
+        {
+            get
+            {
+                lock (_sentLock)
+                {
+                    return _sentFrames.ToArray();
+                }
+            }
+        }
+
+        public Task ReceiveExited => _receiveExited.Task;
+        public bool AbortCalled { get; private set; }
+        public bool DisposeCalled { get; private set; }
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override string? CloseStatusDescription => _closeDescription;
+        // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- WebSocket declares these get-only, so an override cannot add a private setter.
+        public override WebSocketState State => _state;
+        public override string? SubProtocol => null;
+
+        public void EnqueueText(string json) =>
+            _receives.Writer.TryWrite(new StreamingReceiveItem.Frame(
+                Encoding.UTF8.GetBytes(json),
+                WebSocketMessageType.Text));
+
+        public void EnqueueClose(
+            WebSocketCloseStatus closeStatus,
+            string? closeDescription) =>
+            _receives.Writer.TryWrite(new StreamingReceiveItem.Frame(
+                [],
+                WebSocketMessageType.Close,
+                closeStatus,
+                closeDescription));
+
+        public override void Abort()
+        {
+            AbortCalled = true;
+            _state = WebSocketState.Aborted;
+            _receives.Writer.TryComplete();
+        }
+
+        public override Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _closeStatus = closeStatus;
+            _closeDescription = statusDescription;
+            _state = WebSocketState.Closed;
+            _receives.Writer.TryComplete();
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken) =>
+            CloseAsync(closeStatus, statusDescription, cancellationToken);
+
+        public override void Dispose()
+        {
+            DisposeCalled = true;
+            _state = WebSocketState.Closed;
+            _receives.Writer.TryComplete();
+        }
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var item = await _receives.Reader.ReadAsync(cancellationToken);
+                var frame = Assert.IsType<StreamingReceiveItem.Frame>(item);
+                if (frame.MessageType == WebSocketMessageType.Close)
+                {
+                    _closeStatus = frame.CloseStatus;
+                    _closeDescription = frame.CloseDescription;
+                    _state = WebSocketState.CloseReceived;
+                    return new WebSocketReceiveResult(
+                        0,
+                        WebSocketMessageType.Close,
+                        endOfMessage: true,
+                        frame.CloseStatus,
+                        frame.CloseDescription);
+                }
+
+                Assert.True(frame.Payload.Length <= buffer.Count);
+                frame.Payload.CopyTo(buffer.Array!, buffer.Offset);
+                return new WebSocketReceiveResult(
+                    frame.Payload.Length,
+                    frame.MessageType,
+                    endOfMessage: true);
+            }
+            finally
+            {
+                _receiveExited.TrySetResult();
+            }
+        }
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(WebSocketState.Open, _state);
+            Assert.True(endOfMessage);
+            lock (_sentLock)
+            {
+                _sentFrames.Add(new SentStreamingFrame(
+                    buffer.AsSpan().ToArray(),
+                    messageType));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public override ValueTask SendAsync(
+            ReadOnlyMemory<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(WebSocketState.Open, _state);
+            Assert.True(endOfMessage);
+            lock (_sentLock)
+            {
+                _sentFrames.Add(new SentStreamingFrame(
+                    buffer.ToArray(),
+                    messageType));
+            }
+
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class TestPluginHostServices : IPluginHostServices
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -804,6 +1486,8 @@ public class XaiPluginTests
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
 
         public string PluginDataDirectory => Path.GetTempPath();
+        public IPluginPcmPlaybackService PcmPlayback { get; init; } =
+            UnavailablePluginPcmPlaybackService.Instance;
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
@@ -834,16 +1518,4 @@ public class XaiPluginTests
         public void Dispose() { }
     }
 
-    private sealed class FakeTtsPlaybackSession : ITtsPlaybackSession
-    {
-        public bool IsActive => false;
-
-        public event EventHandler? Completed
-        {
-            add { value?.Invoke(this, EventArgs.Empty); }
-            remove { }
-        }
-
-        public void Stop() { }
-    }
 }

@@ -1,9 +1,10 @@
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
-///     Builds the <see cref="DeShortcutSpec" /> for TypeWhisper's dictation toggle. Shared by the
+///     Builds the <see cref="DeShortcutSpec" /> for TypeWhisper's selected recording mode. Shared by the
 ///     Shortcuts panel and onboarding checklist so both register the same id/trigger/command —
 ///     a divergence would let one surface install a shortcut the other can't detect.
 /// </summary>
@@ -14,38 +15,44 @@ public static class DictationShortcutSpecFactory
     private const string DefaultTrigger = "Ctrl+Shift+Space";
 
     /// <summary>
-    ///     Builds the spec for <paramref name="writer" />. PTT desktops (Hyprland/Sway) get
-    ///     press/release/cancel triplet; toggle-only desktops (GNOME/KDE) get a single command.
+    ///     Builds the spec for the selected recording mode and <paramref name="writer" />. Toggle uses
+    ///     a press-only command on every desktop, PushToTalk requires press/release support, and Hybrid
+    ///     is unsupported because native desktop bindings cannot reproduce its tap/hold threshold.
     /// </summary>
-    public static DeShortcutSpec Build(ISettingsService settings, IDeShortcutWriter writer)
+    public static DeShortcutSpec? Build(ISettingsService settings, IDeShortcutWriter writer)
     {
         var trigger = string.IsNullOrWhiteSpace(settings.Current.ToggleHotkey)
             ? DefaultTrigger
             : settings.Current.ToggleHotkey;
+        // GNOME rejects modifier-only accelerators, Qt cannot preserve their left/right side, and
+        // Hyprland release binds need the modifier in the mask. Keep these in the app backend.
+        if (DesktopShortcutKey.IsSideSpecificModifier(trigger) && !NativeSupportsModifierOnly(writer))
+            return null;
         var gui = ResolveGuiCommand();
+        var cancelTrigger = SwapKeyForCancel(trigger);
 
-        if (writer.SupportsPushToTalk)
+        return settings.Current.Mode switch
         {
-            return new DeShortcutSpec(
+            RecordingMode.Toggle => new DeShortcutSpec(
+                DictationShortcutId,
+                DictationDisplayName,
+                trigger,
+                gui,
+                null,
+                null,
+                null
+            ),
+            RecordingMode.PushToTalk when writer.SupportsPushToTalk => new DeShortcutSpec(
                 DictationShortcutId,
                 DictationDisplayName,
                 trigger,
                 $"{gui} record start",
                 $"{gui} record stop",
-                SwapKeyForCancel(trigger),
-                $"{gui} record cancel"
-            );
-        }
-
-        return new DeShortcutSpec(
-            DictationShortcutId,
-            DictationDisplayName,
-            trigger,
-            gui,
-            null,
-            null,
-            null
-        );
+                cancelTrigger,
+                cancelTrigger is null ? null : $"{gui} record cancel"
+            ),
+            _ => null,
+        };
     }
 
     /// <summary>
@@ -65,18 +72,42 @@ public static class DictationShortcutSpecFactory
         return "typewhisper";
     }
 
-    private static string SwapKeyForCancel(string trigger)
+    public static bool NativeSupportsModifierOnly(IDeShortcutWriter writer) =>
+        writer.DesktopId is not ("gnome" or "kde" or "hyprland");
+
+    /// <summary>
+    ///     Derives the cancel accelerator by swapping the trigger's final key for Escape, or returns
+    ///     null when that yields the recording trigger itself (a trigger already ending in Escape,
+    ///     e.g. Ctrl+Shift+Escape) or a bare Escape (a trigger without modifiers, e.g. F9 or
+    ///     Right Ctrl), which would take Escape away from every application. Writers skip the
+    ///     cancel bind for a null trigger.
+    /// </summary>
+    private static string? SwapKeyForCancel(string trigger)
     {
         var parts = trigger.Split(
             '+',
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
         );
-        if (parts.Length == 0)
+        switch (parts.Length)
         {
-            return "Ctrl+Shift+Escape";
+            case 0:
+                return "Ctrl+Shift+Escape";
+            case 1:
+                return null;
         }
 
+        // Compare against the trigger rebuilt from the same parts so spacing, casing, and the
+        // "Esc" alias ("ctrl + shift + esc") can't hide a collision.
+        if (string.Equals(parts[^1], "Esc", StringComparison.OrdinalIgnoreCase))
+        {
+            parts[^1] = "Escape";
+        }
+
+        var normalizedTrigger = string.Join('+', parts);
         parts[^1] = "Escape";
-        return string.Join('+', parts);
+        var cancel = string.Join('+', parts);
+        return string.Equals(cancel, normalizedTrigger, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : cancel;
     }
 }

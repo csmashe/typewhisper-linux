@@ -1,9 +1,12 @@
 {
   "id": "com.typewhisper.gemma-local",
   "name": "Gemma 4 (Local)",
-  "version": "1.0.0",
+  "version": "1.1.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
-  "description": "Run Google Gemma 4 locally via Ollama or any OpenAI-compatible server",
+  "description": "Run Google Gemma 4 locally on the CPU with llama.cpp",
+  "networkAccess": "local",
+  "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.GemmaLocal.dll",
   "pluginClass": "TypeWhisper.Plugin.GemmaLocal.GemmaLocalPlugin"
 }

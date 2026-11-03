@@ -1,6 +1,8 @@
-using System.IO;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.IO.Compression;
-using System.Net.Http;
 using System.Security.Cryptography;
 using TypeWhisper.Plugins.Shared.Net;
 
@@ -33,7 +35,8 @@ internal class WhisperCudaRuntimeInstaller
     private const string PackageId = "whisper.net.runtime.cuda.linux";
 
     // The canonical, immutable package artifact on nuget.org's flat container.
-    internal static readonly string DownloadUrl =
+    // ReSharper disable once ConvertToConstant.Global -- kept as static readonly; const would force a PascalCase rename off the s_ convention.
+    internal static readonly string s_downloadUrl =
         $"https://api.nuget.org/v3-flatcontainer/{PackageId}/{RuntimeVersion}/"
         + $"{PackageId}.{RuntimeVersion}.nupkg";
 
@@ -46,13 +49,18 @@ internal class WhisperCudaRuntimeInstaller
     // Used only as a progress denominator when the server omits Content-Length.
     private const long ApproxDownloadBytes = 167_372_419L;
 
+    // Extracted beside the archive: ~410 MB (almost all libggml-cuda-whisper.so).
+    private const long ExtractedRuntimeBytes = 400L * 1024 * 1024;
+
+    private const string SpaceDescription = "the whisper.cpp GPU runtime";
+
     // Inside the nupkg the libs live under build/linux-x64/; the loader expects
     // them under runtimes/cuda/linux-x64/ relative to LibraryPath.
     private const string PackageLibPrefix = "build/linux-x64/";
 
     // The set Whisper.net's loader walks for the CUDA runtime (dependencies first,
     // then libwhisper.so). Also the completeness check for IsInstalled.
-    private static readonly string[] CoreRuntimeFiles =
+    private static readonly string[] s_coreRuntimeFiles =
     [
         "libggml-base-whisper.so",
         "libggml-cpu-whisper.so",
@@ -92,9 +100,12 @@ internal class WhisperCudaRuntimeInstaller
     /// </summary>
     public string LibraryPath => Path.Join(_runtimeRoot, "whisper");
 
+    // Test seam: free-space probe for the runtime download (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; init; }
+
     /// <summary>True when every required CUDA library has already been extracted.</summary>
     public bool IsInstalled =>
-        CoreRuntimeFiles.All(file => File.Exists(Path.Join(NativeDirectory, file)));
+        s_coreRuntimeFiles.All(file => File.Exists(Path.Join(NativeDirectory, file)));
 
     /// <summary>
     ///     Ensures the CUDA runtime is unpacked, downloading and extracting the
@@ -140,7 +151,16 @@ internal class WhisperCudaRuntimeInstaller
                         await DownloadAsync(nupkgPath, progress, ct).ConfigureAwait(false);
 
                         _log?.Invoke("whisper.cpp GPU runtime: extracting native libraries");
-                        ExtractCoreRuntimeFiles(nupkgPath);
+                        try
+                        {
+                            ExtractCoreRuntimeFiles(nupkgPath);
+                        }
+                        catch (Exception ex)
+                            when (DownloadSpace.TranslateWriteFailure(ex, _runtimeRoot, SpaceDescription)
+                                is { } full && !ReferenceEquals(full, ex))
+                        {
+                            throw full;
+                        }
                     }
                     finally
                     {
@@ -151,7 +171,7 @@ internal class WhisperCudaRuntimeInstaller
 
             if (!IsInstalled)
             {
-                var missing = CoreRuntimeFiles.Where(
+                var missing = s_coreRuntimeFiles.Where(
                     f => !File.Exists(Path.Join(NativeDirectory, f))
                 );
                 throw new InvalidOperationException(
@@ -218,9 +238,11 @@ internal class WhisperCudaRuntimeInstaller
         // report (the resume baseline jump) always fires.
         var lastReport = DateTime.MinValue;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         void OnBytesOnDisk(long onDisk)
         {
             var now = DateTime.UtcNow;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if ((now - lastReport).TotalMilliseconds > 250)
             {
                 progress?.Report(Math.Min(1.0, (double)onDisk / ApproxDownloadBytes));
@@ -230,14 +252,15 @@ internal class WhisperCudaRuntimeInstaller
 
         return ResilientDownloader.DownloadToFileAsync(
             _httpClient,
-            DownloadUrl,
+            s_downloadUrl,
             destination,
             approxTotalBytes: ApproxDownloadBytes,
             idleTimeout: TimeSpan.FromSeconds(60),
             allowResume: true,
             onBytesOnDisk: OnBytesOnDisk,
-            verifyComplete: path => VerifySha256(path),
-            ct
+            verifyComplete: VerifySha256,
+            ct,
+            new DownloadSpaceRequirement(SpaceDescription, ExtractedRuntimeBytes, SpaceProbe)
         );
     }
 
@@ -260,7 +283,7 @@ internal class WhisperCudaRuntimeInstaller
     // the package's build/linux-x64/ prefix into the runtime directory.
     private void ExtractCoreRuntimeFiles(string nupkgPath)
     {
-        var wanted = new HashSet<string>(CoreRuntimeFiles, StringComparer.Ordinal);
+        var wanted = new HashSet<string>(s_coreRuntimeFiles, StringComparer.Ordinal);
 
         using var archive = ZipFile.OpenRead(nupkgPath);
         foreach (var entry in archive.Entries.Where(e =>

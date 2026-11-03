@@ -5,5 +5,5 @@
   "Settings.ModelDescription": "Elige el modelo de Google Cloud STT.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin no configurado. Se requiere la clave de API.",
   "Manifest.Name": "Google Cloud STT",
-  "Manifest.Description": "Transcripción con Google Cloud Speech-to-Text v2"
+  "Manifest.Description": "Transcripción con Google Cloud Speech-to-Text"
 }

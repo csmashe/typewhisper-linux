@@ -1,0 +1,8 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "用于为向量记忆生成嵌入的OpenAI API密钥。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyConfigured": "已配置API密钥。",
+  "Manifest.Name": "OpenAI向量记忆",
+  "Manifest.Description": "使用OpenAI嵌入的向量记忆存储"
+}

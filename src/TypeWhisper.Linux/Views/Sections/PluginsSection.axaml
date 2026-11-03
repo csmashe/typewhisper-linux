@@ -2,6 +2,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
+             xmlns:local="using:TypeWhisper.Linux"
+             xmlns:sdk="using:TypeWhisper.PluginSDK"
+             xmlns:sdkmodels="using:TypeWhisper.PluginSDK.Models"
              x:Class="TypeWhisper.Linux.Views.Sections.PluginsSection"
              x:DataType="vm:PluginsSectionViewModel">
     <UserControl.Resources>
@@ -19,11 +22,12 @@
                 <TextBlock Text="{Binding Description}"
                            FontSize="11"
                            TextWrapping="Wrap"
-                           Foreground="#8A9AAE"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                            IsVisible="{Binding HasDescription}" />
 
                 <ComboBox ItemsSource="{Binding Options}"
                           SelectedItem="{Binding SelectedOption}"
+                          AutomationProperties.Name="{Binding Label}"
                           HorizontalAlignment="Stretch"
                           IsVisible="{Binding IsDropdownKind}"
                           DropDownOpened="OnSettingDropDownOpened">
@@ -36,40 +40,476 @@
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"
+                         AutomationProperties.Name="{Binding Label}"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsTextKind}" />
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"
                          PasswordChar="•"
+                         AutomationProperties.Name="{Binding Label}"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsSecretKind}" />
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"
+                         PasswordChar="{Binding MultilinePasswordChar}"
+                         RevealPassword="{Binding RevealSecretMultiline, Mode=TwoWay}"
+                         AutomationProperties.Name="{Binding Label}"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          MinHeight="80"
                          HorizontalAlignment="Stretch"
                          IsVisible="{Binding IsMultilineKind}" />
 
+                <ToggleButton IsChecked="{Binding RevealSecretMultiline}"
+                              Content="{loc:Str Plugins.RevealSecretMultiline}"
+                              FontSize="12"
+                              HorizontalAlignment="Left"
+                              IsVisible="{Binding IsSecretMultiline}" />
+
                 <CheckBox IsChecked="{Binding BoolValue}"
                           Content="{Binding Label}"
                           IsVisible="{Binding IsBooleanKind}" />
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- One category group (title + its plugin cards). Shared between the
+             Enabled and Disabled tabs; the row layout below is identical for both. -->
+        <DataTemplate x:Key="PluginCategoryGroupTemplate"
+                      x:DataType="vm:PluginCategoryGroup">
+            <StackPanel>
+                <TextBlock Text="{Binding Title}"
+                           Classes="group-title" />
+
+                <ItemsControl ItemsSource="{Binding Plugins}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PluginRow">
+                            <Border Classes="panel"
+                                    Padding="16,14"
+                                    Margin="0,0,0,12">
+                                <StackPanel Spacing="12">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,28"
+                                          ColumnSpacing="14">
+                                        <Border Width="40"
+                                                Height="40"
+                                                CornerRadius="10"
+                                                Background="{DynamicResource TwAccentBrush}"
+                                                VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding Monogram}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TwOnAccentBrush}"
+                                                       FontWeight="Bold" />
+                                        </Border>
+
+                                        <StackPanel Grid.Column="1"
+                                                    Spacing="5">
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="8">
+                                                <TextBlock Text="{Binding Name}"
+                                                           FontSize="13.5"
+                                                           FontWeight="SemiBold" />
+                                                <TextBlock
+                                                    Text="{Binding Version, StringFormat='v{0}'}"
+                                                    FontSize="11.5"
+                                                    Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                    VerticalAlignment="Center" />
+                                            </StackPanel>
+
+                                            <TextBlock Text="{Binding Description}"
+                                                       TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                       IsVisible="{Binding HasDescription}" />
+
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6">
+                                                <Border Classes="badge location-badge"
+                                                        Classes.local="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdkmodels:PluginNetworkAccess.Local}}"
+                                                        Classes.mixed="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdkmodels:PluginNetworkAccess.Mixed}}"
+                                                        Classes.user-controlled="{Binding NetworkAccess, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static sdkmodels:PluginNetworkAccess.UserControlled}}"
+                                                        BorderThickness="1">
+                                                    <TextBlock Text="{Binding LocationBadge}"
+                                                            FontSize="11"
+                                                            Classes="badge-text" />
+                                                </Border>
+                                                <Border Classes="badge status-badge"
+                                                        Classes.enabled="{Binding IsEnabled}"
+                                                        BorderThickness="1">
+                                                    <TextBlock Text="{Binding StatusBadge}"
+                                                            FontSize="11"
+                                                            Classes="badge-text" />
+                                                </Border>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                        <ToggleSwitch Grid.Column="2"
+                                                      Margin="0,0,2,0"
+                                                      VerticalAlignment="Center"
+                                                      IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                      AutomationProperties.Name="{Binding Name, Converter={x:Static loc:LocFormatConverter.Instance}, ConverterParameter=Plugins.EnabledToggleName}"
+                                                      Command="{Binding Owner.ToggleEnabledCommand}"
+                                                      CommandParameter="{Binding}" />
+
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                        <Button Grid.Column="3"
+                                                Width="28"
+                                                Height="28"
+                                                Padding="0"
+                                                VerticalAlignment="Center"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Command="{Binding Owner.ToggleExpandedCommand}"
+                                                CommandParameter="{Binding}"
+                                                AutomationProperties.Name="{Binding ExpanderAccessibleName}"
+                                                IsVisible="{Binding HasExpandableSettings}">
+                                            <TextBlock Text="{Binding ExpansionGlyph}"
+                                                       FontSize="14"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TwTextPrimaryBrush}" />
+                                        </Button>
+                                    </Grid>
+
+                                    <Border IsVisible="{Binding IsExpanded}"
+                                            Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Padding="14,14,14,0">
+                                        <StackPanel Spacing="14">
+                                            <TextBlock Text="{Binding Status}"
+                                                       TextWrapping="Wrap"
+                                                       FontSize="11.5"
+                                                       Foreground="{DynamicResource TwTextSecondaryBrush}" />
+
+                                            <ItemsControl ItemsSource="{Binding SettingFields}"
+                                                          ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
+
+                                            <ItemsControl ItemsSource="{Binding Collections}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate
+                                                        x:DataType="vm:PluginCollectionRow">
+                                                        <StackPanel Spacing="10"
+                                                                Margin="0,0,0,14">
+                                                            <TextBlock Text="{Binding Label}"
+                                                                FontWeight="SemiBold" />
+                                                            <TextBlock Text="{Binding Description}"
+                                                                FontSize="11"
+                                                                TextWrapping="Wrap"
+                                                                Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                                IsVisible="{Binding HasDescription}" />
+                                                            <TextBox
+                                                                Text="{Binding FilterText}"
+                                                                PlaceholderText="{loc:Str Plugins.CollectionSearchPlaceholder}"
+                                                                AutomationProperties.Name="{loc:Str Plugins.CollectionSearchPlaceholder}"
+                                                                IsVisible="{Binding IsSearchable}" />
+                                                            <TextBlock
+                                                                Text="{loc:Str Plugins.CollectionNoMatches}"
+                                                                FontSize="11"
+                                                                Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                                IsVisible="{Binding HasNoMatches}" />
+
+                                                            <ItemsControl
+                                                                ItemsSource="{Binding Items}">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate
+                                                                        x:DataType="vm:PluginCollectionItemRow">
+                                                                        <Border
+                                                                            IsVisible="{Binding IsMatch}"
+                                                                            Background="{DynamicResource TwSurfaceRaisedBrush}"
+                                                                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
+                                                                            BorderThickness="1"
+                                                                            CornerRadius="10"
+                                                                            Padding="12"
+                                                                            Margin="0,0,0,8">
+                                                                            <StackPanel Spacing="8">
+                                                                                <Grid
+                                                                                    ColumnDefinitions="*,Auto,Auto,Auto"
+                                                                                    ColumnSpacing="6">
+                                                                                    <TextBlock
+                                                                                        Grid.Column="0"
+                                                                                        Text="{Binding HeaderText}"
+                                                                                        FontWeight="SemiBold"
+                                                                                        MaxLines="1"
+                                                                                        TextTrimming="CharacterEllipsis"
+                                                                                        VerticalAlignment="Center" />
+                                                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                                                    <Button
+                                                                                        Grid.Column="1"
+                                                                                        Content="{loc:Str Common.Up}"
+                                                                                        Command="{Binding OwnerCollection.MoveUpCommand}"
+                                                                                        CommandParameter="{Binding}" />
+                                                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                                                    <Button
+                                                                                        Grid.Column="2"
+                                                                                        Content="{loc:Str Common.Down}"
+                                                                                        Command="{Binding OwnerCollection.MoveDownCommand}"
+                                                                                        CommandParameter="{Binding}" />
+                                                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                                                    <Button
+                                                                                        Grid.Column="3"
+                                                                                        Content="{loc:Str Common.Remove}"
+                                                                                        Command="{Binding OwnerCollection.RemoveItemCommand}"
+                                                                                        CommandParameter="{Binding}" />
+                                                                                </Grid>
+
+                                                                                <ItemsControl
+                                                                                    ItemsSource="{Binding Fields}"
+                                                                                    ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
+
+                                                                                <StackPanel
+                                                                                    Spacing="6"
+                                                                                    IsVisible="{Binding CanTest}">
+                                                                                    <TextBlock
+                                                                                        Text="{loc:Str Plugins.CollectionTestInput}"
+                                                                                        FontSize="11.5"
+                                                                                        Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                                                                                    <TextBox
+                                                                                        Text="{Binding TestInput}"
+                                                                                        AutomationProperties.Name="{loc:Str Plugins.CollectionTestInput}"
+                                                                                        AcceptsReturn="True"
+                                                                                        TextWrapping="Wrap"
+                                                                                        MinHeight="56" />
+                                                                                    <StackPanel
+                                                                                        Orientation="Horizontal"
+                                                                                        Spacing="6">
+                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                                                        <Button
+                                                                                            Content="{Binding OwnerCollection.TestButtonLabel, FallbackValue=''}"
+                                                                                            Command="{Binding OwnerCollection.OwnerRow.Owner.RunCollectionItemTestCommand}"
+                                                                                            CommandParameter="{Binding}"
+                                                                                            IsEnabled="{Binding !IsTestRunning}" />
+                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                                                        <Button
+                                                                                            Content="{loc:Str Plugins.CollectionTestCancel}"
+                                                                                            Command="{Binding OwnerCollection.OwnerRow.Owner.CancelCollectionItemTestCommand}"
+                                                                                            CommandParameter="{Binding}"
+                                                                                            IsVisible="{Binding IsTestRunning}" />
+                                                                                    </StackPanel>
+                                                                                    <TextBlock
+                                                                                        Text="{Binding TestMessage}"
+                                                                                        IsVisible="{Binding HasTestMessage}"
+                                                                                        TextWrapping="Wrap"
+                                                                                        FontSize="11.5"
+                                                                                        Foreground="{DynamicResource TwTextPrimaryBrush}" />
+                                                                                    <TextBox
+                                                                                        Text="{Binding TestOutput}"
+                                                                                        IsVisible="{Binding HasTestOutput}"
+                                                                                        IsReadOnly="True"
+                                                                                        AcceptsReturn="True"
+                                                                                        TextWrapping="Wrap"
+                                                                                        MaxHeight="220"
+                                                                                        AutomationProperties.Name="{loc:Str Plugins.CollectionTestOutput}" />
+                                                                                </StackPanel>
+                                                                            </StackPanel>
+                                                                        </Border>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+
+                                                            <Button
+                                                                Content="{Binding AddButtonLabel}"
+                                                                HorizontalAlignment="Left"
+                                                                Command="{Binding AddItemCommand}" />
+
+                                                            <StackPanel
+                                                                Spacing="6"
+                                                                IsVisible="{Binding HasTemplates}">
+                                                                <TextBlock
+                                                                    Text="{loc:Str Plugins.CollectionTemplate}"
+                                                                    FontSize="11.5"
+                                                                    Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                                                                <StackPanel
+                                                                    Orientation="Horizontal"
+                                                                    Spacing="6">
+                                                                    <ComboBox
+                                                                        ItemsSource="{Binding Templates}"
+                                                                        SelectedItem="{Binding SelectedTemplate}"
+                                                                        MinWidth="220"
+                                                                        AutomationProperties.Name="{loc:Str Plugins.CollectionTemplate}">
+                                                                        <ComboBox.ItemTemplate>
+                                                                            <DataTemplate x:DataType="sdk:PluginCollectionTemplate">
+                                                                                <TextBlock Text="{Binding Label}" />
+                                                                            </DataTemplate>
+                                                                        </ComboBox.ItemTemplate>
+                                                                    </ComboBox>
+                                                                    <Button
+                                                                        Content="{loc:Str Plugins.CollectionAddTemplate}"
+                                                                        Command="{Binding AddTemplateCommand}" />
+                                                                </StackPanel>
+                                                                <TextBlock
+                                                                    Text="{Binding SelectedTemplateDescription}"
+                                                                    IsVisible="{Binding HasSelectedTemplateDescription}"
+                                                                    TextWrapping="Wrap"
+                                                                    FontSize="11"
+                                                                    Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <ItemsControl ItemsSource="{Binding Actions}"
+                                                          IsVisible="{Binding HasActions}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:PluginSettingsActionRow">
+                                                        <Grid ColumnDefinitions="*,Auto"
+                                                              ColumnSpacing="12"
+                                                              Margin="0,0,0,8">
+                                                            <TextBlock Grid.Column="0"
+                                                                       Text="{Binding Description}"
+                                                                       IsVisible="{Binding HasDescription}"
+                                                                       TextWrapping="Wrap"
+                                                                       FontSize="11.5"
+                                                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                                       VerticalAlignment="Center" />
+                                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                            <Button Grid.Column="1"
+                                                                    Content="{Binding Label}"
+                                                                    Command="{Binding Owner.Owner.RunSettingsActionCommand}"
+                                                                    CommandParameter="{Binding}"
+                                                                    IsEnabled="{Binding CanRun}" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <Border IsVisible="{Binding HasPendingAction}"
+                                                    Background="{DynamicResource TwWarningSubtleBrush}"
+                                                    BorderBrush="{DynamicResource TwWarningBorderBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="8"
+                                                    Padding="12">
+                                                <Grid ColumnDefinitions="*,Auto,Auto"
+                                                      ColumnSpacing="8">
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding PendingAction.ConfirmationMessage, FallbackValue=''}"
+                                                               TextWrapping="Wrap"
+                                                               VerticalAlignment="Center" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Grid.Column="1"
+                                                            Content="{Binding PendingAction.Label, FallbackValue=''}"
+                                                            Command="{Binding Owner.ConfirmSettingsActionCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Grid.Column="2"
+                                                            Content="{loc:Str Common.Cancel}"
+                                                            Command="{Binding Owner.DismissSettingsActionConfirmationCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                </Grid>
+                                            </Border>
+
+                                            <Grid IsVisible="{Binding IsActionRunning}"
+                                                  ColumnDefinitions="*,Auto"
+                                                  ColumnSpacing="12">
+                                                <StackPanel Grid.Column="0"
+                                                            Spacing="6"
+                                                            VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ActivityMessage}"
+                                                               TextWrapping="Wrap"
+                                                               FontSize="11.5"
+                                                               Foreground="{DynamicResource TwTextPrimaryBrush}" />
+                                                    <ProgressBar Height="6"
+                                                                 Minimum="0"
+                                                                 Maximum="100"
+                                                                 Value="{Binding ActivityPercent}"
+                                                                 IsIndeterminate="{Binding IsActivityIndeterminate}" />
+                                                </StackPanel>
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Grid.Column="1"
+                                                        Content="{loc:Str Common.Cancel}"
+                                                        Command="{Binding Owner.CancelSettingsActionCommand}"
+                                                        CommandParameter="{Binding}" />
+                                            </Grid>
+
+                                            <StackPanel Orientation="Horizontal"
+                                                        HorizontalAlignment="Right"
+                                                        Spacing="8"
+                                                        Margin="0,0,0,14">
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Content="{loc:Str Common.Refresh}"
+                                                        Command="{Binding Owner.RefreshModelCatalogCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        IsEnabled="{Binding CanRefreshModels}"
+                                                        IsVisible="{Binding HasModelCatalogProvider}" />
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Content="{loc:Str Common.Save}"
+                                                        Command="{Binding Owner.SaveSettingsCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        IsEnabled="{Binding CanEditSettings}" />
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Content="{loc:Str Plugins.Validate}"
+                                                        Command="{Binding Owner.ValidateSettingsCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        IsEnabled="{Binding CanValidateSettings}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </StackPanel>
         </DataTemplate>
     </UserControl.Resources>
 
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
         <Style Selector="Border.badge">
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Padding" Value="8,3" />
+        </Style>
+        <!-- Location badge: cloud by default, recolored for the other network-access kinds. -->
+        <Style Selector="Border.location-badge">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeCloudBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeCloudBorderBrush}" />
+        </Style>
+        <Style Selector="Border.location-badge > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwBadgeCloudTextBrush}" />
+        </Style>
+        <Style Selector="Border.location-badge.local">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeLocalBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeLocalBorderBrush}" />
+        </Style>
+        <Style Selector="Border.location-badge.local > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwBadgeLocalTextBrush}" />
+        </Style>
+        <Style Selector="Border.location-badge.mixed">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeMixedBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeMixedBorderBrush}" />
+        </Style>
+        <Style Selector="Border.location-badge.mixed > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwBadgeMixedTextBrush}" />
+        </Style>
+        <Style Selector="Border.location-badge.user-controlled">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeUserControlledBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeUserControlledBorderBrush}" />
+        </Style>
+        <Style Selector="Border.location-badge.user-controlled > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwBadgeUserControlledTextBrush}" />
+        </Style>
+        <!-- Status badge: disabled by default, green when the plugin is enabled. -->
+        <Style Selector="Border.status-badge">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeDisabledBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeDisabledBorderBrush}" />
+        </Style>
+        <Style Selector="Border.status-badge > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwBadgeDisabledTextBrush}" />
+        </Style>
+        <Style Selector="Border.status-badge.enabled">
+            <Setter Property="Background" Value="{DynamicResource TwBadgeEnabledBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBadgeEnabledBorderBrush}" />
+        </Style>
+        <Style Selector="Border.status-badge.enabled > TextBlock.badge-text">
+            <Setter Property="Foreground" Value="{DynamicResource TwBadgeEnabledTextBrush}" />
         </Style>
         <Style Selector="TextBlock.group-title">
             <Setter Property="FontSize" Value="14.5" />
@@ -93,43 +533,41 @@
                         Text="{loc:Str Plugins.ExtensionsSubtitle}"
                         FontSize="12.5"
                         TextWrapping="Wrap"
-                        Foreground="#8A9AAE" />
+                        Foreground="{DynamicResource TwTextSecondaryBrush}" />
                 </StackPanel>
             </Border>
 
             <Border Classes="panel"
                     Padding="16,14">
                 <StackPanel Spacing="14">
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="18">
-                        <StackPanel Spacing="6">
-                            <StackPanel Orientation="Horizontal"
-                                        Spacing="8">
-                                <TextBlock Text="⌘"
-                                           FontSize="14"
-                                           Foreground="#D6DEE9" />
-                                <TextBlock Text="{loc:Str Plugins.Installed}"
-                                           FontWeight="SemiBold" />
-                            </StackPanel>
-                            <Border Background="#2196F3"
-                                    Height="2"
-                                    Width="114"
-                                    HorizontalAlignment="Left" />
-                        </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Command="{Binding SetTabCommand}"
+                                CommandParameter="0"
+                                Classes="tab"
+                                Classes.selected="{Binding IsEnabledTabSelected}"
+                                Padding="12,8"
+                                Margin="0,0,8,0"
+                                Content="{Binding EnabledTabLabel}" />
+                        <Button Command="{Binding SetTabCommand}"
+                                CommandParameter="1"
+                                Classes="tab"
+                                Classes.selected="{Binding IsDisabledTabSelected}"
+                                Padding="12,8"
+                                Content="{Binding DisabledTabLabel}" />
                     </StackPanel>
 
-                    <Border Background="#17212B"
-                            BorderBrush="#1AFFFFFF"
+                    <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="1"
                             CornerRadius="12"
                             Padding="14,10">
                         <TextBlock Text="{Binding HeaderSummary}"
                                    FontSize="12.5"
-                                   Foreground="#9BAABC" />
+                                   Foreground="{DynamicResource TwTextMutedBrush}" />
                     </Border>
 
-                    <Border Background="#4D3B17"
-                            BorderBrush="#6E5625"
+                    <Border Background="{DynamicResource TwWarningSubtleBrush}"
+                            BorderBrush="{DynamicResource TwWarningBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="12"
                             Padding="14,10"
@@ -137,18 +575,18 @@
                         <StackPanel Spacing="8">
                             <TextBlock Text="{loc:Str Plugins.LoadFailures}"
                                        FontWeight="SemiBold"
-                                       Foreground="#FFF0B8" />
+                                       Foreground="{DynamicResource TwWarningTextBrush}" />
                             <ItemsControl ItemsSource="{Binding LoadFailures}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:PluginFailureRow">
                                         <StackPanel Spacing="2">
                                             <TextBlock Text="{Binding FolderName}"
                                                        FontWeight="SemiBold"
-                                                       Foreground="White" />
+                                                       Foreground="{DynamicResource TwTextStrongBrush}" />
                                             <TextBlock Text="{Binding Message}"
                                                        FontSize="11.5"
                                                        TextWrapping="Wrap"
-                                                       Foreground="#E7D8A6" />
+                                                       Foreground="{DynamicResource TwWarningTextBrush}" />
                                         </StackPanel>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -156,223 +594,31 @@
                         </StackPanel>
                     </Border>
 
-                    <ItemsControl ItemsSource="{Binding PluginGroups}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:PluginCategoryGroup">
-                                <StackPanel>
-                                    <TextBlock Text="{Binding Title}"
-                                               Classes="group-title" />
+                    <!-- Enabled tab -->
+                    <StackPanel IsVisible="{Binding IsEnabledTabSelected}">
+                        <ItemsControl ItemsSource="{Binding EnabledGroups}"
+                                      IsVisible="{Binding HasEnabledPlugins}"
+                                      ItemTemplate="{StaticResource PluginCategoryGroupTemplate}" />
+                        <TextBlock Text="{loc:Str Plugins.NoEnabledPlugins}"
+                                   FontSize="12.5"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0"
+                                   IsVisible="{Binding !HasEnabledPlugins}" />
+                    </StackPanel>
 
-                                    <ItemsControl ItemsSource="{Binding Plugins}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:PluginRow">
-                                                <Border Classes="panel"
-                                                        Padding="16,14"
-                                                        Margin="0,0,0,12">
-                                                    <StackPanel Spacing="12">
-                                                        <Grid ColumnDefinitions="Auto,*,Auto,28"
-                                                              ColumnSpacing="14">
-                                                            <Border Width="40"
-                                                                    Height="40"
-                                                                    CornerRadius="10"
-                                                                    Background="#1E88E5"
-                                                                    VerticalAlignment="Top">
-                                                                <TextBlock Text="{Binding Monogram}"
-                                                                           HorizontalAlignment="Center"
-                                                                           VerticalAlignment="Center"
-                                                                           Foreground="White"
-                                                                           FontWeight="Bold" />
-                                                            </Border>
-
-                                                            <StackPanel Grid.Column="1"
-                                                                        Spacing="5">
-                                                                <StackPanel Orientation="Horizontal"
-                                                                            Spacing="8">
-                                                                    <TextBlock Text="{Binding Name}"
-                                                                               FontSize="13.5"
-                                                                               FontWeight="SemiBold" />
-                                                                    <TextBlock
-                                                                        Text="{Binding Version, StringFormat='v{0}'}"
-                                                                        FontSize="11.5"
-                                                                        Foreground="#8A9AAE"
-                                                                        VerticalAlignment="Center" />
-                                                                </StackPanel>
-
-                                                                <TextBlock Text="{Binding Description}"
-                                                                           TextWrapping="Wrap"
-                                                                           Foreground="#8A9AAE"
-                                                                           IsVisible="{Binding HasDescription}" />
-
-                                                                <StackPanel Orientation="Horizontal"
-                                                                            Spacing="6">
-                                                                    <Border Classes="badge"
-                                                                            Background="#1A3453"
-                                                                            BorderBrush="#2E5B89"
-                                                                            BorderThickness="1">
-                                                                        <TextBlock Text="{Binding CategoryLabel}"
-                                                                                FontSize="11"
-                                                                                Foreground="#D6E7FF" />
-                                                                    </Border>
-                                                                    <Border Classes="badge"
-                                                                            Background="{Binding LocationBadgeBackground}"
-                                                                            BorderBrush="{Binding LocationBadgeBorder}"
-                                                                            BorderThickness="1">
-                                                                        <TextBlock Text="{Binding LocationBadge}"
-                                                                                FontSize="11"
-                                                                                Foreground="{Binding LocationBadgeForeground}" />
-                                                                    </Border>
-                                                                    <Border Classes="badge"
-                                                                            Background="{Binding StatusBadgeBackground}"
-                                                                            BorderBrush="{Binding StatusBadgeBorder}"
-                                                                            BorderThickness="1">
-                                                                        <TextBlock Text="{Binding StatusBadge}"
-                                                                                FontSize="11"
-                                                                                Foreground="{Binding StatusBadgeForeground}" />
-                                                                    </Border>
-                                                                </StackPanel>
-                                                            </StackPanel>
-
-                                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                            <ToggleSwitch Grid.Column="2"
-                                                                          Margin="0,0,2,0"
-                                                                          VerticalAlignment="Center"
-                                                                          IsChecked="{Binding IsEnabled, Mode=OneWay}"
-                                                                          Command="{Binding Owner.ToggleEnabledCommand}"
-                                                                          CommandParameter="{Binding}" />
-
-                                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                            <Button Grid.Column="3"
-                                                                    Width="28"
-                                                                    Height="28"
-                                                                    Padding="0"
-                                                                    VerticalAlignment="Center"
-                                                                    Background="Transparent"
-                                                                    BorderThickness="0"
-                                                                    Command="{Binding Owner.ToggleExpandedCommand}"
-                                                                    CommandParameter="{Binding}"
-                                                                    IsVisible="{Binding HasExpandableSettings}">
-                                                                <TextBlock Text="{Binding ExpansionGlyph}"
-                                                                           FontSize="14"
-                                                                           HorizontalAlignment="Center"
-                                                                           VerticalAlignment="Center"
-                                                                           Foreground="#D6DEE9" />
-                                                            </Button>
-                                                        </Grid>
-
-                                                        <Border IsVisible="{Binding IsExpanded}"
-                                                                Background="#101821"
-                                                                BorderBrush="#1AFFFFFF"
-                                                                BorderThickness="1"
-                                                                CornerRadius="10"
-                                                                Padding="14,14,14,0">
-                                                            <StackPanel Spacing="14">
-                                                                <TextBlock Text="{Binding Status}"
-                                                                           TextWrapping="Wrap"
-                                                                           FontSize="11.5"
-                                                                           Foreground="#8A9AAE" />
-
-                                                                <ItemsControl ItemsSource="{Binding SettingFields}"
-                                                                              ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
-
-                                                                <ItemsControl ItemsSource="{Binding Collections}">
-                                                                    <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate
-                                                                            x:DataType="vm:PluginCollectionRow">
-                                                                            <StackPanel Spacing="10"
-                                                                                    Margin="0,0,0,14">
-                                                                                <TextBlock Text="{Binding Label}"
-                                                                                    FontWeight="SemiBold" />
-                                                                                <TextBlock Text="{Binding Description}"
-                                                                                    FontSize="11"
-                                                                                    TextWrapping="Wrap"
-                                                                                    Foreground="#8A9AAE"
-                                                                                    IsVisible="{Binding HasDescription}" />
-
-                                                                                <ItemsControl
-                                                                                    ItemsSource="{Binding Items}">
-                                                                                    <ItemsControl.ItemTemplate>
-                                                                                        <DataTemplate
-                                                                                            x:DataType="vm:PluginCollectionItemRow">
-                                                                                            <Border
-                                                                                                Background="#17212B"
-                                                                                                BorderBrush="#1AFFFFFF"
-                                                                                                BorderThickness="1"
-                                                                                                CornerRadius="10"
-                                                                                                Padding="12"
-                                                                                                Margin="0,0,0,8">
-                                                                                                <StackPanel Spacing="8">
-                                                                                                    <Grid
-                                                                                                        ColumnDefinitions="*,Auto,Auto,Auto"
-                                                                                                        ColumnSpacing="6">
-                                                                                                        <TextBlock
-                                                                                                            Grid.Column="0"
-                                                                                                            Text="{Binding HeaderText}"
-                                                                                                            FontWeight="SemiBold"
-                                                                                                            VerticalAlignment="Center" />
-                                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                                                                        <Button
-                                                                                                            Grid.Column="1"
-                                                                                                            Content="{loc:Str Common.Up}"
-                                                                                                            Command="{Binding OwnerCollection.MoveUpCommand}"
-                                                                                                            CommandParameter="{Binding}" />
-                                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                                                                        <Button
-                                                                                                            Grid.Column="2"
-                                                                                                            Content="{loc:Str Common.Down}"
-                                                                                                            Command="{Binding OwnerCollection.MoveDownCommand}"
-                                                                                                            CommandParameter="{Binding}" />
-                                                                                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                                                                        <Button
-                                                                                                            Grid.Column="3"
-                                                                                                            Content="{loc:Str Common.Remove}"
-                                                                                                            Command="{Binding OwnerCollection.RemoveItemCommand}"
-                                                                                                            CommandParameter="{Binding}" />
-                                                                                                    </Grid>
-
-                                                                                                    <ItemsControl
-                                                                                                        ItemsSource="{Binding Fields}"
-                                                                                                        ItemTemplate="{StaticResource PluginSettingFieldTemplate}" />
-                                                                                                </StackPanel>
-                                                                                            </Border>
-                                                                                        </DataTemplate>
-                                                                                    </ItemsControl.ItemTemplate>
-                                                                                </ItemsControl>
-
-                                                                                <Button
-                                                                                    Content="{Binding AddButtonLabel}"
-                                                                                    HorizontalAlignment="Left"
-                                                                                    Command="{Binding AddItemCommand}" />
-                                                                            </StackPanel>
-                                                                        </DataTemplate>
-                                                                    </ItemsControl.ItemTemplate>
-                                                                </ItemsControl>
-
-                                                                <StackPanel Orientation="Horizontal"
-                                                                            HorizontalAlignment="Right"
-                                                                            Spacing="8"
-                                                                            Margin="0,0,0,14">
-                                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                                    <Button Content="{loc:Str Common.Save}"
-                                                                            Command="{Binding Owner.SaveSettingsCommand}"
-                                                                            CommandParameter="{Binding}"
-                                                                            IsEnabled="{Binding CanEditSettings}" />
-                                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                                    <Button Content="{loc:Str Plugins.Validate}"
-                                                                            Command="{Binding Owner.ValidateSettingsCommand}"
-                                                                            CommandParameter="{Binding}"
-                                                                            IsEnabled="{Binding CanValidateSettings}" />
-                                                                </StackPanel>
-                                                            </StackPanel>
-                                                        </Border>
-                                                    </StackPanel>
-                                                </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <!-- Disabled tab -->
+                    <StackPanel IsVisible="{Binding IsDisabledTabSelected}">
+                        <ItemsControl ItemsSource="{Binding DisabledGroups}"
+                                      IsVisible="{Binding HasDisabledPlugins}"
+                                      ItemTemplate="{StaticResource PluginCategoryGroupTemplate}" />
+                        <TextBlock Text="{loc:Str Plugins.NoDisabledPlugins}"
+                                   FontSize="12.5"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0"
+                                   IsVisible="{Binding !HasDisabledPlugins}" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </StackPanel>

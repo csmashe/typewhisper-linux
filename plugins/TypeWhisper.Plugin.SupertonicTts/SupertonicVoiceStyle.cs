@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text.Json;
 using Microsoft.ML.OnnxRuntime.Tensors;
 

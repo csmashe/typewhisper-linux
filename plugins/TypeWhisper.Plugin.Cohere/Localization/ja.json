@@ -1,0 +1,13 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "Cohereの文字起こしとCommandリクエストに必要です。",
+  "Settings.StreamResponses": "応答をストリーミング",
+  "Settings.StreamResponsesDescription": "プロンプトアクションの出力を、完全な応答を待たずに生成されたトークンから順に表示します。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyValid": "APIキーは有効です。",
+  "Settings.ApiKeyInvalid": "APIキーが無効です。",
+  "Settings.ApiKeyNotConfigured": "APIキーが設定されていません",
+  "Errors.RecordingTooLarge": "録音がCohere Transcribeには大きすぎます（上限25 MB）。短い録音を使用してください。",
+  "Manifest.Name": "Cohere",
+  "Manifest.Description": "Cohere Transcribeによる音声認識と、プロンプト処理用のCommand LLM"
+}

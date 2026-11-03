@@ -8,10 +8,29 @@ namespace TypeWhisper.Core.Models;
 /// </summary>
 public sealed record DictionaryEntry
 {
+    private const float MinCtcSimilarity = .4f;
+    private const float MaxCtcSimilarity = .95f;
+
+    internal static float? SanitizeCtcSimilarity(float? value) =>
+        value is { } threshold
+        && float.IsFinite(threshold)
+        && threshold is >= MinCtcSimilarity and <= MaxCtcSimilarity
+            ? threshold
+            : null;
+
     public required string Id { get; init; }
     public required DictionaryEntryType EntryType { get; init; }
     public required string Original { get; init; }
     public string? Replacement { get; init; }
+    /// <summary>
+    /// Replacement escapes (\s, \n, \r, \t, \\) are expanded at apply time.
+    /// False keeps stored text literal for legacy entries, imports, API upserts, and learned corrections.
+    /// </summary>
+    public bool ExpandEscapes { get; init; }
+
+    /// <summary>Original is a .NET regular expression instead of a literal phrase</summary>
+    public bool IsRegex { get; init; }
+
     public bool CaseSensitive { get; init; }
     public bool IsEnabled { get; init; } = true;
     public bool IsStarred { get; init; }
@@ -24,7 +43,11 @@ public sealed record DictionaryEntry
 
     public int TimesCorrected { get; init; }
     public int Priority { get; init; }
-    // ReSharper disable once UnusedMember.Global
+
+    /// <summary>Optional acoustic similarity threshold for the CTC stage, 0.4–0.95; null uses the engine default.</summary>
+    public float? CtcMinSimilarity { get; init; }
+
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global -- read by System.Text.Json when the dictionary is saved.
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? LastUsedAt { get; init; }
     public DateTime? LastCorrectedAt { get; init; }

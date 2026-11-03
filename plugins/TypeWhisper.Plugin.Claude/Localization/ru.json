@@ -1,12 +1,16 @@
 {
   "Settings.ApiKey": "API-ключ",
-  "Settings.ApiKeyDescription": "Требуется для запросов LLM Claude.",
+  "Settings.ApiKeyDescription": "Требуется для запросов LLM Claude. Нажмите «Проверить», чтобы загрузить модели, доступные вашей учётной записи.",
   "Settings.StreamResponses": "Потоковая передача ответов",
   "Settings.StreamResponsesDescription": "Отображать вывод действия промпта по токенам по мере генерации, не дожидаясь полного ответа.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
-  "Settings.ApiKeyFormatValid": "Формат API-ключа выглядит корректным.",
   "Settings.ApiKeyFormatInvalid": "Формат API-ключа недействителен.",
   "Settings.ApiKeyNotConfigured": "API-ключ не настроен",
+  "Settings.ApiKeyValidFetchedModels": "API-ключ действителен. Загружено моделей Claude, доступных этой учётной записи: {0}.",
+  "Settings.ApiKeyRejected": "Anthropic отклонил этот API-ключ. Проверьте ключ и повторите попытку.",
+  "Settings.ModelRefreshFailed": "Не удалось загрузить модели Claude: {0} Сохранённый список моделей не изменён.",
+  "Settings.ModelRefreshStale": "API-ключ изменился во время загрузки моделей. Выполните проверку ещё раз.",
+  "Errors.ModelNotFound": "Claude не удалось найти модель {0}. Проверьте API-ключ в разделе «Расширения», чтобы обновить список моделей, затем выберите доступную модель.",
   "Manifest.Name": "Claude",
   "Manifest.Description": "LLM Anthropic Claude для обработки промптов"
 }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services.Diagnostics;
 
 namespace TypeWhisper.Core.Services;
 
@@ -14,99 +15,213 @@ public sealed class SettingsService : ISettingsService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    private readonly string _filePath;
+    private readonly Lock _commitGate = new();
+
+    // Publication happens outside _commitGate (handlers must not run under the commit lock) but
+    // still in commit order, or a preempted publisher could deliver its older snapshot after a
+    // newer commit. Both fields are guarded by _commitGate; see PublishPendingChanges.
+    private readonly Queue<AppSettings> _pendingNotifications = new();
+    private bool _publishing;
+    private readonly AtomicJsonStore<AppSettings> _store;
 
     public SettingsService(string filePath)
     {
-        _filePath = filePath;
-        Current = Load();
+        _store = new AtomicJsonStore<AppSettings>(
+            filePath,
+            () => AppSettings.Default,
+            new AtomicJsonStoreOptions<AppSettings>
+            {
+                JsonOptions = s_jsonOptions,
+                BackupMode = AtomicJsonBackupMode.LastKnownGood,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = Deserialize,
+                Diagnostic = diagnostic =>
+                    LogWarning(
+                        $"{diagnostic.Kind} at {diagnostic.Path}"
+                        + (
+                            diagnostic.Exception is null
+                                ? string.Empty
+                                : $": {diagnostic.Exception.Message}"
+                        )
+                    ),
+            }
+        );
+        _ = _store.Current;
     }
 
-    private string BackupPath => _filePath + ".bak";
-    private string TempPath => _filePath + ".tmp";
-
-    public AppSettings Current { get; private set; }
+    public AppSettings Current => _store.Current;
 
     public event Action<AppSettings>? SettingsChanged;
 
     public AppSettings Load()
     {
-        var result = TryLoadFrom(_filePath);
-        if (result is not null)
-        {
-            Current = result;
-            return Current;
-        }
-
-        // Primary failed — try backup, then restore it as primary.
-        if (File.Exists(BackupPath))
-        {
-            LogWarning("Primary settings corrupt or missing, trying backup.");
-            result = TryLoadFrom(BackupPath);
-            if (result is not null)
-            {
-                Current = result;
-                try { File.Copy(BackupPath, _filePath, true); } catch { /* best effort */ }
-                return Current;
-            }
-        }
-
-        LogWarning("No valid settings found, using defaults.");
-        Current = AppSettings.Default;
-        return Current;
+        return _store.Reload();
     }
 
     public void Save(AppSettings settings)
     {
-        var directory = Path.GetDirectoryName(_filePath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        if (File.Exists(_filePath))
-        {
-            try { File.Copy(_filePath, BackupPath, true); } catch { /* best effort */ }
-        }
-
-        // Atomic write via .tmp so a crash mid-write can't corrupt the primary file.
-        var json = JsonSerializer.Serialize(settings, s_jsonOptions);
-        File.WriteAllText(TempPath, json);
-        File.Move(TempPath, _filePath, true);
-
-        // Advance in-memory state only after disk success so Current never leads what a reload sees.
-        Current = settings;
-        SettingsChanged?.Invoke(settings);
+        ArgumentNullException.ThrowIfNull(settings);
+        // A replacement object carries no "what changed" signal, so it is normalized on its own
+        // terms rather than reconciled against the previous snapshot.
+        Commit(_ => NormalizeSettings(settings));
     }
 
-    private static AppSettings? TryLoadFrom(string path)
+    public AppSettings Update(Func<AppSettings, AppSettings> mutate)
     {
+        ArgumentNullException.ThrowIfNull(mutate);
+        return Commit(current => NormalizeSettings(ReconcileLanguageHints(current, mutate(current))));
+    }
+
+    private AppSettings Commit(Func<AppSettings, AppSettings> update)
+    {
+        // `changed` is decided by the store from the persisted form, not by comparing
+        // AppSettings by reference here, which would miss real changes and announce false ones.
+        // The store commits atomically but releases before returning, so without this lock
+        // two concurrent saves could notify out of order and leave a subscriber applying
+        // superseded settings. Queue rather than raise here: handlers must never run under the
+        // commit lock, or a subscriber that saves (or waits on a thread that saves) deadlocks.
+        AppSettings committed;
+        lock (_commitGate)
+        {
+            committed = _store.Update(update, out var changed);
+            if (changed)
+            {
+                _pendingNotifications.Enqueue(committed);
+            }
+        }
+
+        PublishPendingChanges();
+        return committed;
+    }
+
+    /// <summary>
+    ///     Drains committed snapshots to <see cref="SettingsChanged" /> in commit order. No lock is
+    ///     held while a subscriber runs — a handler that saves, or waits on a thread that saves,
+    ///     must not deadlock — so a single active drainer is elected instead. A writer that finds a
+    ///     drain already running (another thread, or this thread re-entering from a handler) leaves
+    ///     its snapshot queued and returns, keeping delivery ordered and non-recursive.
+    /// </summary>
+    private void PublishPendingChanges()
+    {
+        lock (_commitGate)
+        {
+            if (_publishing)
+            {
+                return;
+            }
+
+            _publishing = true;
+        }
+
         try
         {
-            if (!File.Exists(path))
+            while (true)
             {
-                return null;
-            }
+                AppSettings next;
+                lock (_commitGate)
+                {
+                    if (_pendingNotifications.Count == 0)
+                    {
+                        // Resign in the same acquisition that observes the empty queue. Clearing
+                        // later leaves a window where a writer enqueues, sees _publishing still
+                        // true, declines to drain, and strands its notification.
+                        _publishing = false;
+                        return;
+                    }
 
-            var json = File.ReadAllText(path);
-            var settings = JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions);
-            if (settings is null)
-            {
-                return null;
-            }
+                    next = _pendingNotifications.Dequeue();
+                }
 
-            settings = ApplyHistoryRetentionMigration(settings, json);
-            settings = ApplyAccelerationMigration(settings, json);
-            return settings;
+                // Per subscriber, not per multicast invoke: one throwing handler would otherwise
+                // starve every handler after it. The drainer may also be carrying another writer's
+                // snapshot, so a failure must not escape and fail that already-succeeded Save.
+                foreach (var subscriber in SettingsChanged?.GetInvocationList() ?? [])
+                {
+                    try
+                    {
+                        ((Action<AppSettings>)subscriber)(next);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWarning($"A SettingsChanged subscriber threw: {ex}");
+                    }
+                }
+            }
         }
-        catch (Exception ex)
+        catch
         {
-            LogWarning($"Failed to load settings from {path}: {ex.Message}");
-            return null;
+            // Backstop for an abnormal exit (the subscriber chain is already guarded above):
+            // never leave the flag set, or publication stops for the process lifetime.
+            lock (_commitGate)
+            {
+                _publishing = false;
+            }
+
+            throw;
         }
+    }
+
+    // One place for the invariants every committed snapshot must satisfy, whichever path wrote it.
+    private static AppSettings NormalizeSettings(AppSettings settings) =>
+        NormalizeLiveTextWindow(NormalizeRetention(NormalizeSpokenFormattingProfiles(NormalizeLanguageHints(settings))));
+
+    // A hand-edited or corrupt position must not place the window at NaN or infinity.
+    private static AppSettings NormalizeLiveTextWindow(AppSettings settings) =>
+        settings with
+        {
+            LiveTextWindowLeft = settings.LiveTextWindowLeft is { } left && double.IsFinite(left) ? left : null,
+            LiveTextWindowTop = settings.LiveTextWindowTop is { } top && double.IsFinite(top) ? top : null,
+            LiveTextWindowWidth = AppSettings.NormalizeLiveTextWindowWidth(settings.LiveTextWindowWidth),
+            LiveTextWindowHeight = AppSettings.NormalizeLiveTextWindowHeight(settings.LiveTextWindowHeight),
+        };
+
+    private static AppSettings NormalizeSpokenFormattingProfiles(AppSettings settings) =>
+        settings with { SpokenFormattingProfiles = SpokenFormatting.SpokenFormattingProfileStore.NormalizeProfiles(settings.SpokenFormattingProfiles) };
+
+    private static AppSettings Deserialize(string json)
+    {
+        var settings =
+            JsonSerializer.Deserialize<AppSettings>(json, s_jsonOptions)
+            ?? throw new JsonException("Settings JSON deserialized to null.");
+        settings = ApplyHistoryRetentionMigration(settings, json);
+        settings = ApplyAccelerationMigration(settings, json);
+        return NormalizeSettings(settings);
+    }
+
+    // A stored list wins; an empty or null list beside an explicit Language keeps that language.
+    private static AppSettings NormalizeLanguageHints(AppSettings settings) =>
+        settings.WithLanguageHints(settings.LanguageHints is { Count: > 0 } stored ? stored : settings.GetLanguageHints());
+
+    // -1 is the "delete captures at shutdown" sentinel; every other value is a day count in 1..365.
+    private static AppSettings NormalizeRetention(AppSettings settings) =>
+        settings with
+        {
+            DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays == -1
+                ? -1 : Math.Clamp(settings.DictationRecoveryRetentionDays, 1, 365),
+            DiagnosticLogRetentionDays =
+                DiagnosticLogPreferences.NormalizeRetentionDays(settings.DiagnosticLogRetentionDays),
+        };
+
+    // The picker writes Language while the hint list writes LanguageHints: whichever side an
+    // update changed leads and the other follows.
+    private static AppSettings ReconcileLanguageHints(AppSettings previous, AppSettings next)
+    {
+        var languageChanged = !string.Equals(previous.Language, next.Language, StringComparison.Ordinal);
+        var hintsChanged = !previous.LanguageHints.SequenceEqual(next.LanguageHints, StringComparer.Ordinal);
+        if (!languageChanged || hintsChanged)
+        {
+            // The list is the source of truth when it has entries; an empty list beside an
+            // explicit Language keeps that language, and an empty list beside "auto" is auto.
+            return NormalizeLanguageHints(next);
+        }
+
+        // Only the picker moved: it leads and the tail follows; "auto" clears the list.
+        var isAuto = string.IsNullOrWhiteSpace(next.Language)
+            || next.Language.Equals("auto", StringComparison.OrdinalIgnoreCase);
+        return next.WithLanguageHints(isAuto ? [] : [next.Language, .. next.LanguageHints.Skip(1)]);
     }
 
     /// <summary>
@@ -147,13 +262,13 @@ public sealed class SettingsService : ISettingsService
                     HistoryRetentionMinutes = (int)Math.Min(
                         (long)legacyDays.Value * 24 * 60,
                         int.MaxValue
-                    )
+                    ),
                 },
                 _ => settings with
                 {
                     HistoryRetentionMode = AppSettings.Default.HistoryRetentionMode,
-                    HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes
-                }
+                    HistoryRetentionMinutes = AppSettings.Default.HistoryRetentionMinutes,
+                },
             };
         }
 
@@ -185,7 +300,7 @@ public sealed class SettingsService : ISettingsService
             {
                 LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
                     settings.LocalModelAcceleration
-                )
+                ),
             };
         }
 
@@ -197,7 +312,7 @@ public sealed class SettingsService : ISettingsService
             {
                 LocalModelAcceleration = AppSettings.NormalizeLocalModelAcceleration(
                     settings.LocalModelAcceleration
-                )
+                ),
             };
         }
 

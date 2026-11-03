@@ -8,9 +8,15 @@ namespace TypeWhisper.PluginSDK.Models;
 /// </summary>
 /// <param name="Success">Whether the action completed successfully.</param>
 /// <param name="Message">Optional user-facing message describing the result.</param>
-/// <param name="Url">Optional URL to open or display after the action completes.</param>
-/// <param name="Icon">Optional icon system name for the result notification.</param>
-/// <param name="DisplayDuration">How long to display the result notification, in seconds.</param>
+/// <param name="Url">
+///     Optional HTTP(S) URL the host may offer after the action completes. Hosts must not
+///     open it automatically; opening requires an explicit user action.
+/// </param>
+/// <param name="Icon">Optional freedesktop icon system name for the result notification.</param>
+/// <param name="DisplayDuration">
+///     Requested result-notification duration in seconds. Hosts may clamp this value to
+///     their supported display range and may suppress feedback according to user preferences.
+/// </param>
 // ReSharper disable once UnusedType.Global
 public sealed record ActionResult(
     bool Success,

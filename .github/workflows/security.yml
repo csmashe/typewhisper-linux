@@ -2,6 +2,7 @@ name: Security
 
 on:
   pull_request:
+    types: [labeled, synchronize, reopened]
     branches:
       - linux
   push:
@@ -17,33 +18,34 @@ permissions:
   security-events: write
 
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
+  group: security-${{ github.workflow }}-${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))) && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   dependency-review:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci')
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - uses: actions/dependency-review-action@v4
 
   codeql:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: csharp
           queries: security-extended,security-and-quality
@@ -53,13 +55,15 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.nuget/packages') | Out-Null
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
           cache: true
           cache-dependency-path: |
             **/*.csproj
             Directory.Build.props
+            tests/Directory.Packages.props
+            **/packages.lock.json
 
       - name: Restore solution and CLI
         shell: pwsh
@@ -104,13 +108,14 @@ jobs:
             }
           }
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
 
   dotnet-package-audit:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'ci') && (github.event.action != 'labeled' || github.event.label.name == 'ci'))
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -118,13 +123,15 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.nuget/packages') | Out-Null
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
           cache: true
           cache-dependency-path: |
             **/*.csproj
             Directory.Build.props
+            tests/Directory.Packages.props
+            **/packages.lock.json
 
       - name: Create artifact directory
         shell: pwsh

@@ -1,10 +1,25 @@
 {
   "Settings.ApiKey": "API-Schlüssel",
-  "Settings.ApiKeyDescription": "Erforderlich für Smallest AI Pulse-Transkription und -Streaming.",
+  "Settings.ApiKeyDescription": "Wird für Pulse-Transkription und -Streaming sowie für die Lightning-Sprachausgabe verwendet.",
   "Settings.EnterApiKey": "Geben Sie zuerst einen API-Schlüssel ein.",
   "Settings.ApiKeyValid": "API-Schlüssel ist gültig.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
-  "Manifest.Name": "Smallest AI Pulse",
-  "Manifest.Description": "Smallest-AI-Pulse-Sprache-zu-Text-Transkriptions-Engine"
+  "Manifest.Name": "Smallest AI",
+  "Manifest.Description": "Smallest-AI-Pulse-Transkription und Lightning-Sprachausgabe",
+  "Settings.ApiKeyValidVoices": "API-Schlüssel ist gültig. Unter Sprachausgabe stehen {0} Stimme(n) zur Verfügung.",
+  "Settings.ApiKeyValidVoicesKept": "API-Schlüssel ist gültig, aber die Stimmen konnten nicht aktualisiert werden. Die bisherige Liste bleibt erhalten: {0}",
+  "Settings.SpeechSpeed": "Sprechgeschwindigkeit",
+  "Settings.SpeechSpeedDescription": "Wie schnell Lightning-Stimmen sprechen. Die Stimme wählen Sie unter Sprachausgabe.",
+  "Settings.RefreshVoices": "Stimmen aktualisieren",
+  "Settings.RefreshVoicesDescription": "Lädt die aktuellen Lightning- und Lightning-Pro-Stimmen von Smallest AI.",
+  "Speech.VoicesRefreshed": "Unter Sprachausgabe stehen {0} Stimme(n) zur Verfügung.",
+  "Speech.InvalidVoiceCatalog": "Smallest AI hat eine unlesbare Stimmenliste geliefert. Die bisherige Liste bleibt erhalten.",
+  "Speech.NoVoices": "Smallest AI hat keine Stimmen geliefert. Die bisherige Liste bleibt erhalten.",
+  "Speech.ConnectionChanged": "Der API-Schlüssel hat sich beim Laden der Stimmen geändert. Aktualisieren Sie die Stimmen erneut.",
+  "Speech.TextTooLong": "Dieser Text ist zu lang, um ihn mit Smallest AI auf einmal zu sprechen: Bei der aktuellen Geschwindigkeit würde es länger als etwa zwei Minuten dauern.",
+  "Speech.AudioTooLarge": "Smallest AI hat mehr als 12 MB Audio geliefert, daher wurde es nicht abgespielt.",
+  "Speech.AudioTooLong": "Smallest AI hat mehr als zwei Minuten Audio geliefert, daher wurde es nicht abgespielt.",
+  "Speech.UnplayableAudio": "Smallest AI hat Audio geliefert, das nicht abgespielt werden kann.",
+  "Speech.TimedOut": "Smallest AI hat zu lange gebraucht, um das Sprachaudio zu liefern."
 }

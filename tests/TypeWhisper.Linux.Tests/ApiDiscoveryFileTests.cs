@@ -27,27 +27,40 @@ public sealed class ApiDiscoveryFileTests : IDisposable
     }
 
     [Fact]
-    public void Write_CreatesJsonWithVersionPortToken()
+    public void Write_CreatesJsonWithVersionPortTokenAndSocketPath()
     {
         var sut = new ApiDiscoveryFile();
 
-        sut.Write(9876, "supersecret");
+        Assert.True(sut.Write(9876, "supersecret", "/tmp/typewhisper/api.sock"));
 
         var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         Assert.True(File.Exists(path));
 
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         var root = doc.RootElement;
-        Assert.Equal(1, root.GetProperty("version").GetInt32());
+        Assert.Equal(2, root.GetProperty("version").GetInt32());
         Assert.Equal(9876, root.GetProperty("port").GetInt32());
         Assert.Equal("supersecret", root.GetProperty("token").GetString());
+        Assert.Equal(
+            "/tmp/typewhisper/api.sock",
+            root.GetProperty("socket_path").GetString()
+        );
+    }
+
+    [Fact]
+    public void Write_ReportsFailureWhenDirectoryCannotBeCreated()
+    {
+        Directory.CreateDirectory(_xdgConfigHome);
+        File.WriteAllText(Path.Join(_xdgConfigHome, "typewhisper"), "not a directory");
+
+        Assert.False(new ApiDiscoveryFile().Write(9876, "tok", "/tmp/api.sock"));
     }
 
     [Fact]
     public void Write_AtomicTempThenRename()
     {
         var sut = new ApiDiscoveryFile();
-        sut.Write(9876, "tok");
+        sut.Write(9876, "tok", "/tmp/api.sock");
 
         var dir = Path.Join(_xdgConfigHome, "typewhisper");
         var leftoverTmp = Directory.GetFiles(dir, "*.tmp");
@@ -58,7 +71,7 @@ public sealed class ApiDiscoveryFileTests : IDisposable
     public void Delete_RemovesFile()
     {
         var sut = new ApiDiscoveryFile();
-        sut.Write(9876, "tok");
+        sut.Write(9876, "tok", "/tmp/api.sock");
         var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         Assert.True(File.Exists(path));
 
@@ -84,7 +97,7 @@ public sealed class ApiDiscoveryFileTests : IDisposable
         }
 
         var sut = new ApiDiscoveryFile();
-        sut.Write(9876, "tok");
+        sut.Write(9876, "tok", "/tmp/api.sock");
 
         var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         var mode = File.GetUnixFileMode(path);
@@ -100,7 +113,7 @@ public sealed class ApiDiscoveryFileTests : IDisposable
         }
 
         var sut = new ApiDiscoveryFile();
-        sut.Write(9876, "tok");
+        sut.Write(9876, "tok", "/tmp/api.sock");
 
         var dir = Path.Join(_xdgConfigHome, "typewhisper");
         var mode = File.GetUnixFileMode(dir);
@@ -114,13 +127,17 @@ public sealed class ApiDiscoveryFileTests : IDisposable
     public void Write_OverwritesPreexistingFile()
     {
         var sut = new ApiDiscoveryFile();
-        sut.Write(1234, "old");
-        sut.Write(9876, "new");
+        sut.Write(1234, "old", "/tmp/old-api.sock");
+        sut.Write(9876, "new", "/tmp/new-api.sock");
 
         var path = Path.Join(_xdgConfigHome, "typewhisper", "api-discovery.json");
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         Assert.Equal(9876, doc.RootElement.GetProperty("port").GetInt32());
         Assert.Equal("new", doc.RootElement.GetProperty("token").GetString());
+        Assert.Equal(
+            "/tmp/new-api.sock",
+            doc.RootElement.GetProperty("socket_path").GetString()
+        );
     }
 
     [Fact]
@@ -134,7 +151,7 @@ public sealed class ApiDiscoveryFileTests : IDisposable
         File.WriteAllText(Path.Join(dir, "api-discovery.json.tmp"), "leftover");
 
         var sut = new ApiDiscoveryFile();
-        sut.Write(9876, "tok");
+        sut.Write(9876, "tok", "/tmp/api.sock");
 
         var path = Path.Join(dir, "api-discovery.json");
         Assert.True(File.Exists(path));

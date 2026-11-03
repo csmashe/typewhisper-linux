@@ -3,6 +3,10 @@
 
 [*.cs]
 
+# The codebase deliberately uses trailing commas in multiline lists (cleaner diffs);
+# tell ReSharper that is the intended style so it stops flagging them for removal.
+resharper_csharp_trailing_comma_in_multiline_lists = true
+
 # IDE0066: Convert switch statement to expression
 dotnet_diagnostic.ide0066.severity = none
 

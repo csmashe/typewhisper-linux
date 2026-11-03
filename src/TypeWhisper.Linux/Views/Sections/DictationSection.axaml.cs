@@ -1,6 +1,9 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Microsoft.Extensions.DependencyInjection;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 
 namespace TypeWhisper.Linux.Views.Sections;
@@ -42,18 +45,43 @@ public partial class DictationSection : UserControl
             return;
         }
 
-        var dialog = new MessageDialogWindow();
-        var confirmed = await dialog.ShowConfirmationAsync(
-            "Delete model files?",
-            $"Delete {selected.DisplayLabel} from your hard drive? It can be downloaded again later.",
-            "Delete"
-        );
-
-        if (confirmed)
-        {
-            await viewModel.DeleteSelectedModelAsync();
-        }
+        await ConfirmAndDeleteModelAsync(selected.DisplayLabel, viewModel.DeleteSelectedModelAsync);
     }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnRemoveLocalModel(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not DictationSectionViewModel viewModel
+            || (sender as Control)?.DataContext is not LocalModelCard card)
+        {
+            return;
+        }
+
+        await ConfirmAndDeleteModelAsync(card.DisplayName, () => viewModel.DeleteLocalModelAsync(card));
+    }
+
+    // Only the confirmation dialog is uncontained here; the view model catches its own
+    // file-system failures, so Window alone is correct.
+    private static Task<bool> ConfirmAndDeleteModelAsync(string label, Func<Task> delete) =>
+        UiOperations.RunAsync(
+            "confirm and delete model",
+            Loc.Instance["Common.Delete"],
+            UiFailureKind.Window,
+            async () =>
+            {
+                var dialog = new MessageDialogWindow();
+                var confirmed = await dialog.ShowConfirmationAsync(
+                    Loc.Instance["Dictation.DeleteModelTitle"],
+                    Loc.Instance.GetString("Dictation.DeleteModelMessage", label),
+                    Loc.Instance["Common.Delete"]
+                );
+
+                if (confirmed)
+                {
+                    await delete();
+                }
+            }
+        );
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnChangeModelStorage(object? sender, RoutedEventArgs e)
@@ -63,24 +91,40 @@ public partial class DictationSection : UserControl
             return;
         }
 
-        var topLevel = TopLevel.GetTopLevel(this);
-        if (topLevel?.StorageProvider is null)
-        {
-            return;
-        }
-
-        var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(
-            new FolderPickerOpenOptions
+        await UiOperations.RunAsync(
+            "select model storage folder",
+            Loc.Instance["Dictation.ModelStorage"],
+            UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
+            async () =>
             {
-                Title = "Choose model storage folder",
-                AllowMultiple = false
+                var topLevel = TopLevel.GetTopLevel(this);
+                if (topLevel?.StorageProvider is null)
+                {
+                    return;
+                }
+
+                var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(
+                    new FolderPickerOpenOptions
+                    {
+                        Title = "Choose model storage folder",
+                        AllowMultiple = false,
+                    }
+                );
+
+                var path = (folders.Count > 0 ? folders[0] : null)?.TryGetLocalPath();
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    await viewModel.ChangeModelStorageAsync(path);
+                }
+            },
+            presenter: message =>
+            {
+                viewModel.ModelStorageStatusText = message;
+                return Task.CompletedTask;
             }
         );
-
-        var path = (folders.Count > 0 ? folders[0] : null)?.TryGetLocalPath();
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            await viewModel.ChangeModelStorageAsync(path);
-        }
     }
+
+    private static UiOperationGuard UiOperations =>
+        Program.Services.GetRequiredService<UiOperationGuard>();
 }

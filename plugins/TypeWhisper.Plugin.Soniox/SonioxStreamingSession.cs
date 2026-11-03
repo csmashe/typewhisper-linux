@@ -1,368 +1,428 @@
-using System.Diagnostics;
-using System.IO;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.WebSockets;
 
 namespace TypeWhisper.Plugin.Soniox;
 
-/// <summary>
-///     Real-time Soniox transcription over their WebSocket API
-///     (<c>wss://stt-rt.soniox.com/transcribe-websocket</c>). Soniox streams tokens
-///     incrementally — final tokens are sent exactly once and never repeated;
-///     non-final tokens may repeat and change until they stabilize. The host
-///     coordinator joins every <see cref="StreamingTranscriptEvent" /> with
-///     <c>IsFinal=true</c> using a newline, so this session deliberately emits a
-///     <b>single</b> final segment (the full accumulated final text) rather than a
-///     final per token-batch (which would scatter newlines mid-sentence).
-/// </summary>
-internal sealed class SonioxStreamingSession : IStreamingSession
+internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
-    private const string EndpointUrl = "wss://stt-rt.soniox.com/transcribe-websocket";
+    internal const string RealtimeModel = "stt-rt-v5";
 
-    // Soniox's real-time models are a separate family from the batch
-    // speech:transcribe models, so the batch model selection ("default") does not
-    // apply here. Pin the current real-time model (per the official soniox_examples
-    // realtime sample).
-    internal const string RealtimeModel = "stt-rt-v4";
+    private readonly WebSocketSessionPump _pump;
 
-    private readonly ClientWebSocket _ws = new();
-    private readonly CancellationTokenSource _receiveCts = new();
-    private readonly SonioxTranscriptAggregator _aggregator = new();
-    private readonly TaskCompletionSource _finishedTcs =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private Task? _receiveTask;
-    private bool _finalEmitted;
+    private SonioxStreamingSession(WebSocketSessionPump pump)
+    {
+        _pump = pump;
+    }
 
-    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+    public Exception? Fault => _pump.Fault;
+
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived
+    {
+        add => _pump.TranscriptReceived += value;
+        remove => _pump.TranscriptReceived -= value;
+    }
 
     public static async Task<SonioxStreamingSession> ConnectAsync(
         string apiKey,
-        string? language,
+        Uri realtimeUri,
+        IReadOnlyList<string> languageHints,
         CancellationToken ct
     )
     {
-        var session = new SonioxStreamingSession();
-        await session._ws.ConnectAsync(new Uri(EndpointUrl), ct);
-
-        // The config message must be the first frame on the socket.
-        var config = Encoding.UTF8.GetBytes(BuildConfigMessage(apiKey, RealtimeModel, language));
-        await session._ws.SendAsync(config, WebSocketMessageType.Text, true, ct);
-
-        session._receiveTask = session.ReceiveLoopAsync(session._receiveCts.Token);
-        return session;
+        var pump = await WebSocketSessionPump.ConnectAsync(
+            new SonioxWebSocketAdapter(apiKey, realtimeUri, languageHints),
+            ct
+        );
+        return new SonioxStreamingSession(pump);
     }
 
-    public async Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
-    {
-        if (_ws.State != WebSocketState.Open || pcm16Audio.Length == 0)
-            return;
-        // Soniox accepts arbitrary raw-PCM chunk sizes as binary frames.
-        await _ws.SendAsync(pcm16Audio, WebSocketMessageType.Binary, true, ct);
-    }
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) =>
+        _pump.SendAudioAsync(pcm16Audio, ct);
 
-    public async Task FinalizeAsync(CancellationToken ct)
-    {
-        if (_ws.State == WebSocketState.Open)
-        {
-            // Empty frame = end-of-audio. The server flushes pending finals then
-            // sends {"finished": true}.
-            try
-            {
-                await _ws.SendAsync(
-                    ReadOnlyMemory<byte>.Empty,
-                    WebSocketMessageType.Text,
-                    true,
-                    ct
-                );
-            }
-            catch (Exception ex) when (ex is WebSocketException or OperationCanceledException)
-            {
-                // Couldn't signal end-of-audio, but fall through and still await
-                // the receive loop so a captured provider-error fault is surfaced.
-            }
-        }
+    public Task FinalizeAsync(CancellationToken ct) => _pump.FinalizeAsync(ct);
 
-        // Wait until the receive loop has observed "finished" (or the socket
-        // closed) so the single final event is emitted — and thus appended to the
-        // coordinator's final-segment buffer — before it snapshots. Bounded by the
-        // caller's ct/timeout. If the receive loop captured a provider error frame
-        // it faults this task, so the await rethrows and the coordinator falls back
-        // to batch transcription (lossless). A caller cancel / timeout
-        // (OperationCanceledException) is the grace-window backstop, not a fault.
-        try { await _finishedTcs.Task.WaitAsync(ct); }
-        catch (OperationCanceledException) { /* coordinator's grace window backstops */ }
-    }
+    public ValueTask DisposeAsync() => _pump.DisposeAsync();
 
-    internal static string BuildConfigMessage(string apiKey, string model, string? language)
+    // The key goes in the Authorization header: from 2027-01-15 Soniox refuses keys sent only here.
+    internal static string BuildConfigMessage(
+        string model,
+        IReadOnlyList<string> languageHints
+    )
     {
         var config = new Dictionary<string, object>
         {
-            ["api_key"] = apiKey,
             ["model"] = model,
             ["audio_format"] = "pcm_s16le",
             ["sample_rate"] = 16000,
             ["num_channels"] = 1,
             ["enable_endpoint_detection"] = true,
+            // Tokens carry a language only when identification is on.
+            ["enable_language_identification"] = true,
         };
 
-        if (!string.IsNullOrWhiteSpace(language)
-            && !string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase))
+        if (languageHints.Count > 0)
         {
-            config["language_hints"] = new[] { language };
+            config["language_hints"] = languageHints;
         }
 
         return JsonSerializer.Serialize(config);
     }
 
-    internal readonly record struct SonioxToken(string Text, bool IsFinal);
+    internal static IReadOnlyDictionary<string, string> BuildConnectionHeaders(string apiKey) =>
+        new Dictionary<string, string> { ["Authorization"] = "Bearer " + apiKey };
+
+    internal readonly record struct SonioxToken(string Text, bool IsFinal, string? Language = null);
+
+    internal sealed record SonioxError(
+        int? Code,
+        string? Type,
+        string? Message,
+        string? RequestId
+    );
 
     internal sealed record SonioxMessage(
         IReadOnlyList<SonioxToken> Tokens,
         bool Finished,
-        string? ErrorMessage
+        SonioxError? Error = null
     );
 
     internal readonly record struct SonioxAggregateUpdate(
         string PreviewText,
         bool Finished,
-        string FinalText
+        string FinalText,
+        string? PreviewLanguage,
+        string? FinalLanguage
     );
 
-    /// <summary>Reflection-free, never-throws parse of one Soniox response frame.</summary>
     internal static SonioxMessage ParseMessage(string json)
     {
-        try
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new FormatException("Soniox response is not an object.");
+
+        var errorCode = root.TryGetProperty("error_code", out var codeElement)
+            && codeElement.ValueKind == JsonValueKind.Number
+            && codeElement.TryGetInt32(out var code)
+                ? code
+                : (int?)null;
+        var errorType = GetString(root, "error_type");
+        var errorMessage = GetString(root, "error_message");
+        if (
+            root.TryGetProperty("error_code", out _)
+            || errorType is not null
+            || errorMessage is not null
+        )
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            string? error = null;
-            if (root.TryGetProperty("error_message", out var errEl)
-                && errEl.ValueKind == JsonValueKind.String)
-            {
-                error = errEl.GetString();
-            }
-            else if (root.TryGetProperty("error_code", out _))
-            {
-                error = json;
-            }
-
-            var finished = root.TryGetProperty("finished", out var finEl)
-                && finEl.ValueKind == JsonValueKind.True;
-
-            var tokens = new List<SonioxToken>();
-            if (root.TryGetProperty("tokens", out var tokensEl)
-                && tokensEl.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var tok in tokensEl.EnumerateArray())
-                {
-                    if (tok.ValueKind != JsonValueKind.Object)
-                        continue;
-                    var text = tok.TryGetProperty("text", out var textEl)
-                        && textEl.ValueKind == JsonValueKind.String
-                        ? textEl.GetString() ?? ""
-                        : "";
-                    var isFinal = tok.TryGetProperty("is_final", out var finalEl)
-                        && finalEl.ValueKind == JsonValueKind.True;
-                    tokens.Add(new SonioxToken(text, isFinal));
-                }
-            }
-
-            return new SonioxMessage(tokens, finished, error);
-        }
-        catch (JsonException)
-        {
-            return new SonioxMessage([], false, null);
-        }
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[8192];
-        using var messageBuffer = new MemoryStream();
-
-        try
-        {
-            while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
-            {
-                messageBuffer.SetLength(0);
-                WebSocketReceiveResult result;
-                var closed = false;
-                do
-                {
-                    result = await _ws.ReceiveAsync(buffer, ct);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        closed = true;
-                        break;
-                    }
-                    messageBuffer.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                if (closed)
-                    break;
-
-                if (result.MessageType != WebSocketMessageType.Text)
-                    continue;
-
-                var json = Encoding.UTF8.GetString(
-                    messageBuffer.GetBuffer(),
-                    0,
-                    (int)messageBuffer.Length
-                );
-
-                var message = ParseMessage(json);
-                if (message.ErrorMessage is not null)
-                {
-                    Debug.WriteLine($"Soniox realtime error: {message.ErrorMessage}");
-                    // A provider error after the stream started means the result is
-                    // unreliable. Fault FinalizeAsync (rather than committing a
-                    // truncated partial) so the coordinator falls back to a complete
-                    // batch transcription of the captured WAV.
-                    _finishedTcs.TrySetException(
-                        new InvalidOperationException(
-                            $"Soniox streaming error: {message.ErrorMessage}"
-                        )
-                    );
-                    return;
-                }
-
-                var update = _aggregator.Apply(message);
-                if (update.Finished)
-                {
-                    EmitFinal(update.FinalText);
-                    return;
-                }
-
-                if (!string.IsNullOrEmpty(update.PreviewText))
-                    Emit(new StreamingTranscriptEvent(update.PreviewText, IsFinal: false));
-            }
-
-            // Clean socket close without an explicit "finished": flush the
-            // accumulated final so the transcript is not lost.
-            EmitFinalIfPending();
-        }
-        catch (OperationCanceledException)
-        {
-            // User cancel / teardown — do NOT synthesize a final.
-        }
-        catch (WebSocketException ex)
-        {
-            Debug.WriteLine($"Soniox realtime WebSocket error: {ex.Message}");
-            // A transport drop before "finished" means the stream is incomplete.
-            // Fault (rather than committing a truncated partial) so the coordinator
-            // falls back to a complete batch transcription of the captured WAV.
-            _finishedTcs.TrySetException(
-                new InvalidOperationException("Soniox streaming transport error.", ex)
+            return new SonioxMessage(
+                [],
+                false,
+                new SonioxError(errorCode, errorType, errorMessage, GetString(root, "request_id"))
             );
         }
-        finally
+
+        var finished = false;
+        if (root.TryGetProperty("finished", out var finishedElement))
         {
-            _finishedTcs.TrySetResult();
+            if (finishedElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new FormatException("Soniox 'finished' is not a boolean.");
+            finished = finishedElement.ValueKind == JsonValueKind.True;
         }
-    }
 
-    private void EmitFinalIfPending()
-    {
-        if (_finalEmitted)
-            return;
-        EmitFinal(_aggregator.FinalText);
-    }
-
-    private void EmitFinal(string finalText)
-    {
-        if (_finalEmitted)
-            return;
-        _finalEmitted = true;
-        if (!string.IsNullOrWhiteSpace(finalText))
-            Emit(new StreamingTranscriptEvent(finalText, IsFinal: true));
-    }
-
-    private void Emit(StreamingTranscriptEvent evt)
-    {
-        try
+        if (
+            !root.TryGetProperty("tokens", out var tokensElement)
+            || tokensElement.ValueKind != JsonValueKind.Array
+        )
         {
-            TranscriptReceived?.Invoke(evt);
+            throw new FormatException("Soniox response has no token array.");
         }
-        catch (Exception ex)
-        {
-            // Isolate subscriber failures from the receive loop.
-            Debug.WriteLine($"Soniox realtime subscriber failed: {ex.Message}");
-        }
-    }
 
-    public async ValueTask DisposeAsync()
-    {
-        _receiveCts.Cancel();
-
-        if (_ws.State == WebSocketState.Open)
+        var tokens = new List<SonioxToken>(tokensElement.GetArrayLength());
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
+        // -- a query would box JsonElement's struct enumerator on every message.
+        foreach (var token in tokensElement.EnumerateArray())
         {
-            // Bound the close handshake; an unresponsive peer would otherwise hang
-            // Dispose indefinitely. Abort is the fallback on timeout/failure.
-            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            try
+            if (
+                token.ValueKind != JsonValueKind.Object
+                || !token.TryGetProperty("text", out var textElement)
+                || textElement.ValueKind != JsonValueKind.String
+                || !token.TryGetProperty("is_final", out var finalElement)
+                || finalElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+            )
             {
-                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token);
+                throw new FormatException("Soniox sent a malformed token.");
             }
-            catch
-            {
-                try { _ws.Abort(); } catch { /* best effort */ }
-            }
+
+            tokens.Add(new SonioxToken(
+                textElement.GetString()!,
+                finalElement.ValueKind == JsonValueKind.True,
+                GetString(token, "language")
+            ));
         }
 
-        if (_receiveTask is not null)
-        {
-            try { await _receiveTask; }
-            catch { /* expected */ }
-        }
-
-        _finishedTcs.TrySetResult();
-        // Observe any captured provider-error fault so it can't surface as an
-        // unobserved task exception when FinalizeAsync was never called.
-        _ = _finishedTcs.Task.Exception;
-        _receiveCts.Dispose();
-        _ws.Dispose();
+        return new SonioxMessage(tokens, finished);
     }
+
+    // Built from the documented fields only: the raw payload is never echoed.
+    internal static PluginRequestException CreateRequestException(SonioxError error)
+    {
+        var kind = error.Code switch
+        {
+            401 => PluginRequestFailureKind.Authentication,
+            402 or 403 => PluginRequestFailureKind.Permission,
+            408 => PluginRequestFailureKind.Timeout,
+            413 => PluginRequestFailureKind.RequestTooLarge,
+            429 => PluginRequestFailureKind.RateLimit,
+            >= 500 => PluginRequestFailureKind.ServerError,
+            null => PluginRequestFailureKind.Unknown,
+            _ => PluginRequestFailureKind.InvalidRequest,
+        };
+
+        var description = new StringBuilder("Soniox streaming error: ");
+        if (!string.IsNullOrWhiteSpace(error.Type))
+            description.Append(error.Type).Append(": ");
+        description.Append(
+            !string.IsNullOrWhiteSpace(error.Message) ? error.Message
+            : error.Code is { } code ? $"HTTP {code}"
+            : "request rejected"
+        );
+        if (!string.IsNullOrWhiteSpace(error.RequestId))
+            description.Append(" (request_id: ").Append(error.RequestId).Append(')');
+
+        return new PluginRequestException(description.ToString(), kind, error.Code);
+    }
+
+    internal static PluginRequestException CreateIncompleteException(Exception? inner = null) =>
+        new(
+            "Soniox returned an invalid or incomplete live response.",
+            PluginRequestFailureKind.OutputIncomplete,
+            innerException: inner
+        );
+
+    private static string? GetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
 }
 
-/// <summary>
-///     Collapses Soniox's incremental token stream into the host's per-segment
-///     model: final tokens (sent once) accumulate; non-final tokens are the
-///     current provisional tail. The preview is final+provisional; the single
-///     final segment is the accumulated final text.
-/// </summary>
-internal sealed class SonioxTranscriptAggregator
+internal sealed class SonioxWebSocketAdapter(
+    string apiKey,
+    Uri realtimeUri,
+    IReadOnlyList<string> languageHints
+) : IWebSocketSessionAdapter
 {
-    private readonly StringBuilder _final = new();
+    private readonly SonioxTranscriptAggregator _aggregator = new();
+    // Set on the send side, read by HandleMessage on the receive loop.
+    private volatile bool _endOfAudioSent;
 
-    public string FinalText => _final.ToString().Trim();
+    public string ProviderName => "Soniox";
+    public WebSocketReadinessPolicy Readiness => WebSocketReadinessPolicy.Immediate;
+    public WebSocketTerminalPolicy Terminal =>
+        WebSocketTerminalPolicy.Require("finished");
+    public WebSocketKeepAlivePolicy? KeepAlive => null;
+    public WebSocketClosePolicy ClosePolicy => WebSocketClosePolicy.Default;
 
-    public SonioxStreamingSession.SonioxAggregateUpdate Apply(
-        SonioxStreamingSession.SonioxMessage message
-    )
+    public ValueTask<WebSocketConnectionOptions> GetConnectionOptionsAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult(
+            new WebSocketConnectionOptions(
+                realtimeUri,
+                SonioxStreamingSession.BuildConnectionHeaders(apiKey)
+            )
+        );
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> OnConnectedAsync(
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            [
+                new WebSocketOutboundMessage(
+                    Encoding.UTF8.GetBytes(
+                        SonioxStreamingSession.BuildConfigMessage(
+                            SonioxStreamingSession.RealtimeModel,
+                            languageHints
+                        )
+                    ),
+                    WebSocketMessageType.Text
+                ),
+            ]
+        );
+
+    public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
+        ReadOnlyMemory<byte> pcm16Audio,
+        CancellationToken ct
+    ) =>
+        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
+            pcm16Audio.Length == 0
+                ? []
+                : [
+                    new WebSocketOutboundMessage(
+                        pcm16Audio.ToArray(),
+                        WebSocketMessageType.Binary
+                    ),
+                ]
+        );
+
+    public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
     {
-        var provisional = new StringBuilder();
-        foreach (var token in message.Tokens)
-        {
-            if (IsControlToken(token.Text))
-                continue;
-            if (token.IsFinal)
-                _final.Append(token.Text);
-            else
-                provisional.Append(token.Text);
-        }
-
-        var preview = (_final.ToString() + provisional).Trim();
-        return new SonioxStreamingSession.SonioxAggregateUpdate(
-            preview,
-            message.Finished,
-            FinalText
+        _endOfAudioSent = true;
+        return ValueTask.FromResult(
+            new WebSocketFinalizePlan(
+                [
+                    new WebSocketOutboundMessage(
+                        ReadOnlyMemory<byte>.Empty,
+                        WebSocketMessageType.Text
+                    ),
+                ]
+            )
         );
     }
 
-    // Legacy Soniox emitted <end>/<fin> control tokens at endpoints; current docs
-    // show no marker, but skip them defensively so they never reach the transcript.
+    public WebSocketInboundResult HandleMessage(
+        WebSocketMessageType type,
+        ReadOnlyMemory<byte> completePayload
+    )
+    {
+        if (type != WebSocketMessageType.Text)
+            return WebSocketInboundResult.Empty;
+
+        SonioxStreamingSession.SonioxAggregateUpdate update;
+        try
+        {
+            var message = SonioxStreamingSession.ParseMessage(
+                Encoding.UTF8.GetString(completePayload.Span)
+            );
+            if (message.Error is not null)
+            {
+                return new WebSocketInboundResult(
+                    [],
+                    Fault: SonioxStreamingSession.CreateRequestException(message.Error)
+                );
+            }
+
+            update = _aggregator.Apply(message, _endOfAudioSent);
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException)
+        {
+            return new WebSocketInboundResult(
+                [],
+                Fault: SonioxStreamingSession.CreateIncompleteException(ex)
+            );
+        }
+
+        // ReSharper disable once InvertIf -- the terminal branch is the significant one and
+        // stays first; inverting buries it behind the preview-transcript ternary.
+        if (update.Finished)
+        {
+            var transcripts =
+                string.IsNullOrWhiteSpace(update.FinalText)
+                    ? (IReadOnlyList<StreamingTranscriptEvent>)[]
+                    : [
+                        new StreamingTranscriptEvent(
+                            update.FinalText,
+                            IsFinal: true
+                        )
+                        {
+                            DetectedLanguage = update.FinalLanguage,
+                        },
+                    ];
+            return new WebSocketInboundResult(
+                transcripts,
+                WebSocketSessionSignal.Terminal
+            );
+        }
+
+        return string.IsNullOrEmpty(update.PreviewText)
+            ? WebSocketInboundResult.Empty
+            : new WebSocketInboundResult(
+                [
+                    new StreamingTranscriptEvent(
+                        update.PreviewText,
+                        IsFinal: false
+                    )
+                    {
+                        DetectedLanguage = update.PreviewLanguage,
+                    },
+                ]
+            );
+    }
+}
+
+internal sealed class SonioxTranscriptAggregator
+{
+    internal const int MaximumTranscriptLength = 1024 * 1024;
+
+    private readonly StringBuilder _final = new();
+    private readonly HashSet<string> _finalLanguages = new(StringComparer.OrdinalIgnoreCase);
+    private string _provisional = "";
+
+    public string FinalText => _final.ToString().Trim();
+
+    /// <summary>Adds a message's final tokens to the transcript and returns the updated preview.</summary>
+    /// <exception cref="FormatException">The message breaks Soniox's protocol or the transcript bound.</exception>
+    public SonioxStreamingSession.SonioxAggregateUpdate Apply(
+        SonioxStreamingSession.SonioxMessage message,
+        bool endOfAudioSent
+    )
+    {
+        var provisional = new StringBuilder();
+        var previewLanguages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var token in message.Tokens)
+        {
+            if (!string.IsNullOrWhiteSpace(token.Language))
+            {
+                var language = token.Language.Trim();
+                previewLanguages.Add(language);
+                if (token.IsFinal)
+                    _finalLanguages.Add(language);
+            }
+
+            if (IsControlToken(token.Text))
+                continue;
+            if (token.IsFinal)
+            {
+                // Soniox lists final tokens before non-final ones.
+                if (provisional.Length > 0)
+                    throw new FormatException("Soniox sent a final token after a non-final one.");
+                _final.Append(token.Text);
+            }
+            else
+            {
+                provisional.Append(token.Text);
+            }
+
+            if (_final.Length + provisional.Length > MaximumTranscriptLength)
+                throw new FormatException("Soniox live transcript exceeded its length limit.");
+        }
+
+        _provisional = provisional.ToString();
+        if (message.Finished)
+        {
+            if (!endOfAudioSent)
+                throw new FormatException("Soniox finished the stream before the end of audio.");
+            // A tail still provisional here would be dropped. An earlier one may have been retracted.
+            if (!string.IsNullOrWhiteSpace(_provisional))
+                throw new FormatException("Soniox finished the stream with unconfirmed text.");
+        }
+
+        var preview = (_final + _provisional).Trim();
+        return new SonioxStreamingSession.SonioxAggregateUpdate(
+            preview,
+            message.Finished,
+            FinalText,
+            previewLanguages.Count == 1 ? previewLanguages.Single() : null,
+            _finalLanguages.Count == 1 ? _finalLanguages.Single() : null
+        );
+    }
+
     internal static bool IsControlToken(string text) => text is "<end>" or "<fin>";
 }

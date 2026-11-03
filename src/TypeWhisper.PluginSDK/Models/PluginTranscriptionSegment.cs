@@ -8,4 +8,11 @@ namespace TypeWhisper.PluginSDK.Models;
 /// <param name="Start">Start offset in seconds within the audio.</param>
 /// <param name="End">End offset in seconds within the audio.</param>
 // ReSharper disable once UnusedType.Global
-public sealed record PluginTranscriptionSegment(string Text, double Start, double End);
+public sealed record PluginTranscriptionSegment(string Text, double Start, double End)
+{
+    /// <summary>The segment's no-speech probability, or null when the engine does not report it.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public float? NoSpeechProbability { get; init; }
+}

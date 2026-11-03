@@ -9,7 +9,7 @@ namespace TypeWhisper.Plugins.Shared.Net;
 ///     A cross-process advisory lock built on an exclusively-opened sentinel file.
 ///     <para>
 ///         The on-demand GPU artifacts stage into <em>stable</em> paths in a SHARED
-///         cache so a dropped download can resume (see <see cref="ResilientDownloader" />).
+///         cache so a dropped download can resume (see <c>ResilientDownloader</c>).
 ///         A stable path means two writers can pick the same file, and the per-engine
 ///         <c>SemaphoreSlim</c> gates only serialize within one provisioner instance —
 ///         not the two file-linked copies of the CUDA provisioner in different plugin
@@ -20,7 +20,7 @@ namespace TypeWhisper.Plugins.Shared.Net;
 ///     </para>
 ///     <para>
 ///         Compiled into each plugin assembly via file-linking, so the type is
-///         <c>internal</c> (like <see cref="ResilientDownloader" />).
+///         <c>internal</c> (like <c>ResilientDownloader</c>).
 ///     </para>
 /// </summary>
 internal static class InterProcessFileLock
@@ -48,7 +48,7 @@ internal static class InterProcessFileLock
                     FileShare.None
                 );
             }
-            catch (IOException)
+            catch (IOException ex) when (IsContention(ex))
             {
                 // Another holder owns the lock; the work it guards (a large download +
                 // extraction) is the long pole, so a coarse poll interval is fine.
@@ -56,4 +56,12 @@ internal static class InterProcessFileLock
             }
         }
     }
+
+    // A refused non-blocking flock surfaces as EWOULDBLOCK (EAGAIN: 11 on Linux, 35 on
+    // macOS/BSD); Windows reports ERROR_SHARING_VIOLATION (32) or ERROR_LOCK_VIOLATION (33).
+    // Anything else (missing directory, ENOSPC, EDQUOT, permissions) never clears by waiting.
+    private static bool IsContention(IOException ex) =>
+        OperatingSystem.IsWindows()
+            ? (ex.HResult & 0xFFFF) is 32 or 33
+            : ex.HResult is 11 or 35;
 }

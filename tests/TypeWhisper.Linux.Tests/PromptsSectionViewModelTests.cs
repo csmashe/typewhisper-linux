@@ -1,6 +1,10 @@
 using System.Reflection;
+using Moq;
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -10,6 +14,43 @@ namespace TypeWhisper.Linux.Tests;
 
 public sealed class PromptsSectionViewModelTests : IDisposable
 {
+    [Fact]
+    public void MissingActionPlugin_IsScopedToEditedPromptAndSurvivesRelocalizationAndSave()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+            var missing = new PromptAction { Id = "missing", Name = "Missing", SystemPrompt = "x", TargetActionPluginId = "missing.plugin" };
+            var other = new PromptAction { Id = "other", Name = "Other", SystemPrompt = "y", TargetActionPluginId = "other.plugin" };
+            prompts.AddAction(missing);
+            prompts.AddAction(other);
+            using var plugins = TestPluginManagerFactory.Create();
+            var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+            var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, plugins, settings.Object)
+            {
+                SelectedAction = missing,
+            };
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "missing.plugin");
+            // Refresh the labels while the missing ID is selected, then move to another draft.
+            Loc.Instance.CurrentLanguage = original == "de" ? "es" : "de";
+            typeof(PromptsSectionViewModel).GetMethod("RefreshPluginOptions", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(sut, null);
+            Assert.Equal("missing.plugin", sut.EditTargetActionPluginId);
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "missing.plugin" && o.Label == Loc.Instance.GetString("Prompts.ProviderUnavailableFormat", "missing.plugin"));
+            sut.SelectedAction = other;
+            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value == "missing.plugin");
+            Assert.Contains(sut.ActionPluginOptions, o => o.Value == "other.plugin");
+            sut.SelectedAction = missing;
+            sut.SaveActionCommand.Execute(null);
+            Assert.Equal("missing.plugin", prompts.Actions.Single(a => a.Id == "missing").TargetActionPluginId);
+            sut.StartCreateCommand.Execute(null);
+            Assert.DoesNotContain(sut.ActionPluginOptions, o => o.Value is "missing.plugin" or "other.plugin");
+        }
+        finally { Loc.Instance.CurrentLanguage = original; }
+    }
+
+    private readonly HotkeyService _hotkeys;
+    private readonly ProfileService _profiles;
     private readonly string _tempDir;
 
     public PromptsSectionViewModelTests()
@@ -19,10 +60,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             "TypeWhisper.Linux.PromptVmTests_" + Guid.NewGuid().ToString("N")
         );
         Directory.CreateDirectory(_tempDir);
+        _profiles = new ProfileService(Path.Join(_tempDir, "profiles.json"));
+        _hotkeys = TestShortcutBackend.CreateHotkeyService();
     }
 
     public void Dispose()
     {
+        _hotkeys.Dispose();
         try
         {
             if (Directory.Exists(_tempDir))
@@ -43,7 +87,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Rewrite";
         sut.EditSystemPrompt = "Rewrite this";
@@ -63,11 +107,11 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Manual rewrite";
         sut.EditSystemPrompt = "Do it";
-        sut.EditHotkeyKey = " Ctrl+Alt+R ";
+        sut.EditHotkeyKey = " control + ALT + r ";
         sut.EditIsManualOnly = true;
         sut.SaveActionCommand.Execute(null);
 
@@ -85,13 +129,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             {
                 Id = "existing",
                 Name = "Existing",
-                SystemPrompt = "x"
+                SystemPrompt = "x",
             }
         );
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
         sut.EditHotkeyKey = "Ctrl+Alt+T";
         sut.EditIsManualOnly = true;
@@ -113,13 +157,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
                 Name = "Existing",
                 SystemPrompt = "x",
                 HotkeyKey = "Ctrl+Alt+R",
-                IsManualOnly = true
+                IsManualOnly = true,
             }
         );
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.SelectedAction = sut.Actions.Single(a => a.Id == "existing");
 
         Assert.Equal("Ctrl+Alt+R", sut.EditHotkeyKey);
@@ -133,7 +177,7 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         using var pluginManager = TestPluginManagerFactory.Create();
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         sut.StartCreateCommand.Execute(null);
         sut.EditName = "Blank";
         sut.EditSystemPrompt = "x";
@@ -142,6 +186,240 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         var action = Assert.Single(prompts.Actions);
         Assert.Null(action.HotkeyKey);
+    }
+
+    [Fact]
+    public void SaveAction_MalformedNewDraftDoesNotPersistAndShowsFeedback()
+    {
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([]);
+        prompts.SetupGet(service => service.EnabledActions).Returns([]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Invalid";
+        sut.EditSystemPrompt = "x";
+        sut.EditHotkeyKey = "Ctrl+DefinitelyNotAKey";
+
+        sut.SaveActionCommand.Execute(null);
+
+        prompts.Verify(service => service.AddAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.True(sut.ShowEditor);
+        Assert.True(sut.IsCreatingNew);
+        Assert.Equal("Ctrl+DefinitelyNotAKey", sut.EditHotkeyKey);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveAction_MalformedExistingDraftDoesNotUpdate()
+    {
+        var existing = new PromptAction
+        {
+            Id = "existing",
+            Name = "Existing",
+            SystemPrompt = "x",
+            HotkeyKey = "Alt+F8",
+        };
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([existing]);
+        prompts.SetupGet(service => service.EnabledActions).Returns([existing]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.SelectedAction = Assert.Single(sut.Actions);
+        sut.EditHotkeyKey = "Ctrl+NoSuchKey";
+
+        sut.SaveActionCommand.Execute(null);
+
+        prompts.Verify(service => service.UpdateAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.Equal("Ctrl+NoSuchKey", sut.EditHotkeyKey);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void SaveAction_DisabledExistingWithCollidingRetainedHotkey_PersistsNonHotkeyEdits()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "enabled-profile",
+                Name = "Enabled profile",
+                HotkeyData = "Alt+F8",
+            }
+        );
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Before",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.SelectedAction = Assert.Single(sut.Actions);
+        sut.EditName = "After";
+
+        sut.SaveActionCommand.Execute(null);
+
+        var updated = Assert.Single(prompts.Actions);
+        Assert.Equal("After", updated.Name);
+        Assert.Equal("Alt+F8", updated.HotkeyKey);
+        Assert.False(updated.IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
+    public void ToggleEnabled_DisabledActionWithCollidingHotkey_DoesNotPersistAndShowsEditorFeedback()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "enabled-profile",
+                Name = "Enabled profile",
+                HotkeyData = "Alt+F8",
+            }
+        );
+        var disabled = new PromptAction
+        {
+            Id = "disabled-action",
+            Name = "Disabled action",
+            SystemPrompt = "x",
+            HotkeyKey = "Alt+F8",
+            IsEnabled = false,
+        };
+        var prompts = new Mock<IPromptActionService>();
+        prompts.SetupGet(service => service.Actions).Returns([disabled]);
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts.Object,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(disabled);
+
+        prompts.Verify(service => service.UpdateAction(It.IsAny<PromptAction>()), Times.Never);
+        Assert.Equal(disabled, sut.SelectedAction);
+        Assert.True(sut.ShowEditor);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
+    }
+
+    [Fact]
+    public void ToggleEnabled_EnabledActionWithMalformedHotkey_StillDisables()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "enabled-action",
+                Name = "Enabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Ctrl+NoSuchKey",
+                IsEnabled = true,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(Assert.Single(sut.Actions));
+
+        Assert.False(Assert.Single(prompts.Actions).IsEnabled);
+        Assert.Null(sut.HotkeyValidationMessage);
+    }
+
+    [Fact]
+    public void ToggleEnabled_DisabledActionWithValidHotkey_Enables()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "disabled-action",
+                Name = "Disabled action",
+                SystemPrompt = "x",
+                HotkeyKey = "Alt+F8",
+                IsEnabled = false,
+            }
+        );
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+
+        sut.ToggleEnabledCommand.Execute(Assert.Single(sut.Actions));
+
+        Assert.True(Assert.Single(prompts.Actions).IsEnabled);
+    }
+
+    [Fact]
+    public void SaveAction_CrossDynamicPrefixCollisionDoesNotPersist()
+    {
+        _profiles.AddProfile(
+            new Profile
+            {
+                Id = "profile",
+                Name = "Profile",
+                HotkeyData = "Right Ctrl",
+            }
+        );
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(
+            prompts,
+            _profiles,
+            _hotkeys,
+            pluginManager,
+            settings.Object
+        );
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Collision";
+        sut.EditSystemPrompt = "x";
+        sut.EditHotkeyKey = "Ctrl+Alt+R";
+
+        sut.SaveActionCommand.Execute(null);
+
+        Assert.Empty(prompts.Actions);
+        Assert.False(string.IsNullOrWhiteSpace(sut.HotkeyValidationMessage));
     }
 
     [Fact]
@@ -157,12 +435,12 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
 
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object);
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
         var option = Assert.Single(
             sut.AvailableProviders,
             candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
@@ -172,6 +450,260 @@ public sealed class PromptsSectionViewModelTests : IDisposable
 
         Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", sut.EditProviderOverride);
         Assert.Equal(option, sut.SelectedEditProvider);
+    }
+
+    [Fact]
+    public void SelectedSpokenCommandProvider_PersistsToSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        var option = Assert.Single(
+            sut.AvailableProviders,
+            candidate => candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
+        );
+
+        sut.SelectedSpokenCommandProvider = option;
+
+        Assert.Equal(
+            "plugin:com.typewhisper.openai:gpt-4.1-mini",
+            settings.Object.Current.SpokenCommandLlmProvider
+        );
+        Assert.Equal(option, sut.SelectedSpokenCommandProvider);
+
+        // Selecting the "use default provider" placeholder clears the override.
+        var defaultOption = Assert.Single(sut.AvailableProviders, candidate => candidate.Value is null);
+        sut.SelectedSpokenCommandProvider = defaultOption;
+
+        Assert.Null(settings.Object.Current.SpokenCommandLlmProvider);
+    }
+
+    [Fact]
+    public void ProviderOptions_ListUnavailableProviderWithUnavailableLabel()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.cli",
+            "CLI Provider",
+            "default",
+            "Provider default"
+        )
+        {
+            IsAvailable = false,
+        };
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.typewhisper.cli:default" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        var option = Assert.Single(
+            sut.AvailableProviders,
+            candidate => candidate.Value == "plugin:com.typewhisper.cli:default"
+        );
+        Assert.Equal("CLI Provider / Provider default (unavailable)", option.Label);
+        Assert.True(option.IsUnavailable);
+        Assert.True(sut.ShowProviderWarning);
+    }
+
+    [Fact]
+    public void ProviderOptions_KeepStaleSelectionsAsPlaceholdersOnRefresh()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { SpokenCommandLlmProvider = "plugin:uninstalled:command-model" }
+        );
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
+        {
+            EditProviderOverride = "plugin:uninstalled:edit-model",
+        };
+
+        InvokeRefreshPluginOptions(sut);
+
+        Assert.Equal("plugin:uninstalled:edit-model", sut.EditProviderOverride);
+        var editOption = Assert.IsType<ProviderOption>(sut.SelectedEditProvider);
+        Assert.Equal("plugin:uninstalled:edit-model", editOption.Value);
+        Assert.Equal("uninstalled · edit-model (unavailable)", editOption.Label);
+        var commandOption = Assert.IsType<ProviderOption>(sut.SelectedSpokenCommandProvider);
+        Assert.Equal("plugin:uninstalled:command-model", commandOption.Value);
+        Assert.True(commandOption.IsUnavailable);
+        Assert.Equal(
+            "plugin:uninstalled:command-model",
+            settings.Object.Current.SpokenCommandLlmProvider
+        );
+    }
+
+    [Fact]
+    public void SelectingAction_WithStaleOverride_ShowsPlaceholderWithoutARefresh()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "existing",
+                Name = "Existing",
+                SystemPrompt = "x",
+                ProviderOverride = "plugin:uninstalled:edit-model",
+            }
+        );
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        // The UI order: the editor hydrates the action; no plugin state change rebuilds the list.
+        sut.SelectedAction = sut.Actions.Single(action => action.Id == "existing");
+
+        var selected = Assert.IsType<ProviderOption>(sut.SelectedEditProvider);
+        Assert.Equal("plugin:uninstalled:edit-model", selected.Value);
+        Assert.Equal("uninstalled · edit-model (unavailable)", selected.Label);
+        Assert.True(selected.IsUnavailable);
+        Assert.Contains(selected, sut.AvailableProviders);
+    }
+
+    [Fact]
+    public void SelectingAnotherAction_DropsThePreviousStaleOverridePlaceholder()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "first",
+                Name = "First",
+                SystemPrompt = "x",
+                ProviderOverride = "plugin:uninstalled:first-model",
+            }
+        );
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "second",
+                Name = "Second",
+                SystemPrompt = "y",
+                ProviderOverride = "plugin:uninstalled:second-model",
+            }
+        );
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        sut.SelectedAction = sut.Actions.Single(action => action.Id == "first");
+        sut.SelectedAction = sut.Actions.Single(action => action.Id == "second");
+
+        // Only the action being edited contributes a placeholder; the resolved options stay.
+        Assert.DoesNotContain(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:uninstalled:first-model"
+        );
+        Assert.Contains(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:uninstalled:second-model"
+        );
+        Assert.Contains(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini"
+        );
+
+        // Deselecting clears the editor, so its placeholder goes with it.
+        sut.SelectedAction = null;
+
+        Assert.DoesNotContain(
+            sut.AvailableProviders,
+            option => option.Value == "plugin:uninstalled:second-model"
+        );
+    }
+
+    [Fact]
+    public void DefaultProviderPlaceholder_NamesFirstAvailableOption()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var unavailable = new FakeLlmProviderPlugin(
+            "com.typewhisper.cli",
+            "CLI Provider",
+            "default",
+            "Provider default"
+        )
+        {
+            IsAvailable = false,
+        };
+        var available = new FakeLlmProviderPlugin(
+            "com.typewhisper.openai",
+            "OpenAI",
+            "gpt-4.1-mini"
+        );
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [unavailable, available],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(
+                    _tempDir,
+                    unavailable.PluginId,
+                    unavailable
+                ),
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, available.PluginId, available),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        var defaultOption = Assert.Single(sut.AvailableProviders, candidate => candidate.Value is null);
+        Assert.Equal("Use default provider (OpenAI / GPT-4.1 Mini)", defaultOption.Label);
+        Assert.False(sut.ShowProviderWarning);
     }
 
     [Fact]
@@ -187,13 +719,13 @@ public sealed class PromptsSectionViewModelTests : IDisposable
             [provider],
             loadedPlugins:
             [
-                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider)
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
             ]
         );
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
-        var sut = new PromptsSectionViewModel(prompts, pluginManager, settings.Object)
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
         {
-            EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini"
+            EditProviderOverride = "plugin:com.typewhisper.openai:gpt-4.1-mini",
         };
         // Simulate the guard flag that the view-model sets while it rebuilds
         // the provider list — a null selection during that window must not
@@ -203,6 +735,149 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         sut.SelectedEditProvider = null;
 
         Assert.Equal("plugin:com.typewhisper.openai:gpt-4.1-mini", sut.EditProviderOverride);
+    }
+
+    [Fact]
+    public void CommandSettings_HydrateFromSettingsWithoutPersisting()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandModeEnabled = true, CommandKeyphrase = "Jarvis" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        Assert.True(sut.CommandModeEnabled);
+        Assert.Equal("Jarvis", sut.CommandKeyphrase);
+        // Hydration must not write the values it just read back to settings.
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    [Fact]
+    public void CommandSettings_HydrateBlankKeyphraseFallsBackToDefault()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandKeyphrase = "   " }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
+    }
+
+    [Fact]
+    public void CommandModeEnabled_TogglePersistsToSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
+        {
+            CommandModeEnabled = true,
+        };
+
+        Assert.True(sut.CommandModeEnabled);
+        Assert.True(settings.Object.Current.CommandModeEnabled);
+        settings.Verify(
+            service => service.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(new AppSettings()).CommandModeEnabled)),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public void CommandKeyphrase_TrimmedValuePersistsNormalizedOnce()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
+        {
+            CommandKeyphrase = "  Jarvis  ",
+        };
+
+        // The re-entrant normalization must land the trimmed value and persist it exactly once.
+        Assert.Equal("Jarvis", sut.CommandKeyphrase);
+        Assert.Equal("Jarvis", settings.Object.Current.CommandKeyphrase);
+        settings.Verify(
+            service => service.Update(
+                It.Is<Func<AppSettings, AppSettings>>(mutate =>
+                    mutate(new AppSettings()).CommandKeyphrase == "Jarvis")),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public void CommandKeyphrase_BlankValueFallsBackToDefaultAndPersists()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandKeyphrase = "Jarvis" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
+        {
+            CommandKeyphrase = "   ",
+        };
+
+        Assert.Equal(AppSettings.DefaultCommandKeyphrase, sut.CommandKeyphrase);
+        Assert.Equal(AppSettings.DefaultCommandKeyphrase, settings.Object.Current.CommandKeyphrase);
+    }
+
+    [Fact]
+    public void CommandKeyphrase_UnchangedNormalizedValueHitsNoOpGuard()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings { CommandKeyphrase = "Jarvis" }
+        );
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object)
+        {
+            // Whitespace that normalizes back to the already-saved value: no persist.
+            CommandKeyphrase = "  Jarvis  ",
+        };
+
+        Assert.Equal("Jarvis", sut.CommandKeyphrase);
+        settings.Verify(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()), Times.Never);
+    }
+
+    private static void InvokeRefreshPluginOptions(PromptsSectionViewModel viewModel,
+        string methodName = "RefreshPluginOptions")
+    {
+        var method =
+            typeof(PromptsSectionViewModel).GetMethod(
+                methodName,
+                BindingFlags.Instance | BindingFlags.NonPublic
+            ) ?? throw new MissingMethodException(nameof(PromptsSectionViewModel), methodName);
+        method.Invoke(viewModel, null);
+    }
+
+    [Fact]
+    public void ProviderRefresh_KeepsUnavailableTargetActionPluginThroughSave()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        using var pluginManager = TestPluginManagerFactory.Create();
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        sut.StartCreateCommand.Execute(null);
+        sut.EditName = "Rewrite";
+        sut.EditSystemPrompt = "Rewrite this";
+        sut.EditTargetActionPluginId = "com.typewhisper.linear";
+
+        // A default-provider change refreshes only the provider pickers.
+        InvokeRefreshPluginOptions(sut, "RefreshProviderOptions");
+        sut.SaveActionCommand.Execute(null);
+
+        Assert.Equal("com.typewhisper.linear", Assert.Single(prompts.Actions).TargetActionPluginId);
     }
 
     private static void SetPrivateField(object target, string fieldName, object value)
@@ -219,20 +894,80 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         field.SetValue(target, value);
     }
 
+    [Fact]
+    public void SelectedDefaultLlmProvider_UpdatesSettings()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var provider = new FakeLlmProviderPlugin("com.typewhisper.openai", "OpenAI", "gpt-4.1-mini");
+        using var pluginManager = TestPluginManagerFactory.Create([provider]);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        var option = Assert.Single(sut.DefaultProviderOptions, candidate =>
+            candidate.Value == "plugin:com.typewhisper.openai:gpt-4.1-mini");
+        var rows = sut.DefaultProviderOptions.ToArray();
+
+        sut.SelectedDefaultLlmProvider = option;
+
+        Assert.Equal(option.Value, settings.Object.Current.DefaultLlmProvider);
+        Assert.Same(option, sut.SelectedDefaultLlmProvider);
+        Assert.Equal(rows, sut.DefaultProviderOptions); // No synchronous rebuild inside SelectedItem.
+
+        sut.SelectedDefaultLlmProvider = Assert.Single(sut.DefaultProviderOptions, candidate => candidate.Value is null);
+
+        Assert.Null(settings.Object.Current.DefaultLlmProvider);
+        Assert.Null(sut.SelectedDefaultLlmProvider!.Value);
+    }
+
+    [Fact]
+    public void AutomaticProvider_NamesAvailableAlternativeAndKeepsMissingDefaultSeparate()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        var unavailable = new FakeLlmProviderPlugin("missing", "Unavailable", "model") { IsAvailable = false };
+        var available = new FakeLlmProviderPlugin("available", "Available", "model", "Actual model");
+        using var pluginManager = TestPluginManagerFactory.Create([unavailable, available]);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings
+        {
+            DefaultLlmProvider = "plugin:missing:model",
+            SpokenCommandLlmProvider = "plugin:command-only:model",
+        });
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+
+        Assert.Equal("Automatic (first available: Available / Actual model)",
+            Assert.Single(sut.DefaultProviderOptions, option => option.Value is null).Label);
+        Assert.Equal("plugin:missing:model", sut.SelectedDefaultLlmProvider!.Value);
+        Assert.True(sut.SelectedDefaultLlmProvider.IsUnavailable);
+
+        sut.EditProviderOverride = "plugin:editor-only:model";
+        InvokeRefreshPluginOptions(sut);
+        Assert.DoesNotContain(sut.DefaultProviderOptions, option => option.Value is "plugin:editor-only:model" or "plugin:command-only:model");
+        Assert.DoesNotContain(sut.SpokenCommandProviderOptions, option => option.Value == "plugin:editor-only:model");
+        Assert.DoesNotContain(sut.AvailableProviders, option => option.Value == "plugin:command-only:model");
+
+        sut.EditProviderOverride = "plugin:next-editor:model";
+        Assert.DoesNotContain(sut.AvailableProviders, option => option.Value == "plugin:editor-only:model");
+        Assert.StartsWith("Use default provider", sut.SpokenCommandProviderOptions[0].Label);
+        Assert.StartsWith("Use default provider", sut.AvailableProviders[0].Label);
+    }
+
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
     {
-        public FakeLlmProviderPlugin(string pluginId, string providerName, string modelId)
+        public FakeLlmProviderPlugin(
+            string pluginId,
+            string providerName,
+            string modelId,
+            string modelDisplayName = "GPT-4.1 Mini"
+        )
         {
             PluginId = pluginId;
             ProviderName = providerName;
-            SupportedModels = [new PluginModelInfo(modelId, "GPT-4.1 Mini")];
+            SupportedModels = [new PluginModelInfo(modelId, modelDisplayName)];
         }
 
         public string PluginId { get; }
         public string PluginName => ProviderName;
         public string PluginVersion => "1.0.0";
         public string ProviderName { get; }
-        public bool IsAvailable => true;
+        public bool IsAvailable { get; init; } = true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
         public Task ActivateAsync(IPluginHostServices host)

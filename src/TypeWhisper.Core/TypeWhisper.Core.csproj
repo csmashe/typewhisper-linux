@@ -6,10 +6,18 @@
         <LangVersion>latest</LangVersion>
         <RootNamespace>TypeWhisper.Core</RootNamespace>
         <AssemblyName>TypeWhisper.Core</AssemblyName>
+        <!-- Required by the LibraryImport source generator (AtomicFileWrite's link(2) P/Invoke). -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <ItemGroup>
-        <!-- Exposes internal AvailableModels to the translation-target guard test. -->
+        <!-- Test hooks and Linux's injected persistence writers use internal constructors. -->
         <InternalsVisibleTo Include="TypeWhisper.Core.Tests"/>
+        <InternalsVisibleTo Include="TypeWhisper.PluginSystem.Tests"/>
+        <InternalsVisibleTo Include="typewhisper"/>
+    </ItemGroup>
+    <ItemGroup>
+        <EmbeddedResource Include="Resources\EnglishSpelling\*.tsv" />
+    <EmbeddedResource Include="Resources\SpokenFormatting\*.json" />
     </ItemGroup>
 </Project>

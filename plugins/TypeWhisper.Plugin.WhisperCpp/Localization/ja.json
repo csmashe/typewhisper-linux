@@ -1,0 +1,10 @@
+{
+  "Settings.NoSpeechThreshold": "無音判定のしきい値",
+  "Settings.NoSpeechThresholdDescription": "0.0～1.0。無音である確率がこの値を超えるセグメントは破棄され、無音部分が幻覚のフレーズ（よくある例は「Thank you.」）として文字起こしされるのを防ぎます。値が低いほどフィルタリングが強くなります。既定値0.6はwhisper.cpp自体の既定値と同じです。既定値を使用する場合は空欄のままにしてください。",
+  "Settings.UsingDefaultThreshold": "既定のしきい値{0}を使用しています。",
+  "Settings.ThresholdSet": "しきい値を{0}に設定しました。",
+  "Settings.ThresholdInvalid": "無音判定のしきい値は0.0～1.0の数値である必要があります。",
+  "Errors.TranslationUnsupported": "{0}は英語に翻訳できません。SmallやMediumなど、Turbo以外の多言語モデルを選択してください。",
+  "Manifest.Name": "whisper.cpp（ローカル）",
+  "Manifest.Description": "Whisper.netを使用したwhisper.cppによるオフライン文字起こし"
+}

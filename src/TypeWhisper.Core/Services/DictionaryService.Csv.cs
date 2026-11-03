@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using TypeWhisper.Core.Models;
 
@@ -9,21 +10,15 @@ public sealed partial class DictionaryService
 {
     public string ExportToCsv()
     {
-        EnsureCacheLoaded();
-
         var sb = new StringBuilder();
         sb.AppendLine(
-            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source"
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex,CtcMinSimilarity"
         );
 
-        List<DictionaryEntry> entries;
-        lock (_gate)
-        {
-            entries = _cache
-                .OrderBy(e => e.EntryType)
-                .ThenBy(e => e.Original, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
+        var entries = _store.Current
+            .OrderBy(e => e.EntryType)
+            .ThenBy(e => e.Original, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         foreach (var entry in entries)
         {
@@ -42,6 +37,16 @@ public sealed partial class DictionaryService
             sb.Append(Csv.Escape(entry.Priority.ToString()));
             sb.Append(',');
             sb.Append(Csv.Escape(entry.Source.ToString()));
+            sb.Append(',');
+            sb.Append(Csv.Escape(entry.ExpandEscapes.ToString()));
+            sb.Append(',');
+            sb.Append(Csv.Escape(entry.IsRegex.ToString()));
+            sb.Append(',');
+            sb.Append(
+                Csv.Escape(
+                    entry.CtcMinSimilarity?.ToString(CultureInfo.InvariantCulture) ?? string.Empty
+                )
+            );
             sb.AppendLine();
         }
 
@@ -50,7 +55,6 @@ public sealed partial class DictionaryService
 
     public int ImportFromCsv(string csv)
     {
-        EnsureCacheLoaded();
         if (string.IsNullOrWhiteSpace(csv))
         {
             return 0;
@@ -64,13 +68,31 @@ public sealed partial class DictionaryService
 
         var imported = 0;
 
-        lock (_gate)
+        Commit(newCache =>
         {
-            var newCache = new List<DictionaryEntry>(_cache);
+            imported = 0;
             var startIndex = LooksLikeHeader(rows[0]) ? 1 : 0;
             var existingKeys = newCache
+                .Where(entry => entry.EntryType != DictionaryEntryType.Correction)
                 .Select(DictionaryEntryKey)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Corrections merge by case-insensitive Original — the same identity
+            // UpsertCorrection uses — so an import can never create a conflicting
+            // duplicate; later rows (in-file or vs. cache) win.
+            var correctionIndexes = new Dictionary<string, int>(
+                StringComparer.OrdinalIgnoreCase
+            );
+            // Regex rules are distinct by exact pattern, so `\s+` and `\S+` never collapse.
+            var regexCorrectionIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            for (var i = 0; i < newCache.Count; i++)
+            {
+                var existing = newCache[i];
+                if (existing.EntryType == DictionaryEntryType.Correction)
+                {
+                    (existing.IsRegex ? regexCorrectionIndexes : correctionIndexes).TryAdd(existing.Original, i);
+                }
+            }
 
             for (var i = startIndex; i < rows.Count; i++)
             {
@@ -87,7 +109,9 @@ public sealed partial class DictionaryService
                     continue;
                 }
 
-                var original = row[1].Trim();
+                var isRegex = entryType == DictionaryEntryType.Correction && ReadBool(row, 9);
+                // Leading and trailing whitespace is significant in a pattern.
+                var original = isRegex ? row[1] : row[1].Trim();
                 if (string.IsNullOrWhiteSpace(original))
                 {
                     continue;
@@ -121,9 +145,45 @@ public sealed partial class DictionaryService
                     IsEnabled = row.Count <= 4 || ReadBool(row, 4),
                     IsStarred = ReadBool(row, 5),
                     Priority = ReadInt(row, 6),
-                    Source = ReadSource(row, 7)
+                    Source = ReadSource(row, 7),
+                    ExpandEscapes = entryType == DictionaryEntryType.Correction && ReadBool(row, 8),
+                    IsRegex = isRegex,
+                    CtcMinSimilarity = DictionaryEntry.SanitizeCtcSimilarity(ReadFloat(row, 10)),
                 };
 
+                if (entryType == DictionaryEntryType.Correction)
+                {
+                    var indexes = entry.IsRegex ? regexCorrectionIndexes : correctionIndexes;
+                    if (indexes.TryGetValue(original, out var existingIndex))
+                    {
+                        var existing = newCache[existingIndex];
+                        if (HasSameCsvFields(existing, entry))
+                        {
+                            continue;
+                        }
+
+                        newCache[existingIndex] = existing with
+                        {
+                            Replacement = entry.Replacement,
+                            CaseSensitive = entry.CaseSensitive,
+                            IsEnabled = entry.IsEnabled,
+                            IsStarred = entry.IsStarred,
+                            Priority = entry.Priority,
+                            Source = entry.Source,
+                            ExpandEscapes = entry.ExpandEscapes,
+                            IsRegex = entry.IsRegex,
+                        };
+                        imported++;
+                        continue;
+                    }
+
+                    indexes.Add(original, newCache.Count);
+                    newCache.Add(entry);
+                    imported++;
+                    continue;
+                }
+
+                // Re-importing a term preserves its existing threshold.
                 if (!existingKeys.Add(DictionaryEntryKey(entry)))
                 {
                     continue;
@@ -133,19 +193,22 @@ public sealed partial class DictionaryService
                 imported++;
             }
 
-            if (imported > 0)
-            {
-                SaveToDisk(newCache);
-                _cache = newCache;
-            }
-        }
-
-        if (imported > 0)
-        {
-            EntriesChanged?.Invoke();
-        }
+            return imported > 0;
+        });
 
         return imported;
+    }
+
+    private static bool HasSameCsvFields(DictionaryEntry existing, DictionaryEntry incoming)
+    {
+        return existing.Replacement == incoming.Replacement
+               && existing.CaseSensitive == incoming.CaseSensitive
+               && existing.IsEnabled == incoming.IsEnabled
+               && existing.IsStarred == incoming.IsStarred
+               && existing.Priority == incoming.Priority
+               && existing.Source == incoming.Source
+               && existing.ExpandEscapes == incoming.ExpandEscapes
+               && existing.IsRegex == incoming.IsRegex;
     }
 
     private static string DictionaryEntryKey(DictionaryEntry entry)
@@ -162,6 +225,17 @@ public sealed partial class DictionaryService
     {
         return row.Count > index && bool.TryParse(row[index], out var value) && value;
     }
+
+    private static float? ReadFloat(List<string> row, int index) =>
+        row.Count > index
+        && float.TryParse(
+            row[index],
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value
+        )
+            ? value
+            : null;
 
     private static int ReadInt(List<string> row, int index)
     {

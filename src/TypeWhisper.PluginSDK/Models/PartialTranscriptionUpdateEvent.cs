@@ -5,7 +5,7 @@ namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>Raised when partial transcription text is updated during recording.</summary>
 // ReSharper disable once UnusedType.Global
-public sealed record PartialTranscriptionUpdateEvent : PluginEvent
+public sealed record PartialTranscriptionUpdateEvent : PluginEvent, ICoalescibleEvent
 {
     /// <summary>The current partial transcription text.</summary>
     // ReSharper disable once UnusedMember.Global
@@ -18,6 +18,9 @@ public sealed record PartialTranscriptionUpdateEvent : PluginEvent
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public bool IsRecording { get; init; } = true;
+
+    /// <inheritdoc />
+    public bool IsTerminalFrame => !IsRecording;
 
     /// <summary>Elapsed seconds since recording started.</summary>
     // ReSharper disable once UnusedMember.Global

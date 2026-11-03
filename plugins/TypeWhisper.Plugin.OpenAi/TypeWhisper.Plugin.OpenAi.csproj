@@ -13,6 +13,11 @@
         <ProjectReference Include="..\..\src\TypeWhisper.PluginSDK\TypeWhisper.PluginSDK.csproj" />
     </ItemGroup>
     <ItemGroup>
+        <Compile Include="..\Shared\OpenAi\OpenAiRealtimeStreamingSession.cs" Link="OpenAi\OpenAiRealtimeStreamingSession.cs" />
+        <Compile Include="..\Shared\OpenAi\OpenAiResponsesClient.cs" Link="OpenAi\OpenAiResponsesClient.cs" />
+        <Compile Include="..\Shared\OpenAi\OpenAiJson.cs" Link="OpenAi\OpenAiJson.cs" />
+    </ItemGroup>
+    <ItemGroup>
         <Content Include="manifest.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>

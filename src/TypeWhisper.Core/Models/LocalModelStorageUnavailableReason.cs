@@ -14,5 +14,5 @@ public enum LocalModelStorageUnavailableReason
     NotWritable,
 
     /// <summary>The chosen target folder is nested inside the current storage folder.</summary>
-    NestedUnderCurrentFolder
+    NestedUnderCurrentFolder,
 }

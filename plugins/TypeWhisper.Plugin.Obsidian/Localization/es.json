@@ -4,6 +4,8 @@
   "Settings.VaultPathDetectedDescription": "Se detectaron {0} vault(s) de Obsidian. Introduce una ruta manualmente si lo necesitas.",
   "Settings.Subfolder": "Subcarpeta",
   "Settings.SubfolderDescription": "Carpeta dentro del vault donde se guardan las notas.",
+  "Settings.SubfolderOutsideVault": "La subcarpeta debe permanecer dentro del vault seleccionado.",
+  "Settings.NoteOutsideVault": "La nota diaria debe permanecer dentro del vault seleccionado.",
   "Settings.SaveMode": "Modo de guardado",
   "Settings.SaveModeDescription": "Elige si añadir a una nota diaria o crear una nota por cada transcripción.",
   "Settings.SaveModeOneNote": "Una nota por transcripción",

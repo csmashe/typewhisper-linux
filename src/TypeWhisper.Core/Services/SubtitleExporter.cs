@@ -11,14 +11,14 @@ public static class SubtitleExporter
     public static string ToSrt(IReadOnlyList<TranscriptionSegment> segments)
     {
         var sb = new StringBuilder();
-        for (var i = 0; i < segments.Count; i++)
+        var number = 1;
+        foreach (var (start, end, text) in Cues(segments))
         {
-            var seg = segments[i];
-            sb.AppendLine((i + 1).ToString());
-            sb.Append(FormatSrtTime(seg.Start));
+            sb.AppendLine(number++.ToString());
+            sb.Append(FormatSrtTime(start));
             sb.Append(" --> ");
-            sb.AppendLine(FormatSrtTime(seg.End));
-            sb.AppendLine(seg.Text);
+            sb.AppendLine(FormatSrtTime(end));
+            sb.AppendLine(text);
             sb.AppendLine();
         }
 
@@ -31,27 +31,46 @@ public static class SubtitleExporter
         sb.AppendLine("WEBVTT");
         sb.AppendLine();
 
-        foreach (var seg in segments)
+        foreach (var (start, end, text) in Cues(segments))
         {
-            sb.Append(FormatVttTime(seg.Start));
+            sb.Append(FormatVttTime(start));
             sb.Append(" --> ");
-            sb.AppendLine(FormatVttTime(seg.End));
-            sb.AppendLine(seg.Text);
+            sb.AppendLine(FormatVttTime(end));
+            sb.AppendLine(text);
             sb.AppendLine();
         }
 
         return sb.ToString();
     }
 
-    private static string FormatSrtTime(double seconds)
+    // Remote providers can return segments out of order; players expect cues sorted by start.
+    // OrderBy is stable, so cues sharing a start keep the provider's order.
+    private static IEnumerable<(TimeSpan Start, TimeSpan End, string Text)> Cues(
+        IReadOnlyList<TranscriptionSegment> segments
+    ) =>
+        segments
+            .Select(segment =>
+            {
+                var (start, end) = CueTimes(segment);
+                return (start, end, segment.Text);
+            })
+            .OrderBy(cue => cue.start);
+
+    // Remote providers can return negative or reversed times. Clamped after rounding so the
+    // end always lands at least 1 ms after the start; players drop zero-length cues.
+    private static (TimeSpan Start, TimeSpan End) CueTimes(TranscriptionSegment segment)
     {
-        var ts = TimeSpan.FromSeconds(seconds);
-        return $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2},{ts.Milliseconds:D3}";
+        var start = Math.Max(0, ToMilliseconds(segment.Start));
+        var end = Math.Max(start + 1, ToMilliseconds(segment.End));
+        return (TimeSpan.FromMilliseconds(start), TimeSpan.FromMilliseconds(end));
     }
 
-    private static string FormatVttTime(double seconds)
-    {
-        var ts = TimeSpan.FromSeconds(seconds);
-        return $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
-    }
+    private static string FormatSrtTime(TimeSpan ts) =>
+        $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2},{ts.Milliseconds:D3}";
+
+    private static string FormatVttTime(TimeSpan ts) =>
+        $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
+
+    // TimeSpan.FromSeconds truncates ticks, so 0.043 would print as 042.
+    private static double ToMilliseconds(double seconds) => Math.Round(seconds * 1000);
 }

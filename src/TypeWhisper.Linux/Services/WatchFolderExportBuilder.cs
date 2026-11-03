@@ -17,7 +17,7 @@ public static class WatchFolderExportBuilder
             WatchFolderOutputFormat.PlainText => new WatchFolderExportArtifact("txt", result.Text),
             WatchFolderOutputFormat.Srt => BuildSubtitle("srt", result),
             WatchFolderOutputFormat.Vtt => BuildSubtitle("vtt", result),
-            _ => BuildMarkdown(result, fileName, engineName, date)
+            _ => BuildMarkdown(result, fileName, engineName, date),
         };
     }
 

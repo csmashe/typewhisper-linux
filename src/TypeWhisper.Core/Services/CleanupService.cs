@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Models;
 
@@ -31,11 +32,11 @@ public sealed partial class CleanupService
         "things",
         "to",
         "we",
-        "with"
+        "with",
     };
 
     // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global
     public string Clean(string text, CleanupLevel level)
     {
@@ -50,7 +51,7 @@ public sealed partial class CleanupService
             // Medium/High LLM cleanup is intentionally not wired yet. Until a
             // provider-backed pass exists, degrade to deterministic cleanup.
             CleanupLevel.Medium or CleanupLevel.High => CleanLight(text),
-            _ => text
+            _ => text,
         };
     }
 
@@ -65,7 +66,7 @@ public sealed partial class CleanupService
                 nameof(level),
                 level,
                 "Only Medium and High cleanup use LLM prompts."
-            )
+            ),
         };
     }
 
@@ -131,7 +132,7 @@ public sealed partial class CleanupService
                         "exclamation mark" or "exclamation point" => "!",
                         "colon" => ":",
                         "semicolon" => ";",
-                        _ => match.Value
+                        _ => match.Value,
                     };
                 }
             );
@@ -148,7 +149,7 @@ public sealed partial class CleanupService
             "comma" or "colon" or "semicolon" => previousWordCount >= 1 && hasWordAfter,
             "question mark" or "exclamation mark" or "exclamation point" => previousWordCount >= 1
                                                                             && !hasWordAfter,
-            _ => false
+            _ => false,
         };
     }
 
@@ -286,7 +287,7 @@ public sealed partial class CleanupService
             "seven" => 7,
             "eight" => 8,
             "nine" => 9,
-            _ => 0
+            _ => 0,
         };
     }
 
@@ -315,7 +316,9 @@ public sealed partial class CleanupService
         return text;
     }
 
-    [GeneratedRegex(@"(?i)(^|[\s,.;:!?-])(?:um+|uh+|er+|ah+|you know)(?=$|[\s,.;:!?-])")]
+    // Doubled-letter minimums (umm/err, not um/er) — bare "er"/"um" are real words in
+    // German/Dutch/Swedish/Danish/Portuguese and must survive this language-agnostic pass.
+    [GeneratedRegex(@"(?i)(^|[\s,.;:!?-])(?:umm+|uh+|err+|erm+|ah+|you know)(?=$|[\s,.;:!?-])")]
     private static partial Regex StandaloneFillerRegex();
 
     [GeneratedRegex(@"[ \t]{2,}")]

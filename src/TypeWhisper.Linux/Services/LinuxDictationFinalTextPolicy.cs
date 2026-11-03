@@ -16,6 +16,14 @@ internal static partial class LinuxDictationFinalTextPolicy
     // pathological transcript can never spin indefinitely.
     private const int MaximumRepeatReductionPasses = 8;
 
+    // Rolling hashes use explicit, stable per-token hashes. Two independent
+    // polynomial bases make accidental range collisions vanishingly unlikely;
+    // matching ranges are still compared token-by-token before removal.
+    private const ulong StableTokenHashOffset = 14_695_981_039_346_656_037UL;
+    private const ulong StableTokenHashPrime = 1_099_511_628_211UL;
+    private const ulong FirstRollingHashBase = 1_000_000_007UL;
+    private const ulong SecondRollingHashBase = 1_000_000_009UL;
+
     [GeneratedRegex(@"\s*(?:\.{3,}|…)\s*", RegexOptions.CultureInvariant)]
     private static partial Regex AutomaticEllipsisRegex();
 
@@ -68,6 +76,25 @@ internal static partial class LinuxDictationFinalTextPolicy
         removalStart = 0;
         removalEnd = 0;
 
+        var characterPrefix = new int[tokens.Count + 1];
+        var tokenHashes = new ulong[tokens.Count];
+        var firstHashPrefix = new ulong[tokens.Count + 1];
+        var secondHashPrefix = new ulong[tokens.Count + 1];
+        var firstHashPowers = new ulong[tokens.Count + 1];
+        var secondHashPowers = new ulong[tokens.Count + 1];
+        firstHashPowers[0] = 1;
+        secondHashPowers[0] = 1;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            characterPrefix[i + 1] = characterPrefix[i] + tokens[i].Normalized.Length;
+            tokenHashes[i] = ComputeStableTokenHash(tokens[i].Normalized);
+            firstHashPrefix[i + 1] = unchecked(firstHashPrefix[i] * FirstRollingHashBase + tokenHashes[i]);
+            secondHashPrefix[i + 1] = unchecked(secondHashPrefix[i] * SecondRollingHashBase + tokenHashes[i]);
+            firstHashPowers[i + 1] = unchecked(firstHashPowers[i] * FirstRollingHashBase);
+            secondHashPowers[i + 1] = unchecked(secondHashPowers[i] * SecondRollingHashBase);
+        }
+
         for (var boundary = MinimumRepeatedPhraseWords;
              boundary <= tokens.Count - MinimumRepeatedPhraseWords;
              boundary++)
@@ -75,8 +102,16 @@ internal static partial class LinuxDictationFinalTextPolicy
             var maxLength = Math.Min(boundary, tokens.Count - boundary);
             for (var length = maxLength; length >= MinimumRepeatedPhraseWords; length--)
             {
-                if (!HasMinimumRepeatedPhraseLength(tokens, boundary, length)
-                    || !TokensMatch(tokens, boundary - length, boundary, length))
+                if (!HasMinimumRepeatedPhraseLength(characterPrefix, boundary, length)
+                    || !TokensMatch(
+                        tokens,
+                        firstHashPrefix,
+                        secondHashPrefix,
+                        firstHashPowers,
+                        secondHashPowers,
+                        boundary - length,
+                        boundary,
+                        length))
                 {
                     continue;
                 }
@@ -101,19 +136,32 @@ internal static partial class LinuxDictationFinalTextPolicy
         return false;
     }
 
-    private static bool HasMinimumRepeatedPhraseLength(IReadOnlyList<WordToken> tokens, int boundary, int length)
+    private static bool HasMinimumRepeatedPhraseLength(int[] characterPrefix, int boundary, int length)
     {
-        var characterCount = 0;
-        for (var i = boundary; i < boundary + length; i++)
-        {
-            characterCount += tokens[i].Normalized.Length;
-        }
-
+        var characterCount = characterPrefix[boundary + length] - characterPrefix[boundary];
         return characterCount >= MinimumRepeatedPhraseCharacters;
     }
 
-    private static bool TokensMatch(IReadOnlyList<WordToken> tokens, int leftStart, int rightStart, int length)
+    private static bool TokensMatch(
+        IReadOnlyList<WordToken> tokens,
+        ulong[] firstHashPrefix,
+        ulong[] secondHashPrefix,
+        ulong[] firstHashPowers,
+        ulong[] secondHashPowers,
+        int leftStart,
+        int rightStart,
+        int length)
     {
+        if (GetRangeHash(firstHashPrefix, firstHashPowers, leftStart, length)
+                != GetRangeHash(firstHashPrefix, firstHashPowers, rightStart, length)
+            || GetRangeHash(secondHashPrefix, secondHashPowers, leftStart, length)
+                != GetRangeHash(secondHashPrefix, secondHashPowers, rightStart, length))
+        {
+            return false;
+        }
+
+        // Hashes only reject non-matches. Exact comparison preserves behavior
+        // even on a rolling-hash or per-token-hash collision.
         for (var offset = 0; offset < length; offset++)
         {
             if (!string.Equals(
@@ -126,6 +174,27 @@ internal static partial class LinuxDictationFinalTextPolicy
         }
 
         return true;
+    }
+
+    private static ulong GetRangeHash(
+        ulong[] hashPrefix,
+        ulong[] hashPowers,
+        int start,
+        int length)
+    {
+        return unchecked(hashPrefix[start + length] - hashPrefix[start] * hashPowers[length]);
+    }
+
+    private static ulong ComputeStableTokenHash(string normalized)
+    {
+        var hash = StableTokenHashOffset;
+        // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- hot unchecked FNV accumulation; a LINQ Aggregate switches the char enumerator and is slower here.
+        foreach (var ch in normalized)
+        {
+            hash = unchecked((hash ^ ch) * StableTokenHashPrime);
+        }
+
+        return hash;
     }
 
     private static bool RightMatchContinuesPhrase(string text, IReadOnlyList<WordToken> tokens, int boundary,

@@ -65,6 +65,60 @@ public sealed class KeyboardDeviceDiscoveryTests
         Assert.Equal(excluded, KeyboardDeviceDiscovery.IsExcludedByName(name));
     }
 
+    [Fact]
+    public void ParseSysfsBitmap_reads_a_real_keyboard_as_a_keyboard()
+        // DYGMA RAISE2 Keyboard's /sys/class/input/eventN/device/capabilities/key.
+    {
+        var bits = KeyboardDeviceDiscovery.ParseSysfsBitmap(
+            "3f00733fff 0 0 483ffff17aff32d bfd4444600000000 1 130ff38b17d007 "
+            + "ffff7bfad941dfff ffbeffdfffefffff fffffffffffffffe\n",
+            96,
+            64
+        );
+
+        Assert.NotNull(bits);
+        Assert.True(KeyboardDeviceDiscovery.LooksLikeKeyboard(bits));
+    }
+
+    [Fact]
+    public void ParseSysfsBitmap_reads_an_empty_capability_as_not_a_keyboard()
+    {
+        var bits = KeyboardDeviceDiscovery.ParseSysfsBitmap("0\n", 96, 64);
+
+        Assert.NotNull(bits);
+        Assert.False(KeyboardDeviceDiscovery.LooksLikeKeyboard(bits));
+    }
+
+    [Theory]
+    [InlineData(64)]
+    [InlineData(32)]
+    public void ParseSysfsBitmap_places_the_last_word_at_bit_zero(int wordBits)
+    {
+        // Two words: the trailing one holds bits 0..wordBits-1, the leading one the next word.
+        var bits = KeyboardDeviceDiscovery.ParseSysfsBitmap("1 4", 96, wordBits);
+
+        Assert.NotNull(bits);
+        Assert.Equal(Bitmap(2, wordBits), bits);
+    }
+
+    [Fact]
+    public void ParseSysfsBitmap_ignores_words_beyond_the_buffer()
+    {
+        var bits = KeyboardDeviceDiscovery.ParseSysfsBitmap("ff 0 1", 8, 64);
+
+        Assert.NotNull(bits);
+        Assert.Equal(new byte[] { 1, 0, 0, 0, 0, 0, 0, 0 }, bits);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\n")]
+    [InlineData("zz 1")]
+    public void ParseSysfsBitmap_rejects_malformed_text(string text)
+    {
+        Assert.Null(KeyboardDeviceDiscovery.ParseSysfsBitmap(text, 96, 64));
+    }
+
     /// <summary>Builds a 96-byte EV_KEY bitmap with the given key bits set.</summary>
     private static byte[] Bitmap(params int[] setBits)
     {

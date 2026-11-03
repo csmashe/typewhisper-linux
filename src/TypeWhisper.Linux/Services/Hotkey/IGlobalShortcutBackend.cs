@@ -18,6 +18,9 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     /// </summary>
     bool IsGlobalScope { get; }
 
+    /// <summary>Discard queued capture actions. Backends without press/release queues need no reset.</summary>
+    void SetCaptureSuspended(bool suspended) { }
+
     // ReSharper disable once UnusedMemberInSuper.Global -- interface contract member; callers invoke IsAvailable on concrete backends (e.g. BackendSelector probes portal.IsAvailable())
     bool IsAvailable();
 
@@ -34,10 +37,16 @@ public interface IGlobalShortcutBackend : IAsyncDisposable
     event EventHandler? DictationToggleRequested;
     event EventHandler? DictationStartRequested;
     event EventHandler? DictationStopRequested;
+
+    // Session-loss teardown (e.g. screen lock): discard any active recording without transcription
+    // or text insertion. Only the evdev backend, which gates on session activity, raises this.
+    event EventHandler? DictationDiscardRequested;
     event EventHandler? PromptPaletteRequested;
     event EventHandler? TransformSelectionRequested;
     event EventHandler? RecentTranscriptionsRequested;
     event EventHandler? CopyLastTranscriptionRequested;
+    event EventHandler? ReadLastTranscriptionRequested;
+    event EventHandler? PasteLastTranscriptionRequested;
     event EventHandler? CancelRequested;
     event EventHandler<string>? PromptActionRequested;
 

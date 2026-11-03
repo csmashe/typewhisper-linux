@@ -1,0 +1,11 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Deepgram转录和流式传输所必需。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.ModelDescription": "选择Deepgram模型。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyValid": "API密钥有效。",
+  "Settings.ApiKeyInvalid": "API密钥无效。",
+  "Manifest.Name": "Deepgram",
+  "Manifest.Description": "Deepgram Nova转录引擎"
+}

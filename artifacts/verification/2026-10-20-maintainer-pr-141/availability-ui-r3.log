@@ -1,0 +1,58 @@
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.a11y.Bus' requested by ':1.0' (uid=1000 pid=3329591 comm="/usr/lib/at-spi2-registryd")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.gtk.vfs.Daemon' requested by ':1.1' (uid=1000 pid=3329594 comm="/usr/lib/at-spi-bus-launcher")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Successfully activated service 'org.gtk.vfs.Daemon'
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Successfully activated service 'org.a11y.Bus'
+fusermount3: failed to access mountpoint /run/user/1000/gvfs: Permission denied
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.systemd1' requested by ':1.4' (uid=1000 pid=3329614 comm="/usr/bin/dbus-broker-launch --config-file=/usr/sha")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activated service 'org.freedesktop.systemd1' failed: Process org.freedesktop.systemd1 exited with status 1
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.8' (uid=1000 pid=3329855 comm="/usr/lib/mutter-x11-frames")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.9' (uid=1000 pid=3329884 comm="/usr/lib/xdg-desktop-portal")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.portal.Documents' requested by ':1.9' (uid=1000 pid=3329884 comm="/usr/lib/xdg-desktop-portal")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Successfully activated service 'org.freedesktop.portal.Documents'
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.impl.portal.desktop.gnome' requested by ':1.9' (uid=1000 pid=3329884 comm="/usr/lib/xdg-desktop-portal")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.gnome.Settings.GlobalShortcutsProvider' requested by ':1.12' (uid=1000 pid=3329909 comm="/usr/lib/xdg-desktop-portal-gnome")
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Successfully activated service 'org.gnome.Settings.GlobalShortcutsProvider'
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Successfully activated service 'org.freedesktop.impl.portal.desktop.gnome'
+
+(/usr/lib/xdg-desktop-portal:3329884): xdg-desktop-portal-WARNING **: 15:42:35.838: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name is not activatable
+
+(/usr/lib/xdg-desktop-portal:3329884): xdg-desktop-portal-WARNING **: 15:42:35.838: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name is not activatable
+
+(/usr/lib/xdg-desktop-portal:3329884): xdg-desktop-portal-WARNING **: 15:42:35.838: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name is not activatable
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.9' (uid=1000 pid=3329884 comm="/usr/lib/xdg-desktop-portal")
+
+(xdg-desktop-portal-gtk:3329938): Gtk-WARNING **: 15:42:35.850: cannot open display: :2
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activated service 'org.freedesktop.impl.portal.desktop.gtk' failed: Process org.freedesktop.impl.portal.desktop.gtk exited with status 1
+
+(/usr/lib/xdg-desktop-portal:3329884): xdg-desktop-portal-WARNING **: 15:42:35.851: Failed to create settings proxy: Error calling StartServiceByName for org.freedesktop.impl.portal.desktop.gtk: Process org.freedesktop.impl.portal.desktop.gtk exited with status 1
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.9' (uid=1000 pid=3329884 comm="/usr/lib/xdg-desktop-portal")
+
+(xdg-desktop-portal-gtk:3329941): Gtk-WARNING **: 15:42:35.863: cannot open display: :2
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activated service 'org.freedesktop.impl.portal.desktop.gtk' failed: Process org.freedesktop.impl.portal.desktop.gtk exited with status 1
+
+(/usr/lib/xdg-desktop-portal:3329884): xdg-desktop-portal-WARNING **: 15:42:35.864: Failed to create inhibit proxy: Error calling StartServiceByName for org.freedesktop.impl.portal.desktop.gtk: Process org.freedesktop.impl.portal.desktop.gtk exited with status 1
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.9' (uid=1000 pid=3329884 comm="/usr/lib/xdg-desktop-portal")
+
+(xdg-desktop-portal-gtk:3329945): Gtk-WARNING **: 15:42:35.878: cannot open display: :2
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activated service 'org.freedesktop.impl.portal.desktop.gtk' failed: Process org.freedesktop.impl.portal.desktop.gtk exited with status 1
+
+(/usr/lib/xdg-desktop-portal:3329884): xdg-desktop-portal-WARNING **: 15:42:35.879: Failed to create email proxy: Error calling StartServiceByName for org.freedesktop.impl.portal.desktop.gtk: Process org.freedesktop.impl.portal.desktop.gtk exited with status 1
+dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Activating service name='org.freedesktop.secrets' requested by ':1.9' (uid=1000 pid=3329884 comm="/usr/lib/xdg-desktop-portal")
+discover_other_daemon: 1dbus-daemon[3329546]: [session uid=1000 pid=3329546 pidfd=4] Successfully activated service 'org.freedesktop.portal.Desktop'
+Gdk-Message: 15:42:42.240: Lost connection to Wayland compositor.
+Gdk-Message: 15:42:42.240: Lost connection to Wayland compositor.
+A connection to the bus can't be made
+
+(/usr/lib/xdg-desktop-portal:3329884): xdg-desktop-portal-WARNING **: 15:42:42.272: Failed to create secret proxy: Error calling StartServiceByName for org.freedesktop.secrets: The connection is closed
+Traceback (most recent call last):
+  File "/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/artifacts/verification/2026-10-20-maintainer-pr-141/availability_ui.py", line 152, in <module>
+    main()
+    ~~~~^^
+  File "/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/artifacts/verification/2026-10-20-maintainer-pr-141/availability_ui.py", line 115, in main
+    scroll_to_control(desktop, label)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/artifacts/verification/2026-10-20-maintainer-pr-141/availability_ui.py", line 30, in scroll_to_control
+    assert 160 <= node["extents"][1] <= 750, node
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'role': 'check box', 'name': 'Clean drafts while recording', 'extents': [440, 1594, 215, 32], 'children': [{'role': 'panel', 'name': 'Grid', 'extents': [440, 1594, 215, 32], 'children': [{'role': 'panel', 'name': 'Border', 'extents': [440, 1594, 215, 32]}, {'role': 'panel', 'name': 'Grid', 'extents': [440, 1594, 20, 32], 'children': [{'role': 'panel', 'name': 'Border', 'extents': [440, 1600, 20, 20]}, {'role': 'panel', 'name': 'Viewbox', 'extents': [440, 1600, 20, 20], 'children': [{'role': 'panel', 'name': 'ViewboxContainer', 'extents': [440, 1600, 20, 20], 'children': [{'role': 'panel', 'name': 'Panel', 'extents': [440, 1600, 20, 20], 'children': [{'role': 'panel', 'name': 'Panel', 'extents': [440, 1600, 20, 20]}, {'role': 'panel', 'name': 'Path', 'extents': [444, 1605, 11, 9]}]}]}]}]}, {'role': 'panel', 'name': 'ContentPresenter', 'extents': [468, 1602, 187, 17], 'children': [{'role': 'panel', 'name': 'AccessText', 'extents': [468, 1602, 187, 17]}]}]}]}

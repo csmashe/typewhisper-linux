@@ -9,7 +9,11 @@ namespace TypeWhisper.Linux.Services.Localization;
 ///     A selectable interface-language option for the settings dropdown.
 ///     <paramref name="Code" /> is null for "Auto (System)".
 /// </summary>
-public sealed record UiLanguageOption(string? Code, string DisplayName);
+public sealed record UiLanguageOption(string? Code, string DisplayName)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => DisplayName;
+}
 
 /// <summary>
 ///     Singleton localization service for the UI. Loads JSON translation files
@@ -25,7 +29,7 @@ public sealed class Loc : INotifyPropertyChanged
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     private readonly Dictionary<string, Dictionary<string, string>> _strings = [];
@@ -41,6 +45,32 @@ public sealed class Loc : INotifyPropertyChanged
     ///     system locale. Defaults to "en" until <see cref="App" /> sets it.
     /// </summary>
     public static string SystemLanguage { get; set; } = FallbackLanguage;
+
+    /// <summary>
+    ///     The catalog code for a culture: its two-letter language, except Traditional Chinese, which
+    ///     maps to "zh-Hant" so it falls back to English rather than the Simplified "zh" catalog.
+    /// </summary>
+    public static string CatalogLanguageFor(CultureInfo culture)
+    {
+        // The tag is checked as well as the parents, in case a culture's parent chain skips zh-Hant.
+        var name = culture.Name;
+        if (name.StartsWith("zh-", StringComparison.OrdinalIgnoreCase)
+            && (name.Contains("-Hant", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("-TW", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("-HK", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("-MO", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "zh-Hant";
+        }
+
+        for (var current = culture; !Equals(current, CultureInfo.InvariantCulture); current = current.Parent)
+        {
+            if (string.Equals(current.Name, "zh-Hant", StringComparison.OrdinalIgnoreCase))
+                return "zh-Hant";
+        }
+
+        return culture.TwoLetterISOLanguageName;
+    }
 
     /// <summary>Indexer used by bindings/converters: Loc.Instance["Key"].</summary>
     public string this[string key] => GetString(key);
@@ -192,8 +222,8 @@ public sealed class Loc : INotifyPropertyChanged
             ["pl"] = "Polski",
             ["ru"] = "Русский",
             ["ja"] = "日本語",
-            ["zh"] = "中文",
-            ["ko"] = "한국어"
+            ["zh"] = "简体中文",
+            ["ko"] = "한국어",
         };
 
         var options = new List<UiLanguageOption> { new(null, "Auto (System)") };

@@ -2,8 +2,17 @@
   "Settings.ApiKey": "API-Schlüssel",
   "Settings.ApiKeyDescription": "Erforderlich für Speechmatics-Transkription.",
   "Settings.TranscriptionModel": "Transkriptionsmodell",
-  "Settings.ModelDescription": "Wählen Sie das Speechmatics-Modell.",
+  "Settings.ModelDescription": "Enhanced ist am genauesten. Standard ist günstiger.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
+  "Settings.Region": "Region",
+  "Settings.RegionDescription": "Wo Speechmatics Ihre Audiodaten verarbeitet, für Aufnahmen und Live-Transkription.",
+  "Settings.RegionEu": "Europa",
+  "Settings.RegionUs": "USA",
+  "Settings.RegionAu": "Australien",
+  "Settings.LiveLanguage": "Sprache für Live-Transkription",
+  "Settings.LiveLanguageDescription": "Live-Transkription benötigt eine feste Sprache. Diese wird verwendet, wenn die gesprochene Sprache auf Automatisch steht. Ohne sie wird automatisches Diktat nach dem Ende der Aufnahme transkribiert.",
+  "Settings.LiveLanguageNone": "Keine (nach der Aufnahme transkribieren)",
+  "Settings.LiveLanguageRequired": "Speechmatics-Live-Transkription benötigt eine feste Sprache. Wählen Sie eine gesprochene Sprache oder eine Sprache für Live-Transkription in den Speechmatics-Einstellungen.",
   "Manifest.Name": "Speechmatics",
   "Manifest.Description": "Speechmatics-Sprache-zu-Text-Transkriptions-Engine"
 }

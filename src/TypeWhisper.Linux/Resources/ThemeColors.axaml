@@ -1,0 +1,160 @@
+<!-- App palette for the Light and Dark theme variants. Views reference these keys with
+     DynamicResource so a theme change applies to open windows without a restart.
+     The dictation overlay and learned-correction toast stay Dark in every theme and keep
+     their own colors. -->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+            <SolidColorBrush x:Key="TwWindowBackgroundBrush" Color="#0E131B" />
+            <SolidColorBrush x:Key="TwSurfaceSunkenBrush" Color="#0E1620" />
+            <SolidColorBrush x:Key="TwSurfaceBrush" Color="#141D26" />
+            <SolidColorBrush x:Key="TwSurfaceAltBrush" Color="#111822" />
+            <SolidColorBrush x:Key="TwSurfaceRaisedBrush" Color="#1A2430" />
+            <SolidColorBrush x:Key="TwSurfaceStrongBrush" Color="#283644" />
+            <SolidColorBrush x:Key="TwPaletteBackgroundBrush" Color="#F0141D29" />
+            <SolidColorBrush x:Key="TwNavSelectedBrush" Color="#1C2735" />
+
+            <SolidColorBrush x:Key="TwFillFaintBrush" Color="#0FFFFFFF" />
+            <SolidColorBrush x:Key="TwFillSubtleBrush" Color="#16FFFFFF" />
+            <SolidColorBrush x:Key="TwFillBrush" Color="#18FFFFFF" />
+            <SolidColorBrush x:Key="TwFillStrongBrush" Color="#1AFFFFFF" />
+
+            <SolidColorBrush x:Key="TwBorderSubtleBrush" Color="#1AFFFFFF" />
+            <SolidColorBrush x:Key="TwBorderStrongBrush" Color="#25FFFFFF" />
+            <SolidColorBrush x:Key="TwBorderBrush" Color="#243241" />
+            <SolidColorBrush x:Key="TwBorderAccentSubtleBrush" Color="#2A3950" />
+
+            <SolidColorBrush x:Key="TwTextStrongBrush" Color="#F2F6FA" />
+            <SolidColorBrush x:Key="TwTextPrimaryBrush" Color="#D6DEE9" />
+            <SolidColorBrush x:Key="TwTextBodyBrush" Color="#C6D2E0" />
+            <SolidColorBrush x:Key="TwTextMutedBrush" Color="#9BAABC" />
+            <SolidColorBrush x:Key="TwTextSecondaryBrush" Color="#8A9AAE" />
+            <SolidColorBrush x:Key="TwTextTertiaryBrush" Color="#7D8796" />
+            <SolidColorBrush x:Key="TwTextDisabledBrush" Color="#566273" />
+
+            <SolidColorBrush x:Key="TwAccentBrush" Color="#1593F5" />
+            <SolidColorBrush x:Key="TwOnAccentBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="TwAccentForegroundBrush" Color="#1593F5" />
+            <SolidColorBrush x:Key="TwAccentTextBrush" Color="#8FC0FF" />
+            <SolidColorBrush x:Key="TwAccentSubtleBrush" Color="#16263A" />
+            <SolidColorBrush x:Key="TwAccentSubtleTextBrush" Color="#D6E7FF" />
+            <SolidColorBrush x:Key="TwAccentAltTextBrush" Color="#C9A8FF" />
+
+            <SolidColorBrush x:Key="TwWarningTextBrush" Color="#F4C97D" />
+            <SolidColorBrush x:Key="TwWarningSubtleBrush" Color="#3A2F12" />
+            <SolidColorBrush x:Key="TwWarningBorderBrush" Color="#6E5625" />
+
+            <SolidColorBrush x:Key="TwErrorTextBrush" Color="#F4A9A9" />
+            <SolidColorBrush x:Key="TwErrorSubtleBrush" Color="#3A1D1D" />
+            <SolidColorBrush x:Key="TwErrorBorderBrush" Color="#7A2E2E" />
+
+            <SolidColorBrush x:Key="TwSuccessTextBrush" Color="#66E3A2" />
+            <SolidColorBrush x:Key="TwSuccessFaintBrush" Color="#1439B980" />
+            <SolidColorBrush x:Key="TwSuccessSubtleBrush" Color="#1E39B980" />
+
+            <SolidColorBrush x:Key="TwDiffAddedBrush" Color="#5FD79A" />
+            <SolidColorBrush x:Key="TwDiffRemovedBrush" Color="#F06A6A" />
+
+            <SolidColorBrush x:Key="TwBadgeCloudBackgroundBrush" Color="#1A3453" />
+            <SolidColorBrush x:Key="TwBadgeCloudBorderBrush" Color="#2E5B89" />
+            <SolidColorBrush x:Key="TwBadgeCloudTextBrush" Color="#D6E7FF" />
+            <SolidColorBrush x:Key="TwBadgeLocalBackgroundBrush" Color="#1B2F24" />
+            <SolidColorBrush x:Key="TwBadgeLocalBorderBrush" Color="#2F5E45" />
+            <SolidColorBrush x:Key="TwBadgeLocalTextBrush" Color="#D8F3E5" />
+            <SolidColorBrush x:Key="TwBadgeMixedBackgroundBrush" Color="#30264A" />
+            <SolidColorBrush x:Key="TwBadgeMixedBorderBrush" Color="#66518F" />
+            <SolidColorBrush x:Key="TwBadgeMixedTextBrush" Color="#E4D9FF" />
+            <SolidColorBrush x:Key="TwBadgeUserControlledBackgroundBrush" Color="#3A2C16" />
+            <SolidColorBrush x:Key="TwBadgeUserControlledBorderBrush" Color="#80622C" />
+            <SolidColorBrush x:Key="TwBadgeUserControlledTextBrush" Color="#FFE7B3" />
+            <SolidColorBrush x:Key="TwBadgeEnabledBackgroundBrush" Color="#173222" />
+            <SolidColorBrush x:Key="TwBadgeEnabledBorderBrush" Color="#2F7D4E" />
+            <SolidColorBrush x:Key="TwBadgeEnabledTextBrush" Color="#D9FBE7" />
+            <SolidColorBrush x:Key="TwBadgeDisabledBackgroundBrush" Color="#3A1F1F" />
+            <SolidColorBrush x:Key="TwBadgeDisabledBorderBrush" Color="#8A3A3A" />
+            <SolidColorBrush x:Key="TwBadgeDisabledTextBrush" Color="#FFD9D9" />
+            <SolidColorBrush x:Key="TwBadgeRanLocallyBackgroundBrush" Color="#153A2A" />
+            <SolidColorBrush x:Key="TwBadgeRanLocallyBorderBrush" Color="#1E5A3E" />
+            <SolidColorBrush x:Key="TwBadgeNetworkBackgroundBrush" Color="#3A2E15" />
+            <SolidColorBrush x:Key="TwBadgeNetworkBorderBrush" Color="#5A4A1E" />
+            <SolidColorBrush x:Key="TwBadgeNetworkTextBrush" Color="#E0A030" />
+        </ResourceDictionary>
+
+        <ResourceDictionary x:Key="Light">
+            <SolidColorBrush x:Key="TwWindowBackgroundBrush" Color="#F3F5F8" />
+            <SolidColorBrush x:Key="TwSurfaceSunkenBrush" Color="#EAEEF3" />
+            <SolidColorBrush x:Key="TwSurfaceBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="TwSurfaceAltBrush" Color="#F8FAFC" />
+            <SolidColorBrush x:Key="TwSurfaceRaisedBrush" Color="#F1F4F8" />
+            <SolidColorBrush x:Key="TwSurfaceStrongBrush" Color="#DCE3EB" />
+            <SolidColorBrush x:Key="TwPaletteBackgroundBrush" Color="#F5FFFFFF" />
+            <SolidColorBrush x:Key="TwNavSelectedBrush" Color="#E1ECFA" />
+
+            <SolidColorBrush x:Key="TwFillFaintBrush" Color="#08000000" />
+            <SolidColorBrush x:Key="TwFillSubtleBrush" Color="#0D000000" />
+            <SolidColorBrush x:Key="TwFillBrush" Color="#10000000" />
+            <SolidColorBrush x:Key="TwFillStrongBrush" Color="#14000000" />
+
+            <SolidColorBrush x:Key="TwBorderSubtleBrush" Color="#1E0F1720" />
+            <SolidColorBrush x:Key="TwBorderStrongBrush" Color="#33000000" />
+            <SolidColorBrush x:Key="TwBorderBrush" Color="#D3DBE4" />
+            <SolidColorBrush x:Key="TwBorderAccentSubtleBrush" Color="#B8CCE4" />
+
+            <SolidColorBrush x:Key="TwTextStrongBrush" Color="#0F1720" />
+            <SolidColorBrush x:Key="TwTextPrimaryBrush" Color="#1B2430" />
+            <SolidColorBrush x:Key="TwTextBodyBrush" Color="#2F3B48" />
+            <SolidColorBrush x:Key="TwTextMutedBrush" Color="#4F5B69" />
+            <SolidColorBrush x:Key="TwTextSecondaryBrush" Color="#5A6676" />
+            <SolidColorBrush x:Key="TwTextTertiaryBrush" Color="#6B7684" />
+            <SolidColorBrush x:Key="TwTextDisabledBrush" Color="#8A94A0" />
+
+            <SolidColorBrush x:Key="TwAccentBrush" Color="#0F72C8" />
+            <SolidColorBrush x:Key="TwOnAccentBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="TwAccentForegroundBrush" Color="#0F6CBD" />
+            <SolidColorBrush x:Key="TwAccentTextBrush" Color="#0B5FA8" />
+            <SolidColorBrush x:Key="TwAccentSubtleBrush" Color="#E3EEFB" />
+            <SolidColorBrush x:Key="TwAccentSubtleTextBrush" Color="#0E3E6E" />
+            <SolidColorBrush x:Key="TwAccentAltTextBrush" Color="#6B3FB8" />
+
+            <SolidColorBrush x:Key="TwWarningTextBrush" Color="#8A5300" />
+            <SolidColorBrush x:Key="TwWarningSubtleBrush" Color="#FFF4DB" />
+            <SolidColorBrush x:Key="TwWarningBorderBrush" Color="#E8C67C" />
+
+            <SolidColorBrush x:Key="TwErrorTextBrush" Color="#B42318" />
+            <SolidColorBrush x:Key="TwErrorSubtleBrush" Color="#FDECEA" />
+            <SolidColorBrush x:Key="TwErrorBorderBrush" Color="#EBA9A3" />
+
+            <SolidColorBrush x:Key="TwSuccessTextBrush" Color="#157347" />
+            <SolidColorBrush x:Key="TwSuccessFaintBrush" Color="#14157347" />
+            <SolidColorBrush x:Key="TwSuccessSubtleBrush" Color="#24157347" />
+
+            <SolidColorBrush x:Key="TwDiffAddedBrush" Color="#157347" />
+            <SolidColorBrush x:Key="TwDiffRemovedBrush" Color="#B42318" />
+
+            <SolidColorBrush x:Key="TwBadgeCloudBackgroundBrush" Color="#E3EEFB" />
+            <SolidColorBrush x:Key="TwBadgeCloudBorderBrush" Color="#A9C6E8" />
+            <SolidColorBrush x:Key="TwBadgeCloudTextBrush" Color="#0E3E6E" />
+            <SolidColorBrush x:Key="TwBadgeLocalBackgroundBrush" Color="#E3F4EA" />
+            <SolidColorBrush x:Key="TwBadgeLocalBorderBrush" Color="#9FD3B5" />
+            <SolidColorBrush x:Key="TwBadgeLocalTextBrush" Color="#145A36" />
+            <SolidColorBrush x:Key="TwBadgeMixedBackgroundBrush" Color="#EEE8FB" />
+            <SolidColorBrush x:Key="TwBadgeMixedBorderBrush" Color="#C2B2E8" />
+            <SolidColorBrush x:Key="TwBadgeMixedTextBrush" Color="#4B2F8F" />
+            <SolidColorBrush x:Key="TwBadgeUserControlledBackgroundBrush" Color="#FFF2D6" />
+            <SolidColorBrush x:Key="TwBadgeUserControlledBorderBrush" Color="#E5C27A" />
+            <SolidColorBrush x:Key="TwBadgeUserControlledTextBrush" Color="#6E4600" />
+            <SolidColorBrush x:Key="TwBadgeEnabledBackgroundBrush" Color="#E3F4EA" />
+            <SolidColorBrush x:Key="TwBadgeEnabledBorderBrush" Color="#8FCBA8" />
+            <SolidColorBrush x:Key="TwBadgeEnabledTextBrush" Color="#145A36" />
+            <SolidColorBrush x:Key="TwBadgeDisabledBackgroundBrush" Color="#FDECEA" />
+            <SolidColorBrush x:Key="TwBadgeDisabledBorderBrush" Color="#E6A4A4" />
+            <SolidColorBrush x:Key="TwBadgeDisabledTextBrush" Color="#8F1D14" />
+            <SolidColorBrush x:Key="TwBadgeRanLocallyBackgroundBrush" Color="#E3F4EA" />
+            <SolidColorBrush x:Key="TwBadgeRanLocallyBorderBrush" Color="#9FD3B5" />
+            <SolidColorBrush x:Key="TwBadgeNetworkBackgroundBrush" Color="#FFF2D6" />
+            <SolidColorBrush x:Key="TwBadgeNetworkBorderBrush" Color="#E5C27A" />
+            <SolidColorBrush x:Key="TwBadgeNetworkTextBrush" Color="#8A5300" />
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>
