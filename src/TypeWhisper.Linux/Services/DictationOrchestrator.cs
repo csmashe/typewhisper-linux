@@ -1527,10 +1527,17 @@ public sealed partial class DictationOrchestrator : IDisposable
             _cancelRequested = false;
 
             byte[] wav;
+            Exception? captureStopFault = null;
             try
             {
                 // ReSharper disable once MethodSupportsCancellation -- stop path must run teardown to completion; recording stop is intentionally non-cancellable.
                 wav = await _audio.StopRecordingAsync(captureSession!);
+            }
+            catch (Exception ex)
+            {
+                // Finish the normal teardown first; the post-stop pipeline then fails the session.
+                wav = [];
+                captureStopFault = ex;
             }
             finally
             {
@@ -1703,6 +1710,20 @@ public sealed partial class DictationOrchestrator : IDisposable
                         return;
                     }
 
+                    if (captureStopFault is not null)
+                    {
+                        _models.PluginManager.EventBus.Publish(
+                            new RecordingStoppedEvent { DurationSeconds = 0 }
+                        );
+                        _ = await TeardownStreamingSessionAsync(
+                            stoppedStreamingCoordinator,
+                            stoppedStreamingStartupCts,
+                            false,
+                            CancellationToken.None
+                        );
+                        ExceptionDispatchInfo.Throw(captureStopFault);
+                    }
+
                     SetOverlayState(recordingContext, state =>
                         state with
                         {
@@ -1842,9 +1863,9 @@ public sealed partial class DictationOrchestrator : IDisposable
             catch (Exception ex)
             {
                 // Reached only for a step BEFORE TranscribeAndInsertAsync's own
-                // try/catch chain (streaming teardown, WAV padding, capture
-                // persistence, the RecordingCaptured event), or a rethrow from
-                // its `await using` lease disposal. Either way the session must
+                // try/catch chain (a failed capture stop, streaming teardown, WAV
+                // padding, capture persistence, the RecordingCaptured event), or a
+                // rethrow from its `await using` lease disposal. Either way the session must
                 // not stay "in_progress" forever (audit §2 H1).
                 CaptureDiagnostic(ex, "dictation.post-stop",
                     recordingContext.StreamingProviderId, recordingContext.StreamingModelId);
