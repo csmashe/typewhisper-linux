@@ -622,6 +622,12 @@ public sealed class HttpApiUnixSocketTests
             Assert.Contains(route.Path, html);
             Assert.Contains(route.Description, html);
         }
+        Assert.Contains("typewhisper-cli models", html);
+        Assert.Contains("typewhisper-cli transcribe &lt;file&gt;", html);
+        Assert.DoesNotContain("typewhisper models", html);
+        Assert.Contains("Settings → General → Services", html);
+        Assert.DoesNotContain("Advanced", html);
+        Assert.DoesNotContain("cannot be combined with language hints", html);
         using var forbiddenOrigin = new HttpRequestMessage(HttpMethod.Get, path);
         forbiddenOrigin.Headers.Add("Origin", "https://example.com");
         using var forbidden = await client.SendAsync(forbiddenOrigin);
