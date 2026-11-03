@@ -370,6 +370,9 @@ public sealed class DashboardSectionViewModelTests : IDisposable
         try
         {
             sut.Refresh();
+            // The constructor's history load posts its refresh from the thread pool; under
+            // load it can land after this drain and leave a stray refresh for the asserts below.
+            Assert.True(SpinWait.SpinUntil(() => !pending.IsEmpty, TimeSpan.FromSeconds(15)));
             while (pending.TryDequeue(out var initialRefresh))
             {
                 initialRefresh();
