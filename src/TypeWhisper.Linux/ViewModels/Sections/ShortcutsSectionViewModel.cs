@@ -219,12 +219,11 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             // The chord is bound and saved before ApplyHotkeyAsync awaits the integration probe,
             // so capture ends now; a cancel or restart during the probe can't misreport it.
             apply = ApplyHotkeyAsync();
-            // Success normalizes HotkeyText to the binding; a captured chord always parses, so a
-            // mismatch means it collided. Show the live binding instead of the rejected chord.
+            // A captured chord always parses, so a mismatch means it collided (ApplyHotkeyAsync
+            // already reported that). Show the live binding instead of the rejected chord.
             if (HotkeyText != _hotkey.CurrentHotkeyString)
             {
                 HotkeyText = _hotkey.CurrentHotkeyString;
-                StatusMessage = Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", hotkey);
             }
         }
         finally
@@ -1196,8 +1195,12 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
         else
         {
-            StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", HotkeyText);
+            StatusMessage = Loc.Instance.GetString(
+                HotkeyService.IsParsableHotkey(HotkeyText)
+                    ? "Shortcuts.HotkeyCollides"
+                    : "Shortcuts.HotkeyParseFailed",
+                HotkeyText
+            );
         }
     }
 

@@ -1166,6 +1166,7 @@
   "Shortcuts.GlobalReadsEnabled": "Global keyboard reads enabled.",
   "Shortcuts.HotkeyParseFailed": "Could not parse '{0}'. Try e.g. Ctrl+Shift+Space, Alt+F9, Ctrl+K.",
   "Shortcuts.HotkeyParseOrCollide": "Could not parse '{0}' or it collides with another shortcut.",
+  "Shortcuts.HotkeyCollides": "'{0}' conflicts with another shortcut.",
   "Shortcuts.HotkeySet": "Hotkey set to {0}.",
   "Shortcuts.InstallingShortcut": "Installing shortcut on {0}…",
   "Shortcuts.KeyboardAccessBanner": "⚠ Enable keyboard access to use global hotkeys on Wayland",
