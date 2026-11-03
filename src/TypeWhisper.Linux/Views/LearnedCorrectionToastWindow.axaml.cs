@@ -13,8 +13,9 @@ namespace TypeWhisper.Linux.Views;
 ///     so it appears where the user is actually looking — even on another monitor.
 ///     <para>
 ///         Must not steal focus from the app the user is typing in: it is created with
-///         ShowActivated=false and only ever shown via <see cref="Window.Show()" /> (never
-///         <see cref="Window.Activate" />d or focused). Mirrors DictationOverlayWindow's
+///         ShowActivated=false, marked "No Input" for the WM (<see cref="X11NoInputFocus" />) so
+///         clicking Undo doesn't activate it, and only ever shown via <see cref="Window.Show()" />
+///         (never <see cref="Window.Activate" />d or focused). Mirrors DictationOverlayWindow's
 ///         utility-window style (Topmost, no decorations, no taskbar entry).
 ///     </para>
 /// </summary>
@@ -25,6 +26,7 @@ public partial class LearnedCorrectionToastWindow : Window
     // Extents of the correction currently being shown, captured so a Reposition posted after
     // ShowToast (once layout has produced a real size) anchors to the right element.
     private AtSpiScreenRect? _pendingExtents;
+    private CompositorWindowFrame? _pendingWindowFrame;
 
     public LearnedCorrectionToastWindow()
     {
@@ -44,19 +46,22 @@ public partial class LearnedCorrectionToastWindow : Window
 
     /// <summary>
     ///     Shows or updates the toast: sets the message and Undo affordance, positions the window
-    ///     beside <paramref name="sourceExtents" /> (or bottom-center as a fallback), then reveals
-    ///     it without activating. Re-invoking updates the existing window in place.
+    ///     beside <paramref name="sourceExtents" /> (else beside <paramref name="windowFrame" />, else
+    ///     bottom-center as a fallback), then reveals it without activating. Re-invoking updates the
+    ///     existing window in place.
     /// </summary>
     public void ShowToast(
         string message,
         bool showUndo,
         string undoLabel,
         AtSpiScreenRect? sourceExtents,
+        CompositorWindowFrame? windowFrame,
         Action onUndo
     )
     {
         _onUndo = onUndo;
         _pendingExtents = sourceExtents;
+        _pendingWindowFrame = windowFrame;
         MessageText.Text = message;
         UndoButton.Content = undoLabel;
         UndoButton.IsVisible = showUndo;
@@ -67,6 +72,14 @@ public partial class LearnedCorrectionToastWindow : Window
         // keeps focus with the target app.
         if (!IsVisible)
         {
+            // ShowActivated=false only covers the map. Clicking Undo would still make KWin
+            // activate the toast, and it stays the keyboard target after HideToast parks it.
+            // Opt out of focus entirely before the first map.
+            if (TryGetPlatformHandle() is { Handle: var xid } && xid != IntPtr.Zero)
+            {
+                X11NoInputFocus.Apply((nuint)xid);
+            }
+
             Show();
             // Mapped once and kept alive via Opacity (never Hide()), so without this the WM pins it
             // to the workspace it was first shown on and later feedback/Undo stays invisible after
@@ -145,7 +158,8 @@ public partial class LearnedCorrectionToastWindow : Window
             (int)Math.Ceiling(height * scaling)
         );
         var screens = CollectScreenBounds();
-        Position = LearnedToastPlacement.Compute(_pendingExtents, screens, toastSize);
+        var anchor = LearnedToastPlacement.ChooseAnchor(_pendingExtents, _pendingWindowFrame, screens);
+        Position = LearnedToastPlacement.Compute(anchor, screens, toastSize);
     }
 
     // Asks the WM to show the (mapped-once) toast on the active virtual desktop rather than

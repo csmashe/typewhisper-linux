@@ -368,7 +368,15 @@ public sealed class TextInsertionService
 
         if (shouldTypeDirectly)
         {
-            var directResult = await TypeTextAsync(text, targetWindowId, autoEnter, request.LockedFocusTarget);
+            // Auto must not let non-ASCII text fall through to ydotool; paste instead if the others fail.
+            var unicodeBackendsOnly = strategy is not TextInsertionStrategy.DirectTyping && !IsAsciiSafe(text);
+            var directResult = await TypeTextAsync(
+                text,
+                targetWindowId,
+                autoEnter,
+                request.LockedFocusTarget,
+                unicodeBackendsOnly
+            );
             if (
                 strategy is TextInsertionStrategy.DirectTyping
                 || directResult is not InsertionResult.Failed
@@ -999,7 +1007,8 @@ public sealed class TextInsertionService
         string text,
         string? targetWindowId,
         bool autoEnter,
-        LockedFocusTarget? lockedTarget
+        LockedFocusTarget? lockedTarget,
+        bool unicodeBackendsOnly = false
     )
     {
         if (!await FocusTargetWindowAsync(targetWindowId))
@@ -1025,7 +1034,7 @@ public sealed class TextInsertionService
                 : InsertionResult.Failed;
         }
 
-        if (!await _platform.TypeTextAsync(text))
+        if (!await _platform.TypeTextAsync(text, unicodeBackendsOnly))
         {
             if (_platform.LastFailureReason != InsertionFailureReason.None)
             {
@@ -1256,6 +1265,12 @@ internal interface ITextInsertionPlatform
     Task<bool> TypeTextAsync(string text);
 
     /// <summary>
+    ///     Types <paramref name="text" />; when <paramref name="unicodeBackendsOnly" /> is true,
+    ///     skips backends that cannot type non-ASCII text.
+    /// </summary>
+    Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly) => TypeTextAsync(text);
+
+    /// <summary>
     ///     Synthesizes a copy. When <paramref name="useTerminalShortcut" /> is true,
     ///     sends Ctrl+Shift+C (terminals map plain Ctrl+C to SIGINT); otherwise Ctrl+C.
     /// </summary>
@@ -1275,13 +1290,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
 
-    // GTK owners also advertise the legacy COMPOUND_TEXT encoding for plain-text copies.
-    private static readonly HashSet<string> s_waylandTextSafeTargets =
-        new(StringComparer.OrdinalIgnoreCase) { "STRING", "UTF8_STRING", "TEXT", "COMPOUND_TEXT" };
-
     // X11 TARGETS listings always include protocol/negotiation targets that carry no
     // content of their own alongside the plain-text encodings. None count as non-text content.
-    private static readonly HashSet<string> s_x11TextSafeTargets = new(
+    // wl-paste listings need the same set: Xwayland bridges an X11 owner's target names to
+    // Wayland verbatim, and GTK owners advertise COMPOUND_TEXT and SAVE_TARGETS there too.
+    private static readonly HashSet<string> s_textSafeTargets = new(
         [
             "TARGETS",
             "MULTIPLE",
@@ -1499,7 +1512,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
 
             return result.Succeeded
-                   && ListingHasNonTextFormats(result.StandardOutput, useWaylandClipboard);
+                   && ListingHasNonTextFormats(result.StandardOutput);
         }
         catch (Exception ex)
         {
@@ -1510,14 +1523,13 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    internal static bool ListingHasNonTextFormats(string listing, bool isWayland)
+    internal static bool ListingHasNonTextFormats(string listing)
     {
-        var textSafe = isWayland ? s_waylandTextSafeTargets : s_x11TextSafeTargets;
         return listing.Split('\n').Any(rawLine =>
         {
             var target = rawLine.Trim();
             return target.Length != 0
-                   && !textSafe.Contains(target)
+                   && !s_textSafeTargets.Contains(target)
                    && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase);
         });
     }
@@ -1624,6 +1636,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public Task<bool> TypeTextAsync(string text)
     {
+        return TypeTextAsync(text, unicodeBackendsOnly: false);
+    }
+
+    public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
+    {
         // Map newlines to Shift+Enter rather than a bare Return so that
         // dictated paragraph breaks insert a newline instead of submitting
         // in chat boxes (Slack / Discord / web chat / Claude's box), where
@@ -1631,7 +1648,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         // out of this method: terminal protocols still deliver Shift+Return
         // as Return, which can submit partial shell commands. The clipboard-
         // paste path is unaffected (pasted multiline text does not submit).
-        return WalkChainAsync(backend => TypeWithNewlinesAsync(backend, text));
+        return WalkChainAsync(
+            backend => TypeWithNewlinesAsync(backend, text),
+            unicodeBackendsOnly ? InputBackend.Ydotool : null
+        );
     }
 
     private async Task<bool> TypeWithNewlinesAsync(InputBackend backend, string text)
@@ -1786,7 +1806,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         ApplyRefreshedSnapshot(snapshot);
     }
 
-    private async Task<bool> WalkChainAsync(Func<InputBackend, Task<bool>> attempt)
+    private async Task<bool> WalkChainAsync(
+        Func<InputBackend, Task<bool>> attempt,
+        InputBackend? skip = null
+    )
     {
         var chain = _chain;
         var disabled = _disabled;
@@ -1803,7 +1826,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- body awaits and mutates state; the explicit disabled-backend guard is clearer than a LINQ Where
         foreach (var backend in chain)
         {
-            if (disabled.Contains(backend))
+            if (disabled.Contains(backend) || backend == skip)
             {
                 continue;
             }

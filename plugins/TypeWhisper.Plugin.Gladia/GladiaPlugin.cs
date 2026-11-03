@@ -3,6 +3,7 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -22,6 +23,9 @@ public sealed class GladiaPlugin
 
     private static readonly TimeSpan s_defaultPollDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan s_defaultPollWindow = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan s_defaultDeferredCleanupDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan s_maxDeferredCleanupDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan s_defaultDeferredCleanupWindow = TimeSpan.FromMinutes(30);
     // Gladia documents no vocabulary limits; this matches upstream and bounds the request.
     private static readonly DictionaryTermsBudget s_vocabularyBudget = new(MaxTerms: 100, MaxTotalChars: 4_000);
     private const double VocabularyIntensity = 0.7;
@@ -29,6 +33,12 @@ public sealed class GladiaPlugin
     private readonly HttpClient _httpClient;
     private readonly TimeSpan _pollDelay;
     private readonly TimeSpan _pollWindow;
+    private readonly TimeSpan _deferredCleanupDelay;
+    private readonly TimeSpan _deferredCleanupWindow;
+    private readonly CancellationTokenSource _disposeCts = new();
+    private readonly Lock _cleanupLock = new();
+    private readonly HashSet<Task> _deferredCleanups = [];
+    private bool _disposed;
     private IPluginHostServices? _host;
     private string? _apiKey;
 
@@ -45,12 +55,16 @@ public sealed class GladiaPlugin
     internal GladiaPlugin(
         HttpClient httpClient,
         TimeSpan? pollDelay = null,
-        TimeSpan? pollWindow = null
+        TimeSpan? pollWindow = null,
+        TimeSpan? deferredCleanupDelay = null,
+        TimeSpan? deferredCleanupWindow = null
     )
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _pollDelay = pollDelay ?? s_defaultPollDelay;
         _pollWindow = pollWindow ?? s_defaultPollWindow;
+        _deferredCleanupDelay = deferredCleanupDelay ?? s_defaultDeferredCleanupDelay;
+        _deferredCleanupWindow = deferredCleanupWindow ?? s_defaultDeferredCleanupWindow;
 
         if (_pollDelay < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
@@ -62,6 +76,18 @@ public sealed class GladiaPlugin
             throw new ArgumentOutOfRangeException(
                 nameof(pollWindow),
                 "The polling window cannot be negative."
+            );
+
+        if (_deferredCleanupDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(deferredCleanupDelay),
+                "The deferred cleanup delay cannot be negative."
+            );
+
+        if (_deferredCleanupWindow < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(deferredCleanupWindow),
+                "The deferred cleanup window cannot be negative."
             );
     }
 
@@ -157,10 +183,11 @@ public sealed class GladiaPlugin
 
         var audioUrl = await UploadAudioAsync(wavAudio, apiKey, ct);
         var job = await InitiateTranscriptionAsync(audioUrl, language, vocabulary, apiKey, ct);
-        var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
 
+        // Once the job exists, cancellation and poll faults must still clean it up.
         try
         {
+            var terminalJson = await PollUntilTerminalAsync(job, apiKey, ct);
             using var terminalDocument = ParseProtocolJson(
                 terminalJson,
                 "polling"
@@ -185,7 +212,29 @@ public sealed class GladiaPlugin
 
     public void Dispose()
     {
+        lock (_cleanupLock)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            if (_deferredCleanups.Count > 0)
+            {
+                Trace.TraceWarning(
+                    $"Gladia plugin disposed with {_deferredCleanups.Count} unfinished job cleanup(s) still pending."
+                );
+            }
+        }
+
+        // Not disposed: running cleanups still hold this token.
+        _disposeCts.Cancel();
         _httpClient.Dispose();
+    }
+
+    internal Task WaitForDeferredCleanupsAsync()
+    {
+        lock (_cleanupLock)
+            return Task.WhenAll(_deferredCleanups.ToArray());
     }
 
     private async Task<string> UploadAudioAsync(
@@ -244,11 +293,22 @@ public sealed class GladiaPlugin
         var json = await SendJsonAsync(request, "Gladia transcription initiation", ct);
         using var document = ParseProtocolJson(json, "transcription initiation");
         var id = RequireString(document.RootElement, "id", "transcription initiation");
-        var resultUrl = RequireString(
-            document.RootElement,
-            "result_url",
-            "transcription initiation"
-        );
+
+        // The job exists from here on, so a bad result_url must not orphan it.
+        try
+        {
+            return new InitiatedJob(id, ReadResultUrl(document.RootElement));
+        }
+        catch
+        {
+            await DeleteJobBestEffortAsync(id, apiKey);
+            throw;
+        }
+    }
+
+    private static Uri ReadResultUrl(JsonElement root)
+    {
+        var resultUrl = RequireString(root, "result_url", "transcription initiation");
 
         // Require HTTPS: polling sends x-gladia-key to this URL; non-HTTPS would leak it in plaintext.
         if (!Uri.TryCreate(resultUrl, UriKind.Absolute, out var resultUri)
@@ -259,7 +319,7 @@ public sealed class GladiaPlugin
             );
         }
 
-        return new InitiatedJob(id, resultUri);
+        return resultUri;
     }
 
     private async Task<string> PollUntilTerminalAsync(
@@ -339,9 +399,20 @@ public sealed class GladiaPlugin
 
     private async Task DeleteJobBestEffortAsync(string jobId, string apiKey)
     {
+        if (await TryDeleteJobAsync(jobId, apiKey, CancellationToken.None) == DeleteOutcome.NotFinished)
+            ScheduleDeferredCleanup(jobId, apiKey);
+    }
+
+    private async Task<DeleteOutcome> TryDeleteJobAsync(
+        string jobId,
+        string apiKey,
+        CancellationToken ct
+    )
+    {
         // Cleanup is best-effort and awaited before returning; bound it short
         // so a stalled DELETE can't hold up the finished result.
-        using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cleanupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cleanupCts.CancelAfter(TimeSpan.FromSeconds(5));
         using var request = new HttpRequestMessage(
             HttpMethod.Delete,
             $"{BaseUrl}/v2/pre-recorded/{Uri.EscapeDataString(jobId)}"
@@ -351,14 +422,21 @@ public sealed class GladiaPlugin
         try
         {
             using var response = await _httpClient.SendAsync(request, cleanupCts.Token);
-            if (!response.IsSuccessStatusCode)
-            {
-                var responseBody = await response.Content.ReadAsStringAsync(cleanupCts.Token);
-                Trace.TraceWarning(
-                    "Gladia cleanup could not delete pre-recorded job "
-                        + $"{jobId}: {(int)response.StatusCode} {ExtractProviderDetails(responseBody)}"
-                );
-            }
+            if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
+                return DeleteOutcome.Deleted;
+
+            var responseBody = await response.Content.ReadAsStringAsync(cleanupCts.Token);
+            if (response.StatusCode == HttpStatusCode.Forbidden && IsUnfinishedJobError(responseBody))
+                return DeleteOutcome.NotFinished;
+
+            Trace.TraceWarning(
+                "Gladia cleanup could not delete pre-recorded job "
+                    + $"{jobId}: {(int)response.StatusCode} {ExtractProviderDetails(responseBody)}"
+            );
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -366,6 +444,91 @@ public sealed class GladiaPlugin
                 $"Gladia cleanup could not delete pre-recorded job {jobId}: {ex.Message}"
             );
         }
+
+        return DeleteOutcome.Failed;
+    }
+
+    // Background, so a canceled or failed request doesn't wait for Gladia to finish the job.
+    private void ScheduleDeferredCleanup(string jobId, string apiKey)
+    {
+        Task cleanup;
+        lock (_cleanupLock)
+        {
+            if (_disposed)
+                return;
+
+            var disposeToken = _disposeCts.Token;
+            // ReSharper disable once MethodSupportsCancellation -- the loop watches the token; passing it here leaves a Canceled task if Dispose runs first.
+            cleanup = Task.Run(() => DeleteWhenFinishedAsync(jobId, apiKey, disposeToken));
+            _deferredCleanups.Add(cleanup);
+        }
+
+        _ = cleanup.ContinueWith(
+            finished =>
+            {
+                lock (_cleanupLock)
+                    _deferredCleanups.Remove(finished);
+            },
+            TaskScheduler.Default
+        );
+    }
+
+    private async Task DeleteWhenFinishedAsync(
+        string jobId,
+        string apiKey,
+        CancellationToken disposeToken
+    )
+    {
+        using var windowCts = CancellationTokenSource.CreateLinkedTokenSource(disposeToken);
+        windowCts.CancelAfter(_deferredCleanupWindow);
+        var delay = _deferredCleanupDelay;
+
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(delay, windowCts.Token);
+
+                var outcome = await TryDeleteJobAsync(jobId, apiKey, windowCts.Token);
+                if (outcome != DeleteOutcome.NotFinished)
+                    return;
+
+                delay = TimeSpan.FromTicks(
+                    Math.Min(delay.Ticks * 2, s_maxDeferredCleanupDelay.Ticks)
+                );
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Trace.TraceWarning(
+                $"Gladia cleanup gave up on pre-recorded job {jobId}: it did not finish within "
+                    + $"{_deferredCleanupWindow.TotalSeconds:0.###} seconds or the plugin was disposed."
+            );
+        }
+    }
+
+    // Gladia answers 403 "Invalid state: QUEUED not in SUCCESS,ERROR" until the job finishes;
+    // any other 403 (e.g. a revoked key) will not clear by waiting.
+    private static bool IsUnfinishedJobError(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && TryGetString(document.RootElement, "message", out var message)
+                && message.StartsWith("Invalid state", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private enum DeleteOutcome
+    {
+        Deleted,
+        NotFinished,
+        Failed,
     }
 
     private static PluginTranscriptionResult ParseCompletedResult(

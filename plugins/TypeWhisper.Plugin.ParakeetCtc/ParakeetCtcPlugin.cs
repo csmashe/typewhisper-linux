@@ -69,9 +69,12 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
                     .ConfigureAwait(false);
             activation.Token.ThrowIfCancellationRequested();
             var tokenizer = new CtcTokenizer(Path.Join(directory, "tokens.txt"));
+            var modelPath = Path.Join(directory, "model.int8.onnx");
+            if (!File.Exists(modelPath))
+                throw new FileNotFoundException("CTC model file is missing.", modelPath);
             activation.Token.ThrowIfCancellationRequested();
             _tokenizer = tokenizer;
-            _modelPath = Path.Join(directory, "model.int8.onnx");
+            _modelPath = modelPath;
             _host = host;
         }
         finally

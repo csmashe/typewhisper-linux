@@ -2247,6 +2247,47 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("café", platform.TypedText);
+        Assert.False(platform.LastTypeUsedUnicodeBackendsOnly);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_known_app_types_non_ascii_with_unicode_backends_only()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "firefox",
+            targetWindowTitle: "QA — Mozilla Firefox"
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("café", platform.TypedText);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_known_app_pastes_non_ascii_when_unicode_backends_fail()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            TypeSucceeds = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "firefox",
+            targetWindowTitle: "QA — Mozilla Firefox"
+        );
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.True(platform.PasteSent);
     }
 
     [Fact]
@@ -2549,50 +2590,51 @@ public sealed class TextInsertionServiceTests
     }
 
     [Theory]
-    [InlineData("", true, false)]
-    [InlineData("text/plain;charset=utf-8\n", true, false)]
-    [InlineData("text/plain;charset=utf-8\ntext/html\n", true, true)]
-    [InlineData("image/png\n", true, true)]
+    [InlineData("", false)]
+    [InlineData("text/plain;charset=utf-8\n", false)]
+    [InlineData("text/plain;charset=utf-8\ntext/html\n", true)]
+    [InlineData("image/png\n", true)]
     // Native GTK3 plain-text copy as wl-paste lists it, duplicates included.
     [InlineData(
         "text/plain\ntext/plain;charset=utf-8\nSTRING\nTEXT\nCOMPOUND_TEXT\nUTF8_STRING\nSTRING\nTEXT\n",
-        true,
         false
     )]
-    [InlineData("COMPOUND_TEXT\ntext/html\n", true, true)]
-    [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false, false)]
+    // Native GTK plain-text copy on KDE Wayland also lists SAVE_TARGETS negotiation metadata.
+    [InlineData(
+        "text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n",
+        false
+    )]
+    [InlineData("SAVE_TARGETS\ntext/html\n", true)]
+    [InlineData("COMPOUND_TEXT\ntext/html\n", true)]
+    [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false)]
     [InlineData(
         "TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\ntext/uri-list\n",
-        false,
         true
     )]
     [InlineData(
         "TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\nx-special/gnome-copied-files\n",
-        false,
         true
     )]
     // ICCCM metadata / side-effect targets carry no content of their own.
-    [InlineData("TARGETS\nSTRING\nLENGTH\n", false, false)]
-    [InlineData("TARGETS\nSTRING\nDELETE\n", false, false)]
-    [InlineData("TARGETS\nSTRING\nINSERT_SELECTION\n", false, false)]
-    [InlineData("TARGETS\nSTRING\nINSERT_PROPERTY\n", false, false)]
+    [InlineData("TARGETS\nSTRING\nLENGTH\n", false)]
+    [InlineData("TARGETS\nSTRING\nDELETE\n", false)]
+    [InlineData("TARGETS\nSTRING\nINSERT_SELECTION\n", false)]
+    [InlineData("TARGETS\nSTRING\nINSERT_PROPERTY\n", false)]
     [InlineData(
         "TARGETS\nMULTIPLE\nTIMESTAMP\nLENGTH\nDELETE\nINSERT_SELECTION\nINSERT_PROPERTY\nSTRING\nUTF8_STRING\nTEXT\nCOMPOUND_TEXT\n",
-        false,
         false
     )]
     // A real rich format alongside them still counts.
-    [InlineData("TARGETS\nSTRING\nLENGTH\ntext/html\n", false, true)]
+    [InlineData("TARGETS\nSTRING\nLENGTH\ntext/html\n", true)]
+    // Xwayland bridges an X11 owner's targets to Wayland verbatim, TARGETS included.
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nTARGETS\n", false)]
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nTARGETS\ntext/html\n", true)]
     public void LinuxTextInsertionPlatform_ListingHasNonTextFormats_classifies_targets(
         string listing,
-        bool isWayland,
         bool expected
     )
     {
-        Assert.Equal(
-            expected,
-            LinuxTextInsertionPlatform.ListingHasNonTextFormats(listing, isWayland)
-        );
+        Assert.Equal(expected, LinuxTextInsertionPlatform.ListingHasNonTextFormats(listing));
     }
 
     [Fact]
@@ -2825,6 +2867,42 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("wl-paste", call.FileName);
         Assert.Equal(["--list-types"], call.Args);
         Assert.Equal(TimeSpan.FromSeconds(5), call.Timeout);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_KdeGtkPlainTextIsTextOnly()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            "text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n"
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        Assert.False(await platform.ClipboardHasNonTextFormatsAsync());
+
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("wl-paste", call.FileName);
+        Assert.Equal(["--list-types"], call.Args);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_XwaylandPlainTextIsTextOnly()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            "text/plain;charset=utf-8\nUTF8_STRING\nTARGETS\n"
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        Assert.False(await platform.ClipboardHasNonTextFormatsAsync());
     }
 
     [Fact]
@@ -3505,6 +3583,26 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_UnicodeOnlyTyping_SkipsYdotoolWhenWtypeFails()
+    {
+        // ydotool would drop "é" and still exit 0, so a wtype failure must surface instead.
+        var runner = new ScriptedProcessRunner();
+        runner.Queue.Enqueue(("wtype", 1, string.Empty));
+
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("café", unicodeBackendsOnly: true);
+
+        Assert.False(result);
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("wtype", call.FileName);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_MultilineTyping_PartialDeliveryStopsChainInsteadOfRetyping()
     {
         // Regression (audit §3 M2): wtype types "line one" successfully, then fails
@@ -3986,6 +4084,14 @@ public sealed class TextInsertionServiceTests
         }
 
         public Action? OnTypeText { get; init; }
+
+        public bool LastTypeUsedUnicodeBackendsOnly { get; private set; }
+
+        public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
+        {
+            LastTypeUsedUnicodeBackendsOnly = unicodeBackendsOnly;
+            return TypeTextAsync(text);
+        }
 
         public Task<bool> TypeTextAsync(string text)
         {

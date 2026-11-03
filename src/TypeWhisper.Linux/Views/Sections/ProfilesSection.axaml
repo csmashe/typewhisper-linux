@@ -177,10 +177,12 @@
                                            FontSize="12"
                                            TextWrapping="Wrap" />
                                 <Button Grid.Row="1"
-                                        Content="{loc:Str Profiles.InstallWindowCallsExtension}"
                                         HorizontalAlignment="Left"
                                         IsVisible="{Binding CanInstallWindowCallsExtension}"
-                                        Command="{Binding InstallWindowCallsExtensionCommand}" />
+                                        Command="{Binding InstallWindowCallsExtensionCommand}">
+                                    <TextBlock Text="{loc:Str Profiles.InstallWindowCallsExtension}"
+                                               TextWrapping="Wrap" />
+                                </Button>
                             </Grid>
                         </Border>
 
@@ -194,16 +196,21 @@
                                            Text="{Binding BrowserAccessibilityStatusMessage}"
                                            FontSize="12"
                                            TextWrapping="Wrap" />
-                                <StackPanel Grid.Row="1"
-                                            Orientation="Horizontal"
-                                            Spacing="8">
-                                    <Button Content="{loc:Str Profiles.EnableBrowserUrlDetection}"
-                                            IsVisible="{Binding CanEnableBrowserAccessibility}"
-                                            Command="{Binding EnableBrowserAccessibilityCommand}" />
-                                    <Button Content="{loc:Str Profiles.RevertBrowserUrlDetection}"
-                                            IsVisible="{Binding CanRevertBrowserAccessibility}"
-                                            Command="{Binding RevertBrowserAccessibilityCommand}" />
-                                </StackPanel>
+                                <!-- Horizontal scrolling is off here, so the buttons wrap to fit a narrow window. -->
+                                <WrapPanel Grid.Row="1"
+                                           ItemSpacing="8"
+                                           LineSpacing="8">
+                                    <Button IsVisible="{Binding CanEnableBrowserAccessibility}"
+                                            Command="{Binding EnableBrowserAccessibilityCommand}">
+                                        <TextBlock Text="{loc:Str Profiles.EnableBrowserUrlDetection}"
+                                                   TextWrapping="Wrap" />
+                                    </Button>
+                                    <Button IsVisible="{Binding CanRevertBrowserAccessibility}"
+                                            Command="{Binding RevertBrowserAccessibilityCommand}">
+                                        <TextBlock Text="{loc:Str Profiles.RevertBrowserUrlDetection}"
+                                                   TextWrapping="Wrap" />
+                                    </Button>
+                                </WrapPanel>
                             </Grid>
                         </Border>
 

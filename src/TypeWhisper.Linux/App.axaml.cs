@@ -27,11 +27,6 @@ namespace TypeWhisper.Linux;
 
 public class App : Application
 {
-    /// <summary>
-    ///     Upstream AppSettings default; meaningful on Windows but no
-    ///     better than any other default on Linux, so we migrate past it.
-    /// </summary>
-    private const string UpstreamDefaultHotkey = "Ctrl+Shift+F9";
     private static readonly TimeSpan s_shutdownQuiesceBudget = TimeSpan.FromSeconds(5);
     private static int s_skipProviderDisposal;
 
@@ -627,7 +622,7 @@ public class App : Application
 
             var api = services.GetRequiredService<HttpApiService>();
             api.ApplySettings();
-            settings.SettingsChanged += _ => api.ApplySettings();
+            settings.SettingsChanged += _ => api.ApplySettingsInBackground();
 
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();
@@ -893,14 +888,12 @@ public class App : Application
 
         // Dictation first: every other binding is checked for collisions against it, so applying
         // them before the saved chord would test them against the default (Ctrl+Shift+Space).
-        // Treat the upstream Windows default ("Ctrl+Shift+F9") as unset on Linux and substitute
-        // the Linux default (Ctrl+Shift+Space) to prevent SettingsChanged from rebinding to it.
+        // A saved Ctrl+Shift+F9 is a user choice: every Linux release has rewritten the old
+        // upstream default on first start, so it can no longer be a leftover.
         var linuxDefault = hotkey.CurrentHotkeyString;
         var persisted = s.ToggleHotkey;
-        var shouldMigrate =
-            string.IsNullOrWhiteSpace(persisted) || persisted == UpstreamDefaultHotkey;
 
-        if (shouldMigrate)
+        if (string.IsNullOrWhiteSpace(persisted))
         {
             settings.Update(current => current with { ToggleHotkey = linuxDefault });
         }

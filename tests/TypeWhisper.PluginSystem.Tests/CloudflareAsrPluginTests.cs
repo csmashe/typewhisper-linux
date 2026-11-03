@@ -597,6 +597,64 @@ public class CloudflareAsrPluginTests
         Assert.Equal("Settings.SettingsChangedDuringValidation", result.Message);
     }
 
+    [Theory]
+    [InlineData("whisper")]
+    [InlineData("whisper-large-v3-turbo")]
+    public async Task TranscribeAsync_UsesWavDurationWhenProviderOmitsIt(string modelId)
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse("""{ "success": true, "result": { "text": "ok" } }"""))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler, modelId);
+
+        var result = await sut.TranscribeAsync(CreateWav(3.253125), null, translate: false, prompt: null, CancellationToken.None);
+
+        Assert.Equal(3.253125, result.DurationSeconds, precision: 6);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_PrefersProviderDurationOverWavLength()
+    {
+        var handler = new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(JsonResponse("""{ "success": true, "result": { "text": "ok", "duration": 1.25 } }"""))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler, "whisper");
+
+        var result = await sut.TranscribeAsync(CreateWav(3), null, translate: false, prompt: null, CancellationToken.None);
+
+        Assert.Equal(1.25, result.DurationSeconds);
+    }
+
+    [Fact]
+    public void CalculateWavDurationSeconds_ClampsUnknownDataSizeToPresentBytes()
+    {
+        var wav = CreateWav(2);
+        BitConverter.GetBytes(uint.MaxValue).CopyTo(wav, 40);
+
+        Assert.Equal(2.0, CloudflareAsrPlugin.CalculateWavDurationSeconds(wav), precision: 6);
+    }
+
+    private static byte[] CreateWav(double seconds)
+    {
+        var dataSize = (int)Math.Round(seconds * 32_000);
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write("RIFF"u8);
+        writer.Write(36 + dataSize);
+        writer.Write("WAVEfmt "u8);
+        writer.Write(16);
+        writer.Write((short)1);
+        writer.Write((short)1);
+        writer.Write(16_000);
+        writer.Write(32_000);
+        writer.Write((short)2);
+        writer.Write((short)16);
+        writer.Write("data"u8);
+        writer.Write(dataSize);
+        writer.Write(new byte[dataSize]);
+        return stream.ToArray();
+    }
+
     private static async Task<CloudflareAsrPlugin> CreateConfiguredPluginAsync(
         StubHttpMessageHandler handler,
         string? modelId = null
