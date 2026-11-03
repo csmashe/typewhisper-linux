@@ -26,6 +26,7 @@ public partial class LearnedCorrectionToastWindow : Window
     // Extents of the correction currently being shown, captured so a Reposition posted after
     // ShowToast (once layout has produced a real size) anchors to the right element.
     private AtSpiScreenRect? _pendingExtents;
+    private CompositorWindowFrame? _pendingWindowFrame;
 
     public LearnedCorrectionToastWindow()
     {
@@ -45,19 +46,22 @@ public partial class LearnedCorrectionToastWindow : Window
 
     /// <summary>
     ///     Shows or updates the toast: sets the message and Undo affordance, positions the window
-    ///     beside <paramref name="sourceExtents" /> (or bottom-center as a fallback), then reveals
-    ///     it without activating. Re-invoking updates the existing window in place.
+    ///     beside <paramref name="sourceExtents" /> (else beside <paramref name="windowFrame" />, else
+    ///     bottom-center as a fallback), then reveals it without activating. Re-invoking updates the
+    ///     existing window in place.
     /// </summary>
     public void ShowToast(
         string message,
         bool showUndo,
         string undoLabel,
         AtSpiScreenRect? sourceExtents,
+        CompositorWindowFrame? windowFrame,
         Action onUndo
     )
     {
         _onUndo = onUndo;
         _pendingExtents = sourceExtents;
+        _pendingWindowFrame = windowFrame;
         MessageText.Text = message;
         UndoButton.Content = undoLabel;
         UndoButton.IsVisible = showUndo;
@@ -154,7 +158,8 @@ public partial class LearnedCorrectionToastWindow : Window
             (int)Math.Ceiling(height * scaling)
         );
         var screens = CollectScreenBounds();
-        Position = LearnedToastPlacement.Compute(_pendingExtents, screens, toastSize);
+        var anchor = LearnedToastPlacement.ChooseAnchor(_pendingExtents, _pendingWindowFrame, screens);
+        Position = LearnedToastPlacement.Compute(anchor, screens, toastSize);
     }
 
     // Asks the WM to show the (mapped-once) toast on the active virtual desktop rather than

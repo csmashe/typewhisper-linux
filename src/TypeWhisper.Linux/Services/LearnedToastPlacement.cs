@@ -61,6 +61,49 @@ public static class LearnedToastPlacement
         return Clamp(new PixelPoint(fallbackX, fallbackY), toastSize, primary);
     }
 
+    /// <summary>
+    ///     Picks the box to anchor the toast to: the element's extents when plausible, else its
+    ///     window's frame mapped onto the screens so the toast still lands on that monitor.
+    /// </summary>
+    public static AtSpiScreenRect? ChooseAnchor(
+        AtSpiScreenRect? extents,
+        CompositorWindowFrame? windowFrame,
+        IReadOnlyList<PixelRect> screens
+    )
+    {
+        if (extents is { } rect && IsPlausible(rect, screens))
+        {
+            return rect;
+        }
+
+        return windowFrame is { } window ? MapToScreens(window, screens) : extents;
+    }
+
+    /// <summary>
+    ///     Maps a compositor-logical window frame onto the screens' coordinate space by stretching
+    ///     the logical desktop over the screens' union. Xwayland applies one scale to the whole
+    ///     desktop (2× under fractional scaling, 1× otherwise), so a linear map is exact.
+    /// </summary>
+    public static AtSpiScreenRect? MapToScreens(CompositorWindowFrame window, IReadOnlyList<PixelRect> screens)
+    {
+        var desktop = window.Desktop;
+        if (screens.Count == 0 || desktop.Width <= 0 || desktop.Height <= 0)
+        {
+            return null;
+        }
+
+        var union = screens.Aggregate((a, b) => a.Union(b));
+        var scaleX = (double)union.Width / desktop.Width;
+        var scaleY = (double)union.Height / desktop.Height;
+        var frame = window.Frame;
+        return new AtSpiScreenRect(
+            union.X + (int)Math.Round((frame.X - desktop.X) * scaleX),
+            union.Y + (int)Math.Round((frame.Y - desktop.Y) * scaleY),
+            (int)Math.Round(frame.Width * scaleX),
+            (int)Math.Round(frame.Height * scaleY)
+        );
+    }
+
     // Extents are plausible only with positive size AND overlapping some screen — this rejects the
     // 0,0/0×0 or window-relative garbage native-Wayland apps report, which would place the toast
     // off-screen or in a corner.
