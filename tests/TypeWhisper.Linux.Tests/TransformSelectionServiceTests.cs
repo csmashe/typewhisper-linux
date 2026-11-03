@@ -592,7 +592,7 @@ public sealed class TransformSelectionServiceTests
 
         public string? GetBrowserUrlForSnapshot(
             ActiveWindowSnapshot? activeWindowSnapshot,
-            bool honorMissBackoff = false
+            bool isPolling = false
         )
         {
             return null;

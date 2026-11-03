@@ -86,7 +86,7 @@ public sealed class GnomeWindowCallsSetupHelperTests
         Assert.True(new GnomeWindowCallsSetupHelper(runner).TryOpenInstallPage());
 
         Assert.Equal(
-            new Uri("https://extensions.gnome.org/extension/4974/window-calls/"),
+            new Uri("https://extensions.gnome.org/extension/4724/window-calls/"),
             Assert.Single(runner.LaunchedUris)
         );
     }

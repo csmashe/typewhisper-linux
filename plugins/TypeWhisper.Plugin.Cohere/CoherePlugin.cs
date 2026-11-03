@@ -254,10 +254,9 @@ public sealed class CoherePlugin
         for (var offset = 12; offset <= wavAudio.Length - 8;)
         {
             var chunkId = Encoding.ASCII.GetString(wavAudio, offset, 4);
-            var chunkSize = BinaryPrimitives.ReadInt32LittleEndian(wavAudio.AsSpan(offset + 4, 4));
-            if (chunkSize < 0)
-                break;
-
+            // Unsigned, because FFmpeg streaming to a pipe writes 0xFFFFFFFF ("unknown length")
+            // for the data chunk; it is clamped to the bytes actually present below.
+            var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(wavAudio.AsSpan(offset + 4, 4));
             var dataStart = offset + 8;
             switch (chunkId)
             {
@@ -265,7 +264,7 @@ public sealed class CoherePlugin
                     byteRate = BinaryPrimitives.ReadInt32LittleEndian(wavAudio.AsSpan(dataStart + 8, 4));
                     break;
                 case "data":
-                    dataSize = Math.Min(chunkSize, Math.Max(0, wavAudio.Length - dataStart));
+                    dataSize = (int)Math.Min(chunkSize, (uint)(wavAudio.Length - dataStart));
                     break;
             }
 

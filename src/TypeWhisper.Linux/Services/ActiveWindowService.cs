@@ -109,16 +109,25 @@ public sealed class ActiveWindowService : IActiveWindowService
 
     public string? GetBrowserUrlForSnapshot(
         ActiveWindowSnapshot? snapshot,
-        bool honorMissBackoff = false
+        bool isPolling = false
     )
     {
         var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(
             snapshot?.ProcessName,
             snapshot?.AppId,
             snapshot?.Title,
-            honorMissBackoff
+            isPolling
         );
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
+    }
+
+    /// <summary>
+    ///     Forgets <paramref name="url" /> if a dictation read cached it for <paramref name="snapshot" />
+    ///     and the caller then rejected it, so polling can't reuse it.
+    /// </summary>
+    public void ForgetBrowserUrl(ActiveWindowSnapshot snapshot, string url)
+    {
+        _atSpiUrlExtractor.ForgetCachedUrl(snapshot.ProcessName, snapshot.AppId, snapshot.Title, url);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -186,6 +195,44 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     Re-activates the window in <paramref name="snapshot" /> through the provider that
+    ///     captured it. False when that provider can't activate windows (only KWin can today).
+    /// </summary>
+    public async Task<bool> TryActivateSnapshotWindowAsync(
+        ActiveWindowSnapshot snapshot,
+        CancellationToken ct
+    )
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.WindowId))
+        {
+            return false;
+        }
+
+        var activator = _providers
+            .OfType<IActiveWindowActivator>()
+            .FirstOrDefault(candidate =>
+                candidate is IActiveWindowProvider provider
+                && string.Equals(provider.Name, snapshot.Source, StringComparison.OrdinalIgnoreCase)
+                && provider.IsApplicable()
+            );
+        if (activator is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await activator
+                .TryActivateWindowAsync(snapshot.WindowId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     // kept instance: injected as a DI/test seam by callers

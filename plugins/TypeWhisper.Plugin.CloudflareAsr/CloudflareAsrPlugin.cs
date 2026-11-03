@@ -3,8 +3,10 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
@@ -193,10 +195,10 @@ public sealed class CloudflareAsrPlugin
             });
         var json = await response.Content.ReadAsStringAsync(ct);
 
-        return ParseTranscription(json);
+        return ParseTranscription(json, wavAudio);
     }
 
-    private static PluginTranscriptionResult ParseTranscription(string json)
+    private static PluginTranscriptionResult ParseTranscription(string json, byte[] wavAudio)
     {
         JsonDocument doc;
         try
@@ -238,7 +240,8 @@ public sealed class CloudflareAsrPlugin
             if (info.TryGetProperty("language", out var langEl) && langEl.ValueKind == JsonValueKind.String)
                 detectedLanguage = langEl.GetString();
 
-            double duration = 0;
+            // The base whisper model omits duration, so fall back to the length of the WAV we sent.
+            double duration;
             if (
                 info.TryGetProperty("duration", out var durEl)
                 && durEl.ValueKind == JsonValueKind.Number
@@ -247,6 +250,8 @@ public sealed class CloudflareAsrPlugin
                 && parsedDuration >= 0
             )
                 duration = parsedDuration;
+            else
+                duration = CalculateWavDurationSeconds(wavAudio);
 
             return new PluginTranscriptionResult(
                 (textEl.GetString() ?? "").Trim(),
@@ -255,6 +260,44 @@ public sealed class CloudflareAsrPlugin
                 NoSpeechProbability: null
             );
         }
+    }
+
+    // Bounded chunk walk, so a truncated or hostile header cannot loop forever.
+    internal static double CalculateWavDurationSeconds(byte[] wavAudio)
+    {
+        if (wavAudio.Length < 12
+            || Encoding.ASCII.GetString(wavAudio, 0, 4) != "RIFF"
+            || Encoding.ASCII.GetString(wavAudio, 8, 4) != "WAVE")
+        {
+            return 0;
+        }
+
+        var byteRate = 0;
+        var dataSize = 0;
+        for (var offset = 12; offset <= wavAudio.Length - 8;)
+        {
+            var chunkId = Encoding.ASCII.GetString(wavAudio, offset, 4);
+            // Unsigned, because FFmpeg streaming to a pipe writes 0xFFFFFFFF ("unknown length")
+            // for the data chunk; it is clamped to the bytes actually present below.
+            var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(wavAudio.AsSpan(offset + 4, 4));
+            var dataStart = offset + 8;
+            switch (chunkId)
+            {
+                case "fmt " when chunkSize >= 12 && dataStart <= wavAudio.Length - 12:
+                    byteRate = BinaryPrimitives.ReadInt32LittleEndian(wavAudio.AsSpan(dataStart + 8, 4));
+                    break;
+                case "data":
+                    dataSize = (int)Math.Min(chunkSize, (uint)(wavAudio.Length - dataStart));
+                    break;
+            }
+
+            var paddedChunkSize = (long)chunkSize + (chunkSize & 1);
+            if (paddedChunkSize > wavAudio.Length - (long)dataStart)
+                break;
+            offset = dataStart + (int)paddedChunkSize;
+        }
+
+        return byteRate > 0 && dataSize > 0 ? dataSize / (double)byteRate : 0;
     }
 
     private static PluginRequestException InvalidResponse(string reason, Exception? inner = null) =>

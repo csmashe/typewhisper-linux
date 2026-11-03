@@ -52,6 +52,24 @@ public sealed class PromptProcessingService
         return provider is null ? null : $"plugin:{provider.GetLlmSelectionId()}:{model}";
     }
 
+    /// <summary>
+    ///     The provider and model the configured default resolves to (the first available
+    ///     provider when none is configured), or null when the selection cannot serve a request.
+    ///     A broken explicit default never falls back to another provider.
+    /// </summary>
+    public (ILlmProviderRole Provider, string ModelId)? TryResolveDefaultProvider()
+    {
+        try
+        {
+            var (provider, model) = ResolveProvider(null, reportProviderProblems: false);
+            return provider is null ? null : (provider, model);
+        }
+        catch (PluginRequestException)
+        {
+            return null;
+        }
+    }
+
     private bool HasSelectedProvider(string? providerOverride)
     {
         return !string.IsNullOrWhiteSpace(providerOverride)

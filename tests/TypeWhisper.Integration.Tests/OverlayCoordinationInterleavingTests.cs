@@ -445,7 +445,7 @@ public sealed class OverlayCoordinationInterleavingTests
 
         public string? GetBrowserUrlForSnapshot(
             ActiveWindowSnapshot? activeWindowSnapshot,
-            bool honorMissBackoff = false
+            bool isPolling = false
         ) => null;
 
         public IReadOnlyList<string> GetRunningAppProcessNames() => [];

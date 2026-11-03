@@ -156,10 +156,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     <c>user.js</c>, and a running Firefox won't clobber our change on
     ///     its next save. Takes effect on the next Firefox restart.
     /// </summary>
-    private static SetupResult ForceEnableFirefoxAccessibility()
+    private static (SetupResult Result, IReadOnlyList<string> Skipped) ForceEnableFirefoxAccessibility()
     {
         var patched = new List<string>();
         var skipped = new List<string>();
+        // Unwritable, but prefs.js already carries an un-overridden -1, so URL detection works.
+        var alreadyEnabled = new List<string>();
 
         try
         {
@@ -173,16 +175,20 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 }
                 catch
                 {
-                    skipped.Add(Path.GetFileName(profileDir));
+                    (IsForceEnabledInProfile(profileDir) ? alreadyEnabled : skipped)
+                        .Add(Path.GetFileName(profileDir));
                 }
             }
 
-            if (patched.Count == 0 && skipped.Count == 0)
+            if (patched.Count == 0 && skipped.Count == 0 && alreadyEnabled.Count == 0)
             {
-                return new SetupResult(
-                    false,
-                    "No Firefox profiles were found to patch.",
-                    "Run Firefox once to create a profile, then try again."
+                return (
+                    new SetupResult(
+                        false,
+                        "No Firefox profiles were found to patch.",
+                        "Run Firefox once to create a profile, then try again."
+                    ),
+                    skipped
                 );
             }
 
@@ -192,6 +198,19 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 detail
                     .Append("Patched profile(s): ")
                     .Append(string.Join(", ", patched))
+                    .Append('.');
+            }
+
+            if (alreadyEnabled.Count > 0)
+            {
+                if (detail.Length > 0)
+                {
+                    detail.Append(' ');
+                }
+
+                detail
+                    .Append("Already enabled in prefs.js, but user.js could not be written: ")
+                    .Append(string.Join(", ", alreadyEnabled))
                     .Append('.');
             }
 
@@ -208,19 +227,29 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     .Append('.');
             }
 
-            detail.Append(" Restart Firefox for the change to take effect.");
+            if (patched.Count > 0)
+            {
+                detail.Append(" Restart Firefox for the change to take effect.");
+            }
 
-            return new SetupResult(
-                patched.Count > 0,
-                patched.Count > 0
-                    ? "Firefox accessibility force-enabled."
-                    : "Could not enable Firefox accessibility.",
-                detail.ToString()
+            var enabled = patched.Count > 0 || alreadyEnabled.Count > 0;
+            return (
+                new SetupResult(
+                    enabled,
+                    enabled
+                        ? "Firefox accessibility force-enabled."
+                        : "Could not enable Firefox accessibility.",
+                    detail.ToString()
+                ),
+                skipped
             );
         }
         catch (Exception ex)
         {
-            return new SetupResult(false, "Could not enable Firefox accessibility.", ex.Message);
+            return (
+                new SetupResult(false, "Could not enable Firefox accessibility.", ex.Message),
+                skipped
+            );
         }
     }
 
@@ -252,7 +281,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment),
                 PrependEnvWrapperToExecLines
             );
-            var firefoxPrefResult = ForceEnableFirefoxAccessibility();
+            var (firefoxPrefResult, skippedProfiles) = ForceEnableFirefoxAccessibility();
 
             var detail = new StringBuilder();
             if (firefoxPatched.Count > 0)
@@ -274,7 +303,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 detail.Append('.');
             }
 
-            if (firefoxPrefResult.Success && !string.IsNullOrWhiteSpace(firefoxPrefResult.Detail))
+            if (
+                (firefoxPrefResult.Success || skippedProfiles.Count > 0)
+                && !string.IsNullOrWhiteSpace(firefoxPrefResult.Detail)
+            )
             {
                 if (detail.Length > 0)
                 {
@@ -312,6 +344,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
                         : "Could not enable browser accessibility.",
                     detail.ToString()
                 )
+                {
+                    SkippedFirefoxProfiles = skippedProfiles,
+                }
             );
         }
         catch (Exception ex)
@@ -393,7 +428,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 || envRemoval.Changed;
             await SweepLegacyEnvFileAsync(ct).ConfigureAwait(false);
             var removedLaunchers = await RemoveOwnedLaunchers(ct).ConfigureAwait(false);
-            var cleanedProfiles = RemoveOwnedFirefoxAccessibilityEntries();
+            var (cleanedProfiles, skippedProfiles) = RemoveOwnedFirefoxAccessibilityEntries();
 
             var summary = new StringBuilder("Browser accessibility integration removed.");
             if (!removedEnv)
@@ -409,15 +444,21 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
-            if (cleanedProfiles.Count <= 0)
+            if (cleanedProfiles.Count > 0)
             {
-                return new SetupResult(true, summary.ToString());
+                summary.Append(' ');
+                summary.Append("Cleaned Firefox profile(s): ");
+                summary.Append(string.Join(", ", cleanedProfiles));
+                summary.Append('.');
             }
 
-            summary.Append(' ');
-            summary.Append("Cleaned Firefox profile(s): ");
-            summary.Append(string.Join(", ", cleanedProfiles));
-            summary.Append('.');
+            if (skippedProfiles.Count > 0)
+            {
+                summary.Append(' ');
+                summary.Append("Could not update user.js in Firefox profile(s): ");
+                summary.Append(string.Join(", ", skippedProfiles));
+                summary.Append('.');
+            }
 
             return new SetupResult(true, summary.ToString());
         }
@@ -600,8 +641,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
     private static bool IsForceEnabledInProfile(string profileDir)
     {
-        // Either user.js (our preferred override file) or Firefox's own
-        // prefs.js — whichever already has the right value satisfies us.
+        // Firefox applies user.js after prefs.js, so the last user.js entry wins;
+        // prefs.js only counts when user.js leaves the preference alone.
         foreach (var name in new[] { "user.js", "prefs.js" })
         {
             var path = Path.Join(profileDir, name);
@@ -612,10 +653,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
             try
             {
-                var content = File.ReadAllText(path);
-                if (ForceDisabledNegOneMultilineRegex().IsMatch(content))
+                if (LastForceDisabledIsNegOne(File.ReadAllText(path)) is { } isNegOne)
                 {
-                    return true;
+                    return isNegOne;
                 }
             }
             catch
@@ -625,6 +665,69 @@ public sealed partial class BrowserAccessibilitySetupHelper
         }
 
         return false;
+    }
+
+    /// <returns>Whether the last force_disabled entry is -1, or null when there is none.</returns>
+    private static bool? LastForceDisabledIsNegOne(string content)
+    {
+        var last = ForceDisabledStatementRegex().Matches(BlankPrefComments(content)).LastOrDefault();
+        return last is null ? null : last.Groups["value"].Value == "-1";
+    }
+
+    /// <summary>
+    ///     Replaces Firefox pref-file comments (<c>//</c>, <c>#</c>, <c>/* */</c>) with spaces,
+    ///     keeping newlines and quoted strings, so commented-out statements never match.
+    /// </summary>
+    private static string BlankPrefComments(string content)
+    {
+        var sb = new StringBuilder(content);
+        var i = 0;
+        while (i < sb.Length)
+        {
+            var c = sb[i];
+            if (c is '"' or '\'')
+            {
+                // Skip the string, honoring backslash escapes; stop at a newline if unterminated.
+                for (i++; i < sb.Length && sb[i] != c && sb[i] != '\n'; i++)
+                {
+                    if (sb[i] == '\\')
+                    {
+                        i++;
+                    }
+                }
+
+                i++;
+                continue;
+            }
+
+            var next = i + 1 < sb.Length ? sb[i + 1] : '\0';
+            int end;
+            switch (c)
+            {
+                case '#':
+                case '/' when next == '/':
+                    var newline = content.IndexOf('\n', i);
+                    end = newline < 0 ? sb.Length : newline;
+                    break;
+                case '/' when next == '*':
+                    var close = content.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                    end = close < 0 ? sb.Length : close + 2;
+                    break;
+                default:
+                    i++;
+                    continue;
+            }
+
+            for (; i < end; i++)
+            {
+                if (sb[i] is not ('\n' or '\r'))
+                {
+                    sb[i] = ' ';
+                }
+            }
+        }
+
+        return sb.ToString();
     }
 
     private static IEnumerable<string> EnumerateFirefoxProfileDirs()
@@ -726,7 +829,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
             var existing = snapshot.Contents;
             // Already effective (our owned block or a user-authored -1): leave the
             // exact file, link, and metadata untouched.
-            if (ForceDisabledNegOneMultilineRegex().IsMatch(existing))
+            if (LastForceDisabledIsNegOne(existing) == true)
             {
                 return false;
             }
@@ -837,9 +940,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
         );
     }
 
-    private static List<string> RemoveOwnedFirefoxAccessibilityEntries()
+    private static (List<string> Cleaned, List<string> Skipped)
+        RemoveOwnedFirefoxAccessibilityEntries()
     {
         var cleaned = new List<string>();
+        var skipped = new List<string>();
         foreach (var profileDir in EnumerateFirefoxProfileDirs())
         {
             var userJsPath = Path.Join(profileDir, "user.js");
@@ -852,11 +957,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
             }
             catch
             {
-                /* best effort — summary reports what we managed */
+                // Best effort per profile; the summary names the ones left unreverted.
+                skipped.Add(Path.GetFileName(profileDir));
             }
         }
 
-        return cleaned;
+        return (cleaned, skipped);
     }
 
     private static ManagedFileOperationResult WriteEnvFile()
@@ -1440,12 +1546,11 @@ public sealed partial class BrowserAccessibilitySetupHelper
             && (!FirefoxInstalled || !FirefoxProfileFound || FirefoxAccessibilityForceEnabled);
     }
 
-    // accessibility.force_disabled = -1 pref line, matched per-line across full user.js content
-    // (Multiline so the line is recognized even when our attribution comment precedes it). Accepts
-    // either quote style, like ForceDisabledAnyValueLineRegex: Firefox's pref parser takes both, so
-    // a single-quoted user-authored -1 is already effective and must not be rewritten/preserved.
-    [GeneratedRegex("""^\s*user_pref\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*-1\s*\)\s*;""", RegexOptions.Multiline)]
-    private static partial Regex ForceDisabledNegOneMultilineRegex();
+    // Every live accessibility.force_disabled statement, including ones sharing a line with
+    // other statements, so the last match is the value Firefox applies. Run on BlankPrefComments
+    // output; the lookbehind skips text inside quoted strings. Either quote style.
+    [GeneratedRegex("""(?<=^(?:[^\r\n"']|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*')*)user_pref\s*\(\s*(?<quote>["'])accessibility\.force_disabled\k<quote>\s*,\s*(?<value>[^\r\n;)]*?)\s*\)\s*;""", RegexOptions.Multiline)]
+    private static partial Regex ForceDisabledStatementRegex();
 
     // Any live accessibility.force_disabled line, captured verbatim (minus its
     // newline) so setup can prefix it with the preservation comment. Lines where a
@@ -1464,5 +1569,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
     [GeneratedRegex("""(?<separator>\r?\n)?^//\s*Set by TypeWhisper(?<ownsSeparator>; separator newline owned)?[^\r\n]*\r?\nuser_pref\(\s*"accessibility\.force_disabled"\s*,\s*-1\s*\)[\t ]*;[\t ]*(?<trailing>\r?\n|\z)""", RegexOptions.Multiline)]
     private static partial Regex OwnedAccessibilityEntryRegex();
 
-    public sealed record SetupResult(bool Success, string Message, string? Detail = null);
+    public sealed record SetupResult(bool Success, string Message, string? Detail = null)
+    {
+        public IReadOnlyList<string> SkippedFirefoxProfiles { get; init; } = [];
+    }
 }
