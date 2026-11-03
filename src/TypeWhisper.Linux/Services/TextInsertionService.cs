@@ -590,6 +590,9 @@ public sealed class TextInsertionService
         return FocusTargetWindowAsync(targetWindowId);
     }
 
+    /// <summary>True when every typing backend the platform may use can type non-ASCII text.</summary>
+    public bool CanTypeNonAscii => _platform.CanTypeNonAscii;
+
     /// <summary>
     ///     Whether the Auto insertion policy would deliver to this target by direct typing based on
     ///     the app alone (terminals, supported browsers, Codex windows) — independent of text content.
@@ -1225,7 +1228,7 @@ internal interface ITextInsertionPlatform
     /// </summary>
     bool PrefersDirectTypingForUnknownTarget { get; }
 
-    /// <summary>True when the platform has a typing backend that can type non-ASCII text.</summary>
+    /// <summary>True when every typing backend the platform may use can type non-ASCII text.</summary>
     bool CanTypeNonAscii => true;
 
     InsertionFailureReason LastFailureReason { get; }
@@ -1425,14 +1428,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         );
 
     // xdotool and wtype map arbitrary keysyms; ydotool types only what the US keymap holds.
-    // wtype counts only where the compositor accepts its virtual keyboard.
-    public bool CanTypeNonAscii =>
-        _chain.Exists(backend => backend switch
-        {
-            InputBackend.Xdotool => true,
-            InputBackend.Wtype => !_snapshot.CompositorRejectsWtype,
-            _ => false,
-        });
+    // The chain can fall through to any backend, so one ydotool entry is enough to rule it out.
+    public bool CanTypeNonAscii => !_chain.Contains(InputBackend.Ydotool);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 

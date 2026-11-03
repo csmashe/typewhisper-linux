@@ -2706,11 +2706,10 @@ public sealed class TextInsertionServiceTests
 
     [Theory]
     [InlineData("Wayland", false, false, "gnome", true, true, false)]
-    [InlineData("Wayland", false, true, "gnome", true, true, false)]
-    [InlineData("Wayland", false, true, "hyprland", true, true, true)]
+    [InlineData("Wayland", false, true, "hyprland", true, true, false)]
     [InlineData("Wayland", false, true, "hyprland", false, false, true)]
     [InlineData("X11", true, false, "gnome", true, true, true)]
-    public void LinuxTextInsertionPlatform_CanTypeNonAscii_WhenChainHasUnicodeBackend(
+    public void LinuxTextInsertionPlatform_CanTypeNonAscii_OnlyWithoutYdotoolInChain(
         string sessionType,
         bool hasXdotool,
         bool hasWtype,
