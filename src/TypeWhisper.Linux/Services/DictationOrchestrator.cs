@@ -1182,17 +1182,19 @@ public sealed partial class DictationOrchestrator : IDisposable
                     using var deferredCts = new CancellationTokenSource(
                         TimeSpan.FromMilliseconds(4000)
                     );
-                    var deferredUrl = await Task.Run(
-                            () => _activeWindow.GetBrowserUrl(false),
-                            deferredCts.Token
-                        )
-                        .ConfigureAwait(false);
+                    // Bound to the recording-start snapshot so the title fallback can't
+                    // come from a window focused later.
+                    var deferredUrl = initialSnap is null
+                        ? null
+                        : await Task.Run(
+                                () => _activeWindow.GetBrowserUrlForSnapshot(initialSnap),
+                                deferredCts.Token
+                            )
+                            .ConfigureAwait(false);
 
                     if (!string.IsNullOrWhiteSpace(deferredUrl))
                     {
-                        // The URL comes from the currently focused window, which may
-                        // have changed. Re-snapshot and only commit if we're on the
-                        // same window, to avoid binding to an unrelated tab/window.
+                        // The walk reads the live address bar: commit only if the recording-start tab is still in front.
                         ActiveWindowSnapshot? verifySnap = null;
                         try
                         {
@@ -1210,15 +1212,15 @@ public sealed partial class DictationOrchestrator : IDisposable
                             // Verification snapshot is best-effort; fall through to the initial snapshot.
                         }
 
-                        if (
-                            initialSnap is null
-                            || verifySnap is null
-                            || !IsSameWindow(initialSnap, verifySnap)
-                        )
+                        if (!IsSameWindowAndTab(initialSnap, verifySnap))
                         {
                             Trace.WriteLine(
-                                "[Dictation] Deferred URL discarded — focused window changed mid-capture."
+                                "[Dictation] Deferred URL discarded — focused window or tab changed mid-capture."
                             );
+                            if (initialSnap is not null)
+                            {
+                                _activeWindow.ForgetBrowserUrl(initialSnap, deferredUrl);
+                            }
                         }
                         else
                         {
@@ -4610,8 +4612,21 @@ public sealed partial class DictationOrchestrator : IDisposable
         return false;
     }
 
-    private static bool IsSameWindow(ActiveWindowSnapshot a, ActiveWindowSnapshot b)
+    // A tab switch keeps the window ID, so the title is the only tab signal the snapshot has;
+    // a missing title can't prove the tab stayed the same.
+    internal static bool IsSameWindowAndTab(ActiveWindowSnapshot? a, ActiveWindowSnapshot? b)
     {
+        if (
+            a is null
+            || b is null
+            || string.IsNullOrWhiteSpace(a.Title)
+            || string.IsNullOrWhiteSpace(b.Title)
+            || !string.Equals(a.Title, b.Title, StringComparison.Ordinal)
+        )
+        {
+            return false;
+        }
+
         if (a.WindowId is not null && b.WindowId is not null)
         {
             return string.Equals(a.WindowId, b.WindowId, StringComparison.Ordinal);
