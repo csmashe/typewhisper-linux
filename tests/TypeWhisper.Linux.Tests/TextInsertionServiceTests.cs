@@ -2499,6 +2499,13 @@ public sealed class TextInsertionServiceTests
         true,
         false
     )]
+    // Native GTK plain-text copy on KDE Wayland also lists SAVE_TARGETS negotiation metadata.
+    [InlineData(
+        "text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n",
+        true,
+        false
+    )]
+    [InlineData("SAVE_TARGETS\ntext/html\n", true, true)]
     [InlineData("COMPOUND_TEXT\ntext/html\n", true, true)]
     [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false, false)]
     [InlineData(
@@ -2741,6 +2748,26 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("wl-paste", call.FileName);
         Assert.Equal(["--list-types"], call.Args);
         Assert.Equal(TimeSpan.FromSeconds(5), call.Timeout);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_KdeGtkPlainTextIsTextOnly()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            "text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n"
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        Assert.False(await platform.ClipboardHasNonTextFormatsAsync());
+
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("wl-paste", call.FileName);
+        Assert.Equal(["--list-types"], call.Args);
     }
 
     [Fact]
