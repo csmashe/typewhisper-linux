@@ -962,8 +962,13 @@ public class GladiaPluginTests
         Assert.Equal(0, handler.RequestCount);
     }
 
-    [Fact]
-    public async Task TranscribeAsync_DeleteFailureDoesNotAffectCompletedResult()
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError, null)]
+    [InlineData(HttpStatusCode.Forbidden, """{ "statusCode": 403, "message": "Forbidden resource" }""")]
+    public async Task TranscribeAsync_DeleteFailureDoesNotAffectCompletedResult(
+        HttpStatusCode deleteStatusCode,
+        string? deleteErrorBody
+    )
     {
         var deleteCount = 0;
         var handler = new SuccessfulFlowHandler(
@@ -972,7 +977,8 @@ public class GladiaPluginTests
                 if (request.Method == HttpMethod.Delete)
                     deleteCount++;
             },
-            deleteStatusCode: HttpStatusCode.InternalServerError
+            deleteStatusCode,
+            deleteErrorBody
         );
 
         using var sut = await CreateConfiguredPluginAsync(handler);
@@ -986,14 +992,18 @@ public class GladiaPluginTests
         );
 
         Assert.Equal("Hallo Welt", result.Text);
-        // A non-403 cleanup failure is not retried in the background.
-        await sut.WaitForDeferredCleanupsAsync();
+        // Only the unfinished-job 403 is retried in the background.
+        // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard.
+        await sut.WaitForDeferredCleanupsAsync().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, deleteCount);
     }
 
     [Fact]
     public async Task TranscribeAsync_UnfinishedJobDeleteIsRetriedInBackgroundUntilAccepted()
     {
+        var pollStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var secondDeleteStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -1017,6 +1027,7 @@ public class GladiaPluginTests
 
             if (request.Method == HttpMethod.Get)
             {
+                pollStarted.TrySetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                 return JsonResponse("""{ "status": "queued" }""");
             }
@@ -1051,11 +1062,14 @@ public class GladiaPluginTests
 
         using var sut = await CreateConfiguredPluginAsync(handler);
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromMilliseconds(50));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, cts.Token)
-        );
+        var transcription = sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, cts.Token);
+        // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard; using cts.Token would abort this wait on the cancellation the test triggers next.
+        await pollStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // ReSharper disable once MethodHasAsyncOverload -- synchronous Cancel must trip the token before the assertion; CancelAsync would defer it.
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transcription);
 
         // The caller got its cancellation even though the background retry is still blocked.
         // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard.
@@ -1434,7 +1448,8 @@ public class GladiaPluginTests
 
     private sealed class SuccessfulFlowHandler(
         Action<HttpRequestMessage, byte[]?>? inspectRequest = null,
-        HttpStatusCode deleteStatusCode = HttpStatusCode.Accepted
+        HttpStatusCode deleteStatusCode = HttpStatusCode.Accepted,
+        string? deleteErrorBody = null
     ) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -1473,10 +1488,13 @@ public class GladiaPluginTests
                 && request.RequestUri?.ToString()
                     == "https://api.gladia.io/v2/pre-recorded/job-123")
             {
+                if (deleteStatusCode == HttpStatusCode.Forbidden && deleteErrorBody is null)
+                    return UnfinishedDeleteResponse();
+
                 return JsonResponse(
                     deleteStatusCode == HttpStatusCode.Accepted
                         ? "{}"
-                        : """{ "message": "cleanup rejected" }""",
+                        : deleteErrorBody ?? """{ "message": "cleanup rejected" }""",
                     deleteStatusCode
                 );
             }

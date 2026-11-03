@@ -425,11 +425,10 @@ public sealed class GladiaPlugin
             if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
                 return DeleteOutcome.Deleted;
 
-            // Gladia answers 403 ("Invalid state: QUEUED not in SUCCESS,ERROR") until the job finishes.
-            if (response.StatusCode == HttpStatusCode.Forbidden)
+            var responseBody = await response.Content.ReadAsStringAsync(cleanupCts.Token);
+            if (response.StatusCode == HttpStatusCode.Forbidden && IsUnfinishedJobError(responseBody))
                 return DeleteOutcome.NotFinished;
 
-            var responseBody = await response.Content.ReadAsStringAsync(cleanupCts.Token);
             Trace.TraceWarning(
                 "Gladia cleanup could not delete pre-recorded job "
                     + $"{jobId}: {(int)response.StatusCode} {ExtractProviderDetails(responseBody)}"
@@ -505,6 +504,23 @@ public sealed class GladiaPlugin
                 $"Gladia cleanup gave up on pre-recorded job {jobId}: it did not finish within "
                     + $"{_deferredCleanupWindow.TotalSeconds:0.###} seconds or the plugin was disposed."
             );
+        }
+    }
+
+    // Gladia answers 403 "Invalid state: QUEUED not in SUCCESS,ERROR" until the job finishes;
+    // any other 403 (e.g. a revoked key) will not clear by waiting.
+    private static bool IsUnfinishedJobError(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && TryGetString(document.RootElement, "message", out var message)
+                && message.StartsWith("Invalid state", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
