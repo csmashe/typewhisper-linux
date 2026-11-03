@@ -188,6 +188,44 @@ public sealed class ActiveWindowService : IActiveWindowService
         return null;
     }
 
+    /// <summary>
+    ///     Re-activates the window in <paramref name="snapshot" /> through the provider that
+    ///     captured it. False when that provider can't activate windows (only KWin can today).
+    /// </summary>
+    public async Task<bool> TryActivateSnapshotWindowAsync(
+        ActiveWindowSnapshot snapshot,
+        CancellationToken ct
+    )
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.WindowId))
+        {
+            return false;
+        }
+
+        var activator = _providers
+            .OfType<IActiveWindowActivator>()
+            .FirstOrDefault(candidate =>
+                candidate is IActiveWindowProvider provider
+                && string.Equals(provider.Name, snapshot.Source, StringComparison.OrdinalIgnoreCase)
+                && provider.IsApplicable()
+            );
+        if (activator is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await activator
+                .TryActivateWindowAsync(snapshot.WindowId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
     // kept instance: injected as a DI/test seam by callers
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
     // ReSharper disable once MemberCanBeMadeStatic.Global

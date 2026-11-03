@@ -240,12 +240,12 @@ public partial class SmallestAiPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsLanguageWhenUnspecified()
+    public async Task TranscribeAsync_RequestsAutoDetectionWhenUnspecified()
     {
         var handler = new CapturingHandler((request, _) =>
         {
-            Assert.DoesNotContain("language=", request.RequestUri?.Query);
-            return JsonResponse("""{ "status": "success", "transcription": "Hello" }""");
+            Assert.Contains("language=auto", request.RequestUri?.Query);
+            return JsonResponse("""{ "status": "success", "transcription": "Hello", "detected_language": "en" }""");
         });
 
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "smallest-key" } };
@@ -256,6 +256,7 @@ public partial class SmallestAiPluginTests
         var result = await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
+        Assert.Equal("en", result.DetectedLanguage);
     }
 
     [Fact]

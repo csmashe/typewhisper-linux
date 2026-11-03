@@ -300,6 +300,17 @@ public sealed class CoherePluginTests
         Assert.Equal(0.5, CoherePlugin.CalculateWavDurationSeconds(truncated[..(44 + 16_000)]), precision: 6);
     }
 
+    [Fact]
+    public void CalculateWavDurationSeconds_MeasuresFfmpegStdoutWavWithUnknownDataSize()
+    {
+        var wav = CreateWav(TimeSpan.FromSeconds(2));
+        // FFmpeg writing to pipe:1 cannot seek back, so it leaves both sizes as 0xFFFFFFFF.
+        BitConverter.GetBytes(uint.MaxValue).CopyTo(wav, 4);
+        BitConverter.GetBytes(uint.MaxValue).CopyTo(wav, 40);
+
+        Assert.Equal(2.0, CoherePlugin.CalculateWavDurationSeconds(wav), precision: 6);
+    }
+
     private static async Task<CoherePlugin> CreateConfiguredPluginAsync(StubHttpMessageHandler handler)
     {
         var host = new TestPluginHostServices { Secrets = { ["apiKey"] = "test-key" } };

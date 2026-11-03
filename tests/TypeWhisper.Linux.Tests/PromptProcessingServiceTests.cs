@@ -742,6 +742,70 @@ public sealed class PromptProcessingServiceTests : IDisposable
         );
     }
 
+    [Theory]
+    [InlineData("plugin:com.test.second:model-b", "com.test.second", "model-b")]
+    [InlineData("plugin:com.test.first:model-a2", "com.test.first", "model-a2")]
+    public void TryResolveDefaultProvider_UsesConfiguredProviderAndModelOverCatalogOrder(
+        string selection,
+        string expectedProviderId,
+        string expectedModel
+    )
+    {
+        var first = new FakeLlmProviderPlugin("com.test.first", "First", "model-a", "model-a2");
+        var second = new FakeLlmProviderPlugin("com.test.second", "Second", "model-b");
+        using var pluginManager = CreatePluginManager([first, second], []);
+        var sut = new PromptProcessingService(
+            pluginManager,
+            CreateSettings(new AppSettings { DefaultLlmProvider = selection }).Object,
+            new MemoryService(pluginManager)
+        );
+
+        var resolved = sut.TryResolveDefaultProvider();
+
+        Assert.NotNull(resolved);
+        Assert.Equal(expectedProviderId, resolved.Value.Provider.PluginId);
+        Assert.Equal(expectedModel, resolved.Value.ModelId);
+    }
+
+    [Fact]
+    public void TryResolveDefaultProvider_UsesFirstAvailableProviderWithoutADefault()
+    {
+        var unavailable = new FakeLlmProviderPlugin("com.test.first", "First", "model-a") { IsAvailable = false };
+        var available = new FakeLlmProviderPlugin("com.test.second", "Second", "model-b");
+        using var pluginManager = CreatePluginManager([unavailable, available], []);
+        var sut = new PromptProcessingService(
+            pluginManager,
+            CreateSettings(new AppSettings()).Object,
+            new MemoryService(pluginManager)
+        );
+
+        var resolved = sut.TryResolveDefaultProvider();
+
+        Assert.NotNull(resolved);
+        Assert.Same(available, resolved.Value.Provider);
+        Assert.Equal("model-b", resolved.Value.ModelId);
+    }
+
+    [Theory]
+    [InlineData("plugin:com.test.first:model-a")]
+    [InlineData("plugin:com.test.second:retired-model")]
+    [InlineData("plugin:com.test.missing:model-x")]
+    public void TryResolveDefaultProvider_ReturnsNullRatherThanAnotherProvider_WhenTheDefaultCannotServe(
+        string selection
+    )
+    {
+        var unavailable = new FakeLlmProviderPlugin("com.test.first", "First", "model-a") { IsAvailable = false };
+        var available = new FakeLlmProviderPlugin("com.test.second", "Second", "model-b");
+        using var pluginManager = CreatePluginManager([unavailable, available], []);
+        var sut = new PromptProcessingService(
+            pluginManager,
+            CreateSettings(new AppSettings { DefaultLlmProvider = selection }).Object,
+            new MemoryService(pluginManager)
+        );
+
+        Assert.Null(sut.TryResolveDefaultProvider());
+    }
+
     private static Mock<ISettingsService> CreateSettings(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
@@ -843,11 +907,13 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
     private sealed class FakeLlmProviderPlugin : ILlmProviderPlugin
     {
-        public FakeLlmProviderPlugin(string pluginId, string providerName, string modelId)
+        public FakeLlmProviderPlugin(string pluginId, string providerName, params string[] modelIds)
         {
             PluginId = pluginId;
             ProviderName = providerName;
-            SupportedModels = [new PluginModelInfo(modelId, modelId.ToUpperInvariant())];
+            SupportedModels = modelIds
+                .Select(modelId => new PluginModelInfo(modelId, modelId.ToUpperInvariant()))
+                .ToList();
         }
 
         public string PluginId { get; }

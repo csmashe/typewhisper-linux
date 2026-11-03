@@ -42,7 +42,7 @@ public record AppSettings
     public const int DefaultLiveTextWindowHeight = 220;
     public const int MaxLiveTextWindowHeight = 4096;
 
-    public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
+    public string ToggleHotkey { get; init; } = "Ctrl+Shift+Space";
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
     public string ReadLastTranscriptionHotkey { get; init; } = "";

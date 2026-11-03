@@ -84,6 +84,9 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     [ObservableProperty]
     private string _hotkeyText = "";
 
+    // Saved ToggleHotkey that HotkeyText last reflected; written on the UI thread only.
+    private string _displayedToggleHotkey;
+
     [ObservableProperty]
     private string _integrationStatusMessage = "";
 
@@ -145,6 +148,7 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         _writers = writers.ToArray();
         _managedSpecInputs = GetManagedSpecInputs(settings.Current);
         HotkeyText = _hotkey.CurrentHotkeyString;
+        _displayedToggleHotkey = settings.Current.ToggleHotkey;
         PromptPaletteHotkeyText = settings.Current.PromptPaletteHotkey;
         RecentTranscriptionsHotkeyText = settings.Current.RecentTranscriptionsHotkey;
         CopyLastTranscriptionHotkeyText = settings.Current.CopyLastTranscriptionHotkey;
@@ -219,12 +223,11 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
             // The chord is bound and saved before ApplyHotkeyAsync awaits the integration probe,
             // so capture ends now; a cancel or restart during the probe can't misreport it.
             apply = ApplyHotkeyAsync();
-            // Success normalizes HotkeyText to the binding; a captured chord always parses, so a
-            // mismatch means it collided. Show the live binding instead of the rejected chord.
+            // A captured chord always parses, so a mismatch means it collided (ApplyHotkeyAsync
+            // already reported that). Show the live binding instead of the rejected chord.
             if (HotkeyText != _hotkey.CurrentHotkeyString)
             {
                 HotkeyText = _hotkey.CurrentHotkeyString;
-                StatusMessage = Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", hotkey);
             }
         }
         finally
@@ -240,12 +243,40 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
     // final state and the VM's own save (which updates the cache first) becomes a no-op.
     private void OnSettingsChanged(AppSettings settings)
     {
-        if (Volatile.Read(ref _disposed) != 0 || !ManagedSpecInputsChanged(settings))
+        if (Volatile.Read(ref _disposed) != 0
+            || (settings.ToggleHotkey == Volatile.Read(ref _displayedToggleHotkey)
+                && !ManagedSpecInputsChanged(settings)))
         {
             return;
         }
 
-        _post(RefreshDesktopIntegrationForCurrentSettings);
+        _post(() =>
+        {
+            SyncHotkeyTextFromSettings();
+            RefreshDesktopIntegrationForCurrentSettings();
+        });
+    }
+
+    // Follows hotkey changes saved elsewhere (e.g. the wizard). Only a changed saved chord
+    // replaces the field, so an unapplied draft survives unrelated saves.
+    private void SyncHotkeyTextFromSettings()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        var saved = _settings.Current.ToggleHotkey;
+        if (saved == _displayedToggleHotkey)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _displayedToggleHotkey, saved);
+        HotkeyText = _hotkey.CurrentHotkeyString;
+        OnPropertyChanged(nameof(IntegrationPreview));
+        OnPropertyChanged(nameof(CanWriteDesktopIntegration));
+        OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
     }
 
     // Deliberately re-reads _settings.Current instead of replaying the event payload:
@@ -1182,6 +1213,8 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
                 proposed,
                 () =>
                 {
+                    // Set before Update so its SettingsChanged echo is not taken for an outside change.
+                    Volatile.Write(ref _displayedToggleHotkey, hotkey);
                     _settings.Update(current => current with { ToggleHotkey = hotkey });
                     StatusMessage = Loc.Instance.GetString(
                         "Shortcuts.HotkeySet",
@@ -1196,8 +1229,12 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
         else
         {
-            StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", HotkeyText);
+            StatusMessage = Loc.Instance.GetString(
+                HotkeyService.IsParsableHotkey(HotkeyText)
+                    ? "Shortcuts.HotkeyCollides"
+                    : "Shortcuts.HotkeyParseFailed",
+                HotkeyText
+            );
         }
     }
 
