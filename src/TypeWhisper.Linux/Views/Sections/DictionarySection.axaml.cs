@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using System.Diagnostics;
 using TypeWhisper.Linux.Services.AppImport;
 using TypeWhisper.Linux.Services.Localization;
@@ -14,6 +15,11 @@ public partial class DictionarySection : UserControl
     {
         InitializeComponent();
     }
+
+    // The panel sits above the entry list, so a row opened while scrolled down would leave it off-screen.
+    // Posted at Background so the click's command shows the panel and layout runs first.
+    private void OnSuggestAliasesForEntry(object? sender, RoutedEventArgs e) =>
+        Dispatcher.UIThread.Post(() => AliasPanel.BringIntoView(), DispatcherPriority.Background);
 
     // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
     private async void OnExport(object? sender, RoutedEventArgs e)
