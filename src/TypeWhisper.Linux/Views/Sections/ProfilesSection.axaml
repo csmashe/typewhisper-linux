@@ -345,7 +345,7 @@
 
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
-                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
                                     <Grid RowDefinitions="Auto,Auto"
                                           RowSpacing="10">
@@ -609,6 +609,58 @@
                                     <Grid RowDefinitions="Auto,Auto"
                                           RowSpacing="10">
                                         <StackPanel>
+                                            <TextBlock Text="{loc:Str Profiles.ScreenContextOverride}"
+                                                       Classes="row-label" />
+                                            <TextBlock
+                                                Text="{loc:Str Profiles.ScreenContextOverrideHint}"
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
+                                                  AutomationProperties.Name="{loc:Str Profiles.ScreenContextOverride}"
+                                                  ItemsSource="{Binding WhisperModeOptions}"
+                                                  SelectedItem="{Binding SelectedScreenContextOverrideOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:NullableBooleanOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="21" Background="{DynamicResource TwFillSubtleBrush}" />
+
+                                <Border Grid.Row="22" Padding="18,14">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
+                                        <StackPanel>
+                                            <TextBlock Text="{loc:Str Profiles.ClipboardContextOverride}"
+                                                       Classes="row-label" />
+                                            <TextBlock
+                                                Text="{loc:Str Profiles.ClipboardContextOverrideHint}"
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
+                                                  AutomationProperties.Name="{loc:Str Profiles.ClipboardContextOverride}"
+                                                  ItemsSource="{Binding WhisperModeOptions}"
+                                                  SelectedItem="{Binding SelectedClipboardContextOverrideOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:NullableBooleanOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="23" Background="{DynamicResource TwFillSubtleBrush}" />
+
+                                <Border Grid.Row="24" Padding="18,14">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
+                                        <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.Priority}"
                                                        Classes="row-label" />
                                             <TextBlock Text="{loc:Str Profiles.PriorityHint}"
@@ -624,9 +676,9 @@
                                                        Value="{Binding EditPriority}" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="21" Background="{DynamicResource TwFillSubtleBrush}" />
+                                <Border Grid.Row="25" Background="{DynamicResource TwFillSubtleBrush}" />
 
-                                <Border Grid.Row="22" Padding="18,14">
+                                <Border Grid.Row="26" Padding="18,14">
                                     <Grid RowDefinitions="Auto,Auto"
                                           RowSpacing="10">
                                         <StackPanel>

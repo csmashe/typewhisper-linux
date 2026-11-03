@@ -55,6 +55,53 @@
                 </Grid>
             </Border>
 
+            <TextBlock Text="{loc:Str Advanced.ReferenceContext}"
+                       Classes="section-title" />
+
+            <Border Classes="panel">
+                <Grid RowDefinitions="Auto,1,Auto">
+                    <Border Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel>
+                                <TextBlock Text="{loc:Str Advanced.UseScreenContext}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{loc:Str Advanced.UseScreenContextHint}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,4,0,0" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Advanced.UseScreenContext}"
+                                          IsChecked="{Binding ScreenContextEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="{DynamicResource TwFillStrongBrush}" />
+
+                    <Border Grid.Row="2" Padding="18,14">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="16">
+                            <StackPanel>
+                                <TextBlock Text="{loc:Str Advanced.UseClipboardContext}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{loc:Str Advanced.UseClipboardContextHint}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,4,0,0" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                          AutomationProperties.Name="{loc:Str Advanced.UseClipboardContext}"
+                                          IsChecked="{Binding ClipboardContextEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
             <TextBlock Text="{loc:Str Advanced.Recording}"
                        Classes="section-title" />
 

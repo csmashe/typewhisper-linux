@@ -66,10 +66,16 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private CleanupLevel? _editCleanupLevelOverride;
 
     [ObservableProperty]
+    private bool? _editClipboardContextOverride;
+
+    [ObservableProperty]
     private bool? _editDeveloperFormattingOverride;
 
     [ObservableProperty]
     private ProfileContextMatchMode _editContextMatchMode = ProfileContextMatchMode.All;
+
+    [ObservableProperty]
+    private bool? _editScreenContextOverride;
 
     [ObservableProperty]
     private ProfileHotkeyBehavior _editHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
@@ -562,6 +568,41 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    // Both reuse WhisperModeOptions (NullableBooleanOption list): inherit / on / off.
+    public NullableBooleanOption? SelectedScreenContextOverrideOption
+    {
+        get =>
+            WhisperModeOptions.FirstOrDefault(option => option.Value == EditScreenContextOverride);
+        set
+        {
+            if (value is null || value.Value == EditScreenContextOverride)
+            {
+                return;
+            }
+
+            EditScreenContextOverride = value.Value;
+            OnPropertyChanged();
+        }
+    }
+
+    public NullableBooleanOption? SelectedClipboardContextOverrideOption
+    {
+        get =>
+            WhisperModeOptions.FirstOrDefault(option =>
+                option.Value == EditClipboardContextOverride
+            );
+        set
+        {
+            if (value is null || value.Value == EditClipboardContextOverride)
+            {
+                return;
+            }
+
+            EditClipboardContextOverride = value.Value;
+            OnPropertyChanged();
+        }
+    }
+
     /// <summary>
     ///     Re-polls providers when a model dropdown opens so newly added models appear
     ///     without a manual "Validate". Debounce/guard live in <see cref="PluginManager" />.
@@ -595,6 +636,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditStylePreset = ProfileStylePreset.Raw;
             EditCleanupLevelOverride = null;
             EditDeveloperFormattingOverride = null;
+            EditScreenContextOverride = null;
+            EditClipboardContextOverride = null;
             EditPriority = 0;
             EditIsEnabled = true;
             NotifyStateChanged();
@@ -617,6 +660,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditStylePreset = value.StylePreset;
         EditCleanupLevelOverride = value.CleanupLevelOverride;
         EditDeveloperFormattingOverride = value.DeveloperFormattingOverride;
+        EditScreenContextOverride = value.ScreenContextOverride;
+        EditClipboardContextOverride = value.ClipboardContextOverride;
         EditPriority = value.Priority;
         EditIsEnabled = value.IsEnabled;
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
@@ -713,6 +758,16 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
     }
 
+    partial void OnEditScreenContextOverrideChanged(bool? value)
+    {
+        OnPropertyChanged(nameof(SelectedScreenContextOverrideOption));
+    }
+
+    partial void OnEditClipboardContextOverrideChanged(bool? value)
+    {
+        OnPropertyChanged(nameof(SelectedClipboardContextOverrideOption));
+    }
+
     partial void OnEditWhisperModeOverrideChanged(bool? value)
     {
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
@@ -807,6 +862,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,
             DeveloperFormattingOverride = EditDeveloperFormattingOverride,
+            ScreenContextOverride = EditScreenContextOverride,
+            ClipboardContextOverride = EditClipboardContextOverride,
             Priority = EditPriority,
             IsEnabled = EditIsEnabled,
         };
@@ -1167,6 +1224,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var cleanupLevelOverride = EditCleanupLevelOverride;
         var whisperModeOverride = EditWhisperModeOverride;
         var developerFormattingOverride = EditDeveloperFormattingOverride;
+        var screenContextOverride = EditScreenContextOverride;
+        var clipboardContextOverride = EditClipboardContextOverride;
         var language = EditLanguage;
         var task = EditTask;
 
@@ -1190,6 +1249,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditCleanupLevelOverride = cleanupLevelOverride;
         EditWhisperModeOverride = whisperModeOverride;
         EditDeveloperFormattingOverride = developerFormattingOverride;
+        EditScreenContextOverride = screenContextOverride;
+        EditClipboardContextOverride = clipboardContextOverride;
         EditLanguage = language;
         EditTask = task;
 
@@ -1203,6 +1264,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(SelectedScreenContextOverrideOption));
+        OnPropertyChanged(nameof(SelectedClipboardContextOverrideOption));
         OnPropertyChanged(nameof(SelectedLanguageOption));
         OnPropertyChanged(nameof(SelectedTaskOption));
         OnPropertyChanged(nameof(Summary));
@@ -1686,6 +1749,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedStylePresetOption));
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(SelectedScreenContextOverrideOption));
+        OnPropertyChanged(nameof(SelectedClipboardContextOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(MatchStatusText));
         OnPropertyChanged(nameof(ShowLiveContextProfileHint));

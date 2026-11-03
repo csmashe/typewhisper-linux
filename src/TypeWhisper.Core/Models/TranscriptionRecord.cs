@@ -35,6 +35,8 @@ public sealed record TranscriptionRecord
     public bool SnippetApplied { get; init; }
     public bool DictionaryCorrectionApplied { get; init; }
     public bool PromptActionApplied { get; init; }
+    public bool ScreenContextApplied { get; init; }
+    public bool ClipboardContextApplied { get; init; }
     public bool TranslationApplied { get; init; }
 
     /// <summary>

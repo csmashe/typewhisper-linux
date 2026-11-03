@@ -25,14 +25,20 @@ public sealed class LlmCleanupServiceTests
         };
         var sut = CreateService([provider]);
         var statuses = new List<string>();
+        var capture = new LlmCallCapture();
 
         var result = await sut.CleanAsync("uh hello", CleanupLevel.Medium,
             message => { statuses.Add(message); return Task.CompletedTask; },
-            isDraft: true, draftTimeout: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(2));
+            capture: capture, isDraft: true, draftTimeout: TimeSpan.FromMilliseconds(50),
+            referenceContext: "ProjectIris").WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal("Hello", result);
         Assert.True(provider.LastToken.IsCancellationRequested);
         Assert.DoesNotContain(statuses, status => status.Contains("wait limit"));
+        var call = Assert.Single(capture.Calls);
+        Assert.Contains("ProjectIris", provider.LastSystemPrompt);
+        Assert.Equal(provider.LastSystemPrompt, call.SystemPromptSent);
+        Assert.True(string.IsNullOrEmpty(call.ResponseReceived));
     }
 
     [Fact]
@@ -128,15 +134,21 @@ public sealed class LlmCleanupServiceTests
             Process = _ => { entered.SetResult(); return release.Task; },
         };
         var sut = CreateService([provider]);
+        var capture = new LlmCallCapture();
         try
         {
             var cleanup = sut.CleanAsync("uh hello", CleanupLevel.Medium,
-                isDraft: true, draftTimeout: TimeSpan.FromSeconds(10), ct: caller.Token);
+                capture: capture, isDraft: true, draftTimeout: TimeSpan.FromSeconds(10), ct: caller.Token,
+                referenceContext: "ProjectIris");
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
             await caller.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 cleanup.WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             Assert.True(provider.LastToken.IsCancellationRequested);
+            var call = Assert.Single(capture.Calls);
+            Assert.Contains("ProjectIris", provider.LastSystemPrompt);
+            Assert.Equal(provider.LastSystemPrompt, call.SystemPromptSent);
+            Assert.True(string.IsNullOrEmpty(call.ResponseReceived));
         }
         finally
         {
@@ -195,8 +207,107 @@ public sealed class LlmCleanupServiceTests
             },
         };
         var sut = CreateService([provider]);
-        Assert.Equal("clean result", await sut.CleanAsync("uh hello", CleanupLevel.Medium));
+        var capture = new LlmCallCapture();
+        Assert.Equal("clean result", await sut.CleanAsync("uh hello", CleanupLevel.Medium,
+            capture: capture, referenceContext: "ProjectIris"));
         Assert.Equal(2, attempts);
+        Assert.Equal(2, provider.SystemPrompts.Count);
+        Assert.Contains("ProjectIris", provider.SystemPrompts[0]);
+        Assert.Equal(provider.SystemPrompts[0], provider.SystemPrompts[1]);
+        var call = Assert.Single(capture.Calls);
+        Assert.Equal(provider.SystemPrompts[1], call.SystemPromptSent);
+        Assert.Equal("clean result", call.ResponseReceived);
+    }
+
+    [Fact]
+    public async Task CleanAsync_FinalAndBudgetedDraftKeepTheirOwnReferenceAndProvenance()
+    {
+        var provider = new FakeLlmProviderPlugin("clean result");
+        var sut = CreateService([provider]);
+        var finalCapture = new LlmCallCapture();
+        var draftCapture = new LlmCallCapture();
+
+        Assert.Equal("clean result", await sut.CleanAsync("uh atlas", CleanupLevel.Medium,
+            capture: finalCapture, referenceContext: "CloudAtlas"));
+        Assert.Equal("clean result", await sut.CleanAsync("uh iris", CleanupLevel.High,
+            capture: draftCapture, isDraft: true, draftTimeout: TimeSpan.FromSeconds(2),
+            referenceContext: "ProjectIris"));
+
+        Assert.Equal(2, provider.SystemPrompts.Count);
+        Assert.StartsWith(CleanupService.MediumSystemPrompt, provider.SystemPrompts[0]);
+        Assert.Contains("CloudAtlas", provider.SystemPrompts[0]);
+        Assert.DoesNotContain("ProjectIris", provider.SystemPrompts[0]);
+        Assert.StartsWith(CleanupService.HighSystemPrompt, provider.SystemPrompts[1]);
+        Assert.Contains("ProjectIris", provider.SystemPrompts[1]);
+        Assert.DoesNotContain("CloudAtlas", provider.SystemPrompts[1]);
+        var finalCall = Assert.Single(finalCapture.Calls);
+        var draftCall = Assert.Single(draftCapture.Calls);
+        Assert.Equal(provider.SystemPrompts[0], finalCall.SystemPromptSent);
+        Assert.Equal(provider.SystemPrompts[1], draftCall.SystemPromptSent);
+        Assert.Equal(PromptProcessingService.FormatPromptActionInput("Atlas"), finalCall.UserPromptSent);
+        Assert.Equal(PromptProcessingService.FormatPromptActionInput("Iris"), draftCall.UserPromptSent);
+    }
+
+    [Theory]
+    [InlineData(CleanupLevel.None, "uh project iris")]
+    [InlineData(CleanupLevel.Light, "Project iris")]
+    public async Task CleanAsync_LocalLevelsIgnoreReferenceWithoutConsultingPromptServices(
+        CleanupLevel level, string expected)
+    {
+        var provider = new FakeLlmProviderPlugin("must not be called") { ThrowOnProcess = true };
+        using var manager = TestPluginManagerFactory.Create([provider]);
+        var settings = new Mock<ISettingsService>(MockBehavior.Strict);
+        var prompts = new PromptProcessingService(manager, settings.Object, new MemoryService(manager));
+        var sut = new LlmCleanupService(new CleanupService(), prompts);
+        var capture = new LlmCallCapture();
+
+        Assert.Equal(expected, await sut.CleanAsync("uh project iris", level,
+            capture: capture, referenceContext: "Clipboard text: ProjectIris"));
+
+        Assert.Equal(0, provider.ProcessCalls);
+        Assert.Empty(capture.Calls);
+        settings.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompleteCleanupAsync_NewReferenceDiscardsOtherwiseMatchingCachedDraft()
+    {
+        var results = new Queue<string>(["Draft without reference.", "Final with reference."]);
+        var provider = new FakeLlmProviderPlugin("unused")
+        {
+            Process = _ => Task.FromResult(results.Dequeue()),
+        };
+        using var manager = TestPluginManagerFactory.Create([provider]);
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(service => service.Current).Returns(new AppSettings
+        {
+            DefaultLlmProvider = "plugin:com.test.cleanup:model-a",
+        });
+        var prompts = new PromptProcessingService(manager, settings.Object, new MemoryService(manager));
+        var cleanup = new LlmCleanupService(new CleanupService(), prompts);
+        var published = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var selection = Assert.IsType<string>(prompts.GetCleanupProviderSelection());
+        using var draft = new LiveCleanupDraft(cleanup, CleanupLevel.Medium, "en", selection,
+            (text, _) => Task.FromResult(text), (_, text) => published.TrySetResult(text), TimeSpan.Zero);
+        draft.Submit("uh project iris");
+        Assert.Equal("Draft without reference.", await published.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        draft.StopScheduling();
+        Assert.True(draft.MatchesFinal(CleanupLevel.Medium, selection));
+        var capture = new LlmCallCapture();
+
+        var result = await DictationOrchestrator.CompleteCleanupAsync(
+            cleanup, prompts, draft, "uh project iris", CleanupLevel.Medium, capture, null,
+            CancellationToken.None, referenceContext: "ProjectIris");
+
+        Assert.Equal("Final with reference.", result);
+        Assert.False(draft.Reused);
+        Assert.Equal(2, provider.ProcessCalls);
+        Assert.DoesNotContain("<reference_context>", provider.SystemPrompts[0]);
+        Assert.Contains("ProjectIris", provider.SystemPrompts[1]);
+        var call = Assert.Single(capture.Calls);
+        Assert.Equal(provider.SystemPrompts[1], call.SystemPromptSent);
+        Assert.Equal("Final with reference.", call.ResponseReceived);
+        Assert.Null(await draft.ReuseAsync("uh project iris", null, CancellationToken.None));
     }
 
     [Fact]
@@ -492,6 +603,7 @@ public sealed class LlmCleanupServiceTests
         public Func<CancellationToken, Task<string>>? Process { get; set; }
         public CancellationToken LastToken { get; private set; }
         public int ProcessCalls { get; private set; }
+        public List<string> SystemPrompts { get; } = [];
 
         public string PluginId => "com.test.cleanup";
         public string PluginName => "Cleanup Provider";
@@ -520,6 +632,7 @@ public sealed class LlmCleanupServiceTests
             LastSystemPrompt = systemPrompt;
             LastUserText = userText;
             LastToken = ct;
+            SystemPrompts.Add(systemPrompt);
             ProcessCalls++;
             BeforeProcess?.Invoke(ct);
 

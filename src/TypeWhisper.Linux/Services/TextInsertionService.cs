@@ -559,6 +559,39 @@ public sealed class TextInsertionService
     }
 
     /// <summary>
+    ///     Reads clipboard reference text after the caller has obtained consent. The session
+    ///     must remain input-eligible, and an active insertion must not supply its temporary text.
+    /// </summary>
+    public async Task<string?> TryGetClipboardTextAsync(
+        int maxChars = int.MaxValue,
+        CancellationToken ct = default
+    )
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxChars);
+        ct.ThrowIfCancellationRequested();
+        if (!_inputAllowed() || !await _insertionGate.WaitAsync(0, ct).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!_inputAllowed())
+            {
+                return null;
+            }
+
+            var text = await _platform.TryGetClipboardTextAsync(maxChars, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            return _inputAllowed() ? text : null;
+        }
+        finally
+        {
+            _insertionGate.Release();
+        }
+    }
+
+    /// <summary>
     ///     Types a chunk of streamed text directly via the platform typing backend — no clipboard,
     ///     no per-chunk focus delay — for streaming a spoken-command result onto the page. The caller
     ///     ensures the target holds focus. Terminal multiline chunks are rejected defensively; the
@@ -1228,7 +1261,7 @@ internal interface ITextInsertionPlatform
     /// </summary>
     bool PrefersDirectTypingForUnknownTarget { get; }
 
-    /// <summary>True when every typing backend the platform may use can type non-ASCII text.</summary>
+    /// <summary>True when the platform has a typing backend that can type non-ASCII text.</summary>
     bool CanTypeNonAscii => true;
 
     InsertionFailureReason LastFailureReason { get; }
@@ -1241,7 +1274,15 @@ internal interface ITextInsertionPlatform
     /// </summary>
     bool LastTypingDeliveredPartialText { get; }
 
-    Task<string?> TryGetClipboardTextAsync();
+    Task<string?> TryGetClipboardTextAsync() =>
+        TryGetClipboardTextAsync(int.MaxValue, CancellationToken.None);
+
+    /// <summary>Older platforms do not expose opt-in reference reads.</summary>
+    Task<string?> TryGetClipboardTextAsync(int maxChars, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<string?>(null);
+    }
     Task<bool> SetClipboardTextAsync(string text);
 
     /// <summary>
@@ -1428,8 +1469,14 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         );
 
     // xdotool and wtype map arbitrary keysyms; ydotool types only what the US keymap holds.
-    // The chain can fall through to any backend, so one ydotool entry is enough to rule it out.
-    public bool CanTypeNonAscii => !_chain.Contains(InputBackend.Ydotool);
+    // wtype counts only where the compositor accepts its virtual keyboard.
+    public bool CanTypeNonAscii =>
+        _chain.Exists(backend => backend switch
+        {
+            InputBackend.Xdotool => true,
+            InputBackend.Wtype => !_snapshot.CompositorRejectsWtype,
+            _ => false,
+        });
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
@@ -1438,8 +1485,18 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private bool UsesWaylandClipboard =>
         _snapshot.ClipboardToolName == LinuxCapabilitySnapshot.WlClipboardToolName;
 
-    public async Task<string?> TryGetClipboardTextAsync()
+    public Task<string?> TryGetClipboardTextAsync() =>
+        TryGetClipboardTextAsync(int.MaxValue, CancellationToken.None);
+
+    public async Task<string?> TryGetClipboardTextAsync(int maxChars, CancellationToken ct = default)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxChars);
+        ct.ThrowIfCancellationRequested();
+        if (maxChars == 0)
+        {
+            return string.Empty;
+        }
+
         var useWaylandClipboard = UsesWaylandClipboard;
         var fileName = useWaylandClipboard ? "wl-paste" : "xclip";
         IReadOnlyList<string> args = useWaylandClipboard
@@ -1448,10 +1505,39 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
         try
         {
+            if (maxChars != int.MaxValue)
+            {
+                var bounded = await _ioRunner.RunOneShotAsync(
+                    new ProcessCommand(fileName, args),
+                    new ProcessOneShotOptions(
+                        Timeout: s_clipboardOperationTimeout,
+                        StandardError: ProcessCaptureMode.Discard
+                    )
+                    {
+                        MaximumStandardOutputBytes = (int)Math.Min((long)maxChars * 4, int.MaxValue),
+                    },
+                    ct
+                ).ConfigureAwait(false);
+                if (!bounded.Succeeded && bounded.Status != ProcessRunStatus.OutputLimitExceeded)
+                {
+                    return null;
+                }
+
+                var text = bounded.StandardOutputText;
+                var length = Math.Min(text.Length, maxChars);
+                if (length < text.Length && length > 0 && char.IsHighSurrogate(text[length - 1]))
+                {
+                    length--;
+                }
+
+                return text[..length];
+            }
+
             var result = await _ioRunner.RunAsync(
                 fileName,
                 args,
-                timeout: s_clipboardOperationTimeout
+                timeout: s_clipboardOperationTimeout,
+                ct: ct
             ).ConfigureAwait(false);
             if (result.TimedOut)
             {

@@ -2706,10 +2706,11 @@ public sealed class TextInsertionServiceTests
 
     [Theory]
     [InlineData("Wayland", false, false, "gnome", true, true, false)]
-    [InlineData("Wayland", false, true, "hyprland", true, true, false)]
+    [InlineData("Wayland", false, true, "gnome", true, true, false)]
+    [InlineData("Wayland", false, true, "hyprland", true, true, true)]
     [InlineData("Wayland", false, true, "hyprland", false, false, true)]
     [InlineData("X11", true, false, "gnome", true, true, true)]
-    public void LinuxTextInsertionPlatform_CanTypeNonAscii_OnlyWithoutYdotoolInChain(
+    public void LinuxTextInsertionPlatform_CanTypeNonAscii_WhenChainHasUnicodeBackend(
         string sessionType,
         bool hasXdotool,
         bool hasWtype,
@@ -4018,7 +4019,10 @@ public sealed class TextInsertionServiceTests
 
         public InsertionFailureReason LastFailureReason { get; private set; }
 
-        public Task<string?> TryGetClipboardTextAsync()
+        public Task<string?> TryGetClipboardTextAsync(
+            int maxChars = int.MaxValue,
+            CancellationToken ct = default
+        )
         {
             return Task.FromResult(
                 ClipboardReadResults is { Count: > 0 } ? ClipboardReadResults.Dequeue() : Clipboard

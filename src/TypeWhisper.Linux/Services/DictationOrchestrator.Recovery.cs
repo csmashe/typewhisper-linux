@@ -13,7 +13,7 @@ public sealed partial class DictationOrchestrator
     internal static async Task<string> CompleteCleanupAsync(
         LlmCleanupService cleanup, PromptProcessingService prompts, LiveCleanupDraft? draft,
         string text, CleanupLevel level, LlmCallCapture? capture,
-        Func<string, Task>? status, CancellationToken token)
+        Func<string, Task>? status, CancellationToken token, string? referenceContext = null)
     {
         // ReSharper disable once InvertIf -- inverting would duplicate the final cleanup call below.
         if (draft is not null)
@@ -23,7 +23,7 @@ public sealed partial class DictationOrchestrator
                 string? provider = null;
                 try { provider = prompts.GetCleanupProviderSelection(); }
                 catch (PluginRequestException) { /* Final cleanup reports configuration errors. */ }
-                if (draft.MatchesFinal(level, provider))
+                if (string.IsNullOrWhiteSpace(referenceContext) && draft.MatchesFinal(level, provider))
                 {
                     // Only waiting for speculative work is bounded. A miss gets ordinary
                     // final cleanup with no deadline and no shared provider gate.
@@ -43,7 +43,8 @@ public sealed partial class DictationOrchestrator
             }
             finally { draft.Dispose(); }
         }
-        return await cleanup.CleanAsync(text, level, status, capture, ct: token);
+        return await cleanup.CleanAsync(text, level, status, capture, ct: token,
+            referenceContext: referenceContext);
     }
 
     private readonly Lock _recoveryLock = new();
@@ -89,6 +90,7 @@ public sealed partial class DictationOrchestrator
         var translationTarget =
             context.Profile?.TranslationTarget ?? _settings.Current.TranslationTargetLanguage;
         var cleanupLevel = ResolveCleanupLevel(context, promptAction);
+        var referenceContext = BuildReferenceContext(context);
 
         var pluginProcessors = _models
             .PluginManager.PostProcessors.Select(processor => new PluginPostProcessor(
@@ -116,7 +118,7 @@ public sealed partial class DictationOrchestrator
                         {
                             ReportStatus(context, message);
                             return Task.CompletedTask;
-                        }, token),
+                        }, token, referenceContext),
             SnippetExpander = text =>
                 _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null

@@ -46,10 +46,16 @@ public partial class AdvancedSectionViewModel : ObservableObject
     private DiagnosticLogRetentionOption? _selectedDiagnosticLogRetention;
 
     [ObservableProperty]
+    private bool _clipboardContextEnabled;
+
+    [ObservableProperty]
     private bool _memoryEnabled;
 
     [ObservableProperty]
     private bool _saveToHistoryEnabled;
+
+    [ObservableProperty]
+    private bool _screenContextEnabled;
 
     [ObservableProperty]
     private AutoUnloadOption? _selectedAutoUnloadOption;
@@ -240,6 +246,8 @@ public partial class AdvancedSectionViewModel : ObservableObject
         RunProgrammaticRefresh(() =>
         {
             MemoryEnabled = _configuredMemoryEnabled && CanUseMemory;
+            ScreenContextEnabled = settings.ScreenContextEnabled;
+            ClipboardContextEnabled = settings.ClipboardContextEnabled;
             SpokenFeedbackEnabled = _configuredSpokenFeedbackEnabled && CanUseSpokenFeedback;
             SaveToHistoryEnabled = settings.SaveToHistoryEnabled;
             CaptureLlmProvenance = settings.CaptureLlmProvenance;
@@ -279,6 +287,26 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
         _configuredMemoryEnabled = value;
         _settings.Update(current => current with { MemoryEnabled = value });
+    }
+
+    partial void OnScreenContextEnabledChanged(bool value)
+    {
+        if (_isProgrammaticRefresh || _settings.Current.ScreenContextEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { ScreenContextEnabled = value });
+    }
+
+    partial void OnClipboardContextEnabledChanged(bool value)
+    {
+        if (_isProgrammaticRefresh || _settings.Current.ClipboardContextEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { ClipboardContextEnabled = value });
     }
 
     partial void OnSelectedAutoUnloadOptionChanged(AutoUnloadOption? value)

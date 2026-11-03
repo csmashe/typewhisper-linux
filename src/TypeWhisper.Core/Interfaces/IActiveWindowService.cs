@@ -32,6 +32,14 @@ public interface IActiveWindowService
     /// </summary>
     string? GetBrowserUrlForSnapshot(ActiveWindowSnapshot? snapshot, bool isPolling = false);
 
+    /// <summary>
+    ///     Bounded text reference from the captured window's focused accessible element.
+    ///     Callers must obtain screen-context consent before invoking this method. Missing or
+    ///     unconfirmed window identity and password fields return null. Older implementations
+    ///     expose no screen context.
+    /// </summary>
+    string? GetFocusedScreenContext(string? processName, string? title) => null;
+
     /// <summary>Returns distinct process names of all visible windows (sorted).</summary>
     IReadOnlyList<string> GetRunningAppProcessNames();
 }
