@@ -32,6 +32,7 @@ public sealed class ParakeetCtcLifecycleTests : IDisposable
             Path.Join(_directory, "tokenizer.json"),
             """{"model":{"type":"BPE","vocab":{"▁":0,"a":1},"merges":[]}}"""
         );
+        File.WriteAllText(Path.Join(_directory, "model.int8.onnx"), "");
         File.WriteAllText(
             Path.Join(_directory, "verified-assets.json"),
             JsonSerializer.Serialize(new { })
@@ -46,12 +47,27 @@ public sealed class ParakeetCtcLifecycleTests : IDisposable
         new(Guid.NewGuid(), "a", ReadOnlyMemory<float>.Empty, 16000, [], []);
 
     [Fact]
-    public async Task ActivationNeedsOnlyTokenizerAndMissingModelWithdrawsReadinessOnFirstRequest()
+    public async Task ActivationRejectsOverrideWithoutModelFile()
+    {
+        File.Delete(Path.Join(_directory, "model.int8.onnx"));
+        using var plugin = new ParakeetCtcPlugin();
+        await Assert.ThrowsAsync<FileNotFoundException>(() => plugin.ActivateAsync(_host.Object));
+        Assert.False(plugin.IsReady);
+        _host.Verify(h => h.NotifyCapabilitiesChanged(), Times.Never);
+        Assert.Equal(
+            ["tokenizer.json", "tokens.txt", "verified-assets.json"],
+            Directory.GetFiles(_directory).Select(Path.GetFileName).Order()
+        );
+    }
+
+    [Fact]
+    public async Task ModelRemovedAfterActivationWithdrawsReadinessOnFirstRequest()
     {
         using var plugin = new ParakeetCtcPlugin();
         await plugin.ActivateAsync(_host.Object);
         Assert.True(plugin.IsReady);
         _host.Verify(h => h.NotifyCapabilitiesChanged(), Times.Once);
+        File.Delete(Path.Join(_directory, "model.int8.onnx"));
         await Assert.ThrowsAsync<FileNotFoundException>(() =>
             plugin.RescoreAsync(Request(), CancellationToken.None)
         );
@@ -70,7 +86,8 @@ public sealed class ParakeetCtcLifecycleTests : IDisposable
             plugin.RescoreAsync(Request(), CancellationToken.None)
         );
         _host.Verify(h => h.NotifyCapabilitiesChanged(), Times.Exactly(2));
-        // Re-enabling the plugin is the retry path.
+        // Re-enabling the plugin is the retry path once the model is back.
+        await File.WriteAllTextAsync(Path.Join(_directory, "model.int8.onnx"), "");
         await plugin.ActivateAsync(_host.Object);
         Assert.True(plugin.IsReady);
         await plugin.DeactivateAsync();

@@ -64,6 +64,15 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void MissingToggleHotkey_LoadsTheLinuxDefault()
+    {
+        var settings = JsonSerializer.Deserialize<AppSettings>("{}", s_jsonOptions);
+
+        Assert.NotNull(settings);
+        Assert.Equal("Ctrl+Shift+Space", settings.ToggleHotkey);
+    }
+
+    [Fact]
     public void LegacyHotkeyProperties_AreIgnoredOnLoadAndOmittedOnSave()
     {
         const string legacyJson =

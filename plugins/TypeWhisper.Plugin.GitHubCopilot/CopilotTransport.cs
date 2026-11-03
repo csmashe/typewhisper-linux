@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
 using TypeWhisper.PluginSDK.Models;
@@ -79,7 +80,7 @@ internal sealed class CopilotTransport : ICopilotTransport
     private TimeSpan _catalogLifetime = CatalogLifetime;
 
     // Per-turn account resolution and model listing are only pre-checks: every turn still binds and
-    // verifies the account on its session and switches with requireAvailable before sending text.
+    // verifies the account on its session and re-checks the model under it before sending text.
     // Only public model metadata is cached in memory; selection IDs are never retained.
     private readonly ConcurrentDictionary<string, (IReadOnlyList<PluginModelInfo> Models, DateTimeOffset Expires)>
         _catalogs = new();
@@ -285,8 +286,9 @@ internal sealed class CopilotTransport : ICopilotTransport
                 }
             }
 
-            // Bind authentication before choosing the request model or sending any text.
-            config.Model = null;
+            // The session starts on the request model: runtime 1.0.83 cancels a switchTo issued after
+            // the account is bound, even for enabled models. No text is sent until the bound account
+            // is verified and the model is re-checked against that account's own list.
             sessionCreationStarted = true;
             session = await client.CreateSessionAsync(config, setup.Token);
             var binding = await session.Rpc.GitHubAuth.SetCredentialsAsync(
@@ -303,11 +305,11 @@ internal sealed class CopilotTransport : ICopilotTransport
                 throw new CopilotSignInRequiredException();
             }
 
-            var switched = await session.Rpc.Model.SwitchToAsync(
-                model,
-                requireAvailable: true,
-                cancellationToken: setup.Token);
-            if (switched.Deferred == true || switched.ModelId != model)
+            var available = await session.Rpc.Model.ListAsync(
+                new SessionModelListRequest { SkipCache = true },
+                setup.Token);
+            if (!available.List.Any(m => IsEnabledModel(m, model))
+                || (await session.Rpc.Model.GetCurrentAsync(setup.Token)).ModelId != model)
             {
                 throw new CopilotModelUnavailableException();
             }
@@ -485,5 +487,16 @@ internal sealed class CopilotTransport : ICopilotTransport
         .Select(m => new PluginModelInfo(m.Id, string.IsNullOrWhiteSpace(m.Name) ? m.Id : m.Name))
         .OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase)
         .ToArray();
+
+    // Session model entries are opaque JSON with the same id/policy shape as models.list.
+    private static bool IsEnabledModel(JsonElement entry, string model) =>
+        entry.ValueKind == JsonValueKind.Object
+        && entry.TryGetProperty("id", out var id)
+        && id.ValueKind == JsonValueKind.String
+        && id.GetString() == model
+        && (!entry.TryGetProperty("policy", out var policy)
+            || policy.ValueKind != JsonValueKind.Object
+            || !policy.TryGetProperty("state", out var state)
+            || state.ValueKind == JsonValueKind.String && state.GetString() == "enabled");
 #pragma warning restore GHCP001
 }

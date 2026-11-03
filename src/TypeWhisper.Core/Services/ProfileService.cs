@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -12,6 +13,7 @@ namespace TypeWhisper.Core.Services;
 public sealed class ProfileService : IProfileService
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+    private static readonly IdnMapping s_idn = new();
 
     private readonly IErrorLogService? _errorLog;
     private readonly string _filePath;
@@ -262,7 +264,9 @@ public sealed class ProfileService : IProfileService
         {
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
             {
-                return uri.Host;
+                // Punycode form, so bücher.test and xn--bcher-kva.test compare equal.
+                // IP literals keep Host: IdnHost drops IPv6 brackets.
+                return uri.HostNameType == UriHostNameType.Dns ? uri.IdnHost : uri.Host;
             }
         }
         catch
@@ -275,18 +279,31 @@ public sealed class ProfileService : IProfileService
 
     private static bool MatchesUrlPattern(string host, string pattern)
     {
+        // Plain pattern (e.g. "example.com") also matches any subdomain
         if (!pattern.StartsWith("*."))
         {
-            return host.Equals(pattern, StringComparison.OrdinalIgnoreCase)
-                   || host.EndsWith("." + pattern, StringComparison.OrdinalIgnoreCase);
+            var domain = ToAsciiHost(pattern);
+            return host.Equals(domain, StringComparison.OrdinalIgnoreCase)
+                   || host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase);
         }
 
         // *.example.com matches sub.example.com AND example.com (bare apex)
-        var suffix = pattern[1..]; // includes the leading dot, e.g. ".example.com"
-        return host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
-               || host.Equals(pattern[2..], StringComparison.OrdinalIgnoreCase);
+        var apex = ToAsciiHost(pattern[2..]);
+        return host.EndsWith("." + apex, StringComparison.OrdinalIgnoreCase)
+               || host.Equals(apex, StringComparison.OrdinalIgnoreCase);
+    }
 
-        // Plain pattern (e.g. "example.com") also matches any subdomain
+    private static string ToAsciiHost(string domain)
+    {
+        try
+        {
+            return s_idn.GetAscii(domain);
+        }
+        catch (ArgumentException)
+        {
+            // Not a valid IDN: compare verbatim.
+            return domain;
+        }
     }
 
     private static ImmutableArray<Profile> Sort(ImmutableArray<Profile> profiles)

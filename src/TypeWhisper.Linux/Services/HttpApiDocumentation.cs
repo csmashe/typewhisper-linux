@@ -25,7 +25,7 @@ internal static class HttpApiDocumentation
         <h1>TypeWhisper HTTP API</h1>
         <p>Base address: <code>http://127.0.0.1:{{PORT}}</code>. Requests must use a loopback host and an allowed origin.</p>
         <h2>Authentication and quick start</h2>
-        <p>Find your token in Settings → Advanced → HTTP API. Send <code>Authorization: Bearer &lt;token&gt;</code>.
+        <p>Enable the API and find its port and token in Settings → General → Services. Send <code>Authorization: Bearer &lt;token&gt;</code>.
         Header names are case-insensitive, so <code>authorization: Bearer &lt;token&gt;</code> also works; the Bearer prefix is case-sensitive.
         Only GET /docs and GET /docs/ are public; API routes including /v1/status require authentication.</p>
         <p>Set the TOKEN environment variable to your token, then run:</p>
@@ -33,10 +33,11 @@ internal static class HttpApiDocumentation
         curl -H "Authorization: Bearer $TOKEN" -F file=@clip.wav \
           -F response_format=json http://127.0.0.1:{{PORT}}/v1/transcribe</code></pre>
         <h2>CLI</h2>
-        <pre><code>typewhisper status
-        typewhisper models
-        typewhisper transcribe &lt;file&gt;
-        typewhisper --help</code></pre>
+        <p>The command-line client is the separate <code>typewhisper-cli</code> executable, not the <code>typewhisper</code> app.</p>
+        <pre><code>typewhisper-cli status
+        typewhisper-cli models
+        typewhisper-cli transcribe &lt;file&gt;
+        typewhisper-cli --help</code></pre>
         <h2>Endpoints</h2>
         <p>Recorder sessions save a WAV file and do not transcribe it automatically.</p>
         <table><thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead><tbody>
@@ -48,7 +49,8 @@ internal static class HttpApiDocumentation
         Multipart uses the option names below; raw audio uses corresponding x- headers with hyphens (for example x-response-format).
         Local-file JSON uses snake_case keys.</p>
         <table><thead><tr><th>Option</th><th>Meaning</th></tr></thead><tbody>
-        <tr><td>language</td><td>Explicit language; cannot be combined with language hints.</td></tr>
+        <tr><td>language</td><td>Explicit language. Multipart and raw audio reject it together with language hints (400);
+        local-file JSON accepts both and treats the hints as advisory alongside the explicit language.</td></tr>
         <tr><td>language_hint(s)</td><td>Repeat language_hint in multipart; use comma-separated x-language-hints for raw audio or a language_hints JSON array.</td></tr>
         <tr><td>task</td><td>transcribe (default) or translate.</td></tr>
         <tr><td>target_language</td><td>Translate the resulting text and, when requested, segments to this language.</td></tr>

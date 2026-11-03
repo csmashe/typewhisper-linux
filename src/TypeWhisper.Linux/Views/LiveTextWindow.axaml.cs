@@ -32,6 +32,7 @@ public partial class LiveTextWindow : Window
     private readonly LiveTextWindowViewModel? _viewModel;
     private bool _applyingBounds;
     private Interaction _interaction;
+    private readonly NativeDragStartGuard _nativeDragStart = new();
     private DispatcherTimer? _saveTimer;
     private bool _sizeChangedByUser;
     private (double? Left, double? Top, int Width, int Height) _ownBounds;
@@ -83,7 +84,15 @@ public partial class LiveTextWindow : Window
 
         DragHandle.PointerPressed += OnDragHandlePressed;
         PointerReleased += (_, _) => EndInteraction();
-        PointerCaptureLost += (_, _) => EndInteraction();
+        PointerCaptureLost += (_, _) =>
+        {
+            // On X11, BeginMoveDrag/BeginResizeDrag drop our capture while handing the pointer to
+            // the WM. That starts the move; ending here would ignore every position it reports.
+            if (!_nativeDragStart.IsStarting)
+            {
+                EndInteraction();
+            }
+        };
         // The WM's move/resize grab can swallow the release; the next buttonless motion ends it.
         PointerMoved += (_, e) =>
         {
@@ -369,7 +378,7 @@ public partial class LiveTextWindow : Window
             }
 
             BeginInteraction(Interaction.Resize);
-            BeginResizeDrag(edge, e);
+            _nativeDragStart.Run(() => BeginResizeDrag(edge, e));
             e.Handled = true;
         };
         ResizeHandles.Children.Add(handle);
@@ -391,12 +400,14 @@ public partial class LiveTextWindow : Window
         }
 
         BeginInteraction(Interaction.Move);
-        BeginMoveDrag(e);
+        _nativeDragStart.Run(() => BeginMoveDrag(e));
         e.Handled = true;
     }
 
     private void BeginInteraction(Interaction interaction)
     {
+        // The WM can swallow the previous drag's release, so its drop may still be unsaved.
+        FlushPendingSave();
         _interaction = interaction;
         if (_settings is not null)
         {

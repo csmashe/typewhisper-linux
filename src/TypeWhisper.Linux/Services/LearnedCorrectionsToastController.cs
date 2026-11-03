@@ -35,6 +35,7 @@ public sealed class LearnedCorrectionsToastController : IDisposable
     // events (the learned toast and its undo confirmation) so the window stays anchored to the same
     // element for both. FeedbackChanged carries only text/undo, not the source box.
     private AtSpiScreenRect? _currentExtents;
+    private CompositorWindowFrame? _currentWindowFrame;
 
     public LearnedCorrectionsToastController(
         TargetAppCorrectionLearningService learning,
@@ -94,6 +95,7 @@ public sealed class LearnedCorrectionsToastController : IDisposable
         Dispatcher.UIThread.Post(() =>
         {
             _currentExtents = batch.SourceExtents;
+            _currentWindowFrame = batch.TargetWindowFrame;
             _presenter.ShowLearned(batch.Corrections);
         });
     }
@@ -112,6 +114,7 @@ public sealed class LearnedCorrectionsToastController : IDisposable
             feedback.ShowUndo,
             Loc.Instance["Feedback.Undo"],
             _currentExtents,
+            _currentWindowFrame,
             OnUndoClicked
         );
     }
