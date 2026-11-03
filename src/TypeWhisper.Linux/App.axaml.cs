@@ -622,7 +622,7 @@ public class App : Application
 
             var api = services.GetRequiredService<HttpApiService>();
             api.ApplySettings();
-            settings.SettingsChanged += _ => api.ApplySettings();
+            settings.SettingsChanged += _ => api.ApplySettingsInBackground();
 
             var promptPalette = services.GetRequiredService<PromptPaletteService>();
             hotkey.PromptPaletteRequested += (_, _) => _ = promptPalette.TogglePaletteAsync();

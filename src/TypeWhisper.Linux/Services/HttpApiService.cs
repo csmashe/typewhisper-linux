@@ -236,6 +236,9 @@ public sealed partial class HttpApiService : IDisposable
     private readonly CancellationToken _serviceLifetimeToken;
     private readonly Lock _lifecycleLock = new();
     private readonly Lock _settingsLifecycleLock = new();
+    private readonly Lock _settingsQueueLock = new();
+    private Task _settingsApplyTail = Task.CompletedTask;
+    private long _settingsApplyVersion;
     private readonly DictationSessionResultStore _sessionResults;
     private readonly ISettingsService _settings;
     private readonly ITranslationService _translation;
@@ -451,16 +454,6 @@ public sealed partial class HttpApiService : IDisposable
         }
     }
 
-    private void Start(int port)
-    {
-        // Serialize settings-driven starts/stops with each other, while quiescence uses only the
-        // short lifecycle-state lock and therefore never waits behind a Kestrel bind.
-        lock (_settingsLifecycleLock)
-        {
-            StartCore(port);
-        }
-    }
-
     private void StartCore(int port)
     {
         WebApplication? priorHost;
@@ -636,49 +629,121 @@ public sealed partial class HttpApiService : IDisposable
         }
     }
 
-    private void Stop()
-    {
-        lock (_settingsLifecycleLock)
-        {
-            StopCore();
-        }
-    }
-
+    /// <summary>Applies the API settings on the calling thread; used at startup and by tests.</summary>
     public void ApplySettings()
     {
-        if (Volatile.Read(ref _lifecycleState) != LifecycleRunning)
+        if (PrepareSettingsAction() is not { } action)
         {
             return;
         }
 
-        var settings = _settings.Current;
-        if (settings.ApiServerEnabled)
+        RunSettingsAction(action, Interlocked.Increment(ref _settingsApplyVersion));
+    }
+
+    /// <summary>
+    /// Applies the API settings without blocking the caller. Stopping Kestrel waits for in-flight
+    /// requests for up to ~3 s, which must not freeze the UI thread raising SettingsChanged.
+    /// Queued applies run one at a time and in order, so a stopping host keeps its socket
+    /// ownership until teardown finishes and a quick off→on cannot race it for api.sock.
+    /// </summary>
+    public Task ApplySettingsInBackground()
+    {
+        if (PrepareSettingsAction() is not { } action)
         {
-            try
+            return Task.CompletedTask;
+        }
+
+        lock (_settingsQueueLock)
+        {
+            var version = Interlocked.Increment(ref _settingsApplyVersion);
+            _settingsApplyTail = _settingsApplyTail.ContinueWith(
+                _ => RunSettingsAction(action, version),
+                CancellationToken.None,
+                TaskContinuationOptions.DenyChildAttach,
+                TaskScheduler.Default
+            );
+            return _settingsApplyTail;
+        }
+    }
+
+    // Runs on the caller's thread: protecting the token can write settings, and SettingsChanged
+    // subscribers expect the thread that raised the original change.
+    private SettingsAction? PrepareSettingsAction()
+    {
+        if (Volatile.Read(ref _lifecycleState) != LifecycleRunning)
+        {
+            return null;
+        }
+
+        if (!_settings.Current.ApiServerEnabled)
+        {
+            return new SettingsAction(SettingsActionKind.Stop, 0);
+        }
+
+        try
+        {
+            EnsureBearerToken();
+        }
+        catch (Exception ex) when (
+            ex is CryptographicException
+                or IOException
+                or UnauthorizedAccessException
+        )
+        {
+            Trace.WriteLine(
+                $"[HttpApiService] Bearer token protection unavailable: {ex}"
+            );
+            return new SettingsAction(SettingsActionKind.StopSecretUnavailable, 0);
+        }
+
+        return new SettingsAction(SettingsActionKind.Start, _settings.Current.ApiServerPort);
+    }
+
+    private void RunSettingsAction(SettingsAction action, long version)
+    {
+        // Serialize settings-driven starts/stops with each other, while quiescence uses only the
+        // short lifecycle-state lock and therefore never waits behind a Kestrel bind.
+        lock (_settingsLifecycleLock)
+        {
+            // Only the newest requested state matters, so superseded applies are skipped.
+            if (version != Interlocked.Read(ref _settingsApplyVersion))
             {
-                EnsureBearerToken();
-            }
-            catch (Exception ex) when (
-                ex is CryptographicException
-                    or IOException
-                    or UnauthorizedAccessException
-            )
-            {
-                Trace.WriteLine(
-                    $"[HttpApiService] Bearer token protection unavailable: {ex}"
-                );
-                Stop();
-                SetStatus("Security.SecretProtectionUnavailable");
                 return;
             }
 
-            Start(_settings.Current.ApiServerPort);
-        }
-        else
-        {
-            Stop();
+            try
+            {
+                switch (action.Kind)
+                {
+                    case SettingsActionKind.Start:
+                        StartCore(action.Port);
+                        break;
+                    case SettingsActionKind.Stop:
+                        StopCore();
+                        break;
+                    case SettingsActionKind.StopSecretUnavailable:
+                        StopCore();
+                        SetStatus("Security.SecretProtectionUnavailable");
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(action), action.Kind, null);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[HttpApiService] Applying API settings failed: {ex}");
+            }
         }
     }
+
+    private enum SettingsActionKind
+    {
+        Start,
+        Stop,
+        StopSecretUnavailable,
+    }
+
+    private readonly record struct SettingsAction(SettingsActionKind Kind, int Port);
 
     internal static string ReadBearerToken(
         AppSettings settings,
@@ -779,16 +844,43 @@ public sealed partial class HttpApiService : IDisposable
         }
         await StopHostForQuiesceAsync(host, RemainingBudget(budget, elapsed))
             .ConfigureAwait(false);
+        var settingsSettled = await WaitForQueuedSettingsAsync(RemainingBudget(budget, elapsed))
+            .ConfigureAwait(false);
         var drained = await _requestDispatcher
             .DrainAsync(RemainingBudget(budget, elapsed))
             .ConfigureAwait(false);
         TryUnlinkSocket(socketPath, ownership);
-        return drained;
+        return drained && settingsSettled;
+    }
+
+    // A queued settings apply may still be tearing down a host it took over before quiesce.
+    private async Task<bool> WaitForQueuedSettingsAsync(TimeSpan budget)
+    {
+        Task pending;
+        lock (_settingsQueueLock)
+        {
+            pending = _settingsApplyTail;
+        }
+
+        try
+        {
+            await pending.WaitAsync(budget, CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
     }
 
     private async Task<bool> RedrainCoreAsync(TimeSpan budget)
     {
-        return await _requestDispatcher.DrainAsync(budget).ConfigureAwait(false);
+        var elapsed = Stopwatch.StartNew();
+        var settingsSettled = await WaitForQueuedSettingsAsync(budget).ConfigureAwait(false);
+        var drained = await _requestDispatcher
+            .DrainAsync(RemainingBudget(budget, elapsed))
+            .ConfigureAwait(false);
+        return drained && settingsSettled;
     }
 
     private void DisposeQuiescedResources()
