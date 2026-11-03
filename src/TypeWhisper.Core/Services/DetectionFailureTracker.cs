@@ -97,7 +97,7 @@ public sealed class DetectionFailureTracker : IDetectionFailureTracker
             "hyprland" or "sway" => $"{reason}. Compositor command failed unexpectedly.",
             "xdotool" =>
                 $"{reason}. xdotool only works on X11/XWayland — install a Wayland-native compositor for better detection.",
-            _ => reason
+            _ => reason,
         };
     }
 }

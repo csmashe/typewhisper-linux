@@ -45,7 +45,7 @@ public sealed class ScriptCollectionSettingsTests : IDisposable
             CollectionKey,
             [
                 Item("First", "echo hello", "bash"),
-                Item("Second", "echo world", "sh", "false")
+                Item("Second", "echo world", "sh", "false"),
             ]
         );
 
@@ -269,7 +269,7 @@ public sealed class ScriptCollectionSettingsTests : IDisposable
             ["name"] = name,
             ["command"] = command,
             ["shell"] = shell,
-            ["enabled"] = enabled
+            ["enabled"] = enabled,
         };
         if (id is not null)
         {

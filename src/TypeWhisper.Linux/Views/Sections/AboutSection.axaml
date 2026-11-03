@@ -1,15 +1,14 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
-             xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.AboutSection"
              x:DataType="vm:AboutSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
@@ -29,11 +28,11 @@
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{loc:Str About.Tagline}"
                            FontSize="13.5"
-                           Foreground="#9BAABC"
+                           Foreground="{DynamicResource TwTextMutedBrush}"
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{Binding Version, StringFormat='Version {0}'}"
                            FontSize="12"
-                           Foreground="#9BAABC"
+                           Foreground="{DynamicResource TwTextMutedBrush}"
                            HorizontalAlignment="Center" />
                 <StackPanel Orientation="Horizontal"
                             Spacing="8"
@@ -48,21 +47,21 @@
                 </StackPanel>
                 <TextBlock Text="{Binding UpdateStatusText}"
                            FontSize="12"
-                           Foreground="#8A9AAE"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                            HorizontalAlignment="Center"
                            TextWrapping="Wrap"
                            Margin="0,6,0,18" />
                 <TextBlock Text="{loc:Str About.EnginesNote}"
                            FontSize="13"
-                           Foreground="#B7C4D3"
+                           Foreground="{DynamicResource TwTextBodyBrush}"
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{loc:Str About.License}"
                            FontSize="13"
-                           Foreground="#B7C4D3"
+                           Foreground="{DynamicResource TwTextBodyBrush}"
                            HorizontalAlignment="Center" />
                 <TextBlock Text="{Binding Copyright}"
                            FontSize="12"
-                           Foreground="#8A9AAE"
+                           Foreground="{DynamicResource TwTextSecondaryBrush}"
                            HorizontalAlignment="Center"
                            TextAlignment="Center"
                            TextWrapping="Wrap"
@@ -71,7 +70,68 @@
 
             <Border Classes="panel"
                     Padding="16">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="{loc:Str About.ProjectInformation}"
+                               FontWeight="SemiBold" />
+                    <WrapPanel ItemSpacing="8"
+                               LineSpacing="8">
+                        <Button Content="{loc:Str About.Project}"
+                                Command="{Binding OpenProjectCommand}" />
+                        <Button Content="{loc:Str About.Documentation}"
+                                Command="{Binding OpenDocsCommand}" />
+                        <Button Content="{loc:Str About.ReportIssue}"
+                                Command="{Binding OpenIssuesCommand}" />
+                        <Button Content="{loc:Str About.ViewLicense}"
+                                Command="{Binding OpenLicenseCommand}" />
+                        <Button Content="{loc:Str About.UpstreamProject}"
+                                Command="{Binding OpenUpstreamCommand}" />
+                    </WrapPanel>
+                    <Grid ColumnDefinitions="140,*"
+                          RowDefinitions="Auto,Auto"
+                          ColumnSpacing="10"
+                          RowSpacing="8">
+                        <TextBlock Text="{loc:Str About.InstallLocation}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center" />
+                        <Border Grid.Row="0"
+                                Grid.Column="1"
+                                Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                BorderBrush="{DynamicResource TwBorderSubtleBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="10,6">
+                            <SelectableTextBlock Text="{Binding InstallLocation}"
+                                                 FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                 FontSize="12" />
+                        </Border>
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Text="{loc:Str About.DataLocation}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center" />
+                        <Border Grid.Row="1"
+                                Grid.Column="1"
+                                Background="{DynamicResource TwSurfaceSunkenBrush}"
+                                BorderBrush="{DynamicResource TwBorderSubtleBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="10,6">
+                            <SelectableTextBlock Text="{Binding DataLocation}"
+                                                 FontFamily="Cascadia Mono, JetBrains Mono, monospace"
+                                                 FontSize="12" />
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="16">
                 <Grid ColumnDefinitions="*,Auto,Auto"
+                      RowDefinitions="Auto,Auto,Auto"
                       ColumnSpacing="10">
                     <StackPanel Spacing="4">
                         <StackPanel Orientation="Horizontal"
@@ -86,19 +146,115 @@
                         </StackPanel>
                         <TextBlock Text="{Binding BackupStatusText}"
                                    FontSize="12"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
-                    <Button Grid.Column="1"
+                    <Button Grid.Row="0"
+                            Grid.Column="1"
                             Content="{loc:Str About.BackUp}"
                             IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
                             VerticalAlignment="Center"
                             Click="OnBackupSettings" />
-                    <Button Grid.Column="2"
+                    <Button Grid.Row="0"
+                            Grid.Column="2"
                             Content="{loc:Str About.Restore}"
                             IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
                             VerticalAlignment="Center"
                             Click="OnRestoreSettings" />
+                    <Border Grid.Row="1"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Margin="0,14,0,0"
+                            Padding="0,14,0,0"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
+                            BorderThickness="0,1,0,0">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="10">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="{loc:Str About.AllData}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{loc:Str About.AllDataDescription}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                                <CheckBox Content="{loc:Str About.IncludeRecordings}"
+                                          IsChecked="{Binding IncludeRecordingsInExport}"
+                                          IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="10"
+                                        VerticalAlignment="Center">
+                                <Button Content="{loc:Str About.ExportAllData}"
+                                        IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
+                                        IsVisible="{Binding !IsExportingData}"
+                                        Click="OnExportAllData" />
+                                <Button Content="{loc:Str Common.Cancel}"
+                                        IsVisible="{Binding IsExportingData}"
+                                        Command="{Binding CancelDataExportCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="2"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Margin="0,14,0,0"
+                            Padding="0,14,0,0"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
+                            BorderThickness="0,1,0,0">
+                        <Grid ColumnDefinitions="*,Auto"
+                              ColumnSpacing="10">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="{loc:Str About.ResetData}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{loc:Str About.ResetDataDescription}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                                <CheckBox Content="{loc:Str About.ResetDeleteModels}"
+                                          IsChecked="{Binding DeleteModelsOnReset}"
+                                          IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}" />
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Content="{loc:Str About.DeleteAllData}"
+                                    Foreground="{DynamicResource TwErrorTextBrush}"
+                                    IsEnabled="{Binding IsBackupBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
+                                    VerticalAlignment="Center"
+                                    Click="OnDeleteAllData" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border Classes="panel"
+                    Padding="16">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="10">
+                    <StackPanel Spacing="4">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="10">
+                            <TextBlock Text="{loc:Str About.SupportReport}"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <ProgressBar Width="90"
+                                         Height="4"
+                                         IsIndeterminate="True"
+                                         IsVisible="{Binding IsSupportReportBusy}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding SupportReportStatusText}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{loc:Str About.SupportReportPrivacy}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            Content="{loc:Str About.ExportSupportReport}"
+                            IsEnabled="{Binding IsSupportReportBusy, Converter={x:Static local:InverseBoolConverter.Instance}}"
+                            VerticalAlignment="Center"
+                            Click="OnExportSupportReport" />
                 </Grid>
             </Border>
 
@@ -106,7 +262,7 @@
                     Height="386">
                 <Grid RowDefinitions="Auto,*">
                     <Border Padding="16,12"
-                            BorderBrush="#1AFFFFFF"
+                            BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                             BorderThickness="0,0,0,1">
                         <Grid ColumnDefinitions="*,Auto,Auto,Auto"
                               ColumnSpacing="10">
@@ -114,6 +270,7 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center" />
                             <ComboBox Grid.Column="1"
+                                      AutomationProperties.Name="{loc:Str About.ErrorCategoryFilter}"
                                       MinWidth="150"
                                       ItemsSource="{Binding CategoryFilters}"
                                       SelectedItem="{Binding SelectedCategoryFilter}"
@@ -135,17 +292,17 @@
                                     IsVisible="{Binding HasErrors, Converter={x:Static local:InverseBoolConverter.Instance}}">
                             <TextBlock Text="✓"
                                        FontSize="42"
-                                       Foreground="#8DA0B8"
+                                       Foreground="{DynamicResource TwTextMutedBrush}"
                                        HorizontalAlignment="Center" />
                             <TextBlock Text="{loc:Str About.NoErrors}"
                                        FontSize="13"
-                                       Foreground="#8A9AAE"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
                         <TextBlock Text="{loc:Str About.NoErrorsInCategory}"
                                    FontSize="13"
-                                   Foreground="#8A9AAE"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    IsVisible="{Binding ShowEmptyCategoryNotice}" />
@@ -155,23 +312,23 @@
                                       IsVisible="{Binding HasVisibleErrors}">
                             <ItemsControl ItemsSource="{Binding FilteredErrorEntries}">
                                 <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="models:ErrorLogEntry">
+                                    <DataTemplate x:DataType="vm:ErrorLogEntryRow">
                                         <Border Padding="16,12"
-                                                BorderBrush="#1AFFFFFF"
+                                                BorderBrush="{DynamicResource TwBorderSubtleBrush}"
                                                 BorderThickness="0,0,0,1">
                                             <StackPanel Spacing="4">
                                                 <StackPanel Orientation="Horizontal"
                                                             Spacing="10">
                                                     <TextBlock Text="{Binding Category}"
                                                                FontSize="11"
-                                                               Foreground="#D6E7FF" />
-                                                    <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:g}'}"
+                                                               Foreground="{DynamicResource TwAccentSubtleTextBrush}" />
+                                                    <TextBlock Text="{Binding LocalTimestamp, StringFormat='{}{0:g}'}"
                                                                FontSize="11"
-                                                               Foreground="#8A9AAE" />
+                                                               Foreground="{DynamicResource TwTextSecondaryBrush}" />
                                                 </StackPanel>
                                                 <TextBlock Text="{Binding Message}"
                                                            TextWrapping="Wrap"
-                                                           Foreground="#D7DEE8" />
+                                                           Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                             </StackPanel>
                                         </Border>
                                     </DataTemplate>

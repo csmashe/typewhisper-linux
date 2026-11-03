@@ -48,7 +48,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         var settings = AppSettings.Default with
         {
             LiveTranscriptionEnabled = true,
-            OnlineAsrBatchLiveTranscriptionEnabled = false
+            OnlineAsrBatchLiveTranscriptionEnabled = false,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -56,7 +56,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = false,
-                SupportsStreaming = false
+                SupportsStreaming = false,
             });
 
         Assert.Equal(LiveTranscriptionMode.None, mode);
@@ -68,7 +68,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         var settings = AppSettings.Default with
         {
             LiveTranscriptionEnabled = true,
-            OnlineAsrBatchLiveTranscriptionEnabled = true
+            OnlineAsrBatchLiveTranscriptionEnabled = true,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -76,7 +76,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = false,
-                SupportsStreaming = false
+                SupportsStreaming = false,
             });
 
         Assert.Equal(LiveTranscriptionMode.Polling, mode);
@@ -91,7 +91,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         {
             LiveTranscriptionEnabled = true,
             LiveTranscriptionStreamingEnabled = false,
-            OnlineAsrBatchLiveTranscriptionEnabled = false
+            OnlineAsrBatchLiveTranscriptionEnabled = false,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -99,7 +99,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = false,
-                SupportsStreaming = true
+                SupportsStreaming = true,
             });
 
         Assert.Equal(LiveTranscriptionMode.None, mode);
@@ -111,7 +111,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         var settings = AppSettings.Default with
         {
             LiveTranscriptionEnabled = true,
-            LiveTranscriptionStreamingEnabled = true
+            LiveTranscriptionStreamingEnabled = true,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -119,7 +119,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = false,
-                SupportsStreaming = true
+                SupportsStreaming = true,
             });
 
         Assert.Equal(LiveTranscriptionMode.Streaming, mode);
@@ -131,7 +131,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         var settings = AppSettings.Default with
         {
             LiveTranscriptionEnabled = true,
-            LiveTranscriptionStreamingEnabled = false
+            LiveTranscriptionStreamingEnabled = false,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -139,7 +139,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = true,
-                SupportsStreaming = true
+                SupportsStreaming = true,
             });
 
         Assert.Equal(LiveTranscriptionMode.Polling, mode);
@@ -152,7 +152,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         {
             LiveTranscriptionEnabled = true,
             LiveTranscriptionStreamingEnabled = true,
-            OnlineAsrBatchLiveTranscriptionEnabled = true
+            OnlineAsrBatchLiveTranscriptionEnabled = true,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -160,7 +160,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = false,
-                SupportsStreaming = false
+                SupportsStreaming = false,
             });
 
         Assert.Equal(LiveTranscriptionMode.Polling, mode);
@@ -175,7 +175,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         var settings = AppSettings.Default with
         {
             LiveTranscriptionEnabled = true,
-            LiveTranscriptionStreamingEnabled = true
+            LiveTranscriptionStreamingEnabled = true,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -183,7 +183,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = true,
-                SupportsStreaming = true
+                SupportsStreaming = true,
             });
 
         Assert.Equal(LiveTranscriptionMode.Streaming, mode);
@@ -196,7 +196,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
         {
             LiveTranscriptionEnabled = false,
             LiveTranscriptionStreamingEnabled = true,
-            OnlineAsrBatchLiveTranscriptionEnabled = true
+            OnlineAsrBatchLiveTranscriptionEnabled = true,
         };
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
@@ -204,7 +204,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             new FakeTranscriptionEnginePlugin
             {
                 SupportsModelDownload = true,
-                SupportsStreaming = true
+                SupportsStreaming = true,
             });
 
         Assert.Equal(LiveTranscriptionMode.None, mode);

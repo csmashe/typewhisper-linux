@@ -1,10 +1,12 @@
 {
   "id": "com.typewhisper.whisper-cpp",
   "name": "whisper.cpp (Local)",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Offline transcription via whisper.cpp using Whisper.net",
-  "category": "transcription",
+  "networkAccess": "local",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.WhisperCpp.dll",
   "pluginClass": "TypeWhisper.Plugin.WhisperCpp.WhisperCppPlugin"
 }

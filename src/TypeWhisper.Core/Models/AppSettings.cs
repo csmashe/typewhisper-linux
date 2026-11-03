@@ -1,3 +1,5 @@
+using TypeWhisper.Core.Services.Diagnostics;
+
 namespace TypeWhisper.Core.Models;
 
 /// <summary>
@@ -11,23 +13,52 @@ public record AppSettings
 {
     public const string DefaultSpokenFeedbackProviderId = "linux-system";
 
+    public const string DefaultCommandKeyphrase = "TypeWhisper";
+
+    /// <summary>
+    ///     Sentinel stored in <see cref="SelectedMicrophoneDeviceId" /> when the user
+    ///     opts to follow the system default capture device instead of pinning a
+    ///     specific microphone. Chosen to never collide with a real PortAudio device
+    ///     id (which is "name|channels"): the leading control marker is not part of
+    ///     any device name. When this is set, <see cref="SelectedMicrophoneDevice" />
+    ///     is ignored and the current OS default is resolved at capture time.
+    /// </summary>
+    public const string FollowSystemDefaultMicrophoneId = "follow-system-default";
+
     public const string LocalModelAccelerationAuto = "auto";
     public const string LocalModelAccelerationCpu = "cpu";
     public const string LocalModelAccelerationNvidiaCuda = "nvidia-cuda";
+    public const string LocalModelAccelerationVulkan = "vulkan";
 
     public const int MinPreviewBubbleAutoHideMilliseconds = 0;
     public const int DefaultPreviewBubbleAutoHideMilliseconds = 1500;
     public const int MaxPreviewBubbleAutoHideMilliseconds = 5000;
 
-    public string ToggleHotkey { get; init; } = "Ctrl+Shift+F9";
-    public string PushToTalkHotkey { get; init; } = "Ctrl+Shift";
-    public string ToggleOnlyHotkey { get; init; } = "";
-    public string HoldOnlyHotkey { get; init; } = "";
+    // Floating live-text window size in device-independent pixels.
+    public const int MinLiveTextWindowWidth = 280;
+    public const int DefaultLiveTextWindowWidth = 420;
+    public const int MaxLiveTextWindowWidth = 4096;
+    public const int MinLiveTextWindowHeight = 140;
+    public const int DefaultLiveTextWindowHeight = 220;
+    public const int MaxLiveTextWindowHeight = 4096;
+
+    public string ToggleHotkey { get; init; } = "Ctrl+Shift+Space";
     public string RecentTranscriptionsHotkey { get; init; } = "";
     public string CopyLastTranscriptionHotkey { get; init; } = "";
+    public string ReadLastTranscriptionHotkey { get; init; } = "";
+    public string PasteLastTranscriptionHotkey { get; init; } = "";
     public string TransformSelectionHotkey { get; init; } = "";
     public string Language { get; init; } = "auto";
+    /// <summary>Ordered spoken-language hints; the first entry mirrors Language, empty means unrestricted auto-detection.</summary>
+    public IReadOnlyList<string> LanguageHints
+    {
+        get;
+        // JsonSerializer passes null for a null JSON value; the reconcile path compares the lists.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? [];
+    } = [];
     public bool AutoPaste { get; init; } = true;
+    public bool LockPasteToFocusedField { get; init; }
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
     {
@@ -45,11 +76,13 @@ public record AppSettings
     } = new(StringComparer.OrdinalIgnoreCase);
 
     public CleanupLevel CleanupLevel { get; init; } = CleanupLevel.None;
+    public bool LiveCleanupEnabled { get; init; }
 
     // Hybrid: quick tap toggles, held key acts as push-to-talk. Most forgiving
     // default — avoids the rapid on/off thrash Toggle produces on a held key.
     public RecordingMode Mode { get; init; } = RecordingMode.Hybrid;
     public HistoryRetentionMode HistoryRetentionMode { get; init; } = HistoryRetentionMode.Duration;
+    public int DictationRecoveryRetentionDays { get; init; } = 30;
     public int HistoryRetentionMinutes { get; init; } = 90 * 24 * 60;
     public int? SelectedMicrophoneDevice { get; init; }
     public string? SelectedMicrophoneDeviceId { get; init; }
@@ -76,6 +109,19 @@ public record AppSettings
     public bool PauseMediaDuringRecording { get; init; }
     public bool SoundFeedbackEnabled { get; init; } = true;
     public bool TranscribeShortQuietClipsAggressively { get; init; }
+    public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
+    public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
+    public GermanOutputVariant GermanOutputVariant { get; init; } = GermanOutputVariant.AsTranscribed;
+    public SpokenFormattingStrategy SpokenFormattingStrategy { get; init; } = SpokenFormattingStrategy.Automatic;
+    public IReadOnlyList<DictationSpokenFormattingProfile> SpokenFormattingProfiles
+    {
+        get;
+        // JsonSerializer passes null for a null JSON value; SettingsService normalizes the list on
+        // load, Save, and Update.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        init => field = value ?? [];
+    } = [];
+    public bool ShortUtterancePunctuationEnabled { get; init; } = true;
 
     // Live transcription (streaming preview while recording)
     public bool LiveTranscriptionEnabled { get; init; } = true;
@@ -93,6 +139,13 @@ public record AppSettings
     public int PreviewBubbleAutoHideMilliseconds { get; init; } = DefaultPreviewBubbleAutoHideMilliseconds;
     public double? OverlayCustomLeft { get; init; }
     public double? OverlayCustomTop { get; init; }
+
+    // Live text in its own movable, resizable window instead of inside the overlay.
+    public bool LiveTextFloating { get; init; }
+    public double? LiveTextWindowLeft { get; init; }
+    public double? LiveTextWindowTop { get; init; }
+    public int LiveTextWindowWidth { get; init; } = DefaultLiveTextWindowWidth;
+    public int LiveTextWindowHeight { get; init; } = DefaultLiveTextWindowHeight;
 
     // Translation
     public string TranscriptionTask { get; init; } = "transcribe";
@@ -116,7 +169,26 @@ public record AppSettings
     // Dictionary
     public string[] EnabledPackIds { get; init; } = [];
     public bool VocabularyBoostingEnabled { get; init; }
+    public bool AcousticVocabularyBoostingEnabled { get; init; } = true;
     public bool AutoAddDictionaryCorrections { get; init; }
+
+    // Silently learn corrections when you type over a dictated word in the target app
+    // (Wispr-Flow-style). Default off — opt-in, since it reads other apps' field text.
+    public bool TargetAppCorrectionLearningEnabled { get; init; }
+
+    // True when TypeWhisper itself turned on the session accessibility flag
+    // (org.a11y.Status.IsEnabled) via the Dictation-settings bridge button. Gates the
+    // "Remove accessibility bridge" button across restarts: the flag is session-global
+    // (and persists via gsettings on GNOME), so removal is only ever offered for a state
+    // this app created — never for one a screen reader or other tool may rely on.
+    public bool AccessibilityBridgeEnabledByApp { get; init; }
+
+    // Opt-in Sentry crash + performance reporting; default off (see docs/PRIVACY.md).
+    public bool CrashReportingEnabled { get; init; }
+
+    // Opt-in local, content-free diagnostic log (Logs/diagnostics.jsonl); never sent anywhere.
+    public bool DiagnosticLogEnabled { get; init; }
+    public int DiagnosticLogRetentionDays { get; init; } = DiagnosticLogPreferences.DefaultRetentionDays;
 
     // Onboarding
     public bool HasCompletedOnboarding { get; init; }
@@ -126,15 +198,30 @@ public record AppSettings
     public string PromptPaletteHotkey { get; init; } = "";
     public string? DefaultLlmProvider { get; init; }
 
+    // Spoken commands (keyphrase command mode). When enabled, a dictation that starts
+    // with CommandKeyphrase is handed to the LLM as an instruction instead of typed.
+    // Ships disabled; the keyphrase defaults to the product name.
+    public bool CommandModeEnabled { get; init; }
+    public string CommandKeyphrase { get; init; } = DefaultCommandKeyphrase;
+
+    // LLM for ad-hoc spoken commands ("plugin:<pluginId>:<modelId>", like DefaultLlmProvider);
+    // null falls back to the default. A matched saved prompt uses that prompt's own override.
+    public string? SpokenCommandLlmProvider { get; init; }
+
     // Plugin state
     public Dictionary<string, bool> PluginEnabledState { get; init; } = new();
-    public bool PluginFirstRunCompleted { get; init; }
 
     // Model auto-unload (0 = disabled)
     public int ModelAutoUnloadSeconds { get; init; }
 
     // History
     public bool SaveToHistoryEnabled { get; init; } = true;
+
+    // Opt-in (default off): persists the exact prompts, provider, and injected
+    // memory context sent to the LLM per history entry (powers the Inspect panel).
+    // Piggybacks history storage, so it only takes effect when history saving is
+    // on; off by default because full prompts are more sensitive than the transcript.
+    public bool CaptureLlmProvenance { get; init; }
 
     // Spoken feedback (TTS readback after transcription)
     public bool SpokenFeedbackEnabled { get; init; }
@@ -153,6 +240,9 @@ public record AppSettings
     // UI Language (null = auto-detect from system)
     public string? UiLanguage { get; init; }
 
+    // Dark keeps the look of releases that had no theme choice.
+    public InterfaceTheme InterfaceTheme { get; init; } = InterfaceTheme.Dark;
+
     // Dashboard
     public int DashboardSelectedPeriod { get; init; }
 
@@ -160,12 +250,40 @@ public record AppSettings
     // (reads /dev/input/event*). Disable to fall back to focused-only SharpHook.
     public bool WaylandEvdevHotkeysEnabled { get; init; } = true;
 
+    /// <summary>Effective ordered hints: the stored list, else the legacy single language, else empty for auto.</summary>
+    public IReadOnlyList<string> GetLanguageHints()
+    {
+        return NormalizeLanguageHints(LanguageHints is { Count: > 0 }
+            ? LanguageHints
+            : string.IsNullOrWhiteSpace(Language) || Language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                ? []
+                : [Language]);
+    }
+
+    /// <summary>Trims, drops blank and "auto" entries, and de-duplicates case-insensitively while keeping order.</summary>
+    public static IReadOnlyList<string> NormalizeLanguageHints(IEnumerable<string?>? values)
+    {
+        return values?.Select(static value => value?.Trim())
+            .Where(static value => !string.IsNullOrEmpty(value)
+                && !string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase))
+            .Select(static value => value!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? [];
+    }
+
+    /// <summary>The one way to change hints: stores the normalized list and mirrors its first entry into Language.</summary>
+    public AppSettings WithLanguageHints(IEnumerable<string?>? hints)
+    {
+        var normalized = NormalizeLanguageHints(hints);
+        return this with { LanguageHints = normalized, Language = normalized.Count > 0 ? normalized[0] : "auto" };
+    }
+
     public static AppSettings Default => new();
 
     /// <summary>
     ///     Maps a stored/user acceleration string to a canonical value
-    ///     (<see cref="LocalModelAccelerationAuto" />, <c>…Cpu</c>, or
-    ///     <c>…NvidiaCuda</c>), accepting aliases like "cuda" and "nvidia cuda" and
+    ///     (<see cref="LocalModelAccelerationAuto" />, <c>…Cpu</c>, <c>…NvidiaCuda</c>,
+    ///     or <c>…Vulkan</c>), accepting aliases like "cuda" and "nvidia cuda" and
     ///     falling back to "auto" for blank or unrecognized input.
     /// </summary>
     public static string NormalizeLocalModelAcceleration(string? value)
@@ -195,7 +313,9 @@ public record AppSettings
             return LocalModelAccelerationNvidiaCuda;
         }
 
-        return LocalModelAccelerationAuto;
+        return string.Equals(trimmed, LocalModelAccelerationVulkan, StringComparison.OrdinalIgnoreCase)
+            ? LocalModelAccelerationVulkan
+            : LocalModelAccelerationAuto;
     }
 
     // Treats blank/whitespace as "use the default storage path" (null); trims otherwise.
@@ -211,6 +331,12 @@ public record AppSettings
             MinPreviewBubbleAutoHideMilliseconds,
             MaxPreviewBubbleAutoHideMilliseconds);
     }
+
+    public static int NormalizeLiveTextWindowWidth(int width) =>
+        Math.Clamp(width, MinLiveTextWindowWidth, MaxLiveTextWindowWidth);
+
+    public static int NormalizeLiveTextWindowHeight(int height) =>
+        Math.Clamp(height, MinLiveTextWindowHeight, MaxLiveTextWindowHeight);
 
     public static (double Left, double Top) ClampOverlayPositionToWorkArea(
         double left,

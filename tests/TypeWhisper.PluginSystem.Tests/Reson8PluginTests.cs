@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -22,8 +23,13 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
-public class Reson8PluginTests
+public partial class Reson8PluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<Reson8Plugin>();
+
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
@@ -40,9 +46,8 @@ public class Reson8PluginTests
 
         Assert.Equal("com.typewhisper.reson8", manifest.GetProperty("id").GetString());
         Assert.Equal("Reson8", manifest.GetProperty("name").GetString());
-        Assert.Equal("transcription", manifest.GetProperty("category").GetString());
         Assert.Equal(["transcription"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
-        Assert.False(manifest.GetProperty("isLocal").GetBoolean());
+        Assert.Equal("network", manifest.GetProperty("networkAccess").GetString());
         Assert.True(manifest.GetProperty("requiresApiKey").GetBoolean());
     }
 
@@ -67,7 +72,7 @@ public class Reson8PluginTests
         host.SetSetting("customAuthHeader", "X-Api-Key");
         host.SetSetting("fetchedCustomModels", new[]
         {
-            new Reson8CustomModel("domain-model", "Domain Model", "Support vocabulary", 42)
+            new Reson8CustomModel("domain-model", "Domain Model", "Support vocabulary", 42),
         });
 
         var sut = new Reson8Plugin();
@@ -83,6 +88,8 @@ public class Reson8PluginTests
         Assert.Equal(["__default__", "domain-model"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
         Assert.Equal("https://proxy.example.test", sut.CustomBaseUrl);
         Assert.Equal("X-Api-Key", sut.CustomAuthHeader);
+        // The unscoped list from earlier versions now belongs to the saved connection.
+        Assert.Equal("domain-model", Assert.Single(StoredCatalog(host).Models).Id);
         Assert.Contains("de", sut.SupportedLanguages);
         Assert.DoesNotContain("ja", sut.SupportedLanguages);
     }
@@ -121,7 +128,7 @@ public class Reson8PluginTests
     {
         var host = new TestPluginHostServices
         {
-            StoreSecretException = new InvalidOperationException("store failed")
+            StoreSecretException = new InvalidOperationException("store failed"),
         };
         var sut = new Reson8Plugin();
         await sut.ActivateAsync(host);
@@ -184,8 +191,8 @@ public class Reson8PluginTests
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
 
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.False(await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Invalid, await sut.ValidateApiKeyAsync("probe-key"));
     }
 
     [Fact]
@@ -195,7 +202,7 @@ public class Reson8PluginTests
             HttpStatusCode.InternalServerError,
             HttpStatusCode.MethodNotAllowed,
             HttpStatusCode.Forbidden,
-            HttpStatusCode.Unauthorized
+            HttpStatusCode.Unauthorized,
         ]);
         var handler = new CapturingHandler((_, _) =>
             JsonResponse("""{ "message": "probe" }""", statuses.Dequeue()));
@@ -203,10 +210,10 @@ public class Reson8PluginTests
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
 
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.True(await sut.ValidateApiKeyAsync("probe-key"));
-        Assert.False(await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Valid, await sut.ValidateApiKeyAsync("probe-key"));
+        Assert.Equal(Reson8KeyCheck.Invalid, await sut.ValidateApiKeyAsync("probe-key"));
     }
 
     [Fact]
@@ -219,6 +226,7 @@ public class Reson8PluginTests
             Assert.Contains("encoding=pcm_s16le", request.RequestUri?.Query);
             Assert.Contains("sample_rate=16000", request.RequestUri?.Query);
             Assert.Contains("channels=1", request.RequestUri?.Query);
+            Assert.Contains("include_language=true", request.RequestUri?.Query);
             Assert.Contains("language=de", request.RequestUri?.Query);
             Assert.Contains("custom_model_id=domain-model", request.RequestUri?.Query);
             Assert.Equal("ApiKey reson-key", request.Headers.Authorization?.ToString());
@@ -232,7 +240,7 @@ public class Reson8PluginTests
         host.SetSetting("selectedModel", "domain-model");
         host.SetSetting("fetchedCustomModels", new[]
         {
-            new Reson8CustomModel("domain-model", "Domain Model", null, null)
+            new Reson8CustomModel("domain-model", "Domain Model", null, null),
         });
 
         using var httpClient = new HttpClient(handler);
@@ -252,12 +260,12 @@ public class Reson8PluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_UsesCustomBaseUrlAndAuthHeaderAndOmitsAutoLanguage()
+    public async Task TranscribeAsync_UsesCustomBaseUrlAndAuthHeaderAndOmitsUnspecifiedLanguage()
     {
         var handler = new CapturingHandler((request, _) =>
         {
             Assert.Equal("https://proxy.example.test/v1/speech-to-text/prerecorded", request.RequestUri?.GetLeftPart(UriPartial.Path));
-            Assert.DoesNotContain("language=", request.RequestUri?.Query);
+            Assert.DoesNotContain("&language=", request.RequestUri?.Query);
             Assert.DoesNotContain("custom_model_id=", request.RequestUri?.Query);
             Assert.True(request.Headers.TryGetValues("X-Api-Key", out var values));
             Assert.Equal("reson-key", Assert.Single(values));
@@ -274,36 +282,33 @@ public class Reson8PluginTests
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var result = await sut.TranscribeAsync(BuildPcm16Wav([0x00, 0x00]), "auto", false, null, CancellationToken.None);
+        var result = await sut.TranscribeAsync(BuildPcm16Wav([0x00, 0x00]), null, false, null, CancellationToken.None);
 
         Assert.Equal("Hello", result.Text);
     }
 
-    [Fact]
-    public async Task TranscribeAsync_ThrowsActionableMessagesForKnownHttpErrors()
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, PluginRequestFailureKind.Authentication, "Settings.InvalidApiKey")]
+    [InlineData(HttpStatusCode.NotFound, PluginRequestFailureKind.InvalidRequest, "Reson8 custom model not found")]
+    [InlineData(HttpStatusCode.RequestEntityTooLarge, PluginRequestFailureKind.RequestTooLarge, "Reson8 file too large")]
+    [InlineData(HttpStatusCode.TooManyRequests, PluginRequestFailureKind.RateLimit, "Reson8 rate limit exceeded")]
+    [InlineData(HttpStatusCode.InternalServerError, PluginRequestFailureKind.ServerError, "Reson8 server error")]
+    public async Task TranscribeAsync_ThrowsActionableMessagesForKnownHttpErrors(
+        HttpStatusCode status, PluginRequestFailureKind failureKind, string message)
     {
-        var statuses = new Queue<HttpStatusCode>([
-            HttpStatusCode.Unauthorized,
-            HttpStatusCode.NotFound,
-            HttpStatusCode.RequestEntityTooLarge,
-            HttpStatusCode.TooManyRequests,
-            HttpStatusCode.InternalServerError
-        ]);
         var handler = new CapturingHandler((_, _) =>
-            JsonResponse("""{ "code": "ERR", "message": "details" }""", statuses.Dequeue()));
+            JsonResponse("""{ "code": "ERR", "message": "details" }""", status));
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         using var httpClient = new HttpClient(handler);
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
 
         var wav = BuildPcm16Wav([0x00, 0x00]);
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        await Assert.ThrowsAsync<HttpRequestException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
-        Assert.Contains("Reson8 server error", ex.Message);
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.TranscribeAsync(wav, null, false, null, CancellationToken.None));
+        Assert.Equal(failureKind, ex.FailureKind);
+        Assert.Equal((int)status, ex.HttpStatusCode);
+        Assert.False(string.IsNullOrWhiteSpace(ex.Message));
+        Assert.Contains(message, ex.Message);
     }
 
     [Fact]
@@ -326,13 +331,130 @@ public class Reson8PluginTests
         var sut = new Reson8Plugin(httpClient);
         await sut.ActivateAsync(host);
 
-        var models = await sut.FetchCustomModelsAsync();
-        sut.SetFetchedCustomModels(models);
+        var fetch = await sut.FetchCustomModelsAsync();
+        sut.SetFetchedCustomModels(fetch.Models!);
 
-        Assert.Equal("domain-model", Assert.Single(models).Id);
+        var model = Assert.Single(fetch.Models!);
+        Assert.Equal(new Reson8CustomModel("domain-model", "Domain Model", "Support vocabulary", 42), model);
         Assert.Equal(["__default__", "domain-model"], sut.TranscriptionModels.Select(m => m.Id).ToArray());
         Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
-        Assert.Equal("domain-model", Assert.Single(host.GetSetting<List<Reson8CustomModel>>("fetchedCustomModels")!).Id);
+        Assert.Equal("domain-model", Assert.Single(StoredCatalog(host).Models).Id);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_ProviderCancellation_RetriesBatchExactlyOnce()
+    {
+        var batchCalls = 0;
+
+        var result = await Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+            _ => Task.FromException<string?>(
+                new OperationCanceledException("provider canceled")
+            ),
+            () =>
+            {
+                batchCalls++;
+                return Task.FromResult("batch");
+            },
+            CancellationToken.None
+        );
+
+        Assert.Equal("batch", result);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_PrivateTimeout_RetriesBatchExactlyOnce()
+    {
+        var batchCalls = 0;
+
+        var result = await Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+            _ => Task.FromException<string?>(new TimeoutException("provider deadline")),
+            () =>
+            {
+                batchCalls++;
+                return Task.FromResult("batch");
+            },
+            CancellationToken.None
+        );
+
+        Assert.Equal("batch", result);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_CallerCancellation_DoesNotRetryBatch()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var batchCalls = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                _ => Task.FromException<string?>(new HttpRequestException("provider raced")),
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                cts.Token
+            ));
+
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_ProgressStop_DoesNotRetryBatch()
+    {
+        var batchCalls = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                markProgressStopped =>
+                {
+                    markProgressStopped();
+                    return Task.FromException<string?>(
+                        new OperationCanceledException("progress stopped")
+                    );
+                },
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                CancellationToken.None
+            ));
+
+        Assert.Equal(0, batchCalls);
+    }
+
+    [Fact]
+    public async Task StreamingAdapter_CallerAndProgressRace_CallerWinsWithoutRetry()
+    {
+        using var cts = new CancellationTokenSource();
+        var batchCalls = 0;
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Reson8Plugin.RunStreamingWithBatchFallbackAsync(
+                markProgressStopped =>
+                {
+                    markProgressStopped();
+                    // ReSharper disable once AccessToDisposedClosure -- the callback runs inside the
+                    // awaited call, which completes before the using-scope disposes cts.
+                    cts.Cancel();
+                    return Task.FromException<string?>(
+                        new TimeoutException("provider deadline")
+                    );
+                },
+                () =>
+                {
+                    batchCalls++;
+                    return Task.FromResult("batch");
+                },
+                cts.Token
+            ));
+
+        Assert.Equal(cts.Token, exception.CancellationToken);
+        Assert.Equal(0, batchCalls);
     }
 
     [Fact]
@@ -346,15 +468,23 @@ public class Reson8PluginTests
         Assert.Contains("sample_rate=16000", uri.Query);
         Assert.Contains("channels=1", uri.Query);
         Assert.Contains("include_interim=true", uri.Query);
+        Assert.Contains("include_language=true", uri.Query);
         Assert.Contains("language=de", uri.Query);
         Assert.Contains("custom_model_id=domain-model", uri.Query);
 
-        var localUri = Reson8StreamingSession.BuildRealtimeUri("http://localhost:8080/base", "__default__", "auto");
+        var localUri = Reson8StreamingSession.BuildRealtimeUri("http://localhost:8080/base", "__default__", null);
         Assert.Equal("ws", localUri.Scheme);
         Assert.Equal(8080, localUri.Port);
         Assert.Equal("/base/v1/speech-to-text/realtime", localUri.AbsolutePath);
-        Assert.DoesNotContain("language=", localUri.Query);
+        Assert.DoesNotContain("&language=", localUri.Query);
         Assert.DoesNotContain("custom_model_id=", localUri.Query);
+
+        // An explicitly plaintext base URL must not be silently upgraded to wss, or a
+        // self-hosted ws:// endpoint becomes unreachable.
+        var plaintextWs = Reson8StreamingSession.BuildRealtimeUri("ws://localhost:8080", null, null);
+        Assert.Equal("ws", plaintextWs.Scheme);
+        var secureWs = Reson8StreamingSession.BuildRealtimeUri("wss://localhost:8080", null, null);
+        Assert.Equal("wss", secureWs.Scheme);
 
         var headers = Reson8StreamingSession.CreateStreamingHeaders("reson-key", "Authorization");
         Assert.Equal("ApiKey reson-key", headers["Authorization"]);
@@ -373,6 +503,194 @@ public class Reson8PluginTests
         Assert.True(collector.IsFlushConfirmed);
     }
 
+    [Theory]
+    [InlineData("""{ "text": "Hallo", "language": "nl" }""", null, "nl")]
+    [InlineData("""{ "text": "Hallo", "language": "" }""", "de", "de")]
+    [InlineData("""{ "text": "Hallo", "language": "" }""", null, null)]
+    [InlineData("""{ "text": "Hallo" }""", null, null)]
+    public async Task TranscribeAsync_ReportsDetectedLanguageAndIgnoresAnEmptyOne(
+        string response,
+        string? requestedLanguage,
+        string? expectedLanguage)
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.Contains("include_language=true", request.RequestUri?.Query);
+            return JsonResponse(response);
+        });
+        using var httpClient = new HttpClient(handler);
+        var sut = new Reson8Plugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } });
+
+        var result = await sut.TranscribeAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            requestedLanguage,
+            false,
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(expectedLanguage, result.DetectedLanguage);
+    }
+
+    [Fact]
+    public void StreamingCollector_ReportsLanguageOfFinalsOnly()
+    {
+        var collector = new Reson8TranscriptCollector();
+
+        var interim = collector.ApplyEvent(
+            """{ "type": "transcript", "text": "Hal", "language": "", "is_final": false }""");
+        Assert.Null(interim!.DetectedLanguage);
+
+        var final = collector.ApplyEvent(
+            """{ "type": "transcript", "text": "Hallo", "language": "nl", "is_final": true }""");
+        Assert.Equal("nl", final!.DetectedLanguage);
+    }
+
+    [Theory]
+    [InlineData(new[] { "nl", "NL" }, "nl")]
+    [InlineData(new[] { "nl", "en" }, null)]
+    [InlineData(new[] { "nl", null }, null)]
+    public void StreamingCollector_ClaimsALanguageOnlyWhenEveryFinalAgrees(
+        string?[] languages,
+        string? expected)
+    {
+        var collector = new Reson8TranscriptCollector();
+        foreach (var language in languages)
+            collector.ApplyEvent(new StreamingTranscriptEvent("words", true) { DetectedLanguage = language });
+
+        // An interim never decides the transcript language.
+        collector.ApplyEvent(new StreamingTranscriptEvent("more", false) { DetectedLanguage = "de" });
+
+        Assert.Equal(expected, collector.DetectedLanguage);
+    }
+
+    [Theory]
+    [InlineData(null, "nl")]
+    [InlineData("de", "de")]
+    public async Task TranscribeStreamingAsync_ReturnsConfirmedFinalsWithTheirLanguage(
+        string? requestedLanguage,
+        string expectedLanguage)
+    {
+        var batchCalls = 0;
+        var progress = new List<string>();
+        var session = new FakeStreamingSession
+        {
+            OnFinalize = (fake, _) =>
+            {
+                fake.Raise(new StreamingTranscriptEvent("Hallo", false));
+                fake.Raise(new StreamingTranscriptEvent("Hallo wereld", true) { DetectedLanguage = "nl" });
+                return Task.CompletedTask;
+            },
+        };
+        var sut = await CreateStreamingPluginAsync(
+            (_, _) => Task.FromResult<IStreamingSession>(session),
+            () => batchCalls++);
+
+        var result = await sut.TranscribeStreamingAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            requestedLanguage,
+            false,
+            null,
+            text =>
+            {
+                progress.Add(text);
+                return true;
+            },
+            CancellationToken.None);
+
+        Assert.Equal("Hallo wereld", result.Text);
+        Assert.Equal(expectedLanguage, result.DetectedLanguage);
+        Assert.Equal(["Hallo", "Hallo wereld"], progress);
+        Assert.Equal(0, batchCalls);
+        Assert.True(session.Disposed);
+    }
+
+    [Fact]
+    public async Task TranscribeStreamingAsync_MissingFlushConfirmationFallsBackToBatch()
+    {
+        var batchCalls = 0;
+        var session = new FakeStreamingSession
+        {
+            OnFinalize = (fake, ct) =>
+            {
+                fake.Raise(new StreamingTranscriptEvent("partial", true));
+                return Task.Delay(Timeout.Infinite, ct);
+            },
+        };
+        var sut = await CreateStreamingPluginAsync(
+            (_, _) => Task.FromResult<IStreamingSession>(session),
+            () => batchCalls++);
+
+        var result = await sut.TranscribeStreamingAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            null,
+            false,
+            null,
+            _ => true,
+            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("batch", result.Text);
+        Assert.Equal(1, batchCalls);
+        Assert.True(session.Disposed);
+    }
+
+    [Fact]
+    public async Task TranscribeStreamingAsync_StalledConnectionFallsBackToBatch()
+    {
+        var batchCalls = 0;
+        var sut = await CreateStreamingPluginAsync(
+            async (_, ct) =>
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                throw new UnreachableException();
+            },
+            () => batchCalls++);
+
+        var result = await sut.TranscribeStreamingAsync(
+            BuildPcm16Wav([0x00, 0x00]),
+            null,
+            false,
+            null,
+            _ => true,
+            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("batch", result.Text);
+        Assert.Equal(1, batchCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeStreamingAsync_CallerCancellationWhileAwaitingConfirmationDoesNotFallBack()
+    {
+        var batchCalls = 0;
+        using var cts = new CancellationTokenSource();
+        var session = new FakeStreamingSession
+        {
+            OnFinalize = (_, ct) =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- runs inside the awaited call below.
+                cts.Cancel();
+                return Task.Delay(Timeout.Infinite, ct);
+            },
+        };
+        var sut = await CreateStreamingPluginAsync(
+            (_, _) => Task.FromResult<IStreamingSession>(session),
+            () => batchCalls++,
+            finalizeGrace: TimeSpan.FromMinutes(5));
+
+        // ReSharper disable once MethodSupportsCancellation -- the cancellation must come from the
+        // plugin; a cancellable WaitAsync would throw it itself and hide a batch fallback.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.TranscribeStreamingAsync(
+                BuildPcm16Wav([0x00, 0x00]),
+                null,
+                false,
+                null,
+                _ => true,
+                cts.Token).WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(0, batchCalls);
+    }
+
     [Fact]
     public void StreamingCollector_ThrowsActionableMessageForApiErrors()
     {
@@ -382,6 +700,48 @@ public class Reson8PluginTests
             collector.ApplyEvent("""{ "type": "error", "message": "Invalid API key" }"""));
 
         Assert.Contains("Invalid API key", ex.Message);
+    }
+
+    [Fact]
+    public void ExtractPcm16_ReturnsDataPayload_ForStandard16kMonoPcm16Wav()
+    {
+        var pcm = new byte[] { 0x01, 0x00, 0xFF, 0xFF };
+
+        Assert.Equal(pcm, WavPcm16Extractor.ExtractPcm16(BuildPcm16Wav(pcm)));
+    }
+
+    [Fact]
+    public void ExtractPcm16_PassesThroughNonWavPayloadUnchanged()
+    {
+        var raw = new byte[] { 0x01, 0x02, 0x03, 0x04 };
+
+        Assert.Equal(raw, WavPcm16Extractor.ExtractPcm16(raw));
+    }
+
+    [Fact]
+    public void ExtractPcm16_ReturnsDataPayload_ForStreamedWavWithPlaceholderSizes()
+    {
+        // Even with ffmpeg's placeholder sizes, the extractor must recover the
+        // PCM payload rather than fall back to shipping the whole container.
+        var pcm = new byte[] { 0x01, 0x00, 0xFF, 0xFF };
+
+        Assert.Equal(pcm, WavPcm16Extractor.ExtractPcm16(BuildStreamedWav(pcm)));
+    }
+
+    [Theory]
+    [InlineData((short)1, (short)2, 16000, (short)16)] // stereo
+    [InlineData((short)1, (short)1, 48000, (short)16)] // wrong sample rate
+    [InlineData((short)3, (short)1, 16000, (short)32)] // IEEE float
+    [InlineData((short)1, (short)1, 16000, (short)8)]  // 8-bit depth
+    public void ExtractPcm16_RejectsUnsupportedFormats_RatherThanMislabelingPayload(
+        short audioFormat,
+        short channels,
+        int sampleRate,
+        short bitsPerSample)
+    {
+        var wav = BuildWav(audioFormat, channels, sampleRate, bitsPerSample, [0x01, 0x00, 0xFF, 0xFF]);
+
+        Assert.Throws<NotSupportedException>(() => WavPcm16Extractor.ExtractPcm16(wav));
     }
 
     private static JsonElement LoadManifest()
@@ -406,12 +766,46 @@ public class Reson8PluginTests
         return doc.RootElement.Clone();
     }
 
-    private static byte[] BuildPcm16Wav(byte[] pcm)
+    private static byte[] BuildPcm16Wav(byte[] pcm) =>
+        BuildWav(audioFormat: 1, channels: 1, sampleRate: 16000, bitsPerSample: 16, pcm);
+
+    private static byte[] BuildWav(
+        short audioFormat,
+        short channels,
+        int sampleRate,
+        short bitsPerSample,
+        byte[] pcm)
     {
+        var blockAlign = (short)(channels * bitsPerSample / 8);
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
         writer.Write("RIFF"u8.ToArray());
         writer.Write(36 + pcm.Length);
+        writer.Write("WAVE"u8.ToArray());
+        writer.Write("fmt "u8.ToArray());
+        writer.Write(16);
+        writer.Write(audioFormat);
+        writer.Write(channels);
+        writer.Write(sampleRate);
+        writer.Write(sampleRate * blockAlign);
+        writer.Write(blockAlign);
+        writer.Write(bitsPerSample);
+        writer.Write("data"u8.ToArray());
+        writer.Write(pcm.Length);
+        writer.Write(pcm);
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    // Mirrors ffmpeg's `-f wav pipe:1` output: RIFF and data chunk sizes are the
+    // 0xFFFFFFFF placeholder a non-seekable muxer can't backfill, with a LIST/INFO
+    // metadata chunk sitting between fmt and data.
+    private static byte[] BuildStreamedWav(byte[] pcm)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.ASCII, leaveOpen: true);
+        writer.Write("RIFF"u8.ToArray());
+        writer.Write(uint.MaxValue);
         writer.Write("WAVE"u8.ToArray());
         writer.Write("fmt "u8.ToArray());
         writer.Write(16);
@@ -421,11 +815,38 @@ public class Reson8PluginTests
         writer.Write(16000 * 2);
         writer.Write((short)2);
         writer.Write((short)16);
+        var software = "Lavf62.12.102\0"u8.ToArray(); // 14 bytes, keeps the chunk even
+        writer.Write("LIST"u8.ToArray());
+        writer.Write(4 + 4 + 4 + software.Length); // "INFO" + "ISFT" + size + data
+        writer.Write("INFO"u8.ToArray());
+        writer.Write("ISFT"u8.ToArray());
+        writer.Write(software.Length);
+        writer.Write(software);
         writer.Write("data"u8.ToArray());
-        writer.Write(pcm.Length);
+        writer.Write(uint.MaxValue);
         writer.Write(pcm);
         writer.Flush();
         return stream.ToArray();
+    }
+
+    private static async Task<Reson8Plugin> CreateStreamingPluginAsync(
+        Func<Reson8StreamingRequest, CancellationToken, Task<IStreamingSession>> connect,
+        Action onBatch,
+        TimeSpan? finalizeGrace = null)
+    {
+        var handler = new CapturingHandler((_, _) =>
+        {
+            onBatch();
+            return JsonResponse("""{ "text": "batch" }""");
+        });
+        var sut = new Reson8Plugin(new HttpClient(handler))
+        {
+            StreamingConnectTimeout = TimeSpan.FromMilliseconds(200),
+            StreamingFinalizeGrace = finalizeGrace ?? TimeSpan.FromMilliseconds(200),
+            StreamingSessionFactory = connect,
+        };
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } });
+        return sut;
     }
 
     private static HttpResponseMessage JsonResponse(
@@ -433,7 +854,7 @@ public class Reson8PluginTests
         HttpStatusCode statusCode = HttpStatusCode.OK) =>
         new(statusCode)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -450,11 +871,33 @@ public class Reson8PluginTests
         }
     }
 
+    private sealed class FakeStreamingSession : IStreamingSession
+    {
+        public Func<FakeStreamingSession, CancellationToken, Task> OnFinalize { get; init; } =
+            (_, _) => Task.CompletedTask;
+
+        public bool Disposed { get; private set; }
+
+        public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+
+        public void Raise(StreamingTranscriptEvent transcript) => TranscriptReceived?.Invoke(transcript);
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) => Task.CompletedTask;
+
+        public Task FinalizeAsync(CancellationToken ct) => OnFinalize(this, ct);
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class TestPluginHostServices : IPluginHostServices
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];
@@ -462,6 +905,8 @@ public class Reson8PluginTests
         public int NotifyCapabilitiesChangedCount { get; private set; }
         public Exception? StoreSecretException { get; init; }
         public Exception? DeleteSecretException { get; set; }
+        public string? FailSettingName { get; set; }
+        public List<string> LogMessages { get; } = [];
 
         public Task StoreSecretAsync(string key, string value)
         {
@@ -489,15 +934,20 @@ public class Reson8PluginTests
                 ? value.Deserialize<T>(s_jsonOptions)
                 : default;
 
-        public void SetSetting<T>(string key, T value) =>
+        public void SetSetting<T>(string key, T value)
+        {
+            if (key == FailSettingName)
+                throw new IOException("setting write failed");
+
             _settings[key] = JsonSerializer.SerializeToElement(value, s_jsonOptions);
+        }
 
         public string PluginDataDirectory => Path.GetTempPath();
         public string? ActiveAppProcessName => null;
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
         public IReadOnlyList<string> AvailableProfileNames => [];
-        public void Log(PluginLogLevel level, string message) { }
+        public void Log(PluginLogLevel level, string message) => LogMessages.Add(message);
         public void NotifyCapabilitiesChanged() => NotifyCapabilitiesChangedCount++;
         public IPluginLocalization Localization { get; } = new TestPluginLocalization();
     }

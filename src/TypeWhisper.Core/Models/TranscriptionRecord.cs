@@ -1,8 +1,11 @@
+using System.Globalization;
+using System.Text.Json.Serialization;
+
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
 /// <summary>
-///     A persisted history entry for one completed dictation: the raw and final
+///     A persisted history entry for one dictation attempt: the raw and final
 ///     text, the app/URL/profile context it ran in, which engine and model
 ///     produced it, which processing steps were applied, and how the text was
 ///     inserted.
@@ -22,6 +25,9 @@ public sealed record TranscriptionRecord
     public string EngineUsed { get; init; } = "whisper";
     public string? ModelUsed { get; init; }
     public string? AudioFileName { get; init; }
+    public TranscriptionRecordStatus Status { get; init; } = TranscriptionRecordStatus.Succeeded;
+    public string? FailureMessage { get; init; }
+    public string TranscriptionTaskUsed { get; init; } = "transcribe";
     public TextInsertionStatus InsertionStatus { get; init; } = TextInsertionStatus.Unknown;
     public string? InsertionFailureReason { get; init; }
     public CleanupLevel CleanupLevelUsed { get; init; } = CleanupLevel.None;
@@ -32,12 +38,58 @@ public sealed record TranscriptionRecord
     public bool ScreenContextApplied { get; init; }
     public bool ClipboardContextApplied { get; init; }
     public bool TranslationApplied { get; init; }
+
+    /// <summary>
+    ///     True when this entry came from a spoken command (keyphrase mode) rather
+    ///     than a plain dictation. Drives the "Command" badge in History; RawText is
+    ///     then the source the command acted on and FinalText the produced result.
+    /// </summary>
+    public bool IsSpokenCommand { get; init; }
     public IReadOnlyList<CorrectionSuggestion> PendingCorrectionSuggestions { get; init; } = [];
+
+    /// <summary>
+    ///     Fine-grained provenance of each LLM call made while producing this
+    ///     entry (cleanup and/or prompt action). Empty for pre-feature records
+    ///     and for runs where provenance capture was disabled.
+    /// </summary>
+    public IReadOnlyList<LlmCallProvenance> LlmCalls { get; init; } = [];
+
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
+    [JsonIgnore]
     public int WordCount =>
         FinalText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
-    public string Preview =>
-        FinalText.Length > 100 ? string.Concat(FinalText.AsSpan(0, 100), "...") : FinalText;
+    [JsonIgnore]
+    public string Preview
+    {
+        get
+        {
+            const int maxLength = 100;
+
+            if (FinalText.Length <= maxLength)
+                return FinalText;
+
+            // Only the code point starting at maxLength can affect a boundary at or
+            // before maxLength — capping the scan there avoids an O(n) walk from many
+            // combining marks.
+            var scanLength = maxLength + 1;
+            if (scanLength < FinalText.Length &&
+                char.IsHighSurrogate(FinalText[maxLength]) &&
+                char.IsLowSurrogate(FinalText[scanLength]))
+                scanLength++;
+
+            // Back off to the start of the last grapheme cluster beginning at or before
+            // maxLength, so truncation never splits a cluster or a surrogate pair.
+            var prefixLength = 0;
+            var cursor = 0;
+            while (cursor <= maxLength)
+            {
+                prefixLength = cursor;
+                cursor += StringInfo.GetNextTextElementLength(FinalText.AsSpan(cursor, scanLength - cursor));
+            }
+
+            return string.Concat(FinalText.AsSpan(0, prefixLength), "...");
+        }
+    }
 }

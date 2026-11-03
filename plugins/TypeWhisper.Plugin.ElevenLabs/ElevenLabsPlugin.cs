@@ -1,25 +1,53 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Buffers;
+using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.ElevenLabs;
 
-public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+internal enum ElevenLabsTranscriptionMode { Automatic, RestOnly }
+internal enum ApiKeyCheck { Valid, Invalid, Unverified, Unavailable }
+
+public sealed class ElevenLabsPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     internal const string DefaultModelId = "scribe_v2";
     private const string BaseUrl = "https://api.elevenlabs.io";
     private const string ApiKeySecretName = "api-key";
     private const string SelectedModelSettingName = "selectedModel";
+    internal const string TranscriptionModeSettingName = "transcriptionMode";
+    internal const string TagAudioEventsSettingName = "tagAudioEvents";
+    internal const string NoVerbatimSettingName = "noVerbatim";
+    internal const string SpeakerCountSettingName = "numSpeakers";
+    internal const int AutomaticSpeakerCount = 0;
+    internal const int MaxSpeakerCount = 32;
+    internal const int DefaultSpeakerCount = 1;
+    // Off by default (keyterms cost 20% more): dictionary terms then reach ElevenLabs only as HTTP API comma prompts.
+    internal const string UseDictionaryTermsSettingName = "useDictionaryTerms";
 
-    private static readonly char[] InvalidKeytermCharacters = ['<', '>', '{', '}', '[', ']', '\\'];
+    private static readonly SearchValues<char> s_invalidKeytermCharacters = SearchValues.Create("<>{}[]\\");
 
-    private static readonly IReadOnlyList<ElevenLabsModelEntry> ModelEntries =
+    // Keyterm limits: https://elevenlabs.io/docs/api-reference/speech-to-text/convert
+    private static readonly DictionaryTermsBudget s_dictionaryBudget = new(MaxTerms: 1000, MaxCharsPerTerm: 49, MaxWordsPerTerm: 5);
+
+    private static readonly IReadOnlyList<ElevenLabsModelEntry> s_modelEntries =
     [
         new(DefaultModelId, "Scribe v2", "scribe_v2", "scribe_v2_realtime"),
     ];
 
-    private static readonly IReadOnlyList<string> Languages =
+    private static readonly IReadOnlyList<string> s_languages =
     [
         "af",
         "am",
@@ -126,8 +154,6 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
 
     public ElevenLabsPlugin()
         : this(CreateHttpClient()) { }
@@ -139,13 +165,20 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public string PluginId => "com.typewhisper.elevenlabs";
     public string PluginName => "ElevenLabs";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync(ApiKeySecretName);
-        _selectedModelId = NormalizeModelId(host.GetSetting<string>(SelectedModelSettingName));
+        ApiKey = await host.LoadSecretAsync(ApiKeySecretName);
+        SelectedModelId = NormalizeModelId(host.GetSetting<string>(SelectedModelSettingName));
+        TranscriptionMode = (host.GetSetting<string>(TranscriptionModeSettingName) ?? "automatic") == "restOnly"
+            ? ElevenLabsTranscriptionMode.RestOnly
+            : ElevenLabsTranscriptionMode.Automatic;
+        TagAudioEvents = host.GetSetting<bool?>(TagAudioEventsSettingName) ?? false;
+        NoVerbatim = host.GetSetting<bool?>(NoVerbatimSettingName) ?? true;
+        SpeakerCount = NormalizeSpeakerCount(host.GetSetting<int?>(SpeakerCountSettingName) ?? DefaultSpeakerCount);
+        UseDictionaryTerms = host.GetSetting<bool?>(UseDictionaryTermsSettingName) ?? false;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -157,23 +190,29 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public string ProviderId => "elevenlabs";
     public string ProviderDisplayName => "ElevenLabs";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        ModelEntries
+        s_modelEntries
             .Select(m => new PluginModelInfo(m.Id, m.DisplayName) { IsRecommended = true })
             .ToList();
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
-    public bool SupportsStreaming => true;
-    public IReadOnlyList<string> SupportedLanguages => Languages;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_dictionaryBudget;
+    // The host reads this per request; realtime sessions ignore the prompt, so terms reach REST requests only.
+    public bool SupportsStructuredDictionaryTerms => UseDictionaryTerms;
+    // Audio events and speaker hints are REST-only, so automatic mode uses the complete recording when set; the host reads this live at recording start.
+    public bool SupportsStreaming => TranscriptionMode == ElevenLabsTranscriptionMode.Automatic && !TagAudioEvents && SpeakerCount == DefaultSpeakerCount;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
+    public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
     {
         var entry = ResolveModelEntry(modelId);
-        _selectedModelId = entry.Id;
+        SelectedModelId = entry.Id;
         _host?.SetSetting(SelectedModelSettingName, entry.Id);
     }
 
@@ -185,14 +224,14 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         CancellationToken ct
     )
     {
-        if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+        if (!IsConfigured || SelectedModelId is null)
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
-        var entry = ResolveModelEntry(_selectedModelId);
+        var entry = ResolveModelEntry(SelectedModelId);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/speech-to-text");
-        request.Headers.TryAddWithoutValidation("xi-api-key", _apiKey);
+        request.Headers.TryAddWithoutValidation("xi-api-key", ApiKey);
 
         using var form = new MultipartFormDataContent();
         var audioContent = new ByteArrayContent(wavAudio);
@@ -203,39 +242,54 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         if (NormalizeLanguage(language) is { } normalizedLanguage)
             form.Add(new StringContent(normalizedLanguage), "language_code");
 
-        foreach (var term in ExtractKeyterms(prompt))
+        form.Add(new StringContent(TagAudioEvents ? "true" : "false"), "tag_audio_events");
+        form.Add(new StringContent(NoVerbatim ? "true" : "false"), "no_verbatim");
+        if (SpeakerCount != AutomaticSpeakerCount)
+            form.Add(new StringContent(SpeakerCount.ToString(CultureInfo.InvariantCulture)), "num_speakers");
+
+        foreach (var term in ExtractKeyterms(prompt, UseDictionaryTerms))
             form.Add(new StringContent(term), "keyterms");
 
         request.Content = form;
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"ElevenLabs API error {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"ElevenLabs API error {(int)response.StatusCode}: {json}"
-            );
 
         return ParseRestResponse(json, NormalizeLanguage(language));
     }
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
-        if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+        if (!IsConfigured || SelectedModelId is null)
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
-        var entry = ResolveModelEntry(_selectedModelId);
+        var entry = ResolveModelEntry(SelectedModelId);
         return await ElevenLabsStreamingSession.ConnectAsync(
-            _apiKey!,
+            ApiKey!,
             entry.RealtimeModelId,
             NormalizeLanguage(language),
+            NoVerbatim,
             ct
         );
     }
 
-    internal string? ApiKey => _apiKey;
+    internal ElevenLabsTranscriptionMode TranscriptionMode { get; private set; } = ElevenLabsTranscriptionMode.Automatic;
+    internal bool TagAudioEvents { get; private set; }
+    internal bool NoVerbatim { get; private set; } = true;
+    internal int SpeakerCount { get; private set; } = DefaultSpeakerCount;
+    internal bool UseDictionaryTerms { get; private set; }
+
+    internal static int NormalizeSpeakerCount(int count) => Math.Clamp(count, AutomaticSpeakerCount, MaxSpeakerCount);
+
+    private static bool ParseBool(string? value) =>
+        bool.TryParse(value, out var parsed) && parsed;
+
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -250,9 +304,9 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
     {
         var normalized = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         var wasConfigured = IsConfigured;
-        var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+        var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-        _apiKey = normalized;
+        ApiKey = normalized;
         if (_host is not null)
         {
             if (normalized is null)
@@ -265,7 +319,7 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         }
     }
 
-    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
+    internal async Task<ApiKeyCheck> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/user");
         request.Headers.TryAddWithoutValidation("xi-api-key", apiKey);
@@ -273,9 +327,48 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         try
         {
             using var response = await _httpClient.SendAsync(request, ct);
-            return response.IsSuccessStatusCode;
+            if (response.IsSuccessStatusCode)
+                return ApiKeyCheck.Valid;
+
+            // Rate limits and server errors say nothing about the key itself.
+            return response.StatusCode switch
+            {
+                HttpStatusCode.Unauthorized when IsUserReadPermissionOnly(await response.Content.ReadAsStringAsync(ct))
+                    => ApiKeyCheck.Unverified,
+                HttpStatusCode.TooManyRequests or >= HttpStatusCode.InternalServerError => ApiKeyCheck.Unavailable,
+                _ => ApiKeyCheck.Invalid,
+            };
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException)
+        {
+            // Transport failure or client timeout: the key was never checked.
+            return ApiKeyCheck.Unavailable;
+        }
+    }
+
+    internal static bool IsUserReadPermissionOnly(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("detail", out var detail)
+                && detail.ValueKind == JsonValueKind.Object
+                && detail.TryGetProperty("status", out var status)
+                && status.ValueKind == JsonValueKind.String
+                && status.GetString() == "missing_permissions"
+                && detail.TryGetProperty("message", out var message)
+                && message.ValueKind == JsonValueKind.String
+                && string.Equals(
+                    message.GetString()?.Trim(),
+                    "The API key you used is missing the permission user_read to execute this operation.",
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
         {
             return false;
         }
@@ -293,11 +386,12 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
             ? textEl.GetString()?.Trim() ?? ""
             : "";
         var detectedLanguage = root.TryGetProperty("language_code", out var langEl)
-            ? langEl.GetString()
+            ? ElevenLabsLanguageCodes.Canonicalize(langEl.GetString()) ?? fallbackLanguage
             : fallbackLanguage;
 
         var duration = 0.0;
         var segments = new List<PluginTranscriptionSegment>();
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (
             root.TryGetProperty("words", out var wordsEl)
             && wordsEl.ValueKind == JsonValueKind.Array
@@ -346,26 +440,25 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         };
     }
 
-    internal static IReadOnlyList<string> ExtractKeyterms(string? prompt)
+    // Prompt text (an API caller's prompt or the legacy comma list) is split; dictionary terms stay whole.
+    internal static IReadOnlyList<string> ExtractKeyterms(string? prompt, bool includeDictionaryTerms = true)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
-            return [];
+        var parsed = PluginTranscriptionPrompt.Parse(prompt);
+        // The HTTP API merges prompt parts with newlines, so a newline must separate terms.
+        var textTerms = parsed.Text?.Split(
+            [',', '\r', '\n'],
+            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
+        ) ?? [];
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var terms = new List<string>();
-        foreach (
-            var part in prompt.Split(
-                ',',
-                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
-            )
-        )
+        foreach (var term in textTerms.Concat(includeDictionaryTerms ? parsed.DictionaryTerms : []))
         {
-            var term = part.Trim();
             if (
                 term.Length == 0
                 || term.Length >= 50
-                || term.IndexOfAny(InvalidKeytermCharacters) >= 0
-                || term.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 5
+                || term.AsSpan().IndexOfAny(s_invalidKeytermCharacters) >= 0
+                || term.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length > 5
                 || !seen.Add(term)
             )
             {
@@ -393,9 +486,45 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: ModelEntries
+                Options: s_modelEntries
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
+            ),
+            new(
+                TranscriptionModeSettingName,
+                Loc.L("Settings.TranscriptionMode"),
+                Description: Loc.L("Settings.TranscriptionModeDescription"),
+                Options:
+                [
+                    new PluginSettingOption("automatic", Loc.L("Settings.ModeAutomatic")),
+                    new PluginSettingOption("restOnly", Loc.L("Settings.ModeRestOnly")),
+                ],
+                Kind: PluginSettingKind.Dropdown
+            ),
+            new(
+                NoVerbatimSettingName,
+                Loc.L("Settings.NoVerbatim"),
+                Description: Loc.L("Settings.NoVerbatimDescription"),
+                Kind: PluginSettingKind.Boolean
+            ),
+            new(
+                TagAudioEventsSettingName,
+                Loc.L("Settings.TagAudioEvents"),
+                Description: Loc.L("Settings.TagAudioEventsDescription"),
+                Kind: PluginSettingKind.Boolean
+            ),
+            new(
+                SpeakerCountSettingName,
+                Loc.L("Settings.SpeakerCount"),
+                Placeholder: "0 – 32",
+                Description: Loc.L("Settings.SpeakerCountDescription"),
+                Kind: PluginSettingKind.Text
+            ),
+            new(
+                UseDictionaryTermsSettingName,
+                Loc.L("Settings.UseDictionaryTerms"),
+                Description: Loc.L("Settings.UseDictionaryTermsDescription"),
+                Kind: PluginSettingKind.Boolean
             ),
         ];
 
@@ -403,8 +532,13 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
+                TranscriptionModeSettingName => TranscriptionMode == ElevenLabsTranscriptionMode.RestOnly ? "restOnly" : "automatic",
+                NoVerbatimSettingName => NoVerbatim ? "true" : "false",
+                TagAudioEventsSettingName => TagAudioEvents ? "true" : "false",
+                SpeakerCountSettingName => SpeakerCount.ToString(CultureInfo.InvariantCulture),
+                UseDictionaryTermsSettingName => UseDictionaryTerms ? "true" : "false",
                 _ => null,
             }
         );
@@ -420,6 +554,35 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
             case "api-key":
                 await SetApiKeyAsync(value ?? string.Empty);
                 break;
+            case TranscriptionModeSettingName:
+                if (value is not ("automatic" or "restOnly"))
+                    break;
+                var mode = value == "restOnly" ? ElevenLabsTranscriptionMode.RestOnly : ElevenLabsTranscriptionMode.Automatic;
+                var changed = TranscriptionMode != mode;
+                TranscriptionMode = mode;
+                _host?.SetSetting(TranscriptionModeSettingName, value);
+                if (changed)
+                    _host?.NotifyCapabilitiesChanged();
+                break;
+            case TagAudioEventsSettingName:
+                TagAudioEvents = ParseBool(value);
+                _host?.SetSetting(TagAudioEventsSettingName, TagAudioEvents);
+                break;
+            case NoVerbatimSettingName:
+                NoVerbatim = ParseBool(value);
+                _host?.SetSetting(NoVerbatimSettingName, NoVerbatim);
+                break;
+            case SpeakerCountSettingName:
+                if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
+                {
+                    SpeakerCount = NormalizeSpeakerCount(count);
+                    _host?.SetSetting(SpeakerCountSettingName, SpeakerCount);
+                }
+                break;
+            case UseDictionaryTermsSettingName:
+                UseDictionaryTerms = ParseBool(value);
+                _host?.SetSetting(UseDictionaryTermsSettingName, UseDictionaryTerms);
+                break;
             case "selectedModel":
                 if (!string.IsNullOrWhiteSpace(value))
                     SelectModel(value);
@@ -429,13 +592,17 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
-        return valid
-            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
-            : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        var check = await ValidateApiKeyAsync(ApiKey, ct);
+        return check switch
+        {
+            ApiKeyCheck.Valid => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid")),
+            ApiKeyCheck.Unverified => new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyUnverified")),
+            ApiKeyCheck.Unavailable => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyUnavailable")),
+            _ => new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid")),
+        };
     }
 
     public void Dispose()
@@ -445,15 +612,14 @@ public sealed class ElevenLabsPlugin : ITranscriptionEnginePlugin, IPluginSettin
 
     private static string? NormalizeLanguage(string? language) =>
         string.IsNullOrWhiteSpace(language)
-        || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
             : language;
 
     private static string NormalizeModelId(string? modelId) =>
-        ModelEntries.Any(m => m.Id == modelId) ? modelId! : DefaultModelId;
+        s_modelEntries.Any(m => m.Id == modelId) ? modelId! : DefaultModelId;
 
     private static ElevenLabsModelEntry ResolveModelEntry(string modelId) =>
-        ModelEntries.FirstOrDefault(m => m.Id == modelId)
+        s_modelEntries.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private static bool TryGetDouble(JsonElement element, string propertyName, out double value)

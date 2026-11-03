@@ -10,6 +10,15 @@ namespace TypeWhisper.PluginSDK;
 ///     Plugin that processes transcribed text after transcription (e.g. formatting, filtering).
 ///     Plugins are executed in ascending <see cref="Priority" /> order.
 /// </summary>
+/// <remarks>
+///     Async members use the SDK cancellation-origin contract: success uses the existing
+///     return/stream terminal; caller cancellation throws <see cref="OperationCanceledException" />
+///     only when the supplied token is requested; private deadlines throw <see cref="TimeoutException" />
+///     (or a provider-specific subclass); every other exception, including an OCE while the
+///     supplied token is live, is a dependency fault. At catch time caller cancellation wins
+///     over a private timeout, which wins over a dependency fault; if both tokens are requested,
+///     caller cancellation wins.
+/// </remarks>
 // ReSharper disable once UnusedType.Global
 public interface IPostProcessorPlugin : ITypeWhisperPlugin
 {

@@ -1,3 +1,5 @@
+using TypeWhisper.Core.Models;
+
 namespace TypeWhisper.Core.Interfaces;
 
 /// <summary>
@@ -24,6 +26,27 @@ public sealed record PipelineOptions
     /// <summary>Applies app-aware formatting to text. Params: text, processName.</summary>
     public Func<string, string?, string>? AppFormatter { get; init; }
 
+    /// <summary>Global number normalization setting.</summary>
+    public bool TranscriptionNumberNormalizationEnabled { get; init; } = true;
+
+    /// <summary>Whether model-supplied punctuation is preserved for one- or two-word utterances.</summary>
+    public bool ShortUtterancePunctuationEnabled { get; init; } = true;
+
+    /// <summary>Transcription task used to choose normalization languages.</summary>
+    public TranscriptionTask TranscriptionTask { get; init; } = TranscriptionTask.Transcribe;
+
+    /// <summary>Configured input language, such as "en", "de", or "auto".</summary>
+    public string? ConfiguredLanguage { get; init; }
+
+    /// <summary>Configured language hint candidates used when detected language does not normalize.</summary>
+    public IReadOnlyList<string> ConfiguredLanguageCandidates { get; init; } = [];
+
+    /// <summary>Regional spelling variant applied to final written English output.</summary>
+    public EnglishOutputVariant EnglishOutputVariant { get; init; } = EnglishOutputVariant.AsTranscribed;
+
+    /// <summary>Regional spelling variant applied to final written German output.</summary>
+    public GermanOutputVariant GermanOutputVariant { get; init; } = GermanOutputVariant.AsTranscribed;
+
     /// <summary>Process name of the target app for formatting.</summary>
     public string? TargetProcessName { get; init; }
 
@@ -41,6 +64,9 @@ public sealed record PipelineOptions
 
     /// <summary>When true, LLM failures abort processing instead of falling back to the current text.</summary>
     public bool RequireLlmSuccess { get; init; }
+
+    /// <summary>When set, applies local spoken formatting and replaces both legacy spoken passes.</summary>
+    public Func<string, string>? SpokenFormatter { get; init; }
 
     /// <summary>Applies cleanup before prompt actions and snippets.</summary>
     public Func<string, CancellationToken, Task<string>>? CleanupHandler { get; init; }
@@ -73,6 +99,9 @@ public sealed record PipelineOptions
     /// <summary>Translation target language, or null if no translation needed.</summary>
     public string? TranslationTarget { get; init; }
 
+    /// <summary>When true, translation failures abort processing instead of falling back to the current text.</summary>
+    public bool RequireTranslationSuccess { get; init; }
+
     /// <summary>Effective source language for translation (e.g. "de", "en").</summary>
     public string? EffectiveSourceLanguage { get; init; }
 
@@ -84,6 +113,9 @@ public sealed record PipelineOptions
 
     /// <summary>Callback to report status updates (e.g. "AI Processing...", "Translating...").</summary>
     public Func<string, Task>? StatusCallback { get; init; }
+
+    /// <summary>Invoked after each step with its name, wall-clock duration, and whether it succeeded.</summary>
+    public Action<string, TimeSpan, bool>? StepCompleted { get; init; }
 }
 
 /// <summary>A plugin post-processor with its priority; context is captured in the delegate closure.</summary>
@@ -104,13 +136,18 @@ public sealed record PostProcessingResult
 
 public static class PostProcessingStepNames
 {
+    public const string ShortUtterancePunctuation = "ShortUtterancePunctuation";
+    public const string SpokenFormatting = "SpokenFormatting";
     public const string SpokenCommands = "SpokenCommands";
     public const string SpokenPunctuation = "SpokenPunctuation";
+    public const string NumberNormalization = "NumberNormalization";
     public const string Formatting = "Formatting";
     public const string Cleanup = "Cleanup";
     public const string Llm = "LLM";
     public const string Snippets = "Snippets";
     public const string VocabularyBoosting = "VocabularyBoosting";
+    public const string OutputVariant = "OutputVariant";
+    public const string TranslatedOutputVariant = "TranslatedOutputVariant";
     public const string Dictionary = "Dictionary";
     public const string Translation = "Translation";
 

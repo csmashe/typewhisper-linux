@@ -1,4 +1,10 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
@@ -7,8 +13,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Xai;
 
+internal enum ApiKeyCheck { Valid, Invalid, NoTeamAccess, Forbidden }
+
 public sealed class XaiPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         ITtsProviderPlugin,
         IPluginSettingsProvider,
@@ -26,19 +35,24 @@ public sealed class XaiPlugin
     private const string TtsTextNormalizationSettingName = "ttsTextNormalization";
 
     internal const string DefaultLlmModelId = "grok-4.3";
+    // The catalog ID predates xAI's model slugs and stays so saved selections keep resolving.
     internal const string DefaultSttModelId = "grok-stt";
+    internal const string SttApiModelId = "grok-voice-transcribe-2.0";
 
-    private static readonly IReadOnlyList<PluginModelInfo> SttModels =
+    private static readonly IReadOnlyList<PluginModelInfo> s_sttModels =
     [
-        new(DefaultSttModelId, "Grok Speech to Text"),
+        new(DefaultSttModelId, "Grok Voice Transcribe 2.0"),
     ];
 
-    private static readonly IReadOnlyList<PluginModelInfo> FallbackLlmModels =
+    private static readonly DictionaryTermsBudget s_keytermBudget = new(MaxTerms: 100, MaxCharsPerTerm: 50);
+    internal const int MaxStreamingKeytermsQueryLength = 6000;
+
+    private static readonly IReadOnlyList<PluginModelInfo> s_fallbackLlmModels =
     [
         new(DefaultLlmModelId, "Grok 4.3"),
     ];
 
-    private static readonly IReadOnlyList<string> Languages =
+    private static readonly IReadOnlyList<string> s_languages =
     [
         "ar", "cs", "da", "de", "en", "es", "fa", "fil", "fr", "hi",
         "id", "it", "ja", "ko", "mk", "ms", "nl", "pl", "pt", "ro",
@@ -46,18 +60,10 @@ public sealed class XaiPlugin
     ];
 
     private readonly HttpClient _httpClient;
-    private readonly Func<byte[], ITtsPlaybackSession> _ttsPlaybackFactory;
-    private readonly Func<bool> _ttsPlaybackAvailableProbe;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
-    private string? _selectedLlmModelId;
     private List<XaiFetchedModel> _fetchedLlmModels = [];
     private string? _selectedVoiceId;
     private List<XaiFetchedVoice> _fetchedVoices = [];
-    private string _customVoiceId = "";
-    private bool _ttsLowLatency;
-    private bool _ttsTextNormalization;
     private bool _streamResponses = true;
 
     public XaiPlugin()
@@ -65,38 +71,31 @@ public sealed class XaiPlugin
     {
     }
 
-    internal XaiPlugin(
-        HttpClient httpClient,
-        Func<byte[], ITtsPlaybackSession>? ttsPlaybackFactory = null,
-        Func<bool>? ttsPlaybackAvailableProbe = null)
+    internal XaiPlugin(HttpClient httpClient)
     {
         _httpClient = httpClient;
-        _ttsPlaybackFactory = ttsPlaybackFactory
-            ?? (pcm => XaiPcmTtsPlaybackSession.Create(pcm, XaiTtsConfiguration.SampleRate));
-        _ttsPlaybackAvailableProbe = ttsPlaybackAvailableProbe
-            ?? XaiPcmTtsPlaybackSession.IsPlaybackAvailable;
     }
 
     // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.xai";
     public string PluginName => "xAI / Grok";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
-        _selectedModelId = NormalizeSttModelId(host.GetSetting<string>(SelectedModelSettingName));
-        _selectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName) ?? DefaultLlmModelId;
+        ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
+        SelectedModelId = NormalizeSttModelId(host.GetSetting<string>(SelectedModelSettingName));
+        SelectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName) ?? DefaultLlmModelId;
         _fetchedLlmModels = NormalizeFetchedLlmModels(
             host.GetSetting<List<XaiFetchedModel>>(FetchedLlmModelsSettingName) ?? []);
         _selectedVoiceId = NormalizeVoiceId(host.GetSetting<string>(SelectedVoiceSettingName));
         _fetchedVoices = NormalizeFetchedVoices(
             host.GetSetting<List<XaiFetchedVoice>>(FetchedVoicesSettingName) ?? []);
-        _customVoiceId = host.GetSetting<string>(CustomVoiceIdSettingName)?.Trim() ?? "";
-        _ttsLowLatency = host.GetSetting<bool?>(TtsLowLatencySettingName) ?? false;
-        _ttsTextNormalization = host.GetSetting<bool?>(TtsTextNormalizationSettingName) ?? false;
+        CustomVoiceId = host.GetSetting<string>(CustomVoiceIdSettingName)?.Trim() ?? "";
+        TtsLowLatency = host.GetSetting<bool?>(TtsLowLatencySettingName) ?? false;
+        TtsTextNormalization = host.GetSetting<bool?>(TtsTextNormalizationSettingName) ?? false;
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         NormalizeSelectedLlmModel(persist: false);
@@ -114,17 +113,22 @@ public sealed class XaiPlugin
 
     public string ProviderId => "xai";
     public string ProviderDisplayName => "xAI / Grok";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => SttModels;
-    public string? SelectedModelId => _selectedModelId;
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_sttModels;
+    public string? SelectedModelId { get; private set; }
+
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
-    public IReadOnlyList<string> SupportedLanguages => Languages;
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_keytermBudget;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
+    public IReadOnlyList<string> SupportedLanguages => s_languages;
 
     public void SelectModel(string modelId)
     {
-        _selectedModelId = NormalizeSttModelId(modelId);
-        _host?.SetSetting(SelectedModelSettingName, _selectedModelId);
+        SelectedModelId = NormalizeSttModelId(modelId);
+        _host?.SetSetting(SelectedModelSettingName, SelectedModelId);
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -138,9 +142,14 @@ public sealed class XaiPlugin
             throw new InvalidOperationException("xAI STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
+        var keyterms = ParseKeyterms(prompt);
         using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(SttApiModelId), "model");
+        foreach (var keyterm in keyterms)
+            form.Add(new StringContent(keyterm), "keyterm");
+
         var normalizedLanguage = NormalizeLanguage(language);
         if (normalizedLanguage is not null)
         {
@@ -153,7 +162,7 @@ public sealed class XaiPlugin
         form.Add(fileContent, "file", "audio.wav");
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/stt");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         request.Content = form;
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
@@ -161,15 +170,47 @@ public sealed class XaiPlugin
         return ParseSttResponse(json, normalizedLanguage);
     }
 
-    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        StartStreamingAsync(language, [], ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct) =>
+        StartStreamingAsync(
+            languageHints.FirstOrDefault(static hint => !string.IsNullOrWhiteSpace(hint))?.Trim(),
+            StreamingKeyterms(ParseKeyterms(prompt)),
+            ct);
+
+    private async Task<IStreamingSession> StartStreamingAsync(
+        string? language,
+        IReadOnlyList<string> keyterms,
+        CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
-        // Run through the same normalization the batch TranscribeAsync uses
-        // so a setting value like " de " or "auto" doesn't propagate into the
-        // streaming URI as %20de%20 or language=auto.
-        return await XaiStreamingSession.ConnectAsync(_apiKey!, NormalizeLanguage(language), ct);
+        return await XaiStreamingSession.ConnectAsync(ApiKey!, NormalizeLanguage(language), keyterms, ct);
+    }
+
+    // xAI has no free-text prompt, so only the dictionary terms are used.
+    internal static IReadOnlyList<string> ParseKeyterms(string? prompt) =>
+        PluginDictionaryTerms.Clip(PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms, s_keytermBudget);
+
+    // Live keyterms go in the WebSocket URL; this keeps it inside common request-line limits.
+    internal static IReadOnlyList<string> StreamingKeyterms(IReadOnlyList<string> keyterms)
+    {
+        var limited = new List<string>(keyterms.Count);
+        var length = 0;
+        foreach (var keyterm in keyterms)
+        {
+            length += "&keyterm=".Length + Uri.EscapeDataString(keyterm).Length;
+            if (length > MaxStreamingKeytermsQueryLength)
+                break;
+            limited.Add(keyterm);
+        }
+
+        return limited;
     }
 
     // ILlmProviderPlugin
@@ -180,17 +221,17 @@ public sealed class XaiPlugin
     public IReadOnlyList<PluginModelInfo> SupportedModels =>
         _fetchedLlmModels.Count > 0
             ? _fetchedLlmModels.Select(m => new PluginModelInfo(m.Id, m.Id)).ToList()
-            : FallbackLlmModels;
+            : s_fallbackLlmModels;
 
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels[0].Id
+            ? SelectedLlmModelId ?? SupportedModels[0].Id
             : model;
-        var client = new XaiResponsesClient(_httpClient, BaseUrl, _apiKey!);
+        var client = new XaiResponsesClient(_httpClient, BaseUrl, ApiKey!);
         return await client.ProcessAsync(systemPrompt, userText, modelId, ct);
     }
 
@@ -207,14 +248,14 @@ public sealed class XaiPlugin
         }
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels[0].Id
+            ? SelectedLlmModelId ?? SupportedModels[0].Id
             : model;
-        var client = new XaiResponsesClient(_httpClient, BaseUrl, _apiKey!);
+        var client = new XaiResponsesClient(_httpClient, BaseUrl, ApiKey!);
         var source = client.ProcessStreamingAsync(systemPrompt, userText, modelId, ct);
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
@@ -225,19 +266,18 @@ public sealed class XaiPlugin
             ? _fetchedVoices.Select(v => new PluginVoiceInfo(v.VoiceId, v.DisplayName, v.Language)).ToList()
             : XaiTtsConfiguration.FallbackVoices;
 
-    public string? SelectedVoiceId =>
-        !string.IsNullOrWhiteSpace(_customVoiceId)
-            ? _customVoiceId
+    public string SelectedVoiceId =>
+        !string.IsNullOrWhiteSpace(CustomVoiceId)
+            ? CustomVoiceId
             : _selectedVoiceId ?? XaiTtsConfiguration.DefaultVoiceId;
 
-    public string? SettingsSummary
+    public string SettingsSummary
     {
         get
         {
             var voice = AvailableVoices.FirstOrDefault(v => v.Id == SelectedVoiceId)?.DisplayName
-                ?? SelectedVoiceId
-                ?? XaiTtsConfiguration.DefaultVoiceId;
-            var latency = _ttsLowLatency ? "low latency" : "quality";
+                ?? SelectedVoiceId;
+            var latency = TtsLowLatency ? "low latency" : "quality";
             return $"Voice: {voice}; {latency}";
         }
     }
@@ -252,20 +292,23 @@ public sealed class XaiPlugin
     public async Task<ITtsPlaybackSession> SpeakAsync(TtsSpeakRequest request, CancellationToken ct)
     {
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var text = request.Text.Trim();
         if (string.IsNullOrWhiteSpace(text))
             return XaiInactiveTtsPlaybackSession.Instance;
 
-        // The xAI TTS endpoint is a paid request. With no audio player on PATH
-        // the synthesized PCM could only be discarded (XaiPcmTtsPlaybackSession
-        // would return the inactive sentinel), so skip the request entirely.
-        if (!_ttsPlaybackAvailableProbe())
+        var host = _host
+                   ?? throw new InvalidOperationException(
+                       "xAI plugin is not activated."
+                   );
+        // Paid endpoint: preflight playback before issuing a request that couldn't be played.
+        if (!host.PcmPlayback.IsAvailable)
         {
-            _host?.Log(
+            host.Log(
                 PluginLogLevel.Warning,
-                "Skipping xAI TTS request: no audio player (paplay/aplay) found on PATH.");
+                "Skipping xAI TTS request: no supported PCM audio player is available."
+            );
             return XaiInactiveTtsPlaybackSession.Instance;
         }
 
@@ -273,21 +316,34 @@ public sealed class XaiPlugin
             text,
             SelectedVoiceId,
             NormalizeTtsLanguage(request.Language),
-            _ttsLowLatency,
-            _ttsTextNormalization);
+            TtsLowLatency,
+            TtsTextNormalization);
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/tts");
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         httpRequest.Content = XaiJson.CreateJsonContent(body);
 
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, httpRequest, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient,
+            httpRequest,
+            ct
+        );
         var pcm = await response.Content.ReadAsByteArrayAsync(ct);
-        return _ttsPlaybackFactory(pcm);
+        return await host.PcmPlayback.PlayAsync(
+            new PcmPlaybackRequest(
+                pcm,
+                XaiTtsConfiguration.SampleRate,
+                1,
+                PcmSampleFormat.Signed16LittleEndian
+            ),
+            ct
+        );
     }
 
     // Settings support
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -297,20 +353,23 @@ public sealed class XaiPlugin
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    internal string? SelectedLlmModelId => _selectedLlmModelId;
+    internal string? SelectedLlmModelId { get; private set; }
+
     internal IReadOnlyList<XaiFetchedModel> FetchedLlmModels => _fetchedLlmModels;
     internal IReadOnlyList<XaiFetchedVoice> FetchedVoices => _fetchedVoices;
-    internal string CustomVoiceId => _customVoiceId;
-    internal bool TtsLowLatency => _ttsLowLatency;
-    internal bool TtsTextNormalization => _ttsTextNormalization;
+    internal string CustomVoiceId { get; private set; } = "";
+
+    internal bool TtsLowLatency { get; private set; }
+
+    internal bool TtsTextNormalization { get; private set; }
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
         var normalized = NormalizeApiKey(apiKey);
         var wasConfigured = IsConfigured;
-        var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+        var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-        _apiKey = normalized;
+        ApiKey = normalized;
         if (_host is not null)
         {
             if (normalized is null)
@@ -328,7 +387,7 @@ public sealed class XaiPlugin
         if (SupportedModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             modelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id ?? modelId;
 
-        _selectedLlmModelId = modelId;
+        SelectedLlmModelId = modelId;
         _host?.SetSetting(SelectedLlmModelSettingName, modelId);
         _host?.NotifyCapabilitiesChanged();
     }
@@ -347,7 +406,7 @@ public sealed class XaiPlugin
             return [];
 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         try
         {
@@ -375,7 +434,6 @@ public sealed class XaiPlugin
         {
             return [];
         }
-        catch (OperationCanceledException) { throw; }
         catch (HttpRequestException)
         {
             return [];
@@ -390,7 +448,7 @@ public sealed class XaiPlugin
         }
     }
 
-    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
+    internal async Task<ApiKeyCheck> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -398,24 +456,35 @@ public sealed class XaiPlugin
         try
         {
             using var response = await _httpClient.SendAsync(request, ct);
-            return response.IsSuccessStatusCode;
+            if (response.IsSuccessStatusCode)
+                return ApiKeyCheck.Valid;
+
+            // xAI rejects a wrong or deleted key with 400. A 403 accepted the key; only the body
+            // says whether the team lacks credits or the key lacks permission or is blocked.
+            if (response.StatusCode != HttpStatusCode.Forbidden)
+                return ApiKeyCheck.Invalid;
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return body.Contains("credit", StringComparison.OrdinalIgnoreCase)
+                   || body.Contains("licens", StringComparison.OrdinalIgnoreCase)
+                ? ApiKeyCheck.NoTeamAccess
+                : ApiKeyCheck.Forbidden;
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
-        catch (OperationCanceledException) { throw; }
         catch (HttpRequestException)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
         catch (JsonException)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return ApiKeyCheck.Invalid;
         }
     }
 
@@ -433,7 +502,7 @@ public sealed class XaiPlugin
             return [];
 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/tts/voices");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         try
         {
@@ -462,7 +531,6 @@ public sealed class XaiPlugin
         {
             return [];
         }
-        catch (OperationCanceledException) { throw; }
         catch (HttpRequestException)
         {
             return [];
@@ -479,21 +547,21 @@ public sealed class XaiPlugin
 
     internal void SetCustomVoiceId(string voiceId)
     {
-        _customVoiceId = voiceId.Trim();
-        _host?.SetSetting(CustomVoiceIdSettingName, _customVoiceId);
+        CustomVoiceId = voiceId.Trim();
+        _host?.SetSetting(CustomVoiceIdSettingName, CustomVoiceId);
         _host?.NotifyCapabilitiesChanged();
     }
 
     internal void SetTtsLowLatency(bool enabled)
     {
-        _ttsLowLatency = enabled;
+        TtsLowLatency = enabled;
         _host?.SetSetting(TtsLowLatencySettingName, enabled);
         _host?.NotifyCapabilitiesChanged();
     }
 
     internal void SetTtsTextNormalization(bool enabled)
     {
-        _ttsTextNormalization = enabled;
+        TtsTextNormalization = enabled;
         _host?.SetSetting(TtsTextNormalizationSettingName, enabled);
         _host?.NotifyCapabilitiesChanged();
     }
@@ -514,6 +582,7 @@ public sealed class XaiPlugin
         var duration = TryGetDouble(root, "duration", out var durationValue) ? durationValue : 0;
         var segments = new List<PluginTranscriptionSegment>();
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (root.TryGetProperty("words", out var wordsEl)
             && wordsEl.ValueKind == JsonValueKind.Array)
         {
@@ -534,7 +603,7 @@ public sealed class XaiPlugin
 
         return new PluginTranscriptionResult(text, language ?? fallbackLanguage ?? "", duration)
         {
-            Segments = segments
+            Segments = segments,
         };
     }
 
@@ -554,12 +623,13 @@ public sealed class XaiPlugin
         if (available.Count == 0)
             return;
 
-        if (_selectedLlmModelId is null
-            || available.All(model => !string.Equals(model.Id, _selectedLlmModelId, StringComparison.Ordinal)))
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+        if (SelectedLlmModelId is null
+            || available.All(model => !string.Equals(model.Id, SelectedLlmModelId, StringComparison.Ordinal)))
         {
-            _selectedLlmModelId = available[0].Id;
+            SelectedLlmModelId = available[0].Id;
             if (persist)
-                _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
+                _host?.SetSetting(SelectedLlmModelSettingName, SelectedLlmModelId);
         }
     }
 
@@ -569,6 +639,7 @@ public sealed class XaiPlugin
         if (available.Count == 0)
             return;
 
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (_selectedVoiceId is null
             || available.All(voice => !string.Equals(voice.Id, _selectedVoiceId, StringComparison.Ordinal)))
         {
@@ -582,15 +653,21 @@ public sealed class XaiPlugin
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
 
     private static string NormalizeSttModelId(string? modelId) =>
-        SttModels.Any(model => model.Id == modelId) ? modelId! : DefaultSttModelId;
+        s_sttModels.Any(model => model.Id == modelId) ? modelId! : DefaultSttModelId;
 
-    private static string? NormalizeVoiceId(string? voiceId) =>
+    private static string NormalizeVoiceId(string? voiceId) =>
         string.IsNullOrWhiteSpace(voiceId) ? XaiTtsConfiguration.DefaultVoiceId : voiceId.Trim();
 
-    private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    // Forwarding it would also make ParseSttResponse report "auto" as the detected language.
+    private static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
-            : language.Trim();
+            : trimmed;
+    }
 
     private static string NormalizeTtsLanguage(string? language) =>
         string.IsNullOrWhiteSpace(language) ? "auto" : language.Trim();
@@ -656,7 +733,7 @@ public sealed class XaiPlugin
                 Key: SelectedModelSettingName,
                 Label: Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.TranscriptionModelDescription"),
-                Options: SttModels
+                Options: s_sttModels
                     .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
                     .ToList()
             ),
@@ -711,15 +788,15 @@ public sealed class XaiPlugin
         Task.FromResult(
             key switch
             {
-                ApiKeySecretName => _apiKey,
-                SelectedModelSettingName => _selectedModelId,
-                SelectedLlmModelSettingName => _selectedLlmModelId,
+                ApiKeySecretName => ApiKey,
+                SelectedModelSettingName => SelectedModelId,
+                SelectedLlmModelSettingName => SelectedLlmModelId,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 SelectedVoiceSettingName => _selectedVoiceId,
-                CustomVoiceIdSettingName => _customVoiceId,
-                TtsLowLatencySettingName => _ttsLowLatency ? "true" : "false",
-                TtsTextNormalizationSettingName => _ttsTextNormalization ? "true" : "false",
+                CustomVoiceIdSettingName => CustomVoiceId,
+                TtsLowLatencySettingName => TtsLowLatency ? "true" : "false",
+                TtsTextNormalizationSettingName => TtsTextNormalization ? "true" : "false",
                 _ => null,
             }
         );
@@ -760,12 +837,17 @@ public sealed class XaiPlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
-        if (!valid)
-            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
+        var check = await ValidateApiKeyAsync(ApiKey, ct);
+        if (check != ApiKeyCheck.Valid)
+            return new PluginSettingsValidationResult(false, Loc.L(check switch
+            {
+                ApiKeyCheck.NoTeamAccess => "Settings.ApiKeyNoTeamAccess",
+                ApiKeyCheck.Forbidden => "Settings.ApiKeyForbidden",
+                _ => "Settings.ApiKeyInvalid",
+            }));
 
         var models = await FetchLlmModelsAsync(ct);
         if (models.Count > 0)

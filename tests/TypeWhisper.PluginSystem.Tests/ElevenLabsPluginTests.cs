@@ -16,9 +16,14 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class ElevenLabsPluginTests
 {
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<ElevenLabsPlugin>();
+
+
     private static readonly JsonSerializerOptions s_manifestJsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     [Fact]
@@ -100,7 +105,132 @@ public class ElevenLabsPluginTests
         using var httpClient = new HttpClient(handler);
         var sut = new ElevenLabsPlugin(httpClient);
 
-        Assert.True(await sut.ValidateApiKeyAsync("eleven-key"));
+        Assert.Equal(ApiKeyCheck.Valid, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Fact]
+    public void DictionaryTermsBudget_MatchesProviderKeytermLimits()
+    {
+        using var sut = new ElevenLabsPlugin();
+
+        Assert.Equal(1000, sut.DictionaryTermsBudget.MaxTerms);
+        Assert.Equal(49, sut.DictionaryTermsBudget.MaxCharsPerTerm);
+        Assert.Equal(5, sut.DictionaryTermsBudget.MaxWordsPerTerm);
+    }
+
+    [Theory]
+    [InlineData("automatic", false, 1, true)]
+    [InlineData("automatic", true, 1, false)]
+    [InlineData("automatic", false, 0, false)]
+    [InlineData("automatic", false, 2, false)]
+    [InlineData("restOnly", false, 1, false)]
+    public async Task SupportsStreaming_RequiresAutomaticModeWithoutBatchOnlyOptions(
+        string mode, bool tagAudioEvents, int speakerCount, bool expected)
+    {
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        await sut.SetSettingValueAsync("transcriptionMode", mode);
+        await sut.SetSettingValueAsync("tagAudioEvents", tagAudioEvents ? "true" : "false");
+        await sut.SetSettingValueAsync("numSpeakers", speakerCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Equal(expected, sut.SupportsStreaming);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized,
+        """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",
+        true, "Settings.ApiKeyUnverified")]
+    [InlineData(HttpStatusCode.Unauthorized,
+        """{"detail":{"status":"missing_permissions","message":"Missing speech_to_text permission"}}""",
+        false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.Unauthorized, """{"detail":{"status":"invalid_api_key"}}""", false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.OK, """{"user_id":"u"}""", true, "Settings.ApiKeyValid")]
+    [InlineData(HttpStatusCode.NoContent, "", true, "Settings.ApiKeyValid")]
+    [InlineData(HttpStatusCode.Unauthorized, "not JSON", false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.Forbidden,
+        """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",
+        false, "Settings.ApiKeyInvalid")]
+    [InlineData(HttpStatusCode.InternalServerError,
+        """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",
+        false, "Settings.ApiKeyUnavailable")]
+    [InlineData(HttpStatusCode.TooManyRequests, """{"detail":"rate limited"}""", false, "Settings.ApiKeyUnavailable")]
+    public async Task ValidateAsync_ReportsUnverifiedForUserReadRestrictedKey(
+        HttpStatusCode statusCode, string body, bool expectedSuccess, string expectedMessage)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            var response = JsonResponse(body);
+            response.StatusCode = statusCode;
+            return response;
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+
+        var result = await sut.ValidateAsync();
+
+        Assert.NotNull(result);
+        Assert.Equal(expectedSuccess, result.IsSuccess);
+        Assert.Equal(expectedMessage, result.Message);
+    }
+
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(TaskCanceledException))]
+    [InlineData(typeof(IOException))]
+    public async Task ValidateApiKeyAsync_ReturnsUnavailableOnTransportFailure(Type exceptionType)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+            throw (Exception)Activator.CreateInstance(exceptionType, "Request failed")!));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        Assert.Equal(ApiKeyCheck.Unavailable, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, ApiKeyCheck.Unavailable)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, ApiKeyCheck.Unavailable)]
+    [InlineData(HttpStatusCode.Unauthorized, ApiKeyCheck.Invalid)]
+    [InlineData(HttpStatusCode.Forbidden, ApiKeyCheck.Invalid)]
+    [InlineData(HttpStatusCode.NotFound, ApiKeyCheck.Invalid)]
+    internal async Task ValidateApiKeyAsync_MapsStatusCodes(HttpStatusCode statusCode, ApiKeyCheck expected)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            var response = JsonResponse("""{"detail":"no"}""");
+            response.StatusCode = statusCode;
+            return response;
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        Assert.Equal(expected, await sut.ValidateApiKeyAsync("eleven-key"));
+    }
+
+    [Fact]
+    public async Task ValidateApiKeyAsync_PropagatesCallerCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) => throw new TaskCanceledException("cancelled")));
+        using var sut = new ElevenLabsPlugin(httpClient);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.ValidateApiKeyAsync("eleven-key", cts.Token));
+    }
+
+    [Theory]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""", true)]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":"  THE API KEY YOU USED IS MISSING THE PERMISSION USER_READ TO EXECUTE THIS OPERATION.  "}}""", true)]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":"Missing speech_to_text permission"}}""", false)]
+    [InlineData("""{"detail":{"status":"invalid_api_key","message":"The API key you used is missing the permission user_read to execute this operation."}}""", false)]
+    [InlineData("not JSON", false)]
+    [InlineData("[]", false)]
+    [InlineData("""{"detail":null}""", false)]
+    [InlineData("""{"detail":{}}""", false)]
+    [InlineData("""{"detail":{"status":401}}""", false)]
+    [InlineData("""{"detail":{"status":"missing_permissions","message":null}}""", false)]
+    public void IsUserReadPermissionOnly_RecognizesOnlyUserReadRestriction(string json, bool expected)
+    {
+        Assert.Equal(expected, ElevenLabsPlugin.IsUserReadPermissionOnly(json));
     }
 
     [Fact]
@@ -133,7 +263,7 @@ public class ElevenLabsPluginTests
                 return JsonResponse(
                     """
                     {
-                      "language_code": "de",
+                      "language_code": "deu",
                       "text": "Hallo Welt",
                       "words": [
                         { "text": "Hallo", "start": 0.1, "end": 0.5, "type": "word" },
@@ -176,19 +306,76 @@ public class ElevenLabsPluginTests
         Assert.Equal(["TypeWhisper", "ElevenLabs"], terms);
     }
 
+    [Theory]
+    [InlineData(true, new[] { "Acme", "Beta", "Washington, D.C.", "type script" })]
+    [InlineData(false, new[] { "Acme", "Beta" })]
+    public async Task TranscribeAsync_SendsDictionaryTermsWholeOnlyWhenEnabled(bool enabled, string[] expected)
+    {
+        string? capturedBody = null;
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            capturedBody = body;
+            return JsonResponse("""{"text":"ok"}""");
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+        await sut.SetSettingValueAsync("useDictionaryTerms", enabled ? "true" : "false");
+
+        var prompt = PluginTranscriptionPrompt.Encode(
+            "Acme, Beta\nacme",
+            ["Washington, D.C.", "BETA", "bad<term", "one two three four five six", "type script"]);
+        await sut.TranscribeAsync([1, 2, 3], null, false, prompt, CancellationToken.None);
+
+        Assert.NotNull(capturedBody);
+        Assert.Equal(expected.Length, CountMultipartParts(capturedBody, "keyterms"));
+        foreach (var term in expected)
+            AssertMultipartPart(capturedBody, "keyterms", term);
+        Assert.DoesNotContain(PluginTranscriptionPrompt.EnvelopePrefix.TrimEnd(), capturedBody);
+    }
+
     [Fact]
-    public void BuildRealtimeUri_UsesScribeRealtimeAndVad()
+    public async Task UseDictionaryTerms_DefaultsOffAndControlsStructuredTerms()
+    {
+        var host = new TestPluginHostServices();
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.False(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal("false", await sut.GetSettingValueAsync("useDictionaryTerms"));
+
+        await sut.SetSettingValueAsync("useDictionaryTerms", "true");
+
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.True(host.GetSetting<bool>("useDictionaryTerms"));
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+
+        using var reloaded = new ElevenLabsPlugin();
+        await reloaded.ActivateAsync(host);
+        Assert.True(reloaded.SupportsStructuredDictionaryTerms);
+    }
+
+    [Fact]
+    public void ExtractKeyterms_RejectsMalformedEnvelope()
+    {
+        Assert.Throws<FormatException>(() =>
+            ElevenLabsPlugin.ExtractKeyterms(PluginTranscriptionPrompt.EnvelopePrefix + "{\"text\":\"x\"}"));
+    }
+
+    [Fact]
+    public void BuildRealtimeUri_UsesScribeRealtimeAndManualCommits()
     {
         var uri = ElevenLabsStreamingSession
-            .BuildRealtimeUri("scribe_v2_realtime", "de")
+            .BuildRealtimeUri("scribe_v2_realtime", "de", noVerbatim: true)
             .AbsoluteUri;
 
         Assert.StartsWith("wss://api.elevenlabs.io/v1/speech-to-text/realtime?", uri);
         Assert.Contains("model_id=scribe_v2_realtime", uri);
         Assert.Contains("audio_format=pcm_16000", uri);
-        Assert.Contains("commit_strategy=vad", uri);
+        Assert.Contains("commit_strategy=manual", uri);
+        Assert.DoesNotContain("vad", uri);
         Assert.Contains("include_timestamps=true", uri);
         Assert.Contains("include_language_detection=true", uri);
+        Assert.Contains("no_verbatim=true", uri);
         Assert.Contains("language_code=de", uri);
     }
 
@@ -205,6 +392,76 @@ public class ElevenLabsPluginTests
         );
         Assert.Equal(16000, doc.RootElement.GetProperty("sample_rate").GetInt32());
         Assert.True(doc.RootElement.GetProperty("commit").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("committed_transcript", "committed_transcript_with_timestamps", "deu", "de")]
+    [InlineData("committed_transcript_with_timestamps", "committed_transcript", "deu", "de")]
+    [InlineData("committed_transcript", "committed_transcript_with_timestamps", null, null)]
+    public void CommittedVariants_SurfaceFirstMessagesLanguage(
+        string firstType, string secondType, string? firstLanguage, string? expectedLanguage)
+    {
+        var adapter = new ElevenLabsWebSocketAdapter("key", "scribe_v2_realtime", null, noVerbatim: true);
+        var first = adapter.HandleMessage(System.Net.WebSockets.WebSocketMessageType.Text,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                message_type = firstType,
+                text = "Hallo Welt",
+                language_code = firstLanguage,
+            }));
+        var second = adapter.HandleMessage(System.Net.WebSockets.WebSocketMessageType.Text,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                message_type = secondType,
+                text = "Hallo Welt",
+                language_code = "eng",
+            }));
+
+        Assert.Equal(expectedLanguage, Assert.Single(first.Transcripts).DetectedLanguage);
+        Assert.Empty(second.Transcripts);
+    }
+
+    [Theory]
+    [InlineData("deu", "de")]
+    [InlineData("ENG", "en")]
+    [InlineData("cmn", "zh")]
+    [InlineData("de", "de")]
+    [InlineData(" fr ", "fr")]
+    [InlineData("xyz", "xyz")]
+    [InlineData(" ", null)]
+    [InlineData(null, null)]
+    public void LanguageCodes_FoldKnownThreeLetterCodesAndKeepTheRest(string? code, string? expected)
+    {
+        Assert.Equal(expected, ElevenLabsLanguageCodes.Canonicalize(code));
+    }
+
+    [Theory]
+    [InlineData("partial_transcript", false)]
+    [InlineData("committed_transcript", true)]
+    [InlineData("committed_transcript_with_timestamps", true)]
+    public void TryParseTranscriptEvent_ReportsMessageLanguage(string messageType, bool isFinal)
+    {
+        foreach (var language in new[] { "deu", " deu ", " ", null })
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                message_type = messageType,
+                text = "Hallo Welt",
+                language_code = language,
+            });
+            Assert.True(ElevenLabsStreamingSession.TryParseTranscriptEvent(
+                json, out var transcript, out var error));
+            Assert.Null(error);
+            Assert.NotNull(transcript);
+            Assert.Equal("Hallo Welt", transcript.Text);
+            Assert.Equal(isFinal, transcript.IsFinal);
+            Assert.Equal(string.IsNullOrWhiteSpace(language) ? null : "de", transcript.DetectedLanguage);
+        }
+
+        Assert.True(ElevenLabsStreamingSession.TryParseTranscriptEvent(
+            $$"""{"message_type":"{{messageType}}","text":"Hallo Welt"}""",
+            out var withoutLanguage, out _));
+        Assert.Null(withoutLanguage!.DetectedLanguage);
     }
 
     [Fact]
@@ -231,7 +488,7 @@ public class ElevenLabsPluginTests
         Assert.Null(partialError);
 
         Assert.True(parsedFinal);
-        Assert.Equal(new StreamingTranscriptEvent("Hello world", true), final);
+        Assert.Equal(new StreamingTranscriptEvent("Hello world", true) { DetectedLanguage = "en" }, final);
         Assert.Null(finalError);
 
         Assert.False(parsedError);
@@ -239,11 +496,185 @@ public class ElevenLabsPluginTests
         Assert.Equal("Invalid API key", error);
     }
 
+
+    [Fact]
+    public async Task TranscriptionSettings_PersistAndNotifyCapabilityChanges()
+    {
+        var host = new TestPluginHostServices();
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(host);
+
+        await sut.SetSettingValueAsync("transcriptionMode", "restOnly");
+        await sut.SetSettingValueAsync("tagAudioEvents", "true");
+        await sut.SetSettingValueAsync("noVerbatim", "false");
+        await sut.SetSettingValueAsync("numSpeakers", "33");
+
+        Assert.Equal("restOnly", host.GetSetting<string>("transcriptionMode"));
+        Assert.True(host.GetSetting<bool>("tagAudioEvents"));
+        Assert.False(host.GetSetting<bool>("noVerbatim"));
+        Assert.Equal(32, host.GetSetting<int>("numSpeakers"));
+        Assert.False(sut.SupportsStreaming);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+        await sut.SetSettingValueAsync("transcriptionMode", "restOnly");
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+
+        using var reloaded = new ElevenLabsPlugin();
+        await reloaded.ActivateAsync(host);
+        Assert.Equal(ElevenLabsTranscriptionMode.RestOnly, reloaded.TranscriptionMode);
+        Assert.True(reloaded.TagAudioEvents);
+        Assert.False(reloaded.NoVerbatim);
+        Assert.Equal(32, reloaded.SpeakerCount);
+
+        await sut.SetSettingValueAsync("transcriptionMode", "unknown");
+        await sut.SetSettingValueAsync("numSpeakers", "invalid");
+        Assert.Equal("restOnly", await sut.GetSettingValueAsync("transcriptionMode"));
+        Assert.Equal("32", await sut.GetSettingValueAsync("numSpeakers"));
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+        await sut.SetSettingValueAsync("numSpeakers", "-1");
+        Assert.Equal(0, host.GetSetting<int>("numSpeakers"));
+        await sut.SetSettingValueAsync("transcriptionMode", "automatic");
+        Assert.False(sut.SupportsStreaming);
+        await sut.SetSettingValueAsync("tagAudioEvents", "false");
+        await sut.SetSettingValueAsync("numSpeakers", "1");
+        Assert.True(sut.SupportsStreaming);
+        Assert.Equal(2, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task GetSettingValueAsync_ReportsDefaultsExplicitly()
+    {
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        Assert.Equal("automatic", await sut.GetSettingValueAsync("transcriptionMode"));
+        Assert.Equal("true", await sut.GetSettingValueAsync("noVerbatim"));
+        Assert.Equal("false", await sut.GetSettingValueAsync("tagAudioEvents"));
+        Assert.Equal("1", await sut.GetSettingValueAsync("numSpeakers"));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_AppliesCustomOptionsAndOmitsAutomaticSpeakerCount()
+    {
+        var bodies = new List<string>();
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            Assert.NotNull(body);
+            bodies.Add(body);
+            return JsonResponse("""{"text":"Hello"}""");
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+        await sut.SetSettingValueAsync("tagAudioEvents", "true");
+        await sut.SetSettingValueAsync("noVerbatim", "false");
+        await sut.SetSettingValueAsync("numSpeakers", "0");
+
+        await sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None);
+        var automaticBody = Assert.Single(bodies);
+        AssertMultipartPart(automaticBody, "tag_audio_events", "true");
+        AssertMultipartPart(automaticBody, "no_verbatim", "false");
+        Assert.DoesNotContain("num_speakers", automaticBody);
+
+        await sut.SetSettingValueAsync("numSpeakers", "3");
+        await sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None);
+        Assert.Equal(2, bodies.Count);
+        AssertMultipartPart(bodies[1], "num_speakers", "3");
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_DefaultsCleanUpTranscriptAndSkipAudioEvents()
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            Assert.NotNull(body);
+            AssertMultipartPart(body, "no_verbatim", "true");
+            AssertMultipartPart(body, "tag_audio_events", "false");
+            AssertMultipartPart(body, "num_speakers", "1");
+            return JsonResponse("""{"text":"Hello"}""");
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+
+        await sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None);
+    }
+
+    [Fact]
+    public void BuildRealtimeUri_CarriesNoVerbatimFalse()
+    {
+        var uri = ElevenLabsStreamingSession.BuildRealtimeUri("scribe_v2_realtime", null, noVerbatim: false);
+        Assert.Contains("no_verbatim=false", uri.AbsoluteUri);
+        Assert.DoesNotContain("language_code=", uri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void ExtractKeyterms_SplitsOnNewlinesAndCountsAnyWhitespace()
+    {
+        Assert.Equal(
+            ["Alpha", "Beta Gamma", "Delta", "Eps\tZeta"],
+            ElevenLabsPlugin.ExtractKeyterms("Alpha\r\nBeta Gamma\nDelta,Eps\tZeta")
+        );
+        Assert.Empty(ElevenLabsPlugin.ExtractKeyterms("one two three four five six"));
+        Assert.Empty(ElevenLabsPlugin.ExtractKeyterms("one\ttwo\tthree\tfour\tfive\tsix"));
+    }
+
+    [Fact]
+    public void ExtractKeyterms_LimitsRequestToOneThousandTerms()
+    {
+        var terms = ElevenLabsPlugin.ExtractKeyterms(
+            string.Join(",", Enumerable.Range(0, 1005).Select(i => $"term{i}"))
+        );
+        Assert.Equal(1000, terms.Count);
+        Assert.Equal("term0", terms[0]);
+        Assert.Equal("term999", terms[^1]);
+    }
+
+    [Fact]
+    public void SettingsLocalization_AllLocalesExposeTheSameKeys()
+    {
+        var english = LoadLocalization("en");
+        var keys = english.EnumerateObject().Select(p => p.Name).Order().ToArray();
+        using var sut = new ElevenLabsPlugin();
+        foreach (var definition in sut.GetSettingDefinitions())
+        {
+            Assert.Contains(definition.Label, keys);
+            if (definition.Description is { } description)
+                Assert.Contains(description, keys);
+            foreach (var option in definition.Options ?? [])
+                if (option.Label.StartsWith("Settings.", StringComparison.Ordinal))
+                    Assert.Contains(option.Label, keys);
+        }
+        foreach (var locale in new[] { "de", "es", "ru" })
+        {
+            var localized = LoadLocalization(locale);
+            Assert.Equal(keys, localized.EnumerateObject().Select(p => p.Name).Order().ToArray());
+            Assert.NotEqual(
+                english.GetProperty("Settings.TranscriptionMode").GetString(),
+                localized.GetProperty("Settings.TranscriptionMode").GetString()
+            );
+        }
+    }
+
+    private static void AssertMultipartPart(string body, string name, string value) =>
+        Assert.Contains($"Content-Disposition: form-data; name={name}\r\n\r\n{value}\r\n", body);
+
+    private static int CountMultipartParts(string body, string name) =>
+        body.Split($"Content-Disposition: form-data; name={name}\r\n").Length - 1;
+
+    private static JsonElement LoadLocalization(string language)
+    {
+        var basePath = Path.GetFullPath(AppContext.BaseDirectory);
+        var relativeLocalizationPath = Path.Join(
+            "..", "..", "..", "..", "..",
+            "plugins", "TypeWhisper.Plugin.ElevenLabs", "Localization", $"{language}.json");
+        var localizationPath = Path.GetFullPath(relativeLocalizationPath, basePath);
+        using var doc = JsonDocument.Parse(File.ReadAllText(localizationPath));
+        return doc.RootElement.Clone();
+    }
+
     private static HttpResponseMessage JsonResponse(string json)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
     }
 
@@ -267,7 +698,7 @@ public class ElevenLabsPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

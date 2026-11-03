@@ -5,7 +5,7 @@ namespace TypeWhisper.PluginSDK.Models;
 
 /// <summary>Raised as an LLM response streams in, carrying the accumulated text.</summary>
 // ReSharper disable once UnusedType.Global
-public sealed record LlmResponseTokenEvent : PluginEvent
+public sealed record LlmResponseTokenEvent : PluginEvent, ICoalescibleEvent
 {
     /// <summary>Full accumulated response text so far.</summary>
     // ReSharper disable once UnusedMember.Global
@@ -24,6 +24,9 @@ public sealed record LlmResponseTokenEvent : PluginEvent
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public bool IsFinal { get; init; }
+
+    /// <inheritdoc />
+    public bool IsTerminalFrame => IsFinal;
 
     /// <summary>True when the terminal flush is due to a mid-stream fault.</summary>
     // ReSharper disable once UnusedMember.Global

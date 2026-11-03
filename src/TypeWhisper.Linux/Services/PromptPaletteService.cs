@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Linux.Views;
 using TypeWhisper.PluginSDK;
@@ -13,13 +14,19 @@ namespace TypeWhisper.Linux.Services;
 public sealed class PromptPaletteService
 {
     private readonly ActiveWindowService _activeWindow;
+    private readonly ActionPluginExecutionHost _actionPluginExecutionHost;
+    private readonly DictationOrchestrator _dictation;
     private readonly PluginManager _pluginManager;
     private readonly PromptProcessingService _processing;
     private readonly IPromptActionService _promptActions;
     private readonly IServiceProvider _services;
     private readonly TextInsertionService _textInsertion;
 
+    internal static string NoProviderMessage =>
+        Loc.Instance["Prompts.NoProviderConfigure"];
+
     private bool _opening;
+    private int _activeRuns;
 
     public PromptPaletteService(
         IServiceProvider services,
@@ -27,7 +34,9 @@ public sealed class PromptPaletteService
         PromptProcessingService processing,
         TextInsertionService textInsertion,
         PluginManager pluginManager,
-        ActiveWindowService activeWindow
+        ActiveWindowService activeWindow,
+        ActionPluginExecutionHost actionPluginExecutionHost,
+        DictationOrchestrator dictation
     )
     {
         _services = services;
@@ -36,7 +45,12 @@ public sealed class PromptPaletteService
         _textInsertion = textInsertion;
         _pluginManager = pluginManager;
         _activeWindow = activeWindow;
+        _actionPluginExecutionHost = actionPluginExecutionHost;
+        _dictation = dictation;
     }
+
+    /// <summary>True from selection capture until the result is delivered: the clipboard is in use.</summary>
+    public bool IsActive => Volatile.Read(ref _activeRuns) > 0;
 
     public async Task TogglePaletteAsync()
     {
@@ -46,12 +60,14 @@ public sealed class PromptPaletteService
         }
 
         _opening = true;
+        Interlocked.Increment(ref _activeRuns);
         try
         {
             await OpenPaletteAsync();
         }
         finally
         {
+            Interlocked.Decrement(ref _activeRuns);
             _opening = false;
         }
     }
@@ -61,8 +77,10 @@ public sealed class PromptPaletteService
     ///     without opening the palette. Manual-only actions are not filtered here
     ///     (that's the B13 flag's purpose). Disabled actions are filtered by
     ///     <see cref="IPromptActionService.EnabledActions" /> so stale hotkeys are no-ops.
+    ///     <paramref name="memorySourceId" /> is the triggering profile's
+    ///     <see cref="Profile.MemorySourceId" />; null follows the global memory setting.
     /// </summary>
-    public async Task ExecuteActionDirectAsync(string actionId)
+    public async Task ExecuteActionDirectAsync(string actionId, string? memorySourceId = null)
     {
         var action = _promptActions.EnabledActions.FirstOrDefault(a => a.Id == actionId);
         if (action is null)
@@ -72,15 +90,23 @@ public sealed class PromptPaletteService
 
         var targetWindowId = _activeWindow.GetActiveWindowId();
 
-        var captured = await _textInsertion.CaptureSelectedTextAsync();
-        if (string.IsNullOrWhiteSpace(captured))
+        Interlocked.Increment(ref _activeRuns);
+        try
         {
-            return;
-        }
+            var captured = await _textInsertion.CaptureSelectedTextAsync();
+            if (string.IsNullOrWhiteSpace(captured))
+            {
+                return;
+            }
 
-        // No palette window: streaming has no UI sink (null → no-op renders),
-        // but the result still streams + falls back to batch and is pasted normally.
-        await ExecuteActionAsync(action, captured, null, targetWindowId);
+            // No palette window: streaming has no UI sink (null → no-op renders),
+            // but the result still streams + falls back to batch before configured delivery.
+            await ExecuteActionAsync(action, captured, null, targetWindowId, memorySourceId);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeRuns);
+        }
     }
 
     private async Task OpenPaletteAsync()
@@ -120,22 +146,23 @@ public sealed class PromptPaletteService
             return;
         }
 
-        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId);
+        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId, null);
     }
 
     private async Task ExecuteActionAsync(
         PromptAction action,
         string capturedText,
         PromptPaletteWindow? window,
-        string? targetWindowId
+        string? targetWindowId,
+        string? memorySourceId
     )
     {
-        if (!_processing.IsAnyProviderAvailable)
+        if (_processing.HasNoProviderForRequest(action.ProviderOverride))
         {
             await CloseWindowAsync(window);
             await ShowWarningAsync(
                 "TypeWhisper",
-                "No LLM provider available. Please configure an API key in Plugins."
+                NoProviderMessage
             );
             return;
         }
@@ -149,39 +176,156 @@ public sealed class PromptPaletteService
             await Dispatcher.UIThread.InvokeAsync(() => window.AttachRunCancellation(userCts));
         }
 
+        string result;
         try
         {
-            var result = await RunActionAsync(action, capturedText, window, userCts.Token);
+            result = await RunActionAsync(action, capturedText, window, memorySourceId, userCts.Token);
 
             // Don't paste a result the user aborted while it was being finalized.
             userCts.Token.ThrowIfCancellationRequested();
-
-            // Close the palette BEFORE inserting so focus returns to the target
-            // app and the paste lands where the user selected the text.
-            await CloseWindowAsync(window);
-
-            var actionPlugin = ResolveActionPlugin(action);
-            if (actionPlugin is not null)
-            {
-                var context = new ActionContext(null, null, null, null, capturedText);
-                using var execCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-                await actionPlugin.ExecuteAsync(result, context, execCts.Token);
-                return;
-            }
-
-            await _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userCts.Token, CancellationToken.None)
+            == PromptPaletteCancellationOrigin.UserCancellation
+        )
         {
-            // User abort or everything timed out — best effort, no insertion.
+            // Genuine user abort — best effort, no insertion.
             await CloseWindowAsync(window);
+            return;
+        }
+        catch (PromptPaletteDeadlineException)
+        {
+            // Private batch/action deadline — bounded quiet exit, no insertion.
+            await CloseWindowAsync(window);
+            return;
         }
         catch (Exception ex)
         {
             await CloseWindowAsync(window);
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
             await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
+            return;
         }
+
+        // Delivery phase. Closing the palette trips userCts (PromptPaletteWindow.OnClosed
+        // cancels it unconditionally), so nothing below may consult it — a delivery
+        // failure is never a user abort.
+        try
+        {
+            // Close the palette BEFORE inserting so focus returns to the target
+            // app and the paste lands where the user selected the text.
+            await CloseWindowAsync(window);
+
+            var actionPlugin = ResolveActionPlugin(action);
+            await RouteActionDeliveryAsync(
+                action.TargetActionPluginId,
+                actionPlugin,
+                () => _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId),
+                async resolvedActionPlugin =>
+                {
+                    // Unlinked: userCts is dead once the palette closed; the plugin's
+                    // only budget is this private deadline.
+                    using var execCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                    try
+                    {
+                        await ExecuteActionPluginAsync(
+                            _actionPluginExecutionHost,
+                            resolvedActionPlugin,
+                            result,
+                            capturedText,
+                            _dictation.TryPublishActionFeedback,
+                            execCts.Token
+                        );
+                    }
+                    catch (Exception ex) when (
+                        ClassifyCancellationOrigin(ex, CancellationToken.None, execCts.Token)
+                        == PromptPaletteCancellationOrigin.PrivateDeadline
+                    )
+                    {
+                        // Private action deadline — bounded quiet exit.
+                    }
+                },
+                async targetActionPluginId =>
+                {
+                    Debug.WriteLine(
+                        $"[PromptPalette] Configured action plugin '{targetActionPluginId}' is unavailable."
+                    );
+                    await ShowWarningAsync(
+                        "TypeWhisper",
+                        Loc.Instance.GetString(
+                            "PromptPalette.ActionPluginUnavailable",
+                            targetActionPluginId
+                        )
+                    );
+                }
+            );
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
+            await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    ///     Extracted for tests: a configured-but-unresolved action target must surface a routing
+    ///     error instead of silently falling back to ordinary insertion (audit §2 M2 / PA7).
+    /// </summary>
+    internal static async Task RouteActionDeliveryAsync(
+        string? targetActionPluginId,
+        IActionPlugin? actionPlugin,
+        Func<Task> insertText,
+        Func<IActionPlugin, Task> executeActionPlugin,
+        Func<string, Task> reportRoutingError
+    )
+    {
+        var actionPluginUnavailable = DictationOrchestrator.IsActionPluginTargetUnavailable(
+            targetActionPluginId,
+            actionPlugin is not null
+        );
+
+        if (actionPluginUnavailable)
+        {
+            await reportRoutingError(targetActionPluginId!);
+            return;
+        }
+
+        if (actionPlugin is not null)
+        {
+            await executeActionPlugin(actionPlugin);
+            return;
+        }
+
+        await insertText();
+    }
+
+    /// <summary>
+    ///     Every terminal result is published, success or failure — a plugin that declares
+    ///     failure must never be silently swallowed. <paramref name="publishFeedback" /> is
+    ///     passed as a method group so this contract lives here, under test, instead of being
+    ///     restated (and re-broken) at each call site.
+    /// </summary>
+    internal static async Task<ActionPluginExecutionResult> ExecuteActionPluginAsync(
+        ActionPluginExecutionHost executionHost,
+        IActionPlugin actionPlugin,
+        string processedText,
+        string capturedText,
+        Func<ActionPluginExecutionResult, bool> publishFeedback,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await executionHost.ExecuteAsync(
+            actionPlugin,
+            processedText,
+            new ActionContext(null, null, null, null, capturedText),
+            null,
+            cancellationToken
+        );
+
+        // Discarded: the publisher declines while a live dictation owns the overlay,
+        // which is its call to make, not a reason to withhold the result.
+        _ = publishFeedback(result);
+        return result;
     }
 
     /// <summary>
@@ -194,6 +338,7 @@ public sealed class PromptPaletteService
         PromptAction action,
         string capturedText,
         PromptPaletteWindow? window,
+        string? memorySourceId,
         CancellationToken userToken
     )
     {
@@ -209,37 +354,84 @@ public sealed class PromptPaletteService
         try
         {
             streamed = await pump.RunAsync(
-                _processing.ProcessStreamingAsync(action, capturedText, streamCts.Token),
+                _processing.ProcessStreamingAsync(action, capturedText, ct: streamCts.Token,
+                    memorySourceId: memorySourceId),
                 streamCts.Token
             );
         }
-        catch (OperationCanceledException) when (userToken.IsCancellationRequested)
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, streamCts.Token)
+            == PromptPaletteCancellationOrigin.UserCancellation
+        )
         {
-            throw; // genuine user abort — do not fall back, do not insert.
+            throw new OperationCanceledException(userToken);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, streamCts.Token)
+            == PromptPaletteCancellationOrigin.PrivateDeadline
+        )
         {
             // Streaming timed out (no user cancel) — fall back to batch.
-            return await BatchAsync(action, capturedText, userToken);
+            return await BatchAsync(action, capturedText, memorySourceId, userToken);
         }
+
+        pump.ThrowIfNonRetryableFault();
 
         // Fall back to batch when the pump faulted or yielded nothing. A single
         // empty chunk (bulk-yield path) still sets ReceivedAnyChunk so it is not re-run.
         return pump.Faulted || !pump.ReceivedAnyChunk
-            ? await BatchAsync(action, capturedText, userToken)
+            ? await BatchAsync(action, capturedText, memorySourceId, userToken)
             : streamed;
     }
 
     private async Task<string> BatchAsync(
         PromptAction action,
         string capturedText,
+        string? memorySourceId,
         CancellationToken userToken
     )
     {
         // Fresh timeout so a streaming attempt that burned its budget doesn't starve the batch.
         using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
         batchCts.CancelAfter(TimeSpan.FromSeconds(60));
-        return await _processing.ProcessAsync(action, capturedText, batchCts.Token);
+        try
+        {
+            return await _processing.ProcessAsync(action, capturedText, ct: batchCts.Token,
+                memorySourceId: memorySourceId);
+        }
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, batchCts.Token)
+            == PromptPaletteCancellationOrigin.UserCancellation
+        )
+        {
+            throw new OperationCanceledException(userToken);
+        }
+        catch (Exception ex) when (
+            ClassifyCancellationOrigin(ex, userToken, batchCts.Token)
+            == PromptPaletteCancellationOrigin.PrivateDeadline
+        )
+        {
+            throw new PromptPaletteDeadlineException(
+                "Prompt batch processing timed out.",
+                ex
+            );
+        }
+    }
+
+    internal static PromptPaletteCancellationOrigin ClassifyCancellationOrigin(
+        Exception _,
+        CancellationToken userToken,
+        CancellationToken privateDeadlineToken
+    )
+    {
+        if (userToken.IsCancellationRequested)
+        {
+            return PromptPaletteCancellationOrigin.UserCancellation;
+        }
+
+        return privateDeadlineToken.IsCancellationRequested
+            ? PromptPaletteCancellationOrigin.PrivateDeadline
+            : PromptPaletteCancellationOrigin.DependencyFault;
     }
 
     private static async Task CloseWindowAsync(PromptPaletteWindow? window)
@@ -281,4 +473,14 @@ public sealed class PromptPaletteService
             await dialog.ShowMessageAsync(title, message);
         });
     }
+
+    private sealed class PromptPaletteDeadlineException(string message, Exception innerException)
+        : TimeoutException(message, innerException);
+}
+
+internal enum PromptPaletteCancellationOrigin
+{
+    UserCancellation,
+    PrivateDeadline,
+    DependencyFault,
 }

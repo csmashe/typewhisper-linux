@@ -1,0 +1,19 @@
+{
+  "Settings.AccountId": "账户ID",
+  "Settings.AccountIdDescription": "你的32位Cloudflare账户ID，可在Cloudflare仪表板中找到。",
+  "Settings.ApiToken": "API令牌",
+  "Settings.ApiTokenDescription": "对此账户具有Workers AI访问权限的Cloudflare API令牌。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.ModelDescription": "Whisper Large V3 Turbo支持指定说话语言和词典词条；Whisper会自动检测语言。",
+  "Settings.EnterAccountIdAndApiToken": "请先输入账户ID和API令牌。",
+  "Settings.InvalidAccountId": "Cloudflare账户ID必须是32个十六进制字符。",
+  "Settings.CredentialsValid": "账户ID和API令牌可用于Workers AI。",
+  "Settings.TokenRejected": "Cloudflare拒绝了此账户的API令牌。请使用对此账户具有Workers AI访问权限的令牌。",
+  "Settings.ValidationFailedStatus": "Cloudflare返回了HTTP {0}。请检查账户ID和API令牌。",
+  "Settings.InvalidValidationResponse": "Cloudflare返回了意外的响应。请重试。",
+  "Settings.CloudflareUnreachable": "无法连接到Cloudflare。请检查网络连接后重试。",
+  "Settings.SettingsChangedDuringValidation": "验证期间设置已更改。请重新验证。",
+  "Errors.RecordingTooLarge": "录音对此Cloudflare模型来说过大。请使用较短的录音。",
+  "Manifest.Name": "Cloudflare ASR",
+  "Manifest.Description": "Cloudflare Workers AI Whisper转录引擎"
+}

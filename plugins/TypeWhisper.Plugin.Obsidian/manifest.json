@@ -1,9 +1,12 @@
 {
   "id": "com.typewhisper.obsidian",
   "name": "Obsidian",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Save transcriptions as notes in Obsidian",
+  "networkAccess": "local",
+  "categories": ["action"],
   "assemblyName": "TypeWhisper.Plugin.Obsidian.dll",
   "pluginClass": "TypeWhisper.Plugin.Obsidian.ObsidianPlugin"
 }

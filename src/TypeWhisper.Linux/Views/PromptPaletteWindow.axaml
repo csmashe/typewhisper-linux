@@ -7,7 +7,6 @@
         mc:Ignorable="d"
         x:Class="TypeWhisper.Linux.Views.PromptPaletteWindow"
         x:DataType="models:PromptAction"
-        RequestedThemeVariant="Dark"
         Title="{loc:Str PromptPalette.Title}"
         Width="400"
         Height="400"
@@ -48,6 +47,11 @@
             <ListBox x:Name="ActionListBox"
                      SelectionChanged="ActionListBox_OnSelectionChanged"
                      DoubleTapped="ActionListBox_OnDoubleTapped">
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem" x:DataType="models:PromptAction">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                    </Style>
+                </ListBox.Styles>
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="models:PromptAction">
                         <Grid Margin="0,2" ColumnDefinitions="32,*">

@@ -10,6 +10,20 @@ namespace TypeWhisper.Linux.Tests;
 public class HttpApiAccelerationDtoTests
 {
     [Fact]
+    public void BuildAccelerationDto_Vulkan_ReportsLoadedBackend()
+    {
+        var plugin = new FakeAccelerationPlugin
+        {
+            AccelerationStatus = new TranscriptionAccelerationStatus(TranscriptionAccelerationBackend.Vulkan, "Using Vulkan"),
+        };
+        var json = JsonSerializer.SerializeToElement(HttpApiService.BuildAccelerationDto(plugin,
+            AppSettings.Default with { LocalModelAcceleration = "vulkan" }));
+        Assert.Equal("vulkan", json.GetProperty("preference").GetString());
+        Assert.Equal("vulkan", json.GetProperty("activeBackend").GetString());
+        Assert.Equal("Using Vulkan", json.GetProperty("displayText").GetString());
+    }
+
+    [Fact]
     public void BuildAccelerationDto_NoActivePlugin_ReturnsNull()
     {
         var dto = HttpApiService.BuildAccelerationDto(null, AppSettings.Default);
@@ -25,11 +39,11 @@ public class HttpApiAccelerationDtoTests
             AccelerationStatus = new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Using CPU"
-            )
+            ),
         };
         var settings = AppSettings.Default with
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
         };
 
         var dto = HttpApiService.BuildAccelerationDto(plugin, settings);
@@ -51,11 +65,11 @@ public class HttpApiAccelerationDtoTests
                 TranscriptionAccelerationBackend.Cpu,
                 "Using CPU",
                 "CUDA not available; falling back to CPU."
-            )
+            ),
         };
         var settings = AppSettings.Default with
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationAuto,
         };
 
         var dto = HttpApiService.BuildAccelerationDto(plugin, settings);
@@ -78,11 +92,11 @@ public class HttpApiAccelerationDtoTests
                 "Using CPU",
                 "Process is pinned to CPU. Restart to switch to NVIDIA CUDA.",
                 RequiresRestart: true
-            )
+            ),
         };
         var settings = AppSettings.Default with
         {
-            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
         };
 
         var dto = HttpApiService.BuildAccelerationDto(plugin, settings);

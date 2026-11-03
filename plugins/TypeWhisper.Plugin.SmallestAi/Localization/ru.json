@@ -1,10 +1,25 @@
 {
   "Settings.ApiKey": "API-ключ",
-  "Settings.ApiKeyDescription": "Требуется для транскрипции и потоковой передачи Smallest AI Pulse.",
+  "Settings.ApiKeyDescription": "Используется для транскрипции и потоковой передачи Pulse, а также для синтеза речи Lightning.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyValid": "API-ключ действителен.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
   "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
-  "Manifest.Name": "Smallest AI Pulse",
-  "Manifest.Description": "Движок распознавания речи Smallest AI Pulse"
+  "Manifest.Name": "Smallest AI",
+  "Manifest.Description": "Транскрипция Smallest AI Pulse и синтез речи Lightning",
+  "Settings.ApiKeyValidVoices": "API-ключ действителен. В разделе «Голосовое подтверждение» доступно голосов: {0}.",
+  "Settings.ApiKeyValidVoicesKept": "API-ключ действителен, но обновить голоса не удалось, поэтому сохранён прежний список: {0}",
+  "Settings.SpeechSpeed": "Скорость речи",
+  "Settings.SpeechSpeedDescription": "Скорость речи голосов Lightning. Голос выбирается в разделе «Голосовое подтверждение».",
+  "Settings.RefreshVoices": "Обновить голоса",
+  "Settings.RefreshVoicesDescription": "Загружает актуальные голоса Lightning и Lightning Pro из Smallest AI.",
+  "Speech.VoicesRefreshed": "В разделе «Голосовое подтверждение» доступно голосов: {0}.",
+  "Speech.InvalidVoiceCatalog": "Smallest AI вернул нечитаемый список голосов. Сохранён прежний список.",
+  "Speech.NoVoices": "Smallest AI не вернул ни одного голоса. Сохранён прежний список.",
+  "Speech.ConnectionChanged": "API-ключ изменился во время загрузки голосов. Обновите голоса ещё раз.",
+  "Speech.TextTooLong": "Этот текст слишком длинный, чтобы Smallest AI озвучил его за один раз: при текущей скорости это заняло бы больше двух минут.",
+  "Speech.AudioTooLarge": "Smallest AI вернул более 12 МБ аудио, поэтому оно не воспроизведено.",
+  "Speech.AudioTooLong": "Smallest AI вернул более двух минут аудио, поэтому оно не воспроизведено.",
+  "Speech.UnplayableAudio": "Smallest AI вернул аудио, которое невозможно воспроизвести.",
+  "Speech.TimedOut": "Smallest AI слишком долго возвращал аудио с речью."
 }

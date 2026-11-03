@@ -1,0 +1,542 @@
+// ReSharper disable MethodHasAsyncOverload -- synchronous File.ReadAll* is deliberate in these test assertions.
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Tests;
+using Xunit;
+
+namespace TypeWhisper.Linux.Tests;
+
+public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
+{
+    private const string ChromeDesktopId = "google-chrome.desktop";
+    private const string OwnershipComment =
+        "# Installed by TypeWhisper - patches Exec= for URL detection";
+    private const UnixFileMode Mode0600 =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    private readonly string _root = TestPaths.CreateTempDirectory("browser-managed-artifacts");
+    private readonly string? _originalConfigHome = Environment.GetEnvironmentVariable(
+        "XDG_CONFIG_HOME"
+    );
+    private readonly string? _originalDataHome = Environment.GetEnvironmentVariable(
+        "XDG_DATA_HOME"
+    );
+
+    public BrowserAccessibilityManagedArtifactTests()
+    {
+        Assert.Contains(
+            ChromeDesktopId,
+            BrowserAccessibilitySetupHelper.GetLauncherNames(
+                BrowserLauncherPatchMode.ChromiumRendererAccessibility
+            )
+        );
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", ConfigHome);
+        Environment.SetEnvironmentVariable("XDG_DATA_HOME", DataHome);
+        BrowserAccessibilitySetupHelper.ManagedArtifactStateRootOverride = StateRoot;
+        BrowserAccessibilitySetupHelper.SystemLauncherDirectoriesOverride = [SystemApps];
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride =
+            [Path.Join(_root, "empty-firefox-roots")];
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", _originalConfigHome);
+        Environment.SetEnvironmentVariable("XDG_DATA_HOME", _originalDataHome);
+        BrowserAccessibilitySetupHelper.ManagedArtifactStateRootOverride = null;
+        BrowserAccessibilitySetupHelper.SystemLauncherDirectoriesOverride = null;
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = null;
+        try
+        {
+            TestPaths.DeleteDirectory(_root);
+        }
+        catch
+        {
+            // Best-effort cleanup for symlink fixtures.
+        }
+    }
+
+    [Fact]
+    public async Task Setup_refuses_and_preserves_foreign_environment_file()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(EnvPath)!);
+        await File.WriteAllTextAsync(EnvPath, "USER_SETTING=keep\n");
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("USER_SETTING=keep\n", File.ReadAllText(EnvPath));
+        Assert.Contains("untouched", result.Detail!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Setup_refuses_environment_symlink_and_preserves_its_target()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(EnvPath)!);
+        var target = Path.Join(_root, "environment-target");
+        await File.WriteAllTextAsync(target, "target bytes\n");
+        File.CreateSymbolicLink(EnvPath, target);
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("target bytes\n", File.ReadAllText(target));
+        Assert.NotNull(new FileInfo(EnvPath).LinkTarget);
+    }
+
+    [Fact]
+    public async Task Customized_published_environment_file_is_retained_on_remove()
+    {
+        var setup = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+        await File.AppendAllTextAsync(EnvPath, "USER_CUSTOMIZATION=1\n");
+
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(setup.Success);
+        Assert.True(removal.Success);
+        Assert.Contains("USER_CUSTOMIZATION=1", File.ReadAllText(EnvPath));
+        Assert.Contains("Left env file", removal.Message, StringComparison.Ordinal);
+        Assert.True(
+            File.Exists(
+                Path.Join(StateRoot, "browser-accessibility-environment", "state.json")
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Environment_file_honors_XDG_CONFIG_HOME_and_uses_private_mode()
+    {
+        var setup = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.True(setup.Success);
+        Assert.True(File.Exists(EnvPath));
+        Assert.StartsWith(
+            ConfigHome + Path.DirectorySeparatorChar,
+            EnvPath,
+            StringComparison.Ordinal
+        );
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(Mode0600, File.GetUnixFileMode(EnvPath));
+        }
+    }
+
+    [Fact]
+    public async Task System_launcher_shadow_is_catalog_scoped_and_deleted_if_unchanged()
+    {
+        WriteSystemChromeLauncher();
+
+        var setup = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.True(setup.Success);
+        Assert.Equal(ExpectedPatchedChrome(SystemChromeContent), File.ReadAllText(UserChromePath));
+
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(removal.Success);
+        Assert.False(File.Exists(UserChromePath));
+    }
+
+    [Fact]
+    public async Task Foreign_user_launcher_is_backed_up_and_restored_with_exact_mode()
+    {
+        const string userLauncher =
+            "[Desktop Entry]\nName=Custom Chrome\nExec=env WRAPPED=1 /opt/chrome %U\n";
+        Directory.CreateDirectory(UserApps);
+        await File.WriteAllTextAsync(UserChromePath, userLauncher);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(UserChromePath, Mode0600);
+        }
+
+        var setup = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+        Assert.True(setup.Success);
+        Assert.Equal(ExpectedPatchedChrome(userLauncher), File.ReadAllText(UserChromePath));
+
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(removal.Success);
+        Assert.Equal(userLauncher, File.ReadAllText(UserChromePath));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(Mode0600, File.GetUnixFileMode(UserChromePath));
+        }
+    }
+
+    [Fact]
+    public async Task Customized_launcher_shadow_is_preserved_with_transaction_state()
+    {
+        WriteSystemChromeLauncher();
+        await new BrowserAccessibilitySetupHelper().SetUpAsync(CancellationToken.None);
+        await File.AppendAllTextAsync(UserChromePath, "X-User-Customized=true\n");
+
+        await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None);
+
+        Assert.Contains("X-User-Customized=true", File.ReadAllText(UserChromePath));
+        Assert.True(
+            File.Exists(
+                Path.Join(StateRoot, $"browser-launcher-{ChromeDesktopId}", "state.json")
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Symlinked_launcher_is_refused_and_target_is_preserved()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        WriteSystemChromeLauncher();
+        Directory.CreateDirectory(UserApps);
+        var target = Path.Join(_root, "launcher-target.desktop");
+        await File.WriteAllTextAsync(target, "[Desktop Entry]\nName=Target\n");
+        File.CreateSymbolicLink(UserChromePath, target);
+
+        var result = await new BrowserAccessibilitySetupHelper().SetUpAsync(
+            CancellationToken.None
+        );
+
+        // The symlinked launcher must not be claimed as patched, whatever the rest of the
+        // run managed to do.
+        Assert.DoesNotContain(ChromeDesktopId, result.Detail ?? string.Empty);
+        Assert.Equal("[Desktop Entry]\nName=Target\n", File.ReadAllText(target));
+        Assert.NotNull(new FileInfo(UserChromePath).LinkTarget);
+    }
+
+    [Fact]
+    public async Task Removal_does_not_sweep_unrelated_marker_bearing_desktop_files()
+    {
+        Directory.CreateDirectory(UserApps);
+        var unrelated = Path.Join(UserApps, "unrelated.desktop");
+        const string contents = $"{OwnershipComment}\n[Desktop Entry]\nExec=/usr/bin/unrelated\n";
+        await File.WriteAllTextAsync(unrelated, contents);
+
+        await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None);
+
+        Assert.Equal(contents, File.ReadAllText(unrelated));
+    }
+
+    [Fact]
+    public async Task Exact_legacy_shadow_and_sidecar_are_adopted_and_restored()
+    {
+        const string original =
+            "[Desktop Entry]\nName=Legacy custom Chrome\nExec=/opt/chrome %U\n";
+        Directory.CreateDirectory(UserApps);
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyBackupPath)!);
+        await File.WriteAllTextAsync(LegacyBackupPath, original);
+        await File.WriteAllTextAsync(UserChromePath, ExpectedPatchedChrome(original));
+
+        var setup = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(setup.Success);
+        Assert.True(removal.Success);
+        Assert.Equal(original, File.ReadAllText(UserChromePath));
+    }
+
+    [Fact]
+    public async Task Firefox_user_js_bytes_and_utf8_bom_are_restored_after_setup_and_remove()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        const string text =
+            "user_pref(\"browser.keep_this\", true);\r\n"
+            + "user_pref(\"accessibility.force_disabled\", 1);\r\n";
+        var withBom = WriteFirefoxProfile(
+            firefoxRoot,
+            "bom.default",
+            [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(text)]
+        );
+        var withoutBom = WriteFirefoxProfile(
+            firefoxRoot,
+            "plain.default",
+            System.Text.Encoding.UTF8.GetBytes(text)
+        );
+        var originals = new[] { File.ReadAllBytes(withBom), File.ReadAllBytes(withoutBom) };
+
+        var setup = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+        Assert.True(setup.Success);
+        Assert.NotEqual(originals[0], File.ReadAllBytes(withBom));
+        Assert.NotEqual(originals[1], File.ReadAllBytes(withoutBom));
+
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(removal.Success);
+        Assert.Equal(originals[0], File.ReadAllBytes(withBom));
+        Assert.Equal(originals[1], File.ReadAllBytes(withoutBom));
+    }
+
+    [Fact]
+    public async Task Remove_reports_firefox_profiles_whose_user_js_could_not_be_updated()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        var latin1 = System.Text.Encoding.Latin1.GetBytes(
+            "// café\nuser_pref(\"accessibility.force_disabled\", -1); // TypeWhisper\n"
+        );
+        var userJs = WriteFirefoxProfile(firefoxRoot, "latin1.default", latin1);
+
+        var removal = await BrowserAccessibilitySetupHelper.RemoveAsync(
+            CancellationToken.None
+        );
+
+        Assert.True(removal.Success);
+        Assert.Contains(
+            "Could not update user.js in Firefox profile(s): latin1.default.",
+            removal.Message
+        );
+        Assert.Equal(latin1, File.ReadAllBytes(userJs));
+    }
+
+    private static string WriteFirefoxProfile(string root, string name, byte[] userJs)
+    {
+        var profile = Path.Join(root, name);
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        var userJsPath = Path.Join(profile, "user.js");
+        File.WriteAllBytes(userJsPath, userJs);
+        return userJsPath;
+    }
+
+    [Fact]
+    public async Task Setup_names_firefox_profile_it_could_not_write()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(SystemApps);
+        File.WriteAllText(
+            Path.Join(SystemApps, "firefox.desktop"),
+            "[Desktop Entry]\nName=Firefox\nExec=/usr/bin/firefox %u\n"
+        );
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        const string userJs = "user_pref(\"accessibility.force_disabled\", 1);\n";
+        File.WriteAllText(Path.Join(profile, "user.js"), userJs);
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+        File.SetUnixFileMode(profile, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            if (CanCreateFileIn(profile))
+            {
+                // Root (or a permission-ignoring filesystem) can still write; nothing to test.
+                return;
+            }
+
+            var result = await new BrowserAccessibilitySetupHelper()
+                .SetUpAsync(CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Equal(["qa.default"], result.SkippedFirefoxProfiles);
+            Assert.Contains("Could not write to: qa.default.", result.Detail!, StringComparison.Ordinal);
+            Assert.DoesNotContain("Restart Firefox", result.Detail!, StringComparison.Ordinal);
+            Assert.Equal(userJs, File.ReadAllText(Path.Join(profile, "user.js")));
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                profile,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+        }
+    }
+
+    [Fact]
+    public async Task Unwritable_profile_already_enabled_in_prefs_js_is_not_reported_as_skipped()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(
+            Path.Join(profile, "prefs.js"),
+            "user_pref(\"accessibility.force_disabled\", -1);\n"
+        );
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+        File.SetUnixFileMode(profile, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            if (CanCreateFileIn(profile))
+            {
+                return;
+            }
+
+            var result = await new BrowserAccessibilitySetupHelper()
+                .SetUpAsync(CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Empty(result.SkippedFirefoxProfiles);
+            Assert.Contains("Already enabled in prefs.js", result.Detail!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                profile,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData("user_pref(\"accessibility.force_disabled\", 1);\n", false)]
+    [InlineData("\n\nuser_pref(\"accessibility.force_disabled\", -1);\n", true)]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"accessibility.force_disabled\", 1); user_pref(\"browser.startup.page\", 3);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"browser.startup.page\", 3); user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", 1); user_pref(\"accessibility.force_disabled\", -1);\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n// user_pref(\"accessibility.force_disabled\", 1);\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n/* user_pref(\"accessibility.force_disabled\", 1); */\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n/*\nuser_pref(\"accessibility.force_disabled\", 1);\n*/\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n# user_pref(\"accessibility.force_disabled\", 1);\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1); /* note */ user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"x\", \"/* # // \\\" \"); user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", 1);\nuser_pref(\"x\", \"user_pref('accessibility.force_disabled', -1);\");\n",
+        false
+    )]
+    [InlineData("user_pref(\"browser.startup.page\", 3);\n", true)]
+    public void Status_lets_user_js_override_prefs_js(string userJs, bool expectedEnabled)
+    {
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(
+            Path.Join(profile, "prefs.js"),
+            "user_pref(\"accessibility.force_disabled\", -1);\n"
+        );
+        File.WriteAllText(Path.Join(profile, "user.js"), userJs);
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+
+        var status = BrowserAccessibilitySetupHelper.IsCurrentlyConfigured();
+
+        Assert.Equal(expectedEnabled, status.FirefoxAccessibilityForceEnabled);
+    }
+
+    [Fact]
+    public async Task Setup_reports_no_skipped_profiles_when_every_profile_is_patched()
+    {
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.SkippedFirefoxProfiles);
+        Assert.Contains("Patched profile(s): qa.default.", result.Detail!, StringComparison.Ordinal);
+    }
+
+    private string ConfigHome => Path.Join(_root, "config");
+    private string DataHome => Path.Join(_root, "data");
+    private string StateRoot => Path.Join(_root, "state");
+    private string SystemApps => Path.Join(_root, "system-applications");
+    private string UserApps => Path.Join(DataHome, "applications");
+    private string EnvPath =>
+        Path.Join(ConfigHome, "environment.d", "typewhisper-accessibility.conf");
+    private string UserChromePath => Path.Join(UserApps, ChromeDesktopId);
+    private string LegacyBackupPath =>
+        Path.Join(DataHome, "typewhisper", "launcher-backups", ChromeDesktopId);
+
+    private const string SystemChromeContent =
+        "[Desktop Entry]\nName=Google Chrome\nExec=/usr/bin/google-chrome %U\n";
+
+    private void WriteSystemChromeLauncher()
+    {
+        Directory.CreateDirectory(SystemApps);
+        File.WriteAllText(Path.Join(SystemApps, ChromeDesktopId), SystemChromeContent);
+    }
+
+    private static bool CanCreateFileIn(string directory)
+    {
+        var probe = Path.Join(directory, ".write-probe");
+        try
+        {
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static string ExpectedPatchedChrome(string source)
+    {
+        return OwnershipComment
+               + "\n"
+               + source.Replace(
+                   " %U",
+                   " --force-renderer-accessibility %U",
+                   StringComparison.Ordinal
+               );
+    }
+}

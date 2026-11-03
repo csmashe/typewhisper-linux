@@ -17,7 +17,7 @@ public sealed record ErrorLogEntry
     {
         return new ErrorLogEntry
         {
-            Id = Guid.NewGuid().ToString("N"), Timestamp = DateTime.UtcNow, Message = message, Category = category
+            Id = Guid.NewGuid().ToString("N"), Timestamp = DateTime.UtcNow, Message = message, Category = category,
         };
     }
 }

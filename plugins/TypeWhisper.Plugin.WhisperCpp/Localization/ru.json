@@ -4,6 +4,7 @@
   "Settings.UsingDefaultThreshold": "Используется порог по умолчанию {0}.",
   "Settings.ThresholdSet": "Порог установлен на {0}.",
   "Settings.ThresholdInvalid": "Порог отсутствия речи должен быть числом от 0.0 до 1.0.",
+  "Errors.TranslationUnsupported": "{0} не умеет переводить на английский. Выберите многоязычную модель, кроме Turbo, например Small или Medium.",
   "Manifest.Name": "whisper.cpp (локально)",
   "Manifest.Description": "Офлайн-транскрипция через whisper.cpp с использованием Whisper.net"
 }

@@ -14,5 +14,7 @@ public enum TranscriptionAccelerationPreference
     // ReSharper disable once UnusedMember.Global
     Cpu,
     // ReSharper disable once UnusedMember.Global
-    NvidiaCuda
+    NvidiaCuda,
+    // ReSharper disable once UnusedMember.Global
+    Vulkan,
 }

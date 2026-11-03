@@ -1,0 +1,168 @@
+using System.Diagnostics;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.PluginSDK;
+using Xunit;
+
+// The Assert.Collection lambdas in this file assert on each element; ReSharper reads
+// xUnit asserts as precondition checks and concludes the element parameter is only
+// validated, never used — but asserting on each element is exactly the test's
+// purpose, so the inspection is a false positive here.
+// ReSharper disable ParameterOnlyUsedForPreconditionCheck.Local
+namespace TypeWhisper.Linux.Tests;
+
+public sealed class DictationOrchestratorDiscardFeedbackTests
+{
+    [Fact]
+    public void TranscriptionFailure_RedactsPreviewAndOtherTextBeforeTrace()
+    {
+        var context = NewRecordingContext() with
+        {
+            RecoveredPartialPreview = "private recovered preview",
+            StreamingFinalText = "private streaming final",
+        };
+        using var output = new StringWriter();
+        using var listener = new TextWriterTraceListener(output);
+        Trace.Listeners.Add(listener);
+        try
+        {
+            var diagnostic = DictationOrchestrator.TraceTranscriptionFailure(
+                new IOException("batch failed: private recovered preview; private streaming final; raw secret; final secret; prompt secret"),
+                context, "raw secret", "final secret", "prompt secret");
+            listener.Flush();
+            Assert.Equal("batch failed: [redacted]; [redacted]; [redacted]; [redacted]; [redacted]", diagnostic);
+            Assert.Contains($"[Dictation] Transcription failed: {nameof(IOException)}: {diagnostic}", output.ToString());
+            Assert.DoesNotContain(context.RecoveredPartialPreview, output.ToString());
+            Assert.DoesNotContain(context.StreamingFinalText, output.ToString());
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+    }
+
+    [Fact]
+    public void Spoken_command_failure_shows_only_configuration_details()
+    {
+        var configuration = new PluginRequestException(
+            "Sign in to the selected CLI.",
+            PluginRequestFailureKind.Configuration,
+            isTransient: false
+        );
+        Assert.Equal(configuration.Message, DictationOrchestrator.DescribeSpokenCommandFailure(configuration));
+        Assert.Equal(
+            Loc.Instance["Command.Failed"],
+            DictationOrchestrator.DescribeSpokenCommandFailure(new InvalidOperationException("Internal detail"))
+        );
+    }
+
+    [Theory]
+    [InlineData((int)LinuxShortSpeechDecision.DiscardTooShort, "Overlay.TooShort")]
+    [InlineData((int)LinuxShortSpeechDecision.DiscardNoSpeech, "Overlay.NoSpeech")]
+    public void Short_speech_discard_resolves_message_and_reports_status_before_error_feedback(
+        int discardReasonValue,
+        string messageKey
+    )
+    {
+        var discardReason = (LinuxShortSpeechDecision)discardReasonValue;
+        var recordingContext = NewRecordingContext();
+        var message = Loc.Instance[messageKey];
+        var calls = new List<OutcomeCall>();
+
+        DictationOrchestrator.ReportShortSpeechDiscardOutcome(
+            discardReason,
+            recordingContext,
+            (context, status) =>
+                calls.Add(new OutcomeCall("status", context, status, null, null)),
+            (context, feedback, isError, isCanceled) =>
+                calls.Add(
+                    new OutcomeCall("feedback", context, feedback, isError, isCanceled)
+                )
+        );
+
+        Assert.Collection(
+            calls,
+            status =>
+            {
+                Assert.Equal("status", status.Kind);
+                Assert.Same(recordingContext, status.Context);
+                Assert.Equal(message, status.Message);
+                Assert.Null(status.IsError);
+                Assert.Null(status.IsCanceled);
+            },
+            feedback =>
+            {
+                Assert.Equal("feedback", feedback.Kind);
+                Assert.Same(recordingContext, feedback.Context);
+                Assert.Equal(message, feedback.Message);
+                Assert.True(feedback.IsError);
+                Assert.False(feedback.IsCanceled);
+            }
+        );
+    }
+
+    [Fact]
+    public void Discard_reasons_resolve_their_distinct_localized_messages()
+    {
+        var recordingContext = NewRecordingContext();
+        var messages = new Dictionary<LinuxShortSpeechDecision, string>();
+
+        foreach (
+            var discardReason in new[]
+            {
+                LinuxShortSpeechDecision.DiscardTooShort,
+                LinuxShortSpeechDecision.DiscardNoSpeech,
+            }
+        )
+        {
+            DictationOrchestrator.ReportShortSpeechDiscardOutcome(
+                discardReason,
+                recordingContext,
+                (_, message) => messages.Add(discardReason, message),
+                (_, _, _, _) => { }
+            );
+        }
+
+        Assert.Equal(
+            Loc.Instance["Overlay.TooShort"],
+            messages[LinuxShortSpeechDecision.DiscardTooShort]
+        );
+        Assert.Equal(
+            Loc.Instance["Overlay.NoSpeech"],
+            messages[LinuxShortSpeechDecision.DiscardNoSpeech]
+        );
+        Assert.NotEqual(
+            messages[LinuxShortSpeechDecision.DiscardTooShort],
+            messages[LinuxShortSpeechDecision.DiscardNoSpeech]
+        );
+    }
+
+    private static RecordingContext NewRecordingContext()
+    {
+        return new RecordingContext(
+            SessionId: 42,
+            RecordingStart: DateTime.UnixEpoch,
+            AppProcess: null,
+            AppTitle: null,
+            AppUrl: null,
+            WindowId: null,
+            Profile: null,
+            RecoveredPartialPreview: string.Empty,
+            StreamingFinalText: null,
+            StreamingFaulted: false,
+            StreamingProviderId: null,
+            StreamingModelId: null,
+            StreamingLanguageSelection: LanguageSelection.Automatic,
+            StreamingLanguageHints: [],
+            CancelToken: CancellationToken.None
+        );
+    }
+
+    private sealed record OutcomeCall(
+        string Kind,
+        RecordingContext Context,
+        string Message,
+        bool? IsError,
+        bool? IsCanceled
+    );
+}

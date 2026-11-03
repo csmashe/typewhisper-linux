@@ -20,8 +20,8 @@ public sealed class RecentTranscriptionStoreTests
                 Id = "same",
                 Timestamp = timestamp.AddSeconds(-1),
                 RawText = "raw",
-                FinalText = "history text"
-            }
+                FinalText = "history text",
+            },
         };
 
         var entries = store.MergedEntries(history, 10);
@@ -29,6 +29,36 @@ public sealed class RecentTranscriptionStoreTests
         Assert.Single(entries);
         Assert.Equal("session text", entries[0].FinalText);
         Assert.Equal(RecentTranscriptionSource.Session, entries[0].Source);
+    }
+
+    [Fact]
+    public void MergedEntries_excludes_failed_records()
+    {
+        var store = new RecentTranscriptionStore();
+        var history = new[]
+        {
+            new TranscriptionRecord
+            {
+                Id = "failed",
+                Timestamp = DateTime.UtcNow,
+                RawText = "raw text",
+                FinalText = "raw text",
+                Status = TranscriptionRecordStatus.ProcessingFailed,
+            },
+            new TranscriptionRecord
+            {
+                Id = "ok",
+                Timestamp = DateTime.UtcNow.AddSeconds(-1),
+                RawText = "raw",
+                FinalText = "clean text",
+            },
+        };
+
+        var entries = store.MergedEntries(history, 10);
+
+        Assert.Single(entries);
+        Assert.Equal("clean text", entries[0].FinalText);
+        Assert.Null(store.LatestEntry([history[0]]));
     }
 
     [Fact]
@@ -72,11 +102,25 @@ public sealed class RecentTranscriptionStoreTests
                 "Browser",
                 "firefox",
                 RecentTranscriptionSource.Session
-            )
+            ),
         };
         var sut = new RecentTranscriptionsPaletteViewModel(entries, _ => { }) { SearchQuery = "firefox" };
 
         Assert.Single(sut.FilteredEntries);
         Assert.Equal("beta note", sut.FilteredEntries[0].FinalText);
+    }
+
+    [Fact]
+    public void PaletteItems_WithTheSameText_HaveDistinctAccessibleNames()
+    {
+        var entries = new[]
+        {
+            new RecentTranscriptionEntry("1", "same note", DateTime.UtcNow, "Editor", "code", RecentTranscriptionSource.Session),
+            new RecentTranscriptionEntry("2", "same note", DateTime.UtcNow, "Browser", "firefox", RecentTranscriptionSource.Session),
+        };
+        var sut = new RecentTranscriptionsPaletteViewModel(entries, _ => { });
+
+        Assert.Equal(2, sut.FilteredEntries.Select(item => item.AccessibleName).Distinct().Count());
+        Assert.All(sut.FilteredEntries, item => Assert.StartsWith("same note, ", item.AccessibleName, StringComparison.Ordinal));
     }
 }

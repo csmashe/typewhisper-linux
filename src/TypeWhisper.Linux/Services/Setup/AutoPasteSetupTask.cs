@@ -43,9 +43,9 @@ public sealed class AutoPasteSetupTask : ISetupTask
     {
         var snapshot = _commands.GetSnapshot();
 
-        // Don't use snapshot.HasAutomaticPasteTool: it counts wtype on Wayland even when
-        // the compositor rejects the virtual-keyboard protocol (GNOME/KDE), and xdotool
-        // only reaches XWayland apps. Require a path that works for native windows.
+        // TextInsertionService.BuildChain and this task use different usable-tool
+        // policies: BuildChain demotes wtype to a fallback when the compositor rejects
+        // it, while this task requires it usable outright; xdotool is excluded on Wayland.
         var autoPasteUsable = IsWayland
             ? snapshot.HasYdotoolAvailable
               || snapshot is { HasWtype: true, CompositorRejectsWtype: false }

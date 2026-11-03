@@ -1,0 +1,9 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  TypeWhisper.PluginSDK -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.PluginSDK/bin/Release/net10.0/TypeWhisper.PluginSDK.dll
+  TypeWhisper.ProcessTestChild -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.ProcessTestChild/bin/Release/net10.0/TypeWhisper.ProcessTestChild.dll
+  TypeWhisper.TranscriptionWorkerProbe -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.TranscriptionWorkerProbe/bin/Release/net10.0/TypeWhisper.TranscriptionWorkerProbe.dll
+  TypeWhisper.Plugin.Webhook -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Webhook/bin/Release/net10.0/TypeWhisper.Plugin.Webhook.dll
+  TypeWhisper.Core -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Core/bin/Release/net10.0/TypeWhisper.Core.dll
+/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/Services/LlmCleanupService.cs(58,33): error CS1501: No overload for method 'Clean' takes 3 arguments [/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/TypeWhisper.Linux.csproj]
+/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/Services/LlmCleanupService.cs(138,18): error CS1501: No overload for method 'Clean' takes 3 arguments [/home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/TypeWhisper.Linux.csproj]

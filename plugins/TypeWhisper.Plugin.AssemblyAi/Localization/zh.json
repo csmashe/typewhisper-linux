@@ -1,0 +1,16 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "AssemblyAI转录和流式传输所必需。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.ModelDescription": "选择AssemblyAI语音模型。Universal-3.5 Pro支持18种语言，Universal-2支持约100种。选择英语、西班牙语、德语、法语、葡萄牙语或意大利语时，实时听写在Universal-3.5 Pro下使用Universal-3.6 Pro Streaming，在Universal-2下使用Universal-Streaming；使用自动检测或其他语言时，Universal-2会在录音结束后转录。",
+  "Settings.UseDictionaryTerms": "将词典词条作为关键词发送",
+  "Settings.UseDictionaryTermsDescription": "让转录偏向你的词典词条，每个词条整体发送（包括逗号）。对于录制的音频以及使用Universal-2的英语实时听写，AssemblyAI会对关键词额外收费；其他实时听写已包含此功能。实时听写最多发送100个词条，每个最长50个字符。关闭后，AssemblyAI不会收到任何词典词条。",
+  "Settings.SpeakerLabels": "标注说话人",
+  "Settings.SpeakerLabelsDescription": "在每段话语开头标注说话人（“Speaker A: …”），并保留话语时间戳。AssemblyAI会额外收费。此选项会关闭实时听写，文本将在录音结束后显示。",
+  "Settings.EnterApiKey": "请先输入API密钥。",
+  "Settings.ApiKeyValid": "API密钥有效。",
+  "Settings.ApiKeyInvalid": "API密钥无效。",
+  "Settings.NotConfiguredApiKeyRequired": "插件未配置。需要API密钥。",
+  "Manifest.Name": "AssemblyAI",
+  "Manifest.Description": "AssemblyAI Universal-3.5 Pro和Universal-2转录引擎"
+}

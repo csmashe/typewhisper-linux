@@ -1,5 +1,9 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Globalization;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -11,8 +15,10 @@ namespace TypeWhisper.Plugin.OpenRouter;
 
 public sealed class OpenRouterPlugin
     : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         ILlmProviderPlugin,
         IPluginSettingsProvider,
+        IModelCatalogProvider,
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://openrouter.ai/api";
@@ -31,34 +37,55 @@ public sealed class OpenRouterPlugin
     private const string LegacyFallbackDefaultLlmModelId = "openai/gpt-4o";
     internal const string DefaultTranscriptionModelId = "openai/whisper-large-v3-turbo";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     private readonly HttpClient _httpClient;
+    private readonly TimeSpan _catalogDeadline;
+    private readonly Lock _catalogLock = new();
+    private long _catalogGeneration;
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedTranscriptionModelId;
-    private string? _selectedLlmModelId;
     private bool _hasUserSelectedLlmModel;
-    private string _temperatureMode = TemperatureModeProviderDefault;
-    private double _temperatureValue = 0.3;
     private List<OpenRouterFetchedModel> _fetchedTranscriptionModels = [];
     private List<OpenRouterFetchedModel> _fetchedModels = [];
     private bool _streamResponses = true;
 
-    private static readonly IReadOnlyList<PluginModelInfo> FallbackTranscriptionModels =
+    // OpenAI speech-to-text documented languages; other upstreams keep automatic detection
+    private static readonly IReadOnlyList<string> s_openAiLanguages =
     [
-        new(DefaultTranscriptionModelId, "OpenAI: Whisper Large V3 Turbo") { IsRecommended = true },
-        new("openai/whisper-large-v3", "OpenAI: Whisper Large V3"),
-        new("openai/whisper-1", "OpenAI: Whisper 1"),
-        new("openai/gpt-4o-mini-transcribe", "OpenAI: GPT-4o Mini Transcribe"),
-        new("openai/gpt-4o-transcribe", "OpenAI: GPT-4o Transcribe"),
-        new("google/chirp-3", "Google: Chirp 3"),
+        "af", "ar", "hy", "az", "be", "bs", "bg", "ca", "zh", "hr", "cs", "da", "nl", "en",
+        "et", "fi", "fr", "gl", "de", "el", "he", "hi", "hu", "is", "id", "it", "ja", "kn",
+        "kk", "ko", "lv", "lt", "mk", "ms", "mi", "mr", "ne", "no", "fa", "pl", "pt", "ro",
+        "ru", "sr", "sk", "sl", "es", "sw", "sv", "tl", "ta", "th", "tr", "uk", "ur", "vi", "cy",
     ];
 
-    private static readonly IReadOnlyList<PluginModelInfo> FallbackModels =
+    private static IReadOnlyList<string> LanguagesFor(string? modelId) => modelId switch
+    {
+        "openai/whisper-large-v3-turbo" or "openai/whisper-large-v3" or "openai/whisper-1"
+            or "openai/gpt-4o-mini-transcribe" or "openai/gpt-4o-transcribe" or "openai/gpt-transcribe"
+            => s_openAiLanguages,
+        _ => [],
+    };
+
+    private static readonly IReadOnlyList<PluginModelInfo> s_fallbackTranscriptionModels =
+    [
+        new(DefaultTranscriptionModelId, "OpenAI: Whisper Large V3 Turbo")
+            { IsRecommended = true, LanguageCount = LanguagesFor(DefaultTranscriptionModelId).Count },
+        new("openai/whisper-large-v3", "OpenAI: Whisper Large V3")
+            { LanguageCount = LanguagesFor("openai/whisper-large-v3").Count },
+        new("openai/whisper-1", "OpenAI: Whisper 1")
+            { LanguageCount = LanguagesFor("openai/whisper-1").Count },
+        new("openai/gpt-4o-mini-transcribe", "OpenAI: GPT-4o Mini Transcribe")
+            { LanguageCount = LanguagesFor("openai/gpt-4o-mini-transcribe").Count },
+        new("openai/gpt-4o-transcribe", "OpenAI: GPT-4o Transcribe")
+            { LanguageCount = LanguagesFor("openai/gpt-4o-transcribe").Count },
+        new("google/chirp-3", "Google: Chirp 3")
+            { LanguageCount = LanguagesFor("google/chirp-3").Count },
+    ];
+
+    private static readonly IReadOnlyList<PluginModelInfo> s_fallbackModels =
     [
         new(DefaultLlmModelId, DefaultLlmModelName) { IsRecommended = true },
         new(LegacyFallbackDefaultLlmModelId, "OpenAI: GPT-4o"),
@@ -67,7 +94,7 @@ public sealed class OpenRouterPlugin
         new("meta-llama/llama-3.3-70b-instruct", "Meta: Llama 3.3 70B"),
     ];
 
-    private static readonly OpenRouterFetchedModel DefaultFetchedModel =
+    private static readonly OpenRouterFetchedModel s_defaultFetchedModel =
         new(DefaultLlmModelId, DefaultLlmModelName, "0", "0");
 
     public OpenRouterPlugin()
@@ -75,30 +102,31 @@ public sealed class OpenRouterPlugin
     {
     }
 
-    internal OpenRouterPlugin(HttpClient httpClient)
+    internal OpenRouterPlugin(HttpClient httpClient, TimeSpan? catalogDeadline = null)
     {
         _httpClient = httpClient;
+        _catalogDeadline = catalogDeadline ?? TimeSpan.FromSeconds(20);
     }
 
     // ITypeWhisperPlugin
 
     public string PluginId => "com.typewhisper.openrouter";
     public string PluginName => "OpenRouter";
-    public string PluginVersion => "1.1.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
+        ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _fetchedTranscriptionModels = NormalizeFetchedTranscriptionModels(
             host.GetSetting<List<OpenRouterFetchedModel>>(FetchedTranscriptionModelsSettingName) ?? []);
-        _selectedTranscriptionModelId = host.GetSetting<string>(SelectedTranscriptionModelSettingName);
+        SelectedModelId = host.GetSetting<string>(SelectedTranscriptionModelSettingName);
         _fetchedModels = NormalizeFetchedModels(
             host.GetSetting<List<OpenRouterFetchedModel>>(FetchedModelsSettingName) ?? []);
-        _selectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
+        SelectedLlmModelId = host.GetSetting<string>(SelectedLlmModelSettingName);
         _hasUserSelectedLlmModel = host.GetSetting<bool?>(UserSelectedLlmModelSettingName) == true;
-        _temperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
-        _temperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
+        TemperatureMode = NormalizeTemperatureMode(host.GetSetting<string>(TemperatureModeSettingName));
+        TemperatureValue = NormalizeTemperatureValue(host.GetSetting<double?>(TemperatureValueSettingName));
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
         NormalizeSelectedTranscriptionModel(persist: true);
         NormalizeSelectedLlmModel(persist: true);
@@ -107,7 +135,11 @@ public sealed class OpenRouterPlugin
 
     public Task DeactivateAsync()
     {
-        _host = null;
+        lock (_catalogLock)
+        {
+            _catalogGeneration++;
+            _host = null;
+        }
         return Task.CompletedTask;
     }
 
@@ -119,19 +151,28 @@ public sealed class OpenRouterPlugin
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels =>
         _fetchedTranscriptionModels.Count > 0
-            ? _fetchedTranscriptionModels.Select(model => new PluginModelInfo(model.Id, model.Name)).ToList()
-            : FallbackTranscriptionModels;
+            ? _fetchedTranscriptionModels.Select(model => new PluginModelInfo(model.Id, model.Name)
+                { LanguageCount = LanguagesFor(model.Id).Count }).ToList()
+            : s_fallbackTranscriptionModels;
 
-    public string? SelectedModelId => _selectedTranscriptionModelId;
+    public string? SelectedModelId { get; private set; }
+    public IReadOnlyList<string> SupportedLanguages => LanguagesFor(SelectedModelId);
+
     public bool SupportsTranslation => false;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public void SelectModel(string modelId)
     {
         if (TranscriptionModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             throw new ArgumentException($"Unknown model: {modelId}");
 
-        _selectedTranscriptionModelId = modelId;
+        if (string.Equals(SelectedModelId, modelId, StringComparison.Ordinal))
+            return;
+
+        SelectedModelId = modelId;
         _host?.SetSetting(SelectedTranscriptionModelSettingName, modelId);
+        _host?.NotifyCapabilitiesChanged();
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -145,29 +186,29 @@ public sealed class OpenRouterPlugin
             throw new InvalidOperationException("OpenRouter STT does not support translation.");
 
         if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
-        var modelId = _selectedTranscriptionModelId ?? TranscriptionModels[0].Id;
+        var modelId = SelectedModelId ?? TranscriptionModels[0].Id;
         return await SendAudioTranscriptionAsync(modelId, wavAudio, NormalizeLanguage(language), ct);
     }
 
     // ILlmProviderPlugin
 
     public string ProviderName => "OpenRouter";
-    public bool IsAvailable => !string.IsNullOrEmpty(_apiKey);
+    public bool IsAvailable => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> SupportedModels =>
         _fetchedModels.Count > 0
             ? _fetchedModels.Select(model => new PluginModelInfo(model.Id, model.Name)).ToList()
-            : FallbackModels;
+            : s_fallbackModels;
 
     public async Task<string> ProcessAsync(string systemPrompt, string userText, string model, CancellationToken ct)
     {
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels[0].Id
+            ? SelectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
         return await SendChatCompletionAsync(modelId, systemPrompt, userText, ct);
@@ -186,34 +227,72 @@ public sealed class OpenRouterPlugin
         }
 
         if (!IsAvailable)
-            throw new InvalidOperationException(Loc.L("Settings.ApiKeyNotConfigured"));
+            throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
         var modelId = string.IsNullOrWhiteSpace(model)
-            ? _selectedLlmModelId ?? SupportedModels[0].Id
+            ? SelectedLlmModelId ?? SupportedModels[0].Id
             : model;
 
         // OpenRouter's batch body emits the same chat.completion shape as the
-        // shared helper: always max_tokens 2048, and temperature only in custom
+        // shared helper: a scaled max_tokens budget, and temperature only in custom
         // mode (provider default otherwise). It sets no extra headers, so the
         // shared streaming helper is a lossless route.
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
             BaseUrl,
-            _apiKey!,
+            ApiKey!,
             modelId,
             systemPrompt,
             userText,
-            ct,
-            maxOutputTokens: 2048,
-            temperature: _temperatureMode == TemperatureModeCustom ? _temperatureValue : (double?)null);
+            new OpenAiChatRequestOptions
+            {
+                ProviderName = "OpenRouter",
+                Temperature = TemperatureMode == TemperatureModeCustom ? TemperatureValue : null,
+            },
+            ct);
 
-        await foreach (var delta in source.WithCancellation(ct))
+        await foreach (var delta in source)
             yield return delta;
     }
 
     // API key / catalog management
 
-    internal string? ApiKey => _apiKey;
+    public async Task RefreshModelCatalogAsync(CancellationToken ct = default)
+    {
+        long generation;
+        lock (_catalogLock)
+            generation = ++_catalogGeneration;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_catalogDeadline);
+        try
+        {
+            // Fetches do not mutate state. WaitAsync also bounds handlers that ignore cancellation.
+            var catalogs = await Task.WhenAll(
+                FetchModelsAsync(deadline.Token), FetchTranscriptionModelsAsync(deadline.Token))
+                .WaitAsync(deadline.Token);
+            lock (_catalogLock)
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                // A newer refresh, key change or deactivation owns the outcome; the caller's
+                // token is still live, so this is not a fault to report.
+                if (generation != _catalogGeneration || _host is null)
+                    return;
+                if (catalogs.All(models => models.Count == 0))
+                    throw new InvalidOperationException("Failed to fetch models from OpenRouter.");
+                if (catalogs[0].Count > 0)
+                    SetFetchedModels(catalogs[0]);
+                if (catalogs[1].Count > 0)
+                    SetFetchedTranscriptionModels(catalogs[1]);
+            }
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException("OpenRouter model discovery timed out.", ex);
+        }
+    }
+
+    internal string? ApiKey { get; private set; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -224,18 +303,25 @@ public sealed class OpenRouterPlugin
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
     internal IReadOnlyList<OpenRouterFetchedModel> FetchedTranscriptionModels => _fetchedTranscriptionModels;
-    internal string? SelectedLlmModelId => _selectedLlmModelId;
+    internal string? SelectedLlmModelId { get; private set; }
+
     internal IReadOnlyList<OpenRouterFetchedModel> FetchedModels => _fetchedModels;
-    internal string TemperatureMode => _temperatureMode;
-    internal double TemperatureValue => _temperatureValue;
+    internal string TemperatureMode { get; private set; } = TemperatureModeProviderDefault;
+
+    internal double TemperatureValue { get; private set; } = 0.3;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
         var normalized = NormalizeApiKey(apiKey);
         var wasAvailable = IsAvailable;
-        var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+        var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
-        _apiKey = normalized;
+        lock (_catalogLock)
+        {
+            if (changed)
+                _catalogGeneration++;
+            ApiKey = normalized;
+        }
         if (_host is not null)
         {
             if (normalized is null)
@@ -273,7 +359,7 @@ public sealed class OpenRouterPlugin
         if (SupportedModels.All(model => !string.Equals(model.Id, modelId, StringComparison.Ordinal)))
             modelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id ?? modelId;
 
-        _selectedLlmModelId = modelId;
+        SelectedLlmModelId = modelId;
         _host?.SetSetting(SelectedLlmModelSettingName, modelId);
         _hasUserSelectedLlmModel = true;
         _host?.SetSetting(UserSelectedLlmModelSettingName, true);
@@ -281,7 +367,10 @@ public sealed class OpenRouterPlugin
 
     internal void SetFetchedModels(List<OpenRouterFetchedModel> models)
     {
-        _fetchedModels = NormalizeFetchedModels(models);
+        var normalized = NormalizeFetchedModels(models);
+        if (_fetchedModels.SequenceEqual(normalized))
+            return;
+        _fetchedModels = normalized;
         _host?.SetSetting(FetchedModelsSettingName, _fetchedModels);
         NormalizeSelectedLlmModel(persist: true);
         _host?.NotifyCapabilitiesChanged();
@@ -289,7 +378,10 @@ public sealed class OpenRouterPlugin
 
     internal void SetFetchedTranscriptionModels(List<OpenRouterFetchedModel> models)
     {
-        _fetchedTranscriptionModels = NormalizeFetchedTranscriptionModels(models);
+        var normalized = NormalizeFetchedTranscriptionModels(models);
+        if (_fetchedTranscriptionModels.SequenceEqual(normalized))
+            return;
+        _fetchedTranscriptionModels = normalized;
         _host?.SetSetting(FetchedTranscriptionModelsSettingName, _fetchedTranscriptionModels);
         NormalizeSelectedTranscriptionModel(persist: true);
         _host?.NotifyCapabilitiesChanged();
@@ -297,21 +389,21 @@ public sealed class OpenRouterPlugin
 
     internal void SetTemperatureMode(string? mode)
     {
-        _temperatureMode = NormalizeTemperatureMode(mode);
-        _host?.SetSetting(TemperatureModeSettingName, _temperatureMode);
+        TemperatureMode = NormalizeTemperatureMode(mode);
+        _host?.SetSetting(TemperatureModeSettingName, TemperatureMode);
     }
 
     internal void SetTemperatureValue(double value)
     {
-        _temperatureValue = NormalizeTemperatureValue(value);
-        _host?.SetSetting(TemperatureValueSettingName, _temperatureValue);
+        TemperatureValue = NormalizeTemperatureValue(value);
+        _host?.SetSetting(TemperatureValueSettingName, TemperatureValue);
     }
 
     internal async Task<List<OpenRouterFetchedModel>> FetchModelsAsync(CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-        if (!string.IsNullOrWhiteSpace(_apiKey))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        if (!string.IsNullOrWhiteSpace(ApiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         try
         {
@@ -320,7 +412,7 @@ public sealed class OpenRouterPlugin
                 return [];
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            var decoded = JsonSerializer.Deserialize<OpenRouterModelsResponse>(json, JsonOptions);
+            var decoded = JsonSerializer.Deserialize<OpenRouterModelsResponse>(json, s_jsonOptions);
 
             // System.Text.Json happily deserializes `{}` or `{"data": null}`
             // into a record whose non-nullable Data field is null — the
@@ -366,8 +458,8 @@ public sealed class OpenRouterPlugin
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"{BaseUrl}/v1/models?output_modalities=transcription");
-        if (!string.IsNullOrWhiteSpace(_apiKey))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        if (!string.IsNullOrWhiteSpace(ApiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         try
         {
@@ -376,7 +468,7 @@ public sealed class OpenRouterPlugin
                 return [];
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            var decoded = JsonSerializer.Deserialize<OpenRouterModelsResponse>(json, JsonOptions);
+            var decoded = JsonSerializer.Deserialize<OpenRouterModelsResponse>(json, s_jsonOptions);
             var data = decoded?.Data ?? [];
 
             var models = data
@@ -411,11 +503,11 @@ public sealed class OpenRouterPlugin
 
     internal async Task<double?> FetchCreditsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return null;
 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/auth/key");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         try
         {
@@ -428,15 +520,16 @@ public sealed class OpenRouterPlugin
             if (!doc.RootElement.TryGetProperty("data", out var data))
                 return null;
 
+            if (TryReadDouble(data, "limit_remaining", out var remaining))
+                return remaining;
+
             if (TryReadDouble(data, "limit", out var limit)
                 && TryReadDouble(data, "usage", out var usage))
             {
                 return limit - usage;
             }
 
-            return TryReadDouble(data, "limit_remaining", out var remaining)
-                ? remaining
-                : null;
+            return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (TaskCanceledException)
@@ -492,50 +585,37 @@ public sealed class OpenRouterPlugin
 
     // Network paths
 
-    private async Task<string> SendChatCompletionAsync(
+    private Task<string> SendChatCompletionAsync(
         string model,
         string systemPrompt,
         string userText,
-        CancellationToken ct)
-    {
-        var body = new Dictionary<string, object?>
-        {
-            ["model"] = model,
-            ["messages"] = new object[]
+        CancellationToken ct) =>
+        OpenAiChatHelper.SendChatCompletionAsync(
+            _httpClient,
+            BaseUrl,
+            ApiKey!,
+            model,
+            systemPrompt,
+            userText,
+            new OpenAiChatRequestOptions
             {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userText },
+                ProviderName = "OpenRouter",
+                Temperature = TemperatureMode == TemperatureModeCustom ? TemperatureValue : null,
             },
-            ["max_tokens"] = 2048,
-        };
+            ct);
 
-        if (_temperatureMode == TemperatureModeCustom)
-            body["temperature"] = _temperatureValue;
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-        request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-
-        var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseChatCompletionResponse(json);
-    }
-
-    private static string ParseChatCompletionResponse(string json)
+    // OpenAI's gpt-* transcribe models accept only json/text; verbose_json is whisper-only there
+    private static bool SupportsVerboseTimestamps(string model)
     {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
+        if (model.Split('/', 2) is not [var provider, var name])
+            return false;
 
-        if (root.TryGetProperty("choices", out var choices)
-            && choices.ValueKind == JsonValueKind.Array
-            && choices.GetArrayLength() > 0
-            && choices[0].TryGetProperty("message", out var message)
-            && message.TryGetProperty("content", out var content))
+        return provider switch
         {
-            return content.GetString()?.Trim() ?? "";
-        }
-
-        return "";
+            "groq" or "together" => true,
+            "openai" => !name.StartsWith("gpt-", StringComparison.Ordinal),
+            _ => false,
+        };
     }
 
     private async Task<PluginTranscriptionResult> SendAudioTranscriptionAsync(
@@ -557,8 +637,14 @@ public sealed class OpenRouterPlugin
         if (!string.IsNullOrWhiteSpace(language))
             body["language"] = language;
 
+        if (SupportsVerboseTimestamps(model))
+        {
+            body["response_format"] = "verbose_json";
+            body["timestamp_granularities"] = new[] { "segment" };
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/audio/transcriptions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
         request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
 
         var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(_httpClient, request, ct);
@@ -587,11 +673,44 @@ public sealed class OpenRouterPlugin
             duration = usageSeconds;
         }
 
-        // OpenRouter's transcription endpoint echoes the *requested* language
-        // (or the model's interpretation of it) rather than a detected ISO code.
-        // Drop it to avoid drifting AppSettings.LastDetectedLanguage on every
-        // request; explicit language selection happens upstream in the orchestrator.
-        return new PluginTranscriptionResult(text, null, duration, null);
+        var segments = ParseSegments(root);
+
+        return new PluginTranscriptionResult(text, null, duration, null) { Segments = segments };
+    }
+
+    private static List<PluginTranscriptionSegment> ParseSegments(JsonElement root)
+    {
+        var segments = new List<PluginTranscriptionSegment>();
+        if (!root.TryGetProperty("segments", out var segmentArray)
+            || segmentArray.ValueKind != JsonValueKind.Array)
+        {
+            return segments;
+        }
+
+        foreach (var segment in segmentArray.EnumerateArray())
+        {
+            if (segment.ValueKind != JsonValueKind.Object
+                || !segment.TryGetProperty("text", out var segmentText)
+                || segmentText.ValueKind != JsonValueKind.String
+                || !segment.TryGetProperty("start", out var startElement)
+                || startElement.ValueKind != JsonValueKind.Number
+                || !startElement.TryGetDouble(out var start) || !double.IsFinite(start) || start < 0
+                || !segment.TryGetProperty("end", out var endElement)
+                || endElement.ValueKind != JsonValueKind.Number
+                || !endElement.TryGetDouble(out var end) || !double.IsFinite(end) || end < start)
+            {
+                continue;
+            }
+
+            segments.Add(new PluginTranscriptionSegment(segmentText.GetString()!, start, end)
+            {
+                NoSpeechProbability = segment.TryGetProperty("no_speech_prob", out var probability)
+                    && probability.ValueKind == JsonValueKind.Number
+                    && probability.TryGetSingle(out var value) ? value : null,
+            });
+        }
+
+        return segments;
     }
 
     // Normalization helpers
@@ -602,15 +721,15 @@ public sealed class OpenRouterPlugin
         if (available.Count == 0)
             return;
 
-        if (_selectedTranscriptionModelId is not null
-            && available.Any(model => string.Equals(model.Id, _selectedTranscriptionModelId, StringComparison.Ordinal)))
+        if (SelectedModelId is not null
+            && available.Any(model => string.Equals(model.Id, SelectedModelId, StringComparison.Ordinal)))
         {
             return;
         }
 
-        _selectedTranscriptionModelId = available[0].Id;
+        SelectedModelId = available[0].Id;
         if (persist)
-            _host?.SetSetting(SelectedTranscriptionModelSettingName, _selectedTranscriptionModelId);
+            _host?.SetSetting(SelectedTranscriptionModelSettingName, SelectedModelId);
     }
 
     private void NormalizeSelectedLlmModel(bool persist)
@@ -630,14 +749,15 @@ public sealed class OpenRouterPlugin
         // review caught this — upstream's verbatim version triggered the
         // migration on any saved selection that predated the new
         // userSelectedLlmModel marker.)
-        if (string.IsNullOrWhiteSpace(_selectedLlmModelId)
-            || string.Equals(_selectedLlmModelId, LegacyFallbackDefaultLlmModelId, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(SelectedLlmModelId)
+            || string.Equals(SelectedLlmModelId, LegacyFallbackDefaultLlmModelId, StringComparison.OrdinalIgnoreCase))
         {
-            _selectedLlmModelId = available[0].Id;
+            SelectedLlmModelId = available[0].Id;
             _hasUserSelectedLlmModel = false;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (persist)
             {
-                _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
+                _host?.SetSetting(SelectedLlmModelSettingName, SelectedLlmModelId);
                 _host?.SetSetting(UserSelectedLlmModelSettingName, false);
             }
             return;
@@ -663,12 +783,12 @@ public sealed class OpenRouterPlugin
         // back to the first available entry but leave the user-selection
         // flag set — the user is still in "I have a preference" mode,
         // we just can't honor their specific pick.
-        if (available.Any(model => string.Equals(model.Id, _selectedLlmModelId, StringComparison.Ordinal)))
+        if (available.Any(model => string.Equals(model.Id, SelectedLlmModelId, StringComparison.Ordinal)))
             return;
 
-        _selectedLlmModelId = available[0].Id;
+        SelectedLlmModelId = available[0].Id;
         if (persist)
-            _host?.SetSetting(SelectedLlmModelSettingName, _selectedLlmModelId);
+            _host?.SetSetting(SelectedLlmModelSettingName, SelectedLlmModelId);
     }
 
     private static List<OpenRouterFetchedModel> NormalizeFetchedModels(IEnumerable<OpenRouterFetchedModel> models)
@@ -683,7 +803,7 @@ public sealed class OpenRouterPlugin
         if (normalized.Count == 0)
             return [];
 
-        return [DefaultFetchedModel, .. normalized];
+        return [s_defaultFetchedModel, .. normalized];
     }
 
     private static List<OpenRouterFetchedModel> NormalizeFetchedTranscriptionModels(IEnumerable<OpenRouterFetchedModel> models) =>
@@ -697,9 +817,7 @@ public sealed class OpenRouterPlugin
         string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
 
     private static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
-            ? null
-            : language.Trim();
+        string.IsNullOrWhiteSpace(language) ? null : language.Trim();
 
     internal static string NormalizeTemperatureMode(string? mode) =>
         string.Equals(mode, TemperatureModeCustom, StringComparison.OrdinalIgnoreCase)
@@ -814,11 +932,11 @@ public sealed class OpenRouterPlugin
         Task.FromResult(
             key switch
             {
-                ApiKeySecretName => _apiKey,
-                SelectedTranscriptionModelSettingName => _selectedTranscriptionModelId,
-                SelectedLlmModelSettingName => _selectedLlmModelId,
-                TemperatureModeSettingName => _temperatureMode,
-                TemperatureValueSettingName => _temperatureValue.ToString(CultureInfo.InvariantCulture),
+                ApiKeySecretName => ApiKey,
+                SelectedTranscriptionModelSettingName => SelectedModelId,
+                SelectedLlmModelSettingName => SelectedLlmModelId,
+                TemperatureModeSettingName => TemperatureMode,
+                TemperatureValueSettingName => TemperatureValue.ToString(CultureInfo.InvariantCulture),
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
                 _ => null,
@@ -875,10 +993,10 @@ public sealed class OpenRouterPlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         if (!valid)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
@@ -909,6 +1027,7 @@ public sealed class OpenRouterPlugin
 
     private sealed record OpenRouterModelsResponse(List<OpenRouterApiModel> Data);
 
+    // ReSharper disable ClassNeverInstantiated.Local -- these records are populated by JSON deserialization of the models response.
     private sealed record OpenRouterApiModel(
         string Id,
         string Name,

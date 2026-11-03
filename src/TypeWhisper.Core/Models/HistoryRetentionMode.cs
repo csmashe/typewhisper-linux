@@ -5,5 +5,5 @@ public enum HistoryRetentionMode
 {
     Duration,
     Forever,
-    UntilAppCloses
+    UntilAppCloses,
 }

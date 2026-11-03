@@ -1,9 +1,12 @@
 {
   "id": "com.typewhisper.webhook",
   "name": "Webhook",
-  "version": "1.0.0",
+  "version": "2.1.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Sends event notifications to a webhook URL",
+  "networkAccess": "userControlled",
+  "categories": ["integration"],
   "assemblyName": "TypeWhisper.Plugin.Webhook.dll",
   "pluginClass": "TypeWhisper.Plugin.Webhook.WebhookPlugin"
 }

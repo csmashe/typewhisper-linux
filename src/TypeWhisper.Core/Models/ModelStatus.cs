@@ -23,7 +23,7 @@ public sealed record ModelStatus
     {
         return new ModelStatus
         {
-            Type = ModelStatusType.Downloading, Progress = progress, BytesPerSecond = bytesPerSecond
+            Type = ModelStatusType.Downloading, Progress = progress, BytesPerSecond = bytesPerSecond,
         };
     }
 

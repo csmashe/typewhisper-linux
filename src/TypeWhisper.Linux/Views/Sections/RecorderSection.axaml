@@ -6,8 +6,8 @@
              x:DataType="vm:RecorderSectionViewModel">
     <UserControl.Styles>
         <Style Selector="Border.section-panel">
-            <Setter Property="Background" Value="#141D26" />
-            <Setter Property="BorderBrush" Value="#1AFFFFFF" />
+            <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Margin" Value="0,0,0,18" />
@@ -22,13 +22,13 @@
         </Style>
         <Style Selector="TextBlock.page-subtitle">
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="TextBlock.section-label">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="#7D8796" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextTertiaryBrush}" />
             <Setter Property="Margin" Value="0,0,0,8" />
         </Style>
         <Style Selector="TextBlock.row-title">
@@ -37,7 +37,7 @@
         </Style>
         <Style Selector="TextBlock.row-hint">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="#8A9AAE" />
+            <Setter Property="Foreground" Value="{DynamicResource TwTextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="0,4,0,0" />
         </Style>
@@ -70,18 +70,24 @@
                                            Classes="row-hint" />
                             </StackPanel>
 
-                            <Button Grid.Column="1"
-                                    Content="{Binding RecordButtonText}"
-                                    Command="{Binding ToggleRecordingCommand}"
-                                    MinWidth="110"
-                                    HorizontalContentAlignment="Center"
-                                    VerticalContentAlignment="Center"
-                                    VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        Spacing="8">
+                                <Button Content="{Binding PauseResumeButtonText}"
+                                        Command="{Binding PauseResumeCommand}"
+                                        IsVisible="{Binding IsSessionActive}" />
+                                <Button Content="{Binding RecordButtonText}"
+                                        Command="{Binding ToggleRecordingCommand}"
+                                        MinWidth="110"
+                                        HorizontalContentAlignment="Center"
+                                        VerticalContentAlignment="Center"
+                                        VerticalAlignment="Center" />
+                            </StackPanel>
                         </Grid>
                     </Border>
 
                     <Border Height="1"
-                            Background="#16FFFFFF"
+                            Background="{DynamicResource TwFillSubtleBrush}"
                             Margin="18,0" />
 
                     <Border Classes="section-row">
@@ -126,13 +132,17 @@
                                                    Margin="0,4,0,0" />
                                         <TextBlock Text="{Binding CreatedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
                                                    FontSize="10"
-                                                   Foreground="#8A9AAE"
+                                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                    Margin="0,2,0,0" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="1"
                                                 Orientation="Horizontal"
                                                 Spacing="8"
                                                 VerticalAlignment="Center">
+                                        <!-- ReSharper disable once Xaml.PossibleNullReferenceException — compiled-binding path is null-safe at runtime; analyzer cannot prove non-null -->
+                                        <Button Content="{Binding PlaybackButtonText}"
+                                                Command="{Binding $parent[ItemsControl].((vm:RecorderSectionViewModel)DataContext).TogglePlaybackCommand}"
+                                                CommandParameter="{Binding}" />
                                         <Button Content="{loc:Str Common.Copy}"
                                                 Click="OnCopyTranscript"
                                                 Tag="{Binding Transcript}"

@@ -1,4 +1,18 @@
 {
   "Manifest.Name": "Memoria de archivos",
-  "Manifest.Description": "Almacenamiento de memoria basado en archivos para los datos extraídos"
+  "Manifest.Description": "Guarda datos en este dispositivo y aporta los que coinciden a las acciones de prompt",
+  "Action.Name": "Recordar en la memoria de archivos",
+  "Action.Stored": "Guardado en la memoria de archivos.",
+  "Action.AlreadyStored": "Ya está en la memoria de archivos.",
+  "Action.Empty": "Nada que recordar: el texto está vacío.",
+  "Collection.Label": "Recuerdos",
+  "Collection.Description": "Datos guardados en este dispositivo, un dato o tema por entrada. Las acciones de prompt recuperan hasta cinco entradas coincidentes cuando la memoria está activada en la configuración avanzada o un perfil selecciona Memoria de archivos. Para guardar texto desde una acción de prompt, establece su destino en «Recordar en la memoria de archivos».",
+  "Collection.DisabledDescription": "Activa Memoria de archivos para ver y editar sus recuerdos.",
+  "Collection.Content": "Recuerdo",
+  "Collection.ContentPlaceholder": "Por ejemplo: el proyecto Aurora usa inglés británico.",
+  "Collection.Add": "Añadir recuerdo",
+  "Collection.Unknown": "Colección de recuerdos desconocida.",
+  "Memory.Empty": "Un recuerdo no puede estar vacío.",
+  "Memory.TooLong": "Un recuerdo puede tener como máximo {0} caracteres.",
+  "Memory.Duplicate": "Dos recuerdos tienen el mismo texto. Elimina o cambia uno de ellos."
 }

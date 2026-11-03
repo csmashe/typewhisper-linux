@@ -1,9 +1,12 @@
 {
   "id": "com.typewhisper.gladia",
   "name": "Gladia",
-  "version": "1.0.0",
+  "version": "1.1.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Gladia speech-to-text transcription engine",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.Gladia.dll",
   "pluginClass": "TypeWhisper.Plugin.Gladia.GladiaPlugin"
 }

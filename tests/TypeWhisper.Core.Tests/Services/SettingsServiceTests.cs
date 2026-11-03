@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.SpokenFormatting;
 
 namespace TypeWhisper.Core.Tests.Services;
 
@@ -10,11 +11,54 @@ public sealed class SettingsServiceTests : IDisposable
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
     private readonly string _filePath;
     private readonly string _tempDir;
+
+    /// <summary>
+    ///     Runs <paramref name="body" /> on <paramref name="participantCount" /> dedicated threads that
+    ///     all start together. Dedicated rather than pooled: a <see cref="Barrier" /> needs every
+    ///     participant running at once, and the thread pool grows past <c>ProcessorCount</c> only slowly.
+    /// </summary>
+    private static void RunConcurrently(int participantCount, Action<int> body)
+    {
+        using var barrier = new Barrier(participantCount);
+        var failures = new List<Exception>();
+        var threads = new Thread[participantCount];
+        for (var i = 0; i < participantCount; i++)
+        {
+            var idx = i;
+            threads[i] = new Thread(() =>
+            {
+                try
+                {
+                    // ReSharper disable once AccessToDisposedClosure -- disposed only after every thread is joined below.
+                    barrier.SignalAndWait();
+                    body(idx);
+                }
+                catch (Exception ex)
+                {
+                    lock (failures)
+                    {
+                        failures.Add(ex);
+                    }
+                }
+            }) { IsBackground = true };
+            threads[i].Start();
+        }
+
+        foreach (var thread in threads)
+        {
+            thread.Join();
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException(failures);
+        }
+    }
 
     public SettingsServiceTests()
     {
@@ -36,6 +80,316 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void CrashReporting_DefaultsOff_AndRoundTripsOptIn()
+    {
+        var settings = new SettingsService(_filePath);
+        Assert.False(AppSettings.Default.CrashReportingEnabled);
+        Assert.False(settings.Current.CrashReportingEnabled);
+        settings.Save(AppSettings.Default with { CrashReportingEnabled = true });
+        Assert.True(new SettingsService(_filePath).Current.CrashReportingEnabled);
+        Assert.Contains("\"crashReportingEnabled\": true", File.ReadAllText(_filePath));
+    }
+
+    [Fact]
+    public void InterfaceTheme_DefaultsDarkForExistingFiles_AndRoundTrips()
+    {
+        Assert.Equal(InterfaceTheme.Dark, new SettingsService(_filePath).Current.InterfaceTheme);
+        File.WriteAllText(_filePath, "{\"uiLanguage\":\"de\"}");
+        Assert.Equal(InterfaceTheme.Dark, new SettingsService(_filePath).Current.InterfaceTheme);
+
+        new SettingsService(_filePath).Save(AppSettings.Default with { InterfaceTheme = InterfaceTheme.Light });
+
+        Assert.Equal(InterfaceTheme.Light, new SettingsService(_filePath).Current.InterfaceTheme);
+    }
+
+    [Fact]
+    public void DiagnosticLog_DefaultsOff_AndUnofferedRetentionFallsBackToSevenDays()
+    {
+        Assert.False(new SettingsService(_filePath).Current.DiagnosticLogEnabled);
+        File.WriteAllText(_filePath, "{\"diagnosticLogEnabled\":true,\"diagnosticLogRetentionDays\":999}");
+        var loaded = new SettingsService(_filePath).Current;
+        Assert.True(loaded.DiagnosticLogEnabled);
+        Assert.Equal(7, loaded.DiagnosticLogRetentionDays);
+
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { DiagnosticLogRetentionDays = 14 });
+        Assert.Equal(14, new SettingsService(_filePath).Current.DiagnosticLogRetentionDays);
+    }
+
+    [Fact]
+    public void LiveTextWindow_DefaultsAttached_AndLoadClampsSizeAndRoundTripsPosition()
+    {
+        var defaults = new SettingsService(_filePath).Current;
+        Assert.False(defaults.LiveTextFloating);
+        Assert.Null(defaults.LiveTextWindowLeft);
+        Assert.Equal(AppSettings.DefaultLiveTextWindowWidth, defaults.LiveTextWindowWidth);
+
+        File.WriteAllText(_filePath,
+            "{\"liveTextFloating\":true,\"liveTextWindowLeft\":-50.5,\"liveTextWindowTop\":30,"
+            + "\"liveTextWindowWidth\":10,\"liveTextWindowHeight\":99999}");
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.True(loaded.LiveTextFloating);
+        Assert.Equal(-50.5, loaded.LiveTextWindowLeft);
+        Assert.Equal(30, loaded.LiveTextWindowTop);
+        Assert.Equal(AppSettings.MinLiveTextWindowWidth, loaded.LiveTextWindowWidth);
+        Assert.Equal(AppSettings.MaxLiveTextWindowHeight, loaded.LiveTextWindowHeight);
+    }
+
+    [Fact]
+    public void Save_DropsNonFiniteLiveTextWindowPosition()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { LiveTextWindowLeft = double.NaN, LiveTextWindowTop = double.PositiveInfinity });
+
+        Assert.Null(sut.Current.LiveTextWindowLeft);
+        Assert.Null(sut.Current.LiveTextWindowTop);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    public void Load_NullSpokenFormattingProfiles_IsEmpty(string profiles)
+    {
+        File.WriteAllText(_filePath, "{\"spokenFormattingProfiles\":" + profiles + "}");
+        Assert.Empty(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+    }
+
+    [Fact]
+    public void Load_NormalizesSpokenFormattingProfiles()
+    {
+        File.WriteAllText(_filePath, """
+            {"spokenFormattingProfiles":[
+                {"engineId":" engine ","modelId":" model ","languageCode":"en-US","strategyOverrideRaw":"AUTOMATIC"},
+                {"engineId":"engine","modelId":"model","languageCode":"en","strategyOverrideRaw":"future","verificationStateRaw":"futureState"}
+            ]}
+            """);
+        var profile = Assert.Single(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("future", profile.StrategyOverrideRaw);
+        Assert.Equal("futureState", profile.VerificationStateRaw);
+    }
+
+    [Fact]
+    public void Save_NormalizesSpokenFormattingProfiles()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with
+        {
+            SpokenFormattingProfiles = [new DictationSpokenFormattingProfile
+            {
+                EngineId = " engine ", ModelId = " model ", LanguageCode = "en-US", StrategyOverrideRaw = "AUTOMATIC",
+            }],
+        });
+
+        var profile = Assert.Single(sut.Current.SpokenFormattingProfiles);
+        Assert.Equal("engine", profile.EngineId);
+        Assert.Equal("model", profile.ModelId);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("automatic", profile.StrategyOverrideRaw);
+        Assert.Equal(profile, new SpokenFormattingProfileStore(sut).Profile("engine", "model", "en-GB"));
+    }
+
+    [Fact]
+    public void Update_NormalizesSpokenFormattingProfiles()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Update(current => current with
+        {
+            SpokenFormattingProfiles = [new DictationSpokenFormattingProfile
+            {
+                EngineId = " engine ", ModelId = " model ", LanguageCode = "en-US", StrategyOverrideRaw = "AUTOMATIC",
+            }],
+        });
+
+        var profile = Assert.Single(sut.Current.SpokenFormattingProfiles);
+        Assert.Equal("engine", profile.EngineId);
+        Assert.Equal("model", profile.ModelId);
+        Assert.Equal("en", profile.LanguageCode);
+        Assert.Equal("automatic", profile.StrategyOverrideRaw);
+        Assert.Equal(profile, new SpokenFormattingProfileStore(sut).Profile("engine", "model", "en-GB"));
+    }
+
+    [Fact]
+    public void Load_NullVerificationStateRaw_IsUnknown()
+    {
+        File.WriteAllText(_filePath, """
+            {"spokenFormattingProfiles":[
+                {"engineId":"engine","modelId":"model","languageCode":"en","verificationStateRaw":null}
+            ]}
+            """);
+
+        var profile = Assert.Single(new SettingsService(_filePath).Current.SpokenFormattingProfiles);
+        Assert.Equal("unknown", profile.VerificationStateRaw);
+    }
+
+    [Fact]
+    public void Load_LegacyLanguage_MigratesToSingleHint()
+    {
+        File.WriteAllText(_filePath, """
+        {
+          "language": "de"
+        }
+        """);
+
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.Equal(["de"], loaded.LanguageHints);
+        Assert.Equal("de", loaded.Language);
+    }
+
+    [Fact]
+    public void SaveAndLoad_NormalizesOrderedLanguageHints()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with
+        {
+            LanguageHints = [" de ", "en", "DE", "", "auto"],
+        });
+
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.Equal(["de", "en"], loaded.LanguageHints);
+        Assert.Equal("de", loaded.Language);
+    }
+
+    [Fact]
+    public void Load_NullLanguageHints_TreatsThemAsAbsent()
+    {
+        File.WriteAllText(_filePath, """{"language":"de","languageHints":null}""");
+        var loaded = new SettingsService(_filePath).Current;
+        Assert.Equal("de", loaded.Language);
+        Assert.Equal(["de"], loaded.LanguageHints);
+    }
+
+    [Fact]
+    public void Load_LegacyAutoLanguage_LeavesHintsEmpty()
+    {
+        File.WriteAllText(_filePath, """{"language":"auto"}""");
+        var loaded = new SettingsService(_filePath).Current;
+        Assert.Empty(loaded.LanguageHints);
+        Assert.Equal("auto", loaded.Language);
+    }
+
+    [Fact]
+    public void SaveAndLoad_LanguageWithEmptyHints_SurvivesReload()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { Language = "de" });
+
+        var loaded = new SettingsService(_filePath).Current;
+
+        Assert.Equal("de", loaded.Language);
+        Assert.Equal(["de"], loaded.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_LanguageChange_RewritesFirstHintAndKeepsTail()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { Language = "fr" });
+
+        Assert.Equal("fr", updated.Language);
+        Assert.Equal(["fr", "en"], updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_LanguageChangeToTailEntry_DropsTheDuplicate()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { Language = "en" });
+
+        Assert.Equal(["en"], updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_LanguageChangeToAuto_ClearsHints()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { Language = "auto" });
+
+        Assert.Equal("auto", updated.Language);
+        Assert.Empty(updated.LanguageHints);
+        Assert.Empty(new SettingsService(_filePath).Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_WithLanguageHintsEmpty_ResetsToAuto()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de"]));
+
+        var updated = sut.Update(current => current.WithLanguageHints([]));
+
+        Assert.Equal("auto", updated.Language);
+        Assert.Empty(updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_HintsEmptiedBesideAnExplicitLanguage_KeepsThatLanguage()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { LanguageHints = [] });
+
+        Assert.Equal("de", updated.Language);
+        Assert.Equal(["de"], updated.LanguageHints);
+    }
+
+    [Fact]
+    public void Save_FullObjectWithHints_UsesThoseHintsWhateverCameBefore()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { Language = "de" });
+
+        sut.Save(AppSettings.Default with { LanguageHints = ["fr", "en"] });
+
+        Assert.Equal("fr", sut.Current.Language);
+        Assert.Equal(["fr", "en"], sut.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Save_SameHintsTwice_KeepsThem()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { LanguageHints = ["de", "en"] });
+        sut.Save(AppSettings.Default with { LanguageHints = ["de", "en"] });
+
+        Assert.Equal("de", sut.Current.Language);
+        Assert.Equal(["de", "en"], sut.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Save_SameExplicitLanguageTwice_KeepsIt()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default with { Language = "de" });
+        sut.Save(AppSettings.Default with { Language = "de" });
+
+        Assert.Equal("de", sut.Current.Language);
+        Assert.Equal(["de"], sut.Current.LanguageHints);
+    }
+
+    [Fact]
+    public void Update_HintsChange_MirrorsLanguage()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default.WithLanguageHints(["de", "en"]));
+
+        var updated = sut.Update(current => current with { LanguageHints = ["fr", "de"] });
+
+        Assert.Equal("fr", updated.Language);
+        Assert.Equal(["fr", "de"], updated.LanguageHints);
+    }
+
+    [Fact]
     public void Load_NoFile_ReturnsDefaults()
     {
         var sut = new SettingsService(_filePath);
@@ -48,34 +402,46 @@ public sealed class SettingsServiceTests : IDisposable
     public void SaveAndLoad_RoundTrips()
     {
         var sut = new SettingsService(_filePath);
+        Assert.True(sut.Current.AcousticVocabularyBoostingEnabled);
         var settings = AppSettings.Default with
         {
             Language = "de",
+            LanguageHints = ["de", "en"],
             HasCompletedOnboarding = true,
             VocabularyBoostingEnabled = true,
+            AcousticVocabularyBoostingEnabled = false,
             AutoAddDictionaryCorrections = true,
             CleanupLevel = CleanupLevel.Light,
+            EnglishOutputVariant = EnglishOutputVariant.UnitedStates,
+            GermanOutputVariant = GermanOutputVariant.Switzerland,
+            ShortUtterancePunctuationEnabled = false,
             PreviewBubbleAutoHideMilliseconds = 3750,
             OverlayCustomLeft = 123.5,
             OverlayCustomTop = 87.25,
             SelectedIndustryPresetId = "real-estate",
             LocalModelAcceleration = AppSettings.LocalModelAccelerationNvidiaCuda,
             LiveTranscriptionStreamingEnabled = true,
+            LockPasteToFocusedField = true,
             AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
             {
                 ["kitty"] = TextInsertionStrategy.DirectTyping,
-                ["firefox"] = TextInsertionStrategy.ClipboardPaste
-            }
+                ["firefox"] = TextInsertionStrategy.ClipboardPaste,
+            },
         };
 
         sut.Save(settings);
 
         var sut2 = new SettingsService(_filePath);
         Assert.Equal("de", sut2.Current.Language);
+        Assert.Equal(["de", "en"], sut2.Current.LanguageHints);
         Assert.True(sut2.Current.HasCompletedOnboarding);
         Assert.True(sut2.Current.VocabularyBoostingEnabled);
+        Assert.False(sut2.Current.AcousticVocabularyBoostingEnabled);
         Assert.True(sut2.Current.AutoAddDictionaryCorrections);
         Assert.Equal(CleanupLevel.Light, sut2.Current.CleanupLevel);
+        Assert.Equal(EnglishOutputVariant.UnitedStates, sut2.Current.EnglishOutputVariant);
+        Assert.Equal(GermanOutputVariant.Switzerland, sut2.Current.GermanOutputVariant);
+        Assert.False(sut2.Current.ShortUtterancePunctuationEnabled);
         Assert.Equal(3750, sut2.Current.PreviewBubbleAutoHideMilliseconds);
         Assert.Equal(123.5, sut2.Current.OverlayCustomLeft);
         Assert.Equal(87.25, sut2.Current.OverlayCustomTop);
@@ -85,6 +451,7 @@ public sealed class SettingsServiceTests : IDisposable
             sut2.Current.LocalModelAcceleration
         );
         Assert.True(sut2.Current.LiveTranscriptionStreamingEnabled);
+        Assert.True(sut2.Current.LockPasteToFocusedField);
         Assert.Equal(
             TextInsertionStrategy.DirectTyping,
             sut2.Current.AppInsertionStrategies["kitty"]
@@ -124,7 +491,7 @@ public sealed class SettingsServiceTests : IDisposable
     [Fact]
     public void Load_CorruptPrimary_FallsBackToBackup()
     {
-        var backup = AppSettings.Default with { Language = "de", HasCompletedOnboarding = true };
+        var backup = AppSettings.Default.WithLanguageHints(["de"]) with { HasCompletedOnboarding = true };
         var json = JsonSerializer.Serialize(backup, s_jsonOptions);
         File.WriteAllText(_filePath + ".bak", json);
         File.WriteAllText(_filePath, "{{not valid json!!");
@@ -176,6 +543,242 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Save_WhileASubscriberIsStillDelivering_SerializesPublicationInCommitOrder()
+    {
+        var sut = new SettingsService(_filePath);
+        var firstDelivering = new ManualResetEventSlim();
+        var releaseFirst = new ManualResetEventSlim();
+        var received = new List<string?>();
+        var blockFirstDelivery = true;
+
+        sut.SettingsChanged += s =>
+        {
+            lock (received)
+            {
+                received.Add(s.Language);
+            }
+
+            if (!blockFirstDelivery)
+            {
+                return;
+            }
+
+            blockFirstDelivery = false;
+            firstDelivering.Set();
+            releaseFirst.Wait(TimeSpan.FromSeconds(5));
+        };
+
+        var writerA = new Thread(() => sut.Save(AppSettings.Default with { Language = "a" }))
+        {
+            IsBackground = true,
+        };
+        writerA.Start();
+        Assert.True(firstDelivering.Wait(TimeSpan.FromSeconds(5)));
+
+        var writerB = new Thread(() => sut.Save(AppSettings.Default with { Language = "b" }))
+        {
+            IsBackground = true,
+        };
+        writerB.Start();
+
+        // B hands its snapshot to the active drainer rather than blocking behind a slow
+        // subscriber. What it must NOT do is announce "b" while A is still delivering "a" — a
+        // subscriber would see the newer value first. Publishing inline fails right here.
+        Assert.True(writerB.Join(TimeSpan.FromSeconds(5)));
+        lock (received)
+        {
+            Assert.Equal(["a"], received);
+        }
+
+        releaseFirst.Set();
+        Assert.True(writerA.Join(TimeSpan.FromSeconds(5)));
+
+        // A's drainer picks up B's queued snapshot before it returns.
+        lock (received)
+        {
+            Assert.Equal(["a", "b"], received);
+        }
+
+        Assert.Equal("b", sut.Current.Language);
+    }
+
+    [Fact]
+    public void Save_ConcurrentCalls_DeliverEveryCommitExactlyOnce()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default);
+
+        const int writers = 16;
+        const int savesPerWriter = 20;
+        var received = 0;
+        // ReSharper disable once AccessToModifiedClosure -- the handler increments the captured counter from many threads (Interlocked); it is read only after every writer has joined.
+        sut.SettingsChanged += _ => Interlocked.Increment(ref received);
+
+        RunConcurrently(
+            writers,
+            idx =>
+            {
+                for (var i = 0; i < savesPerWriter; i++)
+                {
+                    sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}-{i}" });
+                }
+            }
+        );
+
+        // Once every writer has returned no drainer can still be active, so the queue must have
+        // been fully delivered. Asserts that invariant rather than reproducing the narrow resign
+        // race, which needs an interleaving too tight to force without a production seam.
+        Assert.Equal(writers * savesPerWriter, Volatile.Read(ref received));
+    }
+
+    [Fact]
+    public void Save_FromInsideASubscriber_DeliversNestedCommitAfterTheCurrentOne()
+    {
+        var sut = new SettingsService(_filePath);
+        var received = new List<string?>();
+        var reentered = false;
+
+        sut.SettingsChanged += s =>
+        {
+            lock (received)
+            {
+                received.Add(s.Language);
+            }
+
+            if (reentered || s.Language != "a")
+            {
+                return;
+            }
+
+            // Re-entrant save from inside a handler: it must queue, not recurse and deliver "b"
+            // to the remaining subscribers before "a" has finished going out.
+            reentered = true;
+            sut.Save(AppSettings.Default with { Language = "b" });
+
+            lock (received)
+            {
+                Assert.Equal(["a"], received);
+            }
+        };
+
+        sut.Save(AppSettings.Default with { Language = "a" });
+
+        lock (received)
+        {
+            Assert.Equal(["a", "b"], received);
+        }
+    }
+
+    [Fact]
+    public void Save_ConcurrentCalls_DoNotThrow()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default); // ensure the primary file exists before racing
+
+        var exception = Record.Exception(() =>
+            RunConcurrently(
+                24,
+                idx => sut.Save(AppSettings.Default with { CommandKeyphrase = $"phrase-{idx}" })
+            )
+        );
+
+        Assert.Null(exception);
+
+        // Reload must see a fully-formed, non-torn snapshot (a corrupted temp/primary file would
+        // silently fall back to AppSettings.Default inside SettingsService.Load()).
+        var reloaded = new SettingsService(_filePath);
+        Assert.StartsWith("phrase-", reloaded.Current.CommandKeyphrase);
+    }
+
+    [Fact]
+    public void Update_ConcurrentDisjointMutations_AllSurvive()
+    {
+        var sut = new SettingsService(_filePath);
+        sut.Save(AppSettings.Default);
+
+        const int taskCount = 20;
+        RunConcurrently(
+            taskCount,
+            idx => sut.Update(current => current with
+            {
+                AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>(
+                    current.AppInsertionStrategies,
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    [$"app{idx}"] = TextInsertionStrategy.DirectTyping,
+                },
+            })
+        );
+
+        var reloaded = new SettingsService(_filePath);
+        for (var i = 0; i < taskCount; i++)
+        {
+            Assert.True(
+                reloaded.Current.AppInsertionStrategies.ContainsKey($"app{i}"),
+                $"app{i} was lost — Update did not read the latest Current under the write lock.");
+        }
+    }
+
+    [Fact]
+    public async Task Update_GatedTwoWriters_SerializesDelegatesAndPersistsBothChanges()
+    {
+        var sut = new SettingsService(_filePath);
+        var timeout = TimeSpan.FromSeconds(5);
+        var writerAEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseWriterA = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerBAttempting = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerBEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writerARuns = 0;
+        string? writerBSawLanguage = null;
+
+        var writerA = Task.Run(() =>
+            sut.Update(current =>
+            {
+                // ReSharper disable once AccessToModifiedClosure -- the counter is deliberately shared with the outer scope (Interlocked-written here, Volatile-read after both writers complete).
+                Interlocked.Increment(ref writerARuns);
+                writerAEntered.TrySetResult(true);
+                releaseWriterA.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                return current.WithLanguageHints(["writer-a"]);
+            })
+        );
+
+        await writerAEntered.Task.WaitAsync(timeout);
+        var writerB = Task.Run(() =>
+        {
+            writerBAttempting.TrySetResult(true);
+            return sut.Update(current =>
+            {
+                writerBEntered.TrySetResult(true);
+                writerBSawLanguage = current.Language;
+                return current with { HasCompletedOnboarding = true };
+            });
+        });
+
+        await writerBAttempting.Task.WaitAsync(timeout);
+        var writerBInterleaved = writerBEntered.Task.IsCompleted;
+        releaseWriterA.TrySetResult(true);
+        await Task.WhenAll(writerA, writerB).WaitAsync(timeout);
+
+        Assert.False(writerBInterleaved);
+        Assert.Equal(1, Volatile.Read(ref writerARuns));
+        Assert.Equal("writer-a", writerBSawLanguage);
+        Assert.Equal("writer-a", sut.Current.Language);
+        Assert.True(sut.Current.HasCompletedOnboarding);
+
+        var reloaded = new SettingsService(_filePath);
+        Assert.Equal("writer-a", reloaded.Current.Language);
+        Assert.True(reloaded.Current.HasCompletedOnboarding);
+    }
+
+    [Fact]
     public void Load_LegacyHistoryRetentionDays_MigratesToMinutes()
     {
         File.WriteAllText(
@@ -220,7 +823,7 @@ public sealed class SettingsServiceTests : IDisposable
             AppSettings.Default with
             {
                 HistoryRetentionMode = HistoryRetentionMode.Duration,
-                HistoryRetentionMinutes = 60
+                HistoryRetentionMinutes = 60,
             }
         );
 
@@ -237,7 +840,7 @@ public sealed class SettingsServiceTests : IDisposable
         sut.Save(
             AppSettings.Default with
             {
-                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses
+                HistoryRetentionMode = HistoryRetentionMode.UntilAppCloses,
             }
         );
 

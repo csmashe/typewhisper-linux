@@ -4,11 +4,17 @@
 namespace TypeWhisper.PluginSDK;
 
 /// <summary>
-/// Optional capability expansion for plugins that expose additional transcription engine roles.
+///     Optional capability expansion for plugins that expose additional transcription-engine
+///     roles. The parent plugin owns every returned role's lifetime; the host never activates,
+///     deactivates, or disposes returned objects.
 /// </summary>
 // ReSharper disable once UnusedType.Global
 public interface IAdditionalTranscriptionEnginesProvider
 {
-    /// <summary>Additional transcription engine roles exposed by this plugin.</summary>
-    IReadOnlyList<ITranscriptionEnginePlugin> AdditionalTranscriptionEngines { get; }
+    /// <summary>
+    ///     Additional transcription-engine roles exposed by this plugin. Returned role
+    ///     instances MUST be stable across calls so capability-index rebuilds reuse the
+    ///     same objects.
+    /// </summary>
+    IReadOnlyList<ITranscriptionEngineRole> AdditionalTranscriptionEngines { get; }
 }

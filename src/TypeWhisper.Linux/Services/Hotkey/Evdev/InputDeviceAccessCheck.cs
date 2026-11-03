@@ -13,10 +13,9 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 ///         both logind (uaccess) and non-logind (group) systems.
 ///     </para>
 ///     <para>
-///         Probing is cheap: <see cref="KeyboardDeviceDiscovery.EnumerateKeyboards" />
-///         already opens each candidate node to read its capability bits, so a
-///         non-empty result implies at least one keyboard was openable. We
-///         re-probe explicitly here so the intent reads clearly at call sites.
+///         <see cref="KeyboardDeviceDiscovery.EnumerateKeyboards" /> filters with
+///         access(2), which an LSM or revoked device can still contradict, so this
+///         confirms with a real open — usually of just the first node.
 ///     </para>
 /// </summary>
 public static class InputDeviceAccessCheck

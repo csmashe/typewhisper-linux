@@ -1,0 +1,18 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Soniox转录需要此项。",
+  "Settings.ApiKeyRequired": "需要API密钥。",
+  "Settings.ApiKeyInvalid": "无法验证Soniox API密钥。",
+  "Settings.Region": "数据区域",
+  "Settings.RegionDescription": "Soniox会将音频保存在签发API密钥的项目所在区域。测试密钥时会切换到接受该密钥的区域。",
+  "Settings.RegionUs": "美国",
+  "Settings.RegionEu": "欧盟",
+  "Settings.RegionJp": "日本",
+  "Settings.RegionIn": "印度",
+  "Settings.ApiKeyValidRegion": "Soniox API密钥有效（{0}）。",
+  "Settings.ApiKeyValidRegionSwitched": "Soniox API密钥有效。区域已切换为{0}。",
+  "Settings.SettingsChangedDuringProbe": "测试密钥期间设置已更改。请重新验证。",
+  "Settings.NotConfiguredApiKeyRequired": "插件未配置。需要API密钥。",
+  "Manifest.Name": "Soniox",
+  "Manifest.Description": "Soniox语音转文字转录引擎"
+}

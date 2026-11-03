@@ -1,4 +1,18 @@
 {
   "Manifest.Name": "Dateispeicher",
-  "Manifest.Description": "Dateibasierter Speicher für extrahierte Fakten"
+  "Manifest.Description": "Speichert Fakten auf diesem Gerät und liefert passende an Prompt-Aktionen",
+  "Action.Name": "Im Dateispeicher merken",
+  "Action.Stored": "Im Dateispeicher gespeichert.",
+  "Action.AlreadyStored": "Bereits im Dateispeicher vorhanden.",
+  "Action.Empty": "Nichts zu merken: Der Text ist leer.",
+  "Collection.Label": "Erinnerungen",
+  "Collection.Description": "Auf diesem Gerät gespeicherte Fakten, ein Fakt oder Thema pro Eintrag. Prompt-Aktionen rufen bis zu fünf passende Einträge ab, wenn das Gedächtnis in den erweiterten Einstellungen aktiv ist oder ein Profil den Dateispeicher auswählt. Um Text aus einer Prompt-Aktion zu speichern, setzen Sie ihr Aktionsziel auf „Im Dateispeicher merken“.",
+  "Collection.DisabledDescription": "Aktivieren Sie den Dateispeicher, um seine Erinnerungen anzuzeigen und zu bearbeiten.",
+  "Collection.Content": "Erinnerung",
+  "Collection.ContentPlaceholder": "Zum Beispiel: Projekt Aurora verwendet britisches Englisch.",
+  "Collection.Add": "Erinnerung hinzufügen",
+  "Collection.Unknown": "Unbekannte Erinnerungssammlung.",
+  "Memory.Empty": "Eine Erinnerung darf nicht leer sein.",
+  "Memory.TooLong": "Eine Erinnerung darf höchstens {0} Zeichen lang sein.",
+  "Memory.Duplicate": "Zwei Erinnerungen haben denselben Text. Entfernen oder ändern Sie eine davon."
 }

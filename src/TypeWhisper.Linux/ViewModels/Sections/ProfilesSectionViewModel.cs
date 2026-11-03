@@ -1,3 +1,5 @@
+// ReSharper disable ArrangeObjectCreationWhenTypeNotEvident -- target-typed `new(...)` inside collection
+// expressions and record construction is the prevailing style across this codebase.
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -29,7 +31,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly PluginManager _pluginManager;
     private readonly IProfileService _profiles;
     private readonly IPromptActionService _promptActions;
+    private readonly HotkeyService _hotkeys;
+    private readonly UiOperationGuard _uiOperations;
     private readonly DispatcherTimer _windowTimer;
+    private bool _isWindowUpdateInProgress;
+    private int _liveContextActivationCount;
+    private CancellationTokenSource? _liveContextCts;
+    private int _liveContextGeneration;
 
     [ObservableProperty]
     private string? _browserAccessibilityStatusMessage;
@@ -64,6 +72,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private bool? _editDeveloperFormattingOverride;
 
     [ObservableProperty]
+    private ProfileContextMatchMode _editContextMatchMode = ProfileContextMatchMode.All;
+
+    [ObservableProperty]
     private bool? _editScreenContextOverride;
 
     [ObservableProperty]
@@ -71,6 +82,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string? _editHotkeyData;
+
+    [ObservableProperty]
+    private string? _hotkeyValidationMessage;
 
     [ObservableProperty]
     private bool _editIsEnabled = true;
@@ -89,6 +103,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string? _editPromptActionId;
+
+    [ObservableProperty]
+    private string? _editMemorySourceId;
 
     [ObservableProperty]
     private ProfileStylePreset _editStylePreset = ProfileStylePreset.Raw;
@@ -132,31 +149,43 @@ public partial class ProfilesSectionViewModel : ObservableObject
         IActiveWindowService activeWindow,
         PluginManager pluginManager,
         IPromptActionService promptActions,
+        HotkeyService hotkeys,
         IDetectionFailureTracker failureTracker,
         GnomeWindowCallsSetupHelper gnomeSetup,
-        BrowserAccessibilitySetupHelper browserSetup
+        BrowserAccessibilitySetupHelper browserSetup,
+        UiOperationGuard uiOperations
     )
     {
         _profiles = profiles;
         _activeWindow = activeWindow;
         _pluginManager = pluginManager;
         _promptActions = promptActions;
+        _hotkeys = hotkeys;
         _failureTracker = failureTracker;
         _gnomeSetup = gnomeSetup;
         _browserSetup = browserSetup;
+        _uiOperations = uiOperations;
         RefreshBrowserAccessibilityStatus();
 
         _profiles.ProfilesChanged += () => Dispatcher.UIThread.Post(RefreshProfiles);
         _pluginManager.PluginStateChanged += (_, _) =>
-            Dispatcher.UIThread.Post(RefreshModelOptions);
+            Dispatcher.UIThread.Post(() =>
+            {
+                RefreshModelOptions();
+                RefreshMemorySourceOptions();
+            });
         _promptActions.ActionsChanged += () => Dispatcher.UIThread.Post(RefreshPromptActionOptions);
         UrlPatternChips.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
+            OnPropertyChanged(nameof(IsContextMatchModeVisible));
             OnPropertyChanged(nameof(IsGlobalFallbackProfile));
         };
         ProcessNameChips.CollectionChanged += (_, _) =>
+        {
             OnPropertyChanged(nameof(IsGlobalFallbackProfile));
+            OnPropertyChanged(nameof(IsContextMatchModeVisible));
+        };
         _failureTracker.OnFailure += (_, e) =>
         {
             if (!e.ShouldShowPersistentBanner)
@@ -174,6 +203,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         RefreshModelOptions();
         RefreshPromptActionOptions();
+        RefreshMemorySourceOptions();
+        RefreshLanguageOptions();
         foreach (var option in TranslationModelInfo.ProfileTargetOptions)
         {
             TranslationTargetOptions.Add(option);
@@ -182,42 +213,31 @@ public partial class ProfilesSectionViewModel : ObservableObject
         RefreshProfiles();
 
         _windowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _windowTimer.Tick += (_, _) => UpdateCurrentWindow();
-        UpdateCurrentWindow();
-        _windowTimer.Start();
+        _windowTimer.Tick += (_, _) => StartCurrentWindowUpdate();
+        Loc.Instance.LanguageChanged += OnInterfaceLanguageChanged;
     }
 
     public ObservableCollection<Profile> Profiles { get; } = [];
     public ObservableCollection<ProfileModelOption> ModelOptions { get; } = [];
     public ObservableCollection<PromptActionOption> PromptActionOptions { get; } = [];
+    public ObservableCollection<MemorySourceOption> MemorySourceOptions { get; } = [];
     public ObservableCollection<TranslationTargetOption> TranslationTargetOptions { get; } = [];
+    public ObservableCollection<ProfileLanguageOption> LanguageOptions { get; } = [];
+
+    internal Task CurrentWindowUpdateTask { get; private set; } = Task.CompletedTask;
+    internal bool IsLiveContextActive => _liveContextActivationCount > 0;
 
     public ObservableCollection<ProfileStylePresetOption> StylePresetOptions { get; } =
-    [
-        new(ProfileStylePreset.Raw, Loc.Instance["Profiles.StylePresetRaw"]),
-        new(ProfileStylePreset.Clean, Loc.Instance["Profiles.StylePresetClean"]),
-        new(ProfileStylePreset.Concise, Loc.Instance["Profiles.StylePresetConcise"]),
-        new(ProfileStylePreset.FormalEmail, Loc.Instance["Profiles.StylePresetFormalEmail"]),
-        new(ProfileStylePreset.CasualMessage, Loc.Instance["Profiles.StylePresetCasualMessage"]),
-        new(ProfileStylePreset.Developer, Loc.Instance["Profiles.StylePresetDeveloper"]),
-        new(ProfileStylePreset.TerminalSafe, Loc.Instance["Profiles.StylePresetTerminalSafe"]),
-        new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"])
-    ];
+        new(CreateStylePresetOptions());
+
+    public ObservableCollection<ProfileContextMatchModeOption> ContextMatchModeOptions { get; } =
+        new(CreateContextMatchModeOptions());
 
     public ObservableCollection<ProfileHotkeyBehaviorOption> HotkeyBehaviorOptions { get; } =
-    [
-        new(ProfileHotkeyBehavior.StartDictation, Loc.Instance["Profiles.HotkeyBehaviorStartDictation"]),
-        new(ProfileHotkeyBehavior.ProcessSelectedText, Loc.Instance["Profiles.HotkeyBehaviorProcessSelectedText"])
-    ];
+        new(CreateHotkeyBehaviorOptions());
 
     public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
-    [
-        new(null, Loc.Instance["Profiles.CleanupUseStylePreset"]),
-        new(CleanupLevel.None, Loc.Instance["Profiles.CleanupNone"]),
-        new(CleanupLevel.Light, Loc.Instance["Profiles.CleanupLight"]),
-        new(CleanupLevel.Medium, Loc.Instance["Profiles.CleanupMedium"]),
-        new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"])
-    ];
+        new(CreateCleanupOverrideOptions());
 
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
@@ -240,10 +260,46 @@ public partial class ProfilesSectionViewModel : ObservableObject
         && UrlPatternChips.Count == 0
         && string.IsNullOrWhiteSpace(EditHotkeyData);
 
-    public IReadOnlyList<string> LanguageChoices { get; } =
-        ["", "auto", "en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
+    private static readonly string[] s_languageCodes =
+        ["en", "de", "fr", "es", "pt", "ja", "zh", "ko", "it", "nl", "pl", "ru"];
 
-    public IReadOnlyList<string> TaskChoices { get; } = ["", "transcribe", "translate"];
+    public ObservableCollection<ProfileTaskOption> TaskOptions { get; } =
+        new(CreateTaskOptions());
+
+    public void ActivateLiveContext()
+    {
+        _liveContextActivationCount++;
+        if (_liveContextActivationCount != 1)
+        {
+            return;
+        }
+
+        _liveContextGeneration++;
+        _liveContextCts = new CancellationTokenSource();
+        _windowTimer.Start();
+        StartCurrentWindowUpdate();
+    }
+
+    public void DeactivateLiveContext()
+    {
+        if (_liveContextActivationCount == 0)
+        {
+            return;
+        }
+
+        _liveContextActivationCount--;
+        if (_liveContextActivationCount != 0)
+        {
+            return;
+        }
+
+        _windowTimer.Stop();
+        _liveContextGeneration++;
+        var cts = _liveContextCts;
+        _liveContextCts = null;
+        cts?.Cancel();
+        cts?.Dispose();
+    }
 
     public bool HasSelectedProfile => SelectedProfile is not null;
     public int ProfileCount => Profiles.Count;
@@ -280,15 +336,52 @@ public partial class ProfilesSectionViewModel : ObservableObject
         !string.IsNullOrWhiteSpace(CurrentWindowTitle) && CurrentWindowTitle != "-";
 
     public string CurrentUrlPattern => TryExtractUrlPattern(CurrentUrl);
-    public string EditIsEnabledStatusText =>
-        EditIsEnabled ? Loc.Instance["Common.On"] : Loc.Instance["Common.Off"];
 
-    public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; } =
-    [
-        new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
-        new(true, Loc.Instance["Common.Enabled"]),
-        new(false, Loc.Instance["Common.Disabled"])
-    ];
+    public IReadOnlyList<NullableBooleanOption> WhisperModeOptions { get; private set; } =
+        CreateNullableBooleanOptions();
+
+    public ProfileLanguageOption? SelectedLanguageOption
+    {
+        get
+        {
+            var code = string.IsNullOrWhiteSpace(EditLanguage) ? null : EditLanguage;
+            return LanguageOptions.FirstOrDefault(option =>
+                string.Equals(option.Code, code, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+        set
+        {
+            // A rebuilt list briefly clears the ComboBox; that null is not a user choice.
+            if (value is null || ReferenceEquals(value, SelectedLanguageOption))
+            {
+                return;
+            }
+
+            EditLanguage = value.Code;
+            OnPropertyChanged();
+        }
+    }
+
+    public ProfileTaskOption? SelectedTaskOption
+    {
+        get
+        {
+            var task = string.IsNullOrWhiteSpace(EditTask) ? null : EditTask;
+            return TaskOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, task, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+        set
+        {
+            if (value is null || ReferenceEquals(value, SelectedTaskOption))
+            {
+                return;
+            }
+
+            EditTask = value.Value;
+            OnPropertyChanged();
+        }
+    }
 
     public TranslationTargetOption? SelectedTranslationTargetOption
     {
@@ -347,6 +440,30 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    public MemorySourceOption? SelectedMemorySourceOption
+    {
+        get =>
+            MemorySourceOptions.FirstOrDefault(option =>
+                string.Equals(option.Value, EditMemorySourceId, StringComparison.Ordinal)
+            );
+        set
+        {
+            // A rebuilt list briefly clears the ComboBox; that null is not a user choice.
+            if (value is null)
+            {
+                return;
+            }
+
+            if (string.Equals(value.Value, EditMemorySourceId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            EditMemorySourceId = value.Value;
+            OnPropertyChanged();
+        }
+    }
+
     public ProfileStylePresetOption? SelectedStylePresetOption
     {
         get => StylePresetOptions.FirstOrDefault(option => option.Value == EditStylePreset);
@@ -362,6 +479,28 @@ public partial class ProfilesSectionViewModel : ObservableObject
             OnPropertyChanged();
         }
     }
+
+    public ProfileContextMatchModeOption? SelectedContextMatchModeOption
+    {
+        get => ContextMatchModeOptions.FirstOrDefault(o => o.Value == EditContextMatchMode);
+        set
+        {
+            var selected = value?.Value ?? ProfileContextMatchMode.All;
+            if (selected == EditContextMatchMode)
+            {
+                return;
+            }
+
+            EditContextMatchMode = selected;
+        }
+    }
+
+    public string SelectedContextMatchModeHint =>
+        EditContextMatchMode == ProfileContextMatchMode.Any
+            ? Loc.Instance["Profiles.ContextMatchAnyHint"]
+            : Loc.Instance["Profiles.ContextMatchAllHint"];
+
+    public bool IsContextMatchModeVisible => ProcessNameChips.Count > 0 && UrlPatternChips.Count > 0;
 
     public ProfileHotkeyBehaviorOption? SelectedHotkeyBehaviorOption
     {
@@ -436,12 +575,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
             WhisperModeOptions.FirstOrDefault(option => option.Value == EditScreenContextOverride);
         set
         {
-            if (value?.Value == EditScreenContextOverride)
+            if (value is null || value.Value == EditScreenContextOverride)
             {
                 return;
             }
 
-            EditScreenContextOverride = value?.Value;
+            EditScreenContextOverride = value.Value;
             OnPropertyChanged();
         }
     }
@@ -454,12 +593,12 @@ public partial class ProfilesSectionViewModel : ObservableObject
             );
         set
         {
-            if (value?.Value == EditClipboardContextOverride)
+            if (value is null || value.Value == EditClipboardContextOverride)
             {
                 return;
             }
 
-            EditClipboardContextOverride = value?.Value;
+            EditClipboardContextOverride = value.Value;
             OnPropertyChanged();
         }
     }
@@ -475,6 +614,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnSelectedProfileChanged(Profile? value)
     {
+        HotkeyValidationMessage = null;
         ProcessNameChips.Clear();
         UrlPatternChips.Clear();
         ProcessNameInput = "";
@@ -489,8 +629,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditWhisperModeOverride = null;
             EditModelId = null;
             EditPromptActionId = null;
+            EditMemorySourceId = null;
             EditHotkeyData = null;
             EditHotkeyBehavior = ProfileHotkeyBehavior.StartDictation;
+            EditContextMatchMode = ProfileContextMatchMode.All;
             EditStylePreset = ProfileStylePreset.Raw;
             EditCleanupLevelOverride = null;
             EditDeveloperFormattingOverride = null;
@@ -504,13 +646,17 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         EditName = value.Name;
         EditLanguage = value.InputLanguage;
+        // Drops an unlisted code the previous profile added.
+        RefreshLanguageOptions();
         EditTask = value.SelectedTask;
         EditTranslationTarget = value.TranslationTarget;
         EditWhisperModeOverride = value.WhisperModeOverride;
         EditModelId = value.TranscriptionModelOverride;
         EditPromptActionId = value.PromptActionId;
+        EditMemorySourceId = value.MemorySourceId;
         EditHotkeyData = value.HotkeyData;
         EditHotkeyBehavior = value.HotkeyBehavior;
+        EditContextMatchMode = value.ContextMatchMode;
         EditStylePreset = value.StylePreset;
         EditCleanupLevelOverride = value.CleanupLevelOverride;
         EditDeveloperFormattingOverride = value.DeveloperFormattingOverride;
@@ -533,6 +679,23 @@ public partial class ProfilesSectionViewModel : ObservableObject
         NotifyStateChanged();
     }
 
+    partial void OnEditLanguageChanged(string? value)
+    {
+        // A saved code outside the built-in list stays selectable instead of blanking the box.
+        if (!string.IsNullOrWhiteSpace(value) && SelectedLanguageOption is null)
+        {
+            RefreshLanguageOptions();
+            return;
+        }
+
+        OnPropertyChanged(nameof(SelectedLanguageOption));
+    }
+
+    partial void OnEditTaskChanged(string? value)
+    {
+        OnPropertyChanged(nameof(SelectedTaskOption));
+    }
+
     partial void OnEditTranslationTargetChanged(string? value)
     {
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
@@ -545,7 +708,19 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnEditPromptActionIdChanged(string? value)
     {
+        HotkeyValidationMessage = null;
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+    }
+
+    partial void OnEditMemorySourceIdChanged(string? value)
+    {
+        // A saved source that is no longer installed or enabled stays listed as unavailable.
+        if (MemorySourceOptions.All(option => option.Value != value))
+        {
+            RefreshMemorySourceOptions();
+        }
+
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
     }
 
     partial void OnEditStylePresetChanged(ProfileStylePreset value)
@@ -553,13 +728,21 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedStylePresetOption));
     }
 
+    partial void OnEditContextMatchModeChanged(ProfileContextMatchMode value)
+    {
+        OnPropertyChanged(nameof(SelectedContextMatchModeOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeHint));
+    }
+
     partial void OnEditHotkeyBehaviorChanged(ProfileHotkeyBehavior value)
     {
+        HotkeyValidationMessage = null;
         OnPropertyChanged(nameof(SelectedHotkeyBehaviorOption));
     }
 
     partial void OnEditHotkeyDataChanged(string? value)
     {
+        HotkeyValidationMessage = null;
         // A hotkey turns an empty-matcher profile into a hotkey-only profile,
         // which is no longer the global fallback — refresh the editor hint.
         OnPropertyChanged(nameof(IsGlobalFallbackProfile));
@@ -590,27 +773,32 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
     }
 
-    partial void OnEditIsEnabledChanged(bool value)
-    {
-        OnPropertyChanged(nameof(EditIsEnabledStatusText));
-    }
-
     [RelayCommand]
     private void AddProfile()
     {
-        var profile = new Profile
-        {
-            Id = Guid.NewGuid().ToString(),
-            Name = "New profile",
-            IsEnabled = true,
-            Priority = 0,
-            ProcessNames = [],
-            UrlPatterns = []
-        };
+        _uiOperations.Run(
+            "add profile",
+            Loc.Instance["Common.Add"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                var profile = new Profile
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Name = "New profile",
+                    IsEnabled = true,
+                    Priority = 0,
+                    ProcessNames = [],
+                    UrlPatterns = [],
+                    ContextMatchMode = ProfileContextMatchMode.Any,
+                };
 
-        _profiles.AddProfile(profile);
-        RefreshProfiles();
-        SelectById(profile.Id);
+                _profiles.AddProfile(profile);
+                RefreshProfiles();
+                SelectById(profile.Id);
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -620,6 +808,39 @@ public partial class ProfilesSectionViewModel : ObservableObject
         {
             return;
         }
+
+        var promptActionId = string.IsNullOrWhiteSpace(EditPromptActionId)
+            ? null
+            : EditPromptActionId.Trim();
+        // Disabled outcomes keep the draft chord unvalidated; the enable gates
+        // (ToggleProfileEnabled here and the HTTP profile toggle) validate it
+        // before it can ever bind.
+        string? hotkeyData;
+        if (!EditIsEnabled)
+        {
+            hotkeyData = string.IsNullOrWhiteSpace(EditHotkeyData) ? null : EditHotkeyData;
+        }
+        else
+        {
+            var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
+                EditHotkeyData,
+                EditHotkeyBehavior,
+                promptActionId,
+                SelectedProfile.Id,
+                _promptActions.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+
+            hotkeyData = hotkeyValidation.NormalizedHotkey;
+        }
+
+        EditHotkeyData = hotkeyData;
+        HotkeyValidationMessage = null;
 
         var updated = SelectedProfile with
         {
@@ -633,24 +854,33 @@ public partial class ProfilesSectionViewModel : ObservableObject
             TranscriptionModelOverride = string.IsNullOrWhiteSpace(EditModelId)
                 ? null
                 : EditModelId,
-            PromptActionId = string.IsNullOrWhiteSpace(EditPromptActionId)
-                ? null
-                : EditPromptActionId,
-            HotkeyData = string.IsNullOrWhiteSpace(EditHotkeyData) ? null : EditHotkeyData.Trim(),
+            PromptActionId = promptActionId,
+            MemorySourceId = string.IsNullOrWhiteSpace(EditMemorySourceId) ? null : EditMemorySourceId,
+            HotkeyData = hotkeyData,
             HotkeyBehavior = EditHotkeyBehavior,
+            ContextMatchMode = EditContextMatchMode,
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,
             DeveloperFormattingOverride = EditDeveloperFormattingOverride,
             ScreenContextOverride = EditScreenContextOverride,
             ClipboardContextOverride = EditClipboardContextOverride,
             Priority = EditPriority,
-            IsEnabled = EditIsEnabled
+            IsEnabled = EditIsEnabled,
         };
 
         var selectedId = SelectedProfile.Id;
-        _profiles.UpdateProfile(updated);
-        RefreshProfiles();
-        SelectById(selectedId);
+        _uiOperations.Run(
+            "save profile",
+            Loc.Instance["Common.Save"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.UpdateProfile(updated);
+                RefreshProfiles();
+                SelectById(selectedId);
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -669,12 +899,21 @@ public partial class ProfilesSectionViewModel : ObservableObject
             // so a copied hotkey would be silently dead.
             HotkeyData = null,
             CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
+            UpdatedAt = DateTime.UtcNow,
         };
 
-        _profiles.AddProfile(duplicate);
-        RefreshProfiles();
-        SelectById(duplicate.Id);
+        _uiOperations.Run(
+            "duplicate profile",
+            Loc.Instance["Common.Copy"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.AddProfile(duplicate);
+                RefreshProfiles();
+                SelectById(duplicate.Id);
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -685,9 +924,19 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _profiles.DeleteProfile(SelectedProfile.Id);
-        RefreshProfiles();
-        SelectedProfile = null;
+        var selectedId = SelectedProfile.Id;
+        _uiOperations.Run(
+            "delete profile",
+            Loc.Instance["Common.Delete"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.DeleteProfile(selectedId);
+                RefreshProfiles();
+                SelectedProfile = null;
+            },
+            ResyncProfilesAfterFailure
+        );
     }
 
     [RelayCommand]
@@ -698,8 +947,47 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _profiles.UpdateProfile(profile with { IsEnabled = !profile.IsEnabled });
-        RefreshProfiles();
+        if (!profile.IsEnabled)
+        {
+            var hotkeyValidation = _hotkeys.ValidateProfileHotkeyCandidate(
+                profile.HotkeyData,
+                profile.HotkeyBehavior,
+                profile.PromptActionId,
+                profile.Id,
+                _promptActions.Actions,
+                _profiles.Profiles
+            );
+            if (!hotkeyValidation.IsValid)
+            {
+                SelectById(profile.Id);
+                HotkeyValidationMessage = GetHotkeyValidationMessage(hotkeyValidation.Status);
+                return;
+            }
+        }
+
+        _uiOperations.Run(
+            "toggle profile",
+            Loc.Instance["Common.Enabled"],
+            UiFailureKind.FileSystem,
+            () =>
+            {
+                _profiles.ToggleProfileEnabled(profile.Id);
+                RefreshProfiles();
+            },
+            ResyncProfilesAfterFailure
+        );
+    }
+
+    private static string GetHotkeyValidationMessage(HotkeyCandidateValidationStatus status)
+    {
+        return status switch
+        {
+            HotkeyCandidateValidationStatus.Malformed =>
+                Loc.Instance["Profiles.HotkeyMalformed"],
+            HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
+                Loc.Instance["Profiles.HotkeyPromptActionRequired"],
+            _ => Loc.Instance["Profiles.HotkeyCollision"],
+        };
     }
 
     [RelayCommand]
@@ -834,21 +1122,45 @@ public partial class ProfilesSectionViewModel : ObservableObject
             return;
         }
 
-        _contextWindow = new ProfilesContextWindow(this);
+        var contextWindow = new ProfilesContextWindow(this);
+        _contextWindow = contextWindow;
+        var liveContextActivated = false;
+        contextWindow.Opened += (_, _) =>
+        {
+            if (liveContextActivated)
+            {
+                return;
+            }
+
+            liveContextActivated = true;
+            ActivateLiveContext();
+        };
+        contextWindow.Closed += (_, _) =>
+        {
+            if (liveContextActivated)
+            {
+                liveContextActivated = false;
+                DeactivateLiveContext();
+            }
+
+            if (ReferenceEquals(_contextWindow, contextWindow))
+            {
+                _contextWindow = null;
+            }
+        };
+
         if (
             Application.Current?.ApplicationLifetime
             is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
         {
-            _contextWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            _contextWindow.Show(owner);
+            contextWindow.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            contextWindow.Show(owner);
         }
         else
         {
-            _contextWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            _contextWindow.Show();
+            contextWindow.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            contextWindow.Show();
         }
-
-        _contextWindow.Closed += (_, _) => _contextWindow = null;
     }
 
     private void RefreshProfiles()
@@ -874,6 +1186,197 @@ public partial class ProfilesSectionViewModel : ObservableObject
         else
         {
             NotifyStateChanged();
+        }
+    }
+
+    private void ResyncProfilesAfterFailure()
+    {
+        var selectedId = SelectedProfile?.Id;
+
+        // Force the editor hooks to reload the service's committed snapshot even
+        // when record value equality would otherwise suppress the assignment.
+        SelectedProfile = null;
+        Profiles.Clear();
+        foreach (var profile in _profiles.Profiles)
+        {
+            Profiles.Add(profile);
+        }
+
+        SelectedProfile =
+            selectedId is null
+                ? Profiles.FirstOrDefault()
+                : Profiles.FirstOrDefault(profile => profile.Id == selectedId)
+                    ?? Profiles.FirstOrDefault();
+
+        if (SelectedProfile is null)
+        {
+            NotifyStateChanged();
+        }
+    }
+
+    private void OnInterfaceLanguageChanged(object? sender, EventArgs e)
+    {
+        var modelId = EditModelId;
+        var promptActionId = EditPromptActionId;
+        var stylePreset = EditStylePreset;
+        var hotkeyBehavior = EditHotkeyBehavior;
+        var contextMatchMode = EditContextMatchMode;
+        var cleanupLevelOverride = EditCleanupLevelOverride;
+        var whisperModeOverride = EditWhisperModeOverride;
+        var developerFormattingOverride = EditDeveloperFormattingOverride;
+        var screenContextOverride = EditScreenContextOverride;
+        var clipboardContextOverride = EditClipboardContextOverride;
+        var language = EditLanguage;
+        var task = EditTask;
+
+        RefreshModelOptions();
+        RefreshPromptActionOptions();
+        RefreshMemorySourceOptions();
+        ReplaceCollection(StylePresetOptions, CreateStylePresetOptions());
+        ReplaceCollection(HotkeyBehaviorOptions, CreateHotkeyBehaviorOptions());
+        ReplaceCollection(ContextMatchModeOptions, CreateContextMatchModeOptions());
+        ReplaceCollection(CleanupOverrideOptions, CreateCleanupOverrideOptions());
+        ReplaceCollection(TaskOptions, CreateTaskOptions());
+        RefreshLanguageOptions();
+        WhisperModeOptions = CreateNullableBooleanOptions();
+        OnPropertyChanged(nameof(WhisperModeOptions));
+
+        EditModelId = modelId;
+        EditPromptActionId = promptActionId;
+        EditStylePreset = stylePreset;
+        EditHotkeyBehavior = hotkeyBehavior;
+        EditContextMatchMode = contextMatchMode;
+        EditCleanupLevelOverride = cleanupLevelOverride;
+        EditWhisperModeOverride = whisperModeOverride;
+        EditDeveloperFormattingOverride = developerFormattingOverride;
+        EditScreenContextOverride = screenContextOverride;
+        EditClipboardContextOverride = clipboardContextOverride;
+        EditLanguage = language;
+        EditTask = task;
+
+        OnPropertyChanged(nameof(SelectedModelOption));
+        OnPropertyChanged(nameof(SelectedPromptActionOption));
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
+        OnPropertyChanged(nameof(SelectedStylePresetOption));
+        OnPropertyChanged(nameof(SelectedHotkeyBehaviorOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeHint));
+        OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
+        OnPropertyChanged(nameof(SelectedWhisperModeOption));
+        OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(SelectedScreenContextOverrideOption));
+        OnPropertyChanged(nameof(SelectedClipboardContextOverrideOption));
+        OnPropertyChanged(nameof(SelectedLanguageOption));
+        OnPropertyChanged(nameof(SelectedTaskOption));
+        OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(SelectedProfileSummary));
+        OnPropertyChanged(nameof(SelectedProfileDisplayName));
+        OnPropertyChanged(nameof(MatchStatusText));
+        if (_browserStatusIsState)
+        {
+            RefreshBrowserAccessibilityStatus();
+        }
+    }
+
+    private static IReadOnlyList<ProfileStylePresetOption> CreateStylePresetOptions()
+    {
+        return
+        [
+            new(ProfileStylePreset.Raw, Loc.Instance["Profiles.StylePresetRaw"]),
+            new(ProfileStylePreset.Clean, Loc.Instance["Profiles.StylePresetClean"]),
+            new(ProfileStylePreset.Concise, Loc.Instance["Profiles.StylePresetConcise"]),
+            new(ProfileStylePreset.FormalEmail, Loc.Instance["Profiles.StylePresetFormalEmail"]),
+            new(ProfileStylePreset.CasualMessage, Loc.Instance["Profiles.StylePresetCasualMessage"]),
+            new(ProfileStylePreset.Developer, Loc.Instance["Profiles.StylePresetDeveloper"]),
+            new(ProfileStylePreset.TerminalSafe, Loc.Instance["Profiles.StylePresetTerminalSafe"]),
+            new(ProfileStylePreset.MeetingNotes, Loc.Instance["Profiles.StylePresetMeetingNotes"]),
+        ];
+    }
+
+    private static IReadOnlyList<ProfileContextMatchModeOption> CreateContextMatchModeOptions()
+    {
+        return
+        [
+            new(ProfileContextMatchMode.Any, Loc.Instance["Profiles.ContextMatchAny"]),
+            new(ProfileContextMatchMode.All, Loc.Instance["Profiles.ContextMatchAll"]),
+        ];
+    }
+
+    private static IReadOnlyList<ProfileHotkeyBehaviorOption> CreateHotkeyBehaviorOptions()
+    {
+        return
+        [
+            new(ProfileHotkeyBehavior.StartDictation, Loc.Instance["Profiles.HotkeyBehaviorStartDictation"]),
+            new(ProfileHotkeyBehavior.ProcessSelectedText, Loc.Instance["Profiles.HotkeyBehaviorProcessSelectedText"]),
+        ];
+    }
+
+    private static IReadOnlyList<NullableCleanupLevelOption> CreateCleanupOverrideOptions()
+    {
+        return
+        [
+            new(null, Loc.Instance["Profiles.CleanupUseStylePreset"]),
+            new(CleanupLevel.None, Loc.Instance["Profiles.CleanupNone"]),
+            new(CleanupLevel.Light, Loc.Instance["Profiles.CleanupLight"]),
+            new(CleanupLevel.Medium, Loc.Instance["Profiles.CleanupMedium"]),
+            new(CleanupLevel.High, Loc.Instance["Profiles.CleanupHigh"]),
+        ];
+    }
+
+    private static IReadOnlyList<ProfileTaskOption> CreateTaskOptions()
+    {
+        return
+        [
+            new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
+            new("transcribe", Loc.Instance["Profiles.TaskTranscribe"]),
+            new("translate", Loc.Instance["Profiles.TaskTranslate"]),
+        ];
+    }
+
+    private void RefreshLanguageOptions()
+    {
+        var saved = string.IsNullOrWhiteSpace(EditLanguage) ? null : EditLanguage;
+        var choices = DictationSectionViewModel.CreateLanguageChoices(
+            saved is null ? s_languageCodes : [.. s_languageCodes, saved]
+        );
+        List<ProfileLanguageOption> options =
+        [
+            new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
+            .. choices.Select(choice => new ProfileLanguageOption(choice.Code, choice.DisplayName)),
+        ];
+        if (
+            saved is not null
+            && !options.Any(option =>
+                string.Equals(option.Code, saved, StringComparison.OrdinalIgnoreCase)
+            )
+        )
+        {
+            options.Add(new ProfileLanguageOption(saved, saved));
+        }
+
+        ReplaceCollection(LanguageOptions, options);
+        OnPropertyChanged(nameof(SelectedLanguageOption));
+    }
+
+    private static IReadOnlyList<NullableBooleanOption> CreateNullableBooleanOptions()
+    {
+        return
+        [
+            new(null, Loc.Instance["Profiles.UseGlobalDefault"]),
+            new(true, Loc.Instance["Common.Enabled"]),
+            new(false, Loc.Instance["Common.Disabled"]),
+        ];
+    }
+
+    private static void ReplaceCollection<T>(
+        ObservableCollection<T> target,
+        IEnumerable<T> items
+    )
+    {
+        target.Clear();
+        foreach (var item in items)
+        {
+            target.Add(item);
         }
     }
 
@@ -920,6 +1423,36 @@ public partial class ProfilesSectionViewModel : ObservableObject
             : null;
     }
 
+    private void RefreshMemorySourceOptions()
+    {
+        var selected = EditMemorySourceId;
+        MemorySourceOptions.Clear();
+        MemorySourceOptions.Add(new MemorySourceOption(null, Loc.Instance["Profiles.MemoryUseGlobal"]));
+        MemorySourceOptions.Add(
+            new MemorySourceOption(Profile.MemorySourceOff, Loc.Instance["Profiles.MemoryOff"])
+        );
+        foreach (
+            var source in _pluginManager
+                .GetPlugins<IMemoryStoragePlugin>()
+                .OrderBy(source => source.PluginName, StringComparer.CurrentCultureIgnoreCase)
+        )
+        {
+            MemorySourceOptions.Add(new MemorySourceOption(source.PluginId, source.PluginName));
+        }
+
+        if (MemorySourceOptions.All(option => option.Value != selected))
+        {
+            MemorySourceOptions.Add(
+                new MemorySourceOption(
+                    selected,
+                    Loc.Instance.GetString("Profiles.MemorySourceUnavailable", selected!)
+                )
+            );
+        }
+
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
+    }
+
     private void SelectById(string id)
     {
         var match = Profiles.FirstOrDefault(profile => profile.Id == id);
@@ -933,11 +1466,78 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
-    private void UpdateCurrentWindow()
+    private void StartCurrentWindowUpdate()
     {
-        var processName = _activeWindow.GetActiveWindowProcessName();
-        var title = _activeWindow.GetActiveWindowTitle();
-        var url = _activeWindow.GetBrowserUrl(false);
+        if (_isWindowUpdateInProgress)
+        {
+            return;
+        }
+
+        CurrentWindowUpdateTask = UpdateCurrentWindowAsync();
+    }
+
+    internal async Task UpdateCurrentWindowAsync()
+    {
+        // Callers are UI-thread-only; the flag keeps timer ticks from stacking up
+        // behind a slow AT-SPI walk.
+        if (_isWindowUpdateInProgress || _liveContextCts is null)
+        {
+            return;
+        }
+
+        _isWindowUpdateInProgress = true;
+        var generation = _liveContextGeneration;
+        var token = _liveContextCts.Token;
+
+        try
+        {
+            var result = await Task.Run(
+                async () =>
+                {
+                    var snapshot = await _activeWindow
+                        .GetActiveWindowSnapshotAsync(token)
+                        .ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    var url = _activeWindow.GetBrowserUrlForSnapshot(
+                        snapshot,
+                        isPolling: true
+                    );
+                    return (Snapshot: snapshot, Url: url);
+                },
+                token
+            );
+
+            if (token.IsCancellationRequested || generation != _liveContextGeneration)
+            {
+                return;
+            }
+
+            ApplyCurrentWindow(result.Snapshot, result.Url);
+        }
+        catch (OperationCanceledException)
+        {
+            // Deactivation invalidates the in-flight generation; no UI state is applied.
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Profiles] Active-window update failed: {ex.Message}");
+        }
+        finally
+        {
+            _isWindowUpdateInProgress = false;
+            if (IsLiveContextActive && generation != _liveContextGeneration)
+            {
+                StartCurrentWindowUpdate();
+            }
+        }
+    }
+
+    private void ApplyCurrentWindow(ActiveWindowSnapshot? snapshot, string? url)
+    {
+        var processName = snapshot?.ProcessName is { Length: > 0 } name
+            ? name
+            : ActiveWindowService.TryInferBrowserProcessNameFromTitle(snapshot?.Title);
+        var title = snapshot?.Title;
 
         if (
             string.IsNullOrWhiteSpace(processName)
@@ -1029,10 +1629,30 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
         // Re-evaluate panel state: Enable should disappear and Revert should appear together.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = result.Success
-            ? Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message)
-            : $"{result.Message} {result.Detail}";
+        BrowserAccessibilityStatusMessage = FormatBrowserSetupResult(result);
+        _browserStatusIsState = false;
     }
+
+    internal static string FormatBrowserSetupResult(BrowserAccessibilitySetupHelper.SetupResult result)
+    {
+        if (result.Success)
+        {
+            return result.SkippedFirefoxProfiles.Count > 0
+                ? Loc.Instance.GetString(
+                    "Profiles.BrowserSetupPartialFirefox",
+                    string.Join(", ", result.SkippedFirefoxProfiles)
+                )
+                : Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message);
+        }
+
+        var failure = $"{result.Message} {result.Detail}";
+        return result.SkippedFirefoxProfiles.Count > 0
+            ? $"{failure} {Loc.Instance["Profiles.BrowserSetupFirefoxRetry"]}"
+            : failure;
+    }
+
+    // The computed browser status follows a language switch; a setup result keeps its wording.
+    private bool _browserStatusIsState;
 
     private void RefreshBrowserAccessibilityStatus()
     {
@@ -1068,6 +1688,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         // Offer Revert whenever anything was installed, including partial state.
         CanRevertBrowserAccessibility = hasAnyInstall;
+        _browserStatusIsState = true;
 
         OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
     }
@@ -1102,14 +1723,19 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
 
         var result = await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
+        // Refresh first so the state message doesn't overwrite the revert result.
+        RefreshBrowserAccessibilityStatus();
         BrowserAccessibilityStatusMessage = result.Success
             ? Loc.Instance.GetString("Profiles.BrowserRevertSuccess", result.Message)
             : $"{result.Message} {result.Detail}";
-        RefreshBrowserAccessibilityStatus();
+        _browserStatusIsState = false;
     }
 
     private void NotifyStateChanged()
     {
+        OnPropertyChanged(nameof(SelectedContextMatchModeOption));
+        OnPropertyChanged(nameof(SelectedContextMatchModeHint));
+        OnPropertyChanged(nameof(IsContextMatchModeVisible));
         OnPropertyChanged(nameof(HasSelectedProfile));
         OnPropertyChanged(nameof(ProfileCount));
         OnPropertyChanged(nameof(EnabledProfileCount));
@@ -1119,6 +1745,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedModelOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
+        OnPropertyChanged(nameof(SelectedMemorySourceOption));
         OnPropertyChanged(nameof(SelectedStylePresetOption));
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
@@ -1132,7 +1759,6 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowNoBrowserUrlHint));
         OnPropertyChanged(nameof(HasCurrentWindowTitle));
         OnPropertyChanged(nameof(CurrentUrlPattern));
-        OnPropertyChanged(nameof(EditIsEnabledStatusText));
     }
 
     private static string TryExtractUrlPattern(string? rawUrl)
@@ -1154,14 +1780,53 @@ public partial class ProfilesSectionViewModel : ObservableObject
     }
 }
 
-public sealed record ProfileModelOption(string? Value, string Label);
+public sealed record ProfileModelOption(string? Value, string Label)
+{
+    // A collapsed ComboBox announces its selected item through ToString().
+    public override string ToString() => Label;
+}
 
-public sealed record PromptActionOption(string? Value, string Label);
+public sealed record PromptActionOption(string? Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label);
+public sealed record MemorySourceOption(string? Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label);
+public sealed record ProfileStylePresetOption(ProfileStylePreset Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record NullableBooleanOption(bool? Value, string Label);
+public sealed record ProfileContextMatchModeOption(ProfileContextMatchMode Value, string Label)
+{
+    public override string ToString() => Label;
+}
 
-public sealed record NullableCleanupLevelOption(CleanupLevel? Value, string Label);
+public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record ProfileLanguageOption(string? Code, string Label)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record ProfileTaskOption(string? Value, string Label)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record NullableBooleanOption(bool? Value, string Label)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record NullableCleanupLevelOption(CleanupLevel? Value, string Label)
+{
+    public override string ToString() => Label;
+}

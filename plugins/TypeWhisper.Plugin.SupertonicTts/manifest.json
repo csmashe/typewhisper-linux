@@ -1,11 +1,12 @@
 {
   "id": "com.typewhisper.supertonic-tts",
   "name": "Supertonic TTS",
-  "version": "1.0.0",
+  "version": "1.1.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Local Supertonic 3 text-to-speech provider. Downloads OpenRAIL-M model assets on demand and runs synthesis on-device with ONNX Runtime.",
-  "category": "tts",
-  "isLocal": true,
+  "networkAccess": "local",
+  "categories": ["tts"],
   "assemblyName": "TypeWhisper.Plugin.SupertonicTts.dll",
   "pluginClass": "TypeWhisper.Plugin.SupertonicTts.SupertonicTtsPlugin"
 }

@@ -45,7 +45,7 @@ public static class ProfileStylePresetService
                 CleanupLevel.Medium,
                 true
             ),
-            _ => Settings(ProfileStylePreset.Raw, CleanupLevel.None)
+            _ => Settings(ProfileStylePreset.Raw, CleanupLevel.None),
         };
     }
 
@@ -63,7 +63,7 @@ public static class ProfileStylePresetService
             CleanupLevel = cleanupLevel,
             SmartFormattingEnabled = smartFormatting,
             DeveloperFormattingEnabled = developerFormatting,
-            TerminalSafe = terminalSafe
+            TerminalSafe = terminalSafe,
         };
     }
 }

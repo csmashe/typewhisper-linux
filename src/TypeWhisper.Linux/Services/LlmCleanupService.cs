@@ -2,6 +2,8 @@ using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -9,13 +11,17 @@ namespace TypeWhisper.Linux.Services;
 ///     Applies rule-based and optional LLM cleanup to transcribed text.
 ///     Light cleanup is always local (no LLM). Medium / High first run the
 ///     local pass, then send the lightened text to the configured LLM
-///     provider — falling back to Light if no provider is available.
+///     provider, falling back to Light when unavailable or failed. Only drafts have a deadline.
 /// </summary>
 public sealed class LlmCleanupService
 {
     private readonly CleanupService _cleanup;
     private readonly PromptProcessingService _promptProcessing;
     private readonly IErrorLogService? _errorLog;
+
+    // Last cleanup failure written to the error log. A broken provider fails on every dictation,
+    // so only a change of message is worth a new entry.
+    private string? _lastLoggedFailure;
 
     public LlmCleanupService(
         CleanupService cleanup,
@@ -32,10 +38,16 @@ public sealed class LlmCleanupService
         string text,
         CleanupLevel level,
         Func<string, Task>? statusCallback = null,
-        string? referenceContext = null,
-        CancellationToken ct = default
+        LlmCallCapture? capture = null,
+        string? providerOverride = null,
+        bool preparedLightText = false,
+        bool isDraft = false,
+        TimeSpan? draftTimeout = null,
+        CancellationToken ct = default,
+        string? referenceContext = null
     )
     {
+        ct.ThrowIfCancellationRequested();
         // Medium/High intentionally fall through to the LLM cleanup path below.
         // ReSharper disable once SwitchStatementMissingSomeEnumCasesNoDefault
         switch (level)
@@ -46,8 +58,8 @@ public sealed class LlmCleanupService
                 return _cleanup.Clean(text, CleanupLevel.Light);
         }
 
-        var lightText = _cleanup.Clean(text, CleanupLevel.Light);
-        if (!_promptProcessing.IsAnyProviderAvailable)
+        var lightText = preparedLightText ? text : PrepareLiveInput(text);
+        if (_promptProcessing.HasNoProviderForRequest(providerOverride))
         {
             await NotifyStatusAsync(
                 statusCallback,
@@ -64,31 +76,99 @@ public sealed class LlmCleanupService
         try
         {
             var prompt = CleanupService.GetLlmSystemPrompt(level);
-            var cleaned = await _promptProcessing.ProcessSystemPromptAsync(
+            var cleaned = await ProcessWithinBudgetAsync(
                 prompt,
                 lightText,
+                capture,
+                isDraft ? draftTimeout ?? TimeSpan.FromSeconds(5) : Timeout.InfiniteTimeSpan,
+                providerOverride,
+                isDraft,
                 ct,
                 referenceContext
             );
+            ct.ThrowIfCancellationRequested();
+            // Cleanup works again, so the same failure recurring later is worth logging afresh.
+            if (!isDraft) _lastLoggedFailure = null;
             return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
+        }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {ex.Message}");
+            if (isDraft) return lightText;
+            var safeMessage =
+                FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level))
+                ?? Loc.Instance["Common.UnknownError"];
+            Trace.WriteLine($"[LlmCleanupService] Cleanup failed: {safeMessage}");
             // User-actionable: the requested Medium/High cleanup silently degraded to
             // Light because the LLM call failed (key, network, provider outage).
-            _errorLog?.AddEntry(
-                $"AI cleanup failed and fell back to Light cleanup: {ex.Message}",
-                ErrorCategory.Prompt
-            );
+            var failure = $"AI cleanup failed and fell back to Light cleanup: {safeMessage}";
+            // A configuration failure is already one entry from PromptProcessingService; wrapping it
+            // here would describe the same event twice.
+            var alreadyLogged =
+                ex is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration };
+            if (!alreadyLogged
+                && !string.Equals(failure, _lastLoggedFailure, StringComparison.Ordinal))
+            {
+                _lastLoggedFailure = failure;
+                _errorLog?.AddEntry(failure, ErrorCategory.Prompt);
+            }
+
             await NotifyStatusAsync(statusCallback, "Cleanup failed. Using Light cleanup.");
             return lightText;
         }
     }
+
+    internal string PrepareLiveInput(string text) =>
+        _cleanup.Clean(text, CleanupLevel.Light);
+
+    // Only drafts pass a deadline. Final cleanup waits for its provider or caller cancellation.
+    private async Task<string> ProcessWithinBudgetAsync(
+        string prompt, string text, LlmCallCapture? capture, TimeSpan timeout,
+        string? providerOverride, bool isDraft, CancellationToken ct, string? referenceContext)
+    {
+        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timerCts = new CancellationTokenSource();
+        var completed = false;
+        var request = Task.Run(async () =>
+        {
+            requestCts.Token.ThrowIfCancellationRequested();
+            return await _promptProcessing.ProcessSystemPromptAsync(
+                prompt, text, capture, providerOverride,
+                reportProviderProblems: !isDraft, ct: requestCts.Token,
+                referenceContext: referenceContext).ConfigureAwait(false);
+        }, requestCts.Token);
+        try
+        {
+            var deadline = Task.Delay(timeout > TimeSpan.Zero ? timeout : Timeout.InfiniteTimeSpan, timerCts.Token);
+            var winner = await Task.WhenAny(request, deadline).WaitAsync(ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            if (winner != request)
+                throw new CleanupDeadlineExceededException();
+            var result = await request.ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            completed = true;
+            return result;
+        }
+        finally
+        {
+            await timerCts.CancelAsync().ConfigureAwait(false);
+            var cancellation = completed ? Task.CompletedTask : requestCts.CancelAsync();
+            // A cancellation callback can also stall. Observe it and dispose the source only
+            // after both tasks finish; never let late provider work mutate an inserted result.
+            _ = Task.WhenAll(request, cancellation).ContinueWith(
+                task => { _ = task.Exception; requestCts.Dispose(); },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
+    private sealed class CleanupDeadlineExceededException : TimeoutException;
 
     private static async Task NotifyStatusAsync(Func<string, Task>? statusCallback, string message)
     {

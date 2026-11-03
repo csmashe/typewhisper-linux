@@ -1,12 +1,12 @@
 {
   "id": "com.typewhisper.reson8",
   "name": "Reson8",
-  "version": "1.0.0",
+  "version": "1.2.0",
+  "minHostVersion": "0.19.0",
   "author": "Y. Vos",
   "description": "Cloud transcription via Reson8 speech-to-text API with real-time WebSocket streaming. Requires API key.",
-  "category": "transcription",
+  "networkAccess": "network",
   "categories": ["transcription"],
-  "isLocal": false,
   "requiresApiKey": true,
   "iconSystemName": "waveform.badge.mic",
   "descriptions": {

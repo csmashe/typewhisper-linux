@@ -1,9 +1,12 @@
 {
   "id": "com.typewhisper.fireworks",
   "name": "Fireworks",
-  "version": "1.0.0",
+  "version": "1.1.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Fireworks AI fast LLM inference",
+  "networkAccess": "network",
+  "categories": ["llm"],
   "assemblyName": "TypeWhisper.Plugin.Fireworks.dll",
   "pluginClass": "TypeWhisper.Plugin.Fireworks.FireworksPlugin"
 }

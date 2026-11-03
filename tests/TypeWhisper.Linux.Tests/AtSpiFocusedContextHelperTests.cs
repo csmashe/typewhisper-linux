@@ -1,3 +1,5 @@
+using System.Reflection;
+using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using Xunit;
 
@@ -6,7 +8,7 @@ namespace TypeWhisper.Linux.Tests;
 /// <summary>
 ///     Covers the pure, subprocess-free helpers of the focused-context harvest (Feature 03):
 ///     whitespace collapse, snippet combination + char cap, and the password-role skip.
-///     The AT-SPI walk itself is subprocess-bound and exercised via live logs, not here.
+///     Identity guards use an injected runner; no live accessibility or clipboard data is read.
 /// </summary>
 public sealed class AtSpiFocusedContextHelperTests
 {
@@ -94,5 +96,75 @@ public sealed class AtSpiFocusedContextHelperTests
     public void TitlesRelate_MatchesOnlyTheRecordedWindow(string? frameTitle, string? recordedTitle, bool expected)
     {
         Assert.Equal(expected, AtSpiUrlExtractor.TitlesRelate(frameTitle, recordedTitle));
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("qa-editor", null)]
+    [InlineData(null, "QA Window")]
+    public void Harvest_UnknownWindowIdentity_DoesNotReadAccessibilityData(string? process, string? title)
+    {
+        var runner = new RecordingRunner();
+        var extractor = new AtSpiUrlExtractor(runner);
+        runner.Calls.Clear();
+
+        Assert.Null(extractor.TryHarvestFocusedContext(process, title, "TypeWhisper"));
+        Assert.Empty(runner.Calls);
+    }
+
+    [Theory]
+    [InlineData(23, "s \"\"", false)]
+    [InlineData(23, "s \"Different Window\"", false)]
+    [InlineData(23, "s \"QA Window\"", true)]
+    [InlineData(79, "", false)]
+    [InlineData(40, "s \"Password\"", false)]
+    public void Harvest_WindowConfirmation_FailsClosedWithoutReadingElementText(
+        int role,
+        string frameName,
+        bool expected
+    )
+    {
+        var runner = new RecordingRunner((_, args) => new ProcessRunResult(
+            true,
+            false,
+            0,
+            args.Contains("GetRole") ? $"u {role}" : args.Contains("Name") ? frameName : "",
+            ""
+        ));
+        var extractor = new AtSpiUrlExtractor(runner);
+        runner.Calls.Clear();
+        var nodeType = typeof(AtSpiUrlExtractor).GetNestedType("AccessibleRef", BindingFlags.NonPublic)!;
+        var node = Activator.CreateInstance(nodeType, ["org.example.qa", "/org/example/qa/field"]);
+        var check = typeof(AtSpiUrlExtractor).GetMethod(
+            "FocusedNodeBelongsToWindow",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!;
+        object?[] checkArgs = ["unix:path=/owned-qa-bus", node, "QA Window", 40, CancellationToken.None];
+
+        Assert.Equal(expected, (bool)check.Invoke(extractor, checkArgs)!);
+        Assert.DoesNotContain(runner.Calls, call => call.Args.Contains("GetText"));
+    }
+
+    private sealed class RecordingRunner(
+        Func<string, IReadOnlyList<string>, ProcessRunResult>? respond = null
+    ) : IProcessRunner
+    {
+        public List<(string File, IReadOnlyList<string> Args)> Calls { get; } = [];
+
+        public Task<ProcessRunResult> RunAsync(
+            string fileName,
+            IReadOnlyList<string> args,
+            IReadOnlyDictionary<string, string>? environment = null,
+            string? standardInput = null,
+            TimeSpan? timeout = null,
+            bool detachAfterExit = false,
+            CancellationToken ct = default
+        )
+        {
+            ct.ThrowIfCancellationRequested();
+            Calls.Add((fileName, args.ToArray()));
+            return Task.FromResult(respond?.Invoke(fileName, args)
+                ?? new ProcessRunResult(true, false, 0, "", ""));
+        }
     }
 }

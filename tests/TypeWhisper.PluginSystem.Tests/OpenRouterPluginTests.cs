@@ -17,6 +17,105 @@ namespace TypeWhisper.PluginSystem.Tests;
 
 public class OpenRouterPluginTests
 {
+    private const string CatalogJson = """{"data":[{"id":"fixture/model","name":"Fixture","architecture":{"modality":"text->text"}}]}""";
+
+    [Fact]
+    public async Task RefreshCatalog_UpdatesBothAndDoesNotNotifyForUnchangedCatalogs()
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) => JsonResponse(CatalogJson)));
+        using var sut = new OpenRouterPlugin(client);
+        var host = new TestPluginHostServices();
+        await sut.ActivateAsync(host);
+        await sut.RefreshModelCatalogAsync();
+        Assert.Contains(sut.FetchedModels, model => model.Id == "fixture/model");
+        Assert.Equal("fixture/model", Assert.Single(sut.FetchedTranscriptionModels).Id);
+        var notifications = host.NotifyCapabilitiesChangedCount;
+        await sut.RefreshModelCatalogAsync();
+        Assert.Equal(notifications, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_BothFailuresPreserveCatalogsAndSelections()
+    {
+        using var client = new HttpClient(new CapturingHandler((_, _) => new HttpResponseMessage(HttpStatusCode.BadGateway)));
+        using var sut = new OpenRouterPlugin(client);
+        var host = new TestPluginHostServices();
+        await sut.ActivateAsync(host);
+        sut.SetFetchedModels([new OpenRouterFetchedModel("saved/model", "Saved", "0", "0")]);
+        sut.SelectLlmModel("saved/model");
+        sut.SetFetchedTranscriptionModels([new OpenRouterFetchedModel("saved/audio", "Saved audio", "0", "0")]);
+        var notifications = host.NotifyCapabilitiesChangedCount;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RefreshModelCatalogAsync());
+        Assert.Contains(sut.FetchedModels, model => model.Id == "saved/model");
+        Assert.Equal("saved/audio", Assert.Single(sut.FetchedTranscriptionModels).Id);
+        Assert.Equal("saved/model", sut.SelectedLlmModelId);
+        Assert.Equal("saved/audio", sut.SelectedModelId);
+        Assert.True(host.GetSetting<bool>("userSelectedLlmModel"));
+        Assert.Equal(notifications, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefreshCatalog_DiscardsResponseAfterNewRefreshOrKeyChange(bool changeKey)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        using var client = new HttpClient(new AsyncCatalogHandler(async () =>
+        {
+            if (Interlocked.Increment(ref calls) != 1)
+            {
+                return JsonResponse(CatalogJson);
+            }
+
+            started.SetResult();
+            await release.Task;
+            return JsonResponse(CatalogJson.Replace("fixture/model", "stale/model"));
+        }));
+        using var sut = new OpenRouterPlugin(client);
+        await sut.ActivateAsync(new TestPluginHostServices());
+        var oldRefresh = sut.RefreshModelCatalogAsync();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (changeKey)
+            await sut.SetApiKeyAsync("new-key");
+        else
+            await sut.RefreshModelCatalogAsync();
+        release.SetResult();
+        await oldRefresh;
+        Assert.DoesNotContain(sut.FetchedModels, model => model.Id == "stale/model");
+    }
+
+    [Fact]
+    public async Task RefreshCatalog_DeadlinePreventsLateMutationEvenWhenHandlerIgnoresCancellation()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = new HttpClient(new AsyncCatalogHandler(async () =>
+        {
+            await release.Task;
+            return JsonResponse(CatalogJson);
+        }));
+        using var sut = new OpenRouterPlugin(client, TimeSpan.FromMilliseconds(50));
+        var host = new TestPluginHostServices();
+        await sut.ActivateAsync(host);
+        await Assert.ThrowsAsync<TimeoutException>(() => sut.RefreshModelCatalogAsync());
+        release.SetResult();
+        await Task.Delay(100);
+        Assert.Empty(sut.FetchedModels);
+        Assert.Empty(sut.FetchedTranscriptionModels);
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+    }
+
+    private sealed class AsyncCatalogHandler(Func<Task<HttpResponseMessage>> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => respond();
+    }
+
+    [Fact]
+    public Task RequestFailures_AreClassified() =>
+        ProviderFailureAssertions.VerifyAsync<OpenRouterPlugin>();
+
+
     [Fact]
     public void PluginVersion_MatchesManifestVersion()
     {
@@ -33,7 +132,7 @@ public class OpenRouterPluginTests
 
         Assert.Equal("com.typewhisper.openrouter", manifest.GetProperty("id").GetString());
         Assert.Equal("OpenRouter", manifest.GetProperty("name").GetString());
-        Assert.Equal("llm", manifest.GetProperty("category").GetString());
+        Assert.Equal(["transcription", "llm"], manifest.GetProperty("categories").EnumerateArray().Select(e => e.GetString()!).ToArray());
         Assert.Equal(
             "TypeWhisper.Plugin.OpenRouter.dll",
             manifest.GetProperty("assemblyName").GetString());
@@ -64,13 +163,68 @@ public class OpenRouterPluginTests
     }
 
     [Fact]
+    public async Task SupportedLanguages_FollowSelectedModel()
+    {
+        var host = new TestPluginHostServices();
+        using var sut = new OpenRouterPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(57, sut.SupportedLanguages.Count);
+        Assert.Contains("en", sut.SupportedLanguages);
+        Assert.Contains("de", sut.SupportedLanguages);
+        Assert.DoesNotContain("de-DE", sut.SupportedLanguages);
+        sut.SelectModel("openai/whisper-large-v3-turbo");
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+
+        sut.SelectModel("google/chirp-3");
+        Assert.Empty(sut.SupportedLanguages);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+        sut.SelectModel("google/chirp-3");
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+
+        sut.SelectModel("openai/whisper-1");
+        Assert.Equal(57, sut.SupportedLanguages.Count);
+        Assert.Equal(2, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task TranscriptionModels_CarryLanguageCountsForFallbackAndFetchedModels()
+    {
+        using var sut = new OpenRouterPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+        var openAiIds = new[]
+        {
+            "openai/whisper-large-v3-turbo", "openai/whisper-large-v3", "openai/whisper-1",
+            "openai/gpt-4o-mini-transcribe", "openai/gpt-4o-transcribe", "openai/gpt-transcribe",
+        };
+        Assert.All(sut.TranscriptionModels, model =>
+            Assert.Equal(openAiIds.Contains(model.Id) ? 57 : 0, model.LanguageCount));
+
+        var ids = openAiIds.Concat(["google/chirp-3", "openai/other", "groq/whisper-large-v3"]);
+        sut.SetFetchedTranscriptionModels(ids.Select(id => new OpenRouterFetchedModel(id, id, "0", "0")).ToList());
+
+        Assert.All(sut.TranscriptionModels, model =>
+        {
+            var expected = openAiIds.Contains(model.Id) ? 57 : 0;
+            Assert.Equal(expected, model.LanguageCount);
+            sut.SelectModel(model.Id);
+            Assert.Equal(expected, sut.SupportedLanguages.Count);
+        });
+
+        sut.SetFetchedTranscriptionModels([new OpenRouterFetchedModel("OpenAI/whisper-1", "Case variant", "0", "0")]);
+        sut.SelectModel("OpenAI/whisper-1");
+        Assert.Equal(0, Assert.Single(sut.TranscriptionModels).LanguageCount);
+        Assert.Empty(sut.SupportedLanguages);
+    }
+
+    [Fact]
     public async Task ActivateAsync_RestoresFetchedTranscriptionModelsAndNormalizesStaleSelection()
     {
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
         host.SetSetting("fetchedTranscriptionModels", new List<OpenRouterFetchedModel>
         {
             new("z/stt", "Zulu STT", "0.000002", "0"),
-            new("a/stt", "Alpha STT", "0", "0")
+            new("a/stt", "Alpha STT", "0", "0"),
         });
         host.SetSetting("selectedTranscriptionModel", "missing/stt");
 
@@ -159,7 +313,7 @@ public class OpenRouterPluginTests
         host.SetSetting("fetchedModels", new List<OpenRouterFetchedModel>
         {
             new("z/model", "Z Model", "0.000002", "0.000003"),
-            new("a/model", "A Model", "0", "0")
+            new("a/model", "A Model", "0", "0"),
         });
         host.SetSetting("selectedLlmModel", "missing/model");
 
@@ -389,6 +543,85 @@ public class OpenRouterPluginTests
     }
 
     [Fact]
+    public async Task FetchCreditsAsync_PrefersLimitRemaining()
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.Equal("https://openrouter.ai/api/v1/auth/key", request.RequestUri?.ToString());
+            return JsonResponse("""{"data":{"limit":10,"usage":100,"limit_remaining":7.5}}""");
+        });
+        using var sut = new OpenRouterPlugin(new HttpClient(handler));
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } });
+
+        Assert.Equal(7.5, await sut.FetchCreditsAsync());
+    }
+
+    [Theory]
+    [InlineData("openai/whisper-1", true)]
+    [InlineData("google/chirp-3", false)]
+    [InlineData("groq/whisper-large-v3", true)]
+    [InlineData("together/whisper-large-v3", true)]
+    [InlineData("openai/gpt-4o-transcribe", false)]
+    [InlineData("openai/gpt-4o-mini-transcribe", false)]
+    [InlineData("openai/gpt-transcribe", false)]
+    [InlineData("openai", false)]
+    public async Task TranscribeAsync_RequestsAndPreservesSupportedTimestamps(string model, bool timed)
+    {
+        var handler = new CapturingHandler((_, body) =>
+        {
+            using var doc = JsonDocument.Parse(body!);
+            Assert.Equal(model, doc.RootElement.GetProperty("model").GetString());
+            Assert.Equal(timed, doc.RootElement.TryGetProperty("response_format", out var format));
+            Assert.Equal(timed, doc.RootElement.TryGetProperty("timestamp_granularities", out var granularities));
+            // ReSharper disable once InvertIf -- the assertions belong before the shared response; inverting would duplicate the return.
+            if (timed)
+            {
+                Assert.Equal("verbose_json", format.GetString());
+                Assert.Equal(["segment"], granularities.EnumerateArray().Select(item => item.GetString()!).ToArray());
+            }
+
+            return JsonResponse("""{"text":" Hello ","usage":{"seconds":1.25},"segments":[{"text":"Hello","start":0,"end":1.25,"no_speech_prob":0.1},{"text":"bad","start":3,"end":1},{"text":"nan","start":"x","end":2}]}""");
+        });
+        using var sut = new OpenRouterPlugin(new HttpClient(handler));
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } });
+        sut.SetFetchedTranscriptionModels([new OpenRouterFetchedModel(model, model, "0", "0")]);
+        sut.SelectModel(model);
+
+        var result = await sut.TranscribeAsync([1], null, false, null, CancellationToken.None);
+
+        Assert.Equal("Hello", result.Text);
+        Assert.Equal(1.25, result.DurationSeconds);
+        Assert.Null(result.DetectedLanguage);
+        var segment = Assert.Single(result.Segments);
+        Assert.Equal("Hello", segment.Text);
+        Assert.Equal(0, segment.Start);
+        Assert.Equal(1.25, segment.End);
+        Assert.Equal(0.1f, segment.NoSpeechProbability);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("42")]
+    [InlineData("{}")]
+    [InlineData("{\"text\":42,\"start\":0,\"end\":1}")]
+    [InlineData("{\"text\":\"bad\",\"start\":-1,\"end\":1}")]
+    [InlineData("{\"text\":\"bad\",\"start\":1e400,\"end\":1e400}")]
+    [InlineData("{\"text\":\"bad\",\"start\":0,\"end\":1e400}")]
+    [InlineData("{\"text\":\"bad\",\"start\":0,\"end\":\"1\"}")]
+    public async Task TranscribeAsync_DropsInvalidSegments(string segmentJson)
+    {
+        var handler = new CapturingHandler((_, _) =>
+            JsonResponse($$"""{"text":"Hello","duration":2,"segments":[{{segmentJson}}]}"""));
+        using var sut = new OpenRouterPlugin(new HttpClient(handler));
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } });
+
+        var result = await sut.TranscribeAsync([1], null, false, null, CancellationToken.None);
+
+        Assert.Empty(result.Segments);
+        Assert.Equal(2, result.DurationSeconds);
+    }
+
+    [Fact]
     public async Task TranscribeAsync_PostsBase64WavToOpenRouterTranscriptionsEndpoint()
     {
         var handler = new CapturingHandler((request, body) =>
@@ -426,10 +659,11 @@ public class OpenRouterPluginTests
         Assert.Equal("Hallo Welt", result.Text);
         Assert.Null(result.DetectedLanguage);
         Assert.Equal(1.25, result.DurationSeconds);
+        Assert.Empty(result.Segments);
     }
 
     [Fact]
-    public async Task TranscribeAsync_OmitsAutoLanguageAndRejectsTranslation()
+    public async Task TranscribeAsync_OmitsUnspecifiedLanguageAndRejectsTranslation()
     {
         var handler = new CapturingHandler((request, body) =>
         {
@@ -445,7 +679,7 @@ public class OpenRouterPluginTests
         var sut = new OpenRouterPlugin(httpClient);
         await sut.ActivateAsync(host);
 
-        await sut.TranscribeAsync([1], "auto", translate: false, prompt: null, CancellationToken.None);
+        await sut.TranscribeAsync([1], null, translate: false, prompt: null, CancellationToken.None);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             sut.TranscribeAsync([1], "en", translate: true, prompt: null, CancellationToken.None));
         Assert.Contains("does not support translation", ex.Message);
@@ -533,6 +767,7 @@ public class OpenRouterPluginTests
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}",
             "",
             "data: [DONE]",
+            "",
             "");
         var handler = new CapturingHandler((request, body) =>
         {
@@ -542,7 +777,7 @@ public class OpenRouterPluginTests
                 request.RequestUri?.ToString());
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -574,8 +809,8 @@ public class OpenRouterPluginTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n",
-                    Encoding.UTF8, "text/event-stream")
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n",
+                    Encoding.UTF8, "text/event-stream"),
             };
         });
 
@@ -637,7 +872,7 @@ public class OpenRouterPluginTests
                 "selectedLlmModel",
                 "llmTemperatureMode",
                 "llmTemperatureValue",
-                "streamResponses"
+                "streamResponses",
             ],
             keys);
     }
@@ -755,7 +990,7 @@ public class OpenRouterPluginTests
                           ]
                         }
                         """),
-                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
         });
 
@@ -778,6 +1013,46 @@ public class OpenRouterPluginTests
         Assert.Equal(
             ["openai/whisper-large-v3-turbo"],
             sut.TranscriptionModels.Select(m => m.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task ValidateAsync_RefreshFailureKeepsSavedCatalogAndSelection()
+    {
+        var handler = new CapturingHandler((request, _) => request.RequestUri?.AbsolutePath switch
+        {
+            "/api/v1/models" => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            "/api/v1/auth/key" => JsonResponse("""{"data":{"limit_remaining":7.5}}"""),
+            _ => throw new InvalidOperationException("Unexpected request"),
+        });
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "openrouter-key" } };
+        host.SetSetting("fetchedModels", new List<OpenRouterFetchedModel>
+        {
+            new("anthropic/claude-sonnet-4", "Saved LLM", "1", "2"),
+        });
+        host.SetSetting("selectedLlmModel", "anthropic/claude-sonnet-4");
+        host.SetSetting("userSelectedLlmModel", true);
+        host.SetSetting("fetchedTranscriptionModels", new List<OpenRouterFetchedModel>
+        {
+            new("google/chirp-3", "Saved STT", "3", "0"),
+        });
+        host.SetSetting("selectedTranscriptionModel", "google/chirp-3");
+        using var sut = new OpenRouterPlugin(new HttpClient(handler));
+        await sut.ActivateAsync(host);
+        var models = sut.FetchedModels.ToArray();
+        var transcriptionModels = sut.FetchedTranscriptionModels.ToArray();
+
+        var result = await sut.ValidateAsync();
+
+        Assert.True(result!.IsSuccess);
+        Assert.Equal(models, sut.FetchedModels);
+        Assert.Equal(transcriptionModels, sut.FetchedTranscriptionModels);
+        Assert.Equal("anthropic/claude-sonnet-4", sut.SelectedLlmModelId);
+        Assert.Equal("google/chirp-3", sut.SelectedModelId);
+        Assert.Equal("anthropic/claude-sonnet-4", host.GetSetting<string>("selectedLlmModel"));
+        Assert.Equal(models.Where(model => model.Id != "openrouter/free"),
+            host.GetSetting<List<OpenRouterFetchedModel>>("fetchedModels"));
+        Assert.Equal(transcriptionModels, host.GetSetting<List<OpenRouterFetchedModel>>("fetchedTranscriptionModels"));
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
     }
 
     [Fact]
@@ -809,7 +1084,7 @@ public class OpenRouterPluginTests
     private static HttpResponseMessage JsonResponse(string json) =>
         new(HttpStatusCode.OK)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
 
     private sealed class CapturingHandler(
@@ -830,7 +1105,7 @@ public class OpenRouterPluginTests
     {
         private static readonly JsonSerializerOptions s_jsonOptions = new()
         {
-            PropertyNameCaseInsensitive = true
+            PropertyNameCaseInsensitive = true,
         };
 
         private readonly Dictionary<string, JsonElement> _settings = [];

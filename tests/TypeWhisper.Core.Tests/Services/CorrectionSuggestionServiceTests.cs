@@ -33,6 +33,23 @@ public sealed class CorrectionSuggestionServiceTests
     }
 
     [Fact]
+    public void GenerateSuggestions_IsolatesEditedWordWithinUnchangedSurroundingText()
+    {
+        // Mirrors the target-app learning flow: baseline is the whole field text right
+        // after insertion; final is the same field after the user types over one word.
+        // The common prefix/suffix trim must isolate just the corrected word even though
+        // most of the surrounding sentence is unchanged.
+        var result = CorrectionSuggestionService.GenerateSuggestions(
+            "Please email jon about the kubernets migration next week",
+            "Please email jon about the Kubernetes migration next week"
+        );
+
+        var suggestion = Assert.Single(result);
+        Assert.Equal("kubernets", suggestion.Original);
+        Assert.Equal("Kubernetes", suggestion.Replacement);
+    }
+
+    [Fact]
     public void GenerateSuggestions_DoesNotSuggestLargeRewrite()
     {
         var result = CorrectionSuggestionService.GenerateSuggestions(
@@ -60,6 +77,20 @@ public sealed class CorrectionSuggestionServiceTests
     public void GenerateSuggestions_DoesNotSuggestWhenOnlyPunctuationChanged()
     {
         var result = CorrectionSuggestionService.GenerateSuggestions("hello world", "hello, world");
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void GenerateSuggestions_DoesNotSuggestWhenChangedTokenEmbedsNewline()
+    {
+        // Tokenize only splits on spaces, so a word adjacent to a line break gloms into one
+        // token ("update\nplease"); a correction embedding a newline is never a sensible
+        // word-level fix and must be rejected.
+        var result = CorrectionSuggestionService.GenerateSuggestions(
+            "send the status update please",
+            "send the status update\nplease"
+        );
 
         Assert.Empty(result);
     }

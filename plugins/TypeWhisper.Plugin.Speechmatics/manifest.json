@@ -1,9 +1,12 @@
 {
   "id": "com.typewhisper.speechmatics",
   "name": "Speechmatics",
-  "version": "1.0.0",
+  "version": "1.1.1",
+  "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Speechmatics speech-to-text transcription engine",
+  "networkAccess": "network",
+  "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.Speechmatics.dll",
   "pluginClass": "TypeWhisper.Plugin.Speechmatics.SpeechmaticsPlugin"
 }

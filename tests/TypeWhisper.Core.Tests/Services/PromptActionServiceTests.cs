@@ -24,6 +24,18 @@ public sealed class PromptActionServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetActions_ReportsACorruptFileResetToEmpty()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+
+        Assert.False(new PromptActionService(_filePath).TryGetActions(out _));
+
+        File.Delete(_filePath);
+
+        Assert.True(new PromptActionService(_filePath).TryGetActions(out _));
+    }
+
+    [Fact]
     public void AddAction_PersistsAndLoads()
     {
         _sut.AddAction(
@@ -32,7 +44,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Id = "1",
                 Name = "Test Prompt",
                 SystemPrompt = "Do something",
-                Icon = "\U0001F680"
+                Icon = "\U0001F680",
             }
         );
 
@@ -51,7 +63,7 @@ public sealed class PromptActionServiceTests : IDisposable
             {
                 Id = "1",
                 Name = "Original",
-                SystemPrompt = "Original prompt"
+                SystemPrompt = "Original prompt",
             }
         );
 
@@ -60,7 +72,7 @@ public sealed class PromptActionServiceTests : IDisposable
             {
                 Id = "1",
                 Name = "Updated",
-                SystemPrompt = "Updated prompt"
+                SystemPrompt = "Updated prompt",
             }
         );
 
@@ -78,7 +90,7 @@ public sealed class PromptActionServiceTests : IDisposable
             {
                 Id = "1",
                 Name = "A",
-                SystemPrompt = "a"
+                SystemPrompt = "a",
             }
         );
         _sut.AddAction(
@@ -86,7 +98,7 @@ public sealed class PromptActionServiceTests : IDisposable
             {
                 Id = "2",
                 Name = "B",
-                SystemPrompt = "b"
+                SystemPrompt = "b",
             }
         );
 
@@ -130,7 +142,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Name = "C",
                 SystemPrompt = "c",
                 SortOrder = 2,
-                IsEnabled = true
+                IsEnabled = true,
             }
         );
         _sut.AddAction(
@@ -140,7 +152,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Name = "A",
                 SystemPrompt = "a",
                 SortOrder = 0,
-                IsEnabled = true
+                IsEnabled = true,
             }
         );
         _sut.AddAction(
@@ -150,7 +162,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Name = "B",
                 SystemPrompt = "b",
                 SortOrder = 1,
-                IsEnabled = false
+                IsEnabled = false,
             }
         );
 
@@ -169,7 +181,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Id = "1",
                 Name = "First",
                 SystemPrompt = "a",
-                SortOrder = 0
+                SortOrder = 0,
             }
         );
         _sut.AddAction(
@@ -178,7 +190,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Id = "2",
                 Name = "Second",
                 SystemPrompt = "b",
-                SortOrder = 1
+                SortOrder = 1,
             }
         );
         _sut.AddAction(
@@ -187,7 +199,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Id = "3",
                 Name = "Third",
                 SystemPrompt = "c",
-                SortOrder = 2
+                SortOrder = 2,
             }
         );
 
@@ -211,7 +223,7 @@ public sealed class PromptActionServiceTests : IDisposable
             {
                 Id = "1",
                 Name = "Test",
-                SystemPrompt = "test"
+                SystemPrompt = "test",
             }
         );
 
@@ -228,7 +240,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Name = "With Provider",
                 SystemPrompt = "test",
                 ProviderOverride = "plugin:com.test:model-1",
-                ModelOverride = "model-1"
+                ModelOverride = "model-1",
             }
         );
 
@@ -248,7 +260,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Name = "With Target",
                 SystemPrompt = "test",
                 TargetActionPluginId = "com.test.linear",
-                HotkeyKey = "Ctrl+Shift+L"
+                HotkeyKey = "Ctrl+Shift+L",
             }
         );
 
@@ -266,7 +278,7 @@ public sealed class PromptActionServiceTests : IDisposable
             {
                 Id = "1",
                 Name = "Normal",
-                SystemPrompt = "test"
+                SystemPrompt = "test",
             }
         );
 
@@ -285,7 +297,7 @@ public sealed class PromptActionServiceTests : IDisposable
                 Id = "1",
                 Name = "Manual",
                 SystemPrompt = "test",
-                IsManualOnly = true
+                IsManualOnly = true,
             }
         );
 
@@ -306,5 +318,56 @@ public sealed class PromptActionServiceTests : IDisposable
         var service = new PromptActionService(_filePath);
         var action = Assert.Single(service.Actions);
         Assert.False(action.IsManualOnly);
+    }
+
+    [Fact]
+    public void AddAction_WhenSaveFails_ThrowsWithoutChangingCacheFileOrEvent()
+    {
+        const string originalJson =
+            "[{\"Id\":\"old\",\"Name\":\"Old\",\"SystemPrompt\":\"Keep this\"}]";
+        using var failurePath = new AtomicWriteFailureTestPath(originalJson);
+        var sut = new PromptActionService(failurePath.FilePath);
+        var original = Assert.Single(sut.Actions);
+        var before = File.ReadAllBytes(failurePath.FilePath);
+        var eventFired = false;
+        sut.ActionsChanged += () => eventFired = true;
+
+        Assert.ThrowsAny<Exception>(() =>
+            sut.AddAction(
+                new PromptAction
+                {
+                    Id = "new",
+                    Name = "New",
+                    SystemPrompt = "Do not persist",
+                }
+            )
+        );
+
+        Assert.Same(original, Assert.Single(sut.Actions));
+        Assert.False(eventFired);
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
+    }
+
+    [Fact]
+    public void UpdateAction_WhenSaveFails_ThrowsWithoutChangingCacheFileOrEvent()
+    {
+        const string originalJson =
+            "[{\"Id\":\"old\",\"Name\":\"Old\",\"SystemPrompt\":\"Keep this\"}]";
+        using var failurePath = new AtomicWriteFailureTestPath(originalJson);
+        var sut = new PromptActionService(failurePath.FilePath);
+        var original = Assert.Single(sut.Actions);
+        var before = File.ReadAllBytes(failurePath.FilePath);
+        var eventFired = false;
+        sut.ActionsChanged += () => eventFired = true;
+
+        Assert.ThrowsAny<Exception>(() =>
+            sut.UpdateAction(original with { Name = "Changed", SystemPrompt = "Changed" })
+        );
+
+        Assert.Same(original, Assert.Single(sut.Actions));
+        Assert.False(eventFired);
+        Assert.Equal(before, File.ReadAllBytes(failurePath.FilePath));
+        Assert.Empty(failurePath.TemporaryFiles);
     }
 }

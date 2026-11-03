@@ -1,0 +1,142 @@
+DOTNET="/tmp/typewhisper-dotnet/dotnet" "/tmp/typewhisper-dotnet/dotnet" build TypeWhisper.slnx -c Release --no-restore
+  TypeWhisper.PluginSDK -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.PluginSDK/bin/Release/net10.0/TypeWhisper.PluginSDK.dll
+  TypeWhisper.Plugin.GoogleCloudStt -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.GoogleCloudStt/bin/Release/net10.0/TypeWhisper.Plugin.GoogleCloudStt.dll
+  TypeWhisper.Plugin.Cohere -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Cohere/bin/Release/net10.0/TypeWhisper.Plugin.Cohere.dll
+  TypeWhisper.Plugin.Qwen3Stt -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Qwen3Stt/bin/Release/net10.0/TypeWhisper.Plugin.Qwen3Stt.dll
+  TypeWhisper.Plugin.Script -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Script/bin/Release/net10.0/TypeWhisper.Plugin.Script.dll
+  TypeWhisper.Plugin.AssemblyAi -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.AssemblyAi/bin/Release/net10.0/TypeWhisper.Plugin.AssemblyAi.dll
+  TypeWhisper.Plugin.OpenAiVectorMemory -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.OpenAiVectorMemory/bin/Release/net10.0/TypeWhisper.Plugin.OpenAiVectorMemory.dll
+  TypeWhisper.Plugin.SmallestAi -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.SmallestAi/bin/Release/net10.0/TypeWhisper.Plugin.SmallestAi.dll
+  TypeWhisper.Plugin.OpenRouter -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.OpenRouter/bin/Release/net10.0/TypeWhisper.Plugin.OpenRouter.dll
+  TypeWhisper.Plugin.Obsidian -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Obsidian/bin/Release/net10.0/TypeWhisper.Plugin.Obsidian.dll
+  TypeWhisper.Plugin.Speechmatics -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Speechmatics/bin/Release/net10.0/TypeWhisper.Plugin.Speechmatics.dll
+  TypeWhisper.Plugin.MicrosoftAi -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.MicrosoftAi/bin/Release/net10.0/TypeWhisper.Plugin.MicrosoftAi.dll
+  TypeWhisper.Plugin.Reson8 -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Reson8/bin/Release/net10.0/TypeWhisper.Plugin.Reson8.dll
+  TypeWhisper.Plugin.ParakeetCtc -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.ParakeetCtc/bin/Release/net10.0/TypeWhisper.Plugin.ParakeetCtc.dll
+  TypeWhisper.Plugin.Soniox -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Soniox/bin/Release/net10.0/TypeWhisper.Plugin.Soniox.dll
+  TypeWhisper.Plugin.Cerebras -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Cerebras/bin/Release/net10.0/TypeWhisper.Plugin.Cerebras.dll
+  TypeWhisper.Plugin.Webhook -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Webhook/bin/Release/net10.0/TypeWhisper.Plugin.Webhook.dll
+  TypeWhisper.Plugin.SherpaOnnx -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.SherpaOnnx/bin/Release/net10.0/TypeWhisper.Plugin.SherpaOnnx.dll
+  TypeWhisper.Plugin.SupertonicTts -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.SupertonicTts/bin/Release/net10.0/TypeWhisper.Plugin.SupertonicTts.dll
+  TypeWhisper.Plugin.Gladia -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Gladia/bin/Release/net10.0/TypeWhisper.Plugin.Gladia.dll
+  TypeWhisper.Plugin.Voxtral -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Voxtral/bin/Release/net10.0/TypeWhisper.Plugin.Voxtral.dll
+  TypeWhisper.Plugin.ElevenLabs -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.ElevenLabs/bin/Release/net10.0/TypeWhisper.Plugin.ElevenLabs.dll
+  TypeWhisper.Plugin.Deepgram -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Deepgram/bin/Release/net10.0/TypeWhisper.Plugin.Deepgram.dll
+  TypeWhisper.Plugin.FileMemory -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.FileMemory/bin/Release/net10.0/TypeWhisper.Plugin.FileMemory.dll
+  TypeWhisper.Plugin.FillerWords -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.FillerWords/bin/Release/net10.0/TypeWhisper.Plugin.FillerWords.dll
+  TypeWhisper.Plugin.Meta -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Meta/bin/Release/net10.0/TypeWhisper.Plugin.Meta.dll
+  TypeWhisper.Plugin.Linear -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Linear/bin/Release/net10.0/TypeWhisper.Plugin.Linear.dll
+  TypeWhisper.Plugin.Fireworks -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Fireworks/bin/Release/net10.0/TypeWhisper.Plugin.Fireworks.dll
+  TypeWhisper.Core -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Core/bin/Release/net10.0/TypeWhisper.Core.dll
+  TypeWhisper.Plugin.WhisperCpp -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.WhisperCpp/bin/Release/net10.0/TypeWhisper.Plugin.WhisperCpp.dll
+  TypeWhisper.Plugin.Gemini -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Gemini/bin/Release/net10.0/TypeWhisper.Plugin.Gemini.dll
+  TypeWhisper.Plugin.AuthenticatedCli -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.AuthenticatedCli/bin/Release/net10.0/TypeWhisper.Plugin.AuthenticatedCli.dll
+  TypeWhisper.FakeProviderCli -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.FakeProviderCli/bin/Release/net10.0/TypeWhisper.FakeProviderCli.dll
+  TypeWhisper.Plugin.Xai -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Xai/bin/Release/net10.0/TypeWhisper.Plugin.Xai.dll
+  TypeWhisper.ProcessTestChild -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.ProcessTestChild/bin/Release/net10.0/TypeWhisper.ProcessTestChild.dll
+  TypeWhisper.Plugin.OpenAiCompatible -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.OpenAiCompatible/bin/Release/net10.0/TypeWhisper.Plugin.OpenAiCompatible.dll
+  TypeWhisper.TranscriptionWorkerProbe -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.TranscriptionWorkerProbe/bin/Release/net10.0/TypeWhisper.TranscriptionWorkerProbe.dll
+  TypeWhisper.Plugin.OpenAi -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.OpenAi/bin/Release/net10.0/TypeWhisper.Plugin.OpenAi.dll
+  TypeWhisper.Plugin.CloudflareAsr -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.CloudflareAsr/bin/Release/net10.0/TypeWhisper.Plugin.CloudflareAsr.dll
+  TypeWhisper.Plugin.Claude -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Claude/bin/Release/net10.0/TypeWhisper.Plugin.Claude.dll
+  TypeWhisper.Plugin.Groq -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.Groq/bin/Release/net10.0/TypeWhisper.Plugin.Groq.dll
+  TypeWhisper.Cli -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Cli/bin/Release/net10.0/typewhisper-cli.dll
+  TypeWhisper.Plugin.GemmaLocal -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/plugins/TypeWhisper.Plugin.GemmaLocal/bin/Release/net10.0/TypeWhisper.Plugin.GemmaLocal.dll
+  TypeWhisper.Core.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Core.Tests/bin/Release/net10.0/TypeWhisper.Core.Tests.dll
+  TypeWhisper.Cli.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Cli.Tests/bin/Release/net10.0/TypeWhisper.Cli.Tests.dll
+  TypeWhisper.Linux -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/typewhisper.dll
+  ==> com.typewhisper.assemblyai (TypeWhisper.Plugin.AssemblyAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.assemblyai
+  ==> com.typewhisper.authenticated-cli (TypeWhisper.Plugin.AuthenticatedCli)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.authenticated-cli
+  ==> com.typewhisper.cerebras (TypeWhisper.Plugin.Cerebras)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.cerebras
+  ==> com.typewhisper.claude (TypeWhisper.Plugin.Claude)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.claude
+  ==> com.typewhisper.cloudflare-asr (TypeWhisper.Plugin.CloudflareAsr)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.cloudflare-asr
+  ==> com.typewhisper.cohere (TypeWhisper.Plugin.Cohere)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.cohere
+  ==> com.typewhisper.deepgram (TypeWhisper.Plugin.Deepgram)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.deepgram
+  ==> com.typewhisper.elevenlabs (TypeWhisper.Plugin.ElevenLabs)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.elevenlabs
+  ==> com.typewhisper.file-memory (TypeWhisper.Plugin.FileMemory)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.file-memory
+  ==> com.typewhisper.filler-words (TypeWhisper.Plugin.FillerWords)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.filler-words
+  ==> com.typewhisper.fireworks (TypeWhisper.Plugin.Fireworks)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.fireworks
+  ==> com.typewhisper.gemini (TypeWhisper.Plugin.Gemini)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.gemini
+  ==> com.typewhisper.gemma-local (TypeWhisper.Plugin.GemmaLocal)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.gemma-local
+  ==> com.typewhisper.gladia (TypeWhisper.Plugin.Gladia)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.gladia
+  ==> com.typewhisper.google-cloud-stt (TypeWhisper.Plugin.GoogleCloudStt)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.google-cloud-stt
+  ==> com.typewhisper.groq (TypeWhisper.Plugin.Groq)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.groq
+  ==> com.typewhisper.linear (TypeWhisper.Plugin.Linear)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.linear
+  ==> com.typewhisper.meta (TypeWhisper.Plugin.Meta)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.meta
+  ==> com.typewhisper.microsoft-ai (TypeWhisper.Plugin.MicrosoftAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.microsoft-ai
+  ==> com.typewhisper.obsidian (TypeWhisper.Plugin.Obsidian)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.obsidian
+  ==> com.typewhisper.openai (TypeWhisper.Plugin.OpenAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai
+  ==> com.typewhisper.openai-compatible (TypeWhisper.Plugin.OpenAiCompatible)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai-compatible
+  ==> com.typewhisper.openai-vector-memory (TypeWhisper.Plugin.OpenAiVectorMemory)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openai-vector-memory
+  ==> com.typewhisper.openrouter (TypeWhisper.Plugin.OpenRouter)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.openrouter
+  ==> com.typewhisper.parakeet-ctc (TypeWhisper.Plugin.ParakeetCtc)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.parakeet-ctc
+  ==> com.typewhisper.qwen3-stt (TypeWhisper.Plugin.Qwen3Stt)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.qwen3-stt
+  ==> com.typewhisper.reson8 (TypeWhisper.Plugin.Reson8)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.reson8
+  ==> com.typewhisper.script (TypeWhisper.Plugin.Script)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.script
+  ==> com.typewhisper.sherpa-onnx (TypeWhisper.Plugin.SherpaOnnx)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.sherpa-onnx
+  ==> com.typewhisper.smallest-ai (TypeWhisper.Plugin.SmallestAi)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.smallest-ai
+  ==> com.typewhisper.soniox (TypeWhisper.Plugin.Soniox)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.soniox
+  ==> com.typewhisper.speechmatics (TypeWhisper.Plugin.Speechmatics)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.speechmatics
+  ==> com.typewhisper.supertonic-tts (TypeWhisper.Plugin.SupertonicTts)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.supertonic-tts
+  ==> com.typewhisper.voxtral (TypeWhisper.Plugin.Voxtral)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.voxtral
+  ==> com.typewhisper.webhook (TypeWhisper.Plugin.Webhook)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.webhook
+  ==> com.typewhisper.whisper-cpp (TypeWhisper.Plugin.WhisperCpp)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.whisper-cpp
+  ==> com.typewhisper.xai (TypeWhisper.Plugin.Xai)
+      -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins/com.typewhisper.xai
+
+  Done. Bundled plugins are in: /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Linux/bin/Release/net10.0/Plugins
+  On first run, BundledPluginDeployer will copy them into ~/.local/share/TypeWhisper/Plugins/
+  TypeWhisper.Integration.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Integration.Tests/bin/Release/net10.0/TypeWhisper.Integration.Tests.dll
+  TypeWhisper.Linux.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.Linux.Tests/bin/Release/net10.0/TypeWhisper.Linux.Tests.dll
+  TypeWhisper.PluginSystem.Tests -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/tests/TypeWhisper.PluginSystem.Tests/bin/Release/net10.0/TypeWhisper.PluginSystem.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:58.47
+"/tmp/typewhisper-dotnet/dotnet" build src/TypeWhisper.Cli/TypeWhisper.Cli.csproj -c Release --no-restore
+  TypeWhisper.PluginSDK -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.PluginSDK/bin/Release/net10.0/TypeWhisper.PluginSDK.dll
+  TypeWhisper.Cli -> /home/jshah/.t3/worktrees/typewhisper-linux/t3-c1871b28/src/TypeWhisper.Cli/bin/Release/net10.0/typewhisper-cli.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.54

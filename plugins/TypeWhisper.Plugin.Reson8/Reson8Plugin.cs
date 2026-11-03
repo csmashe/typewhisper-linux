@@ -1,14 +1,23 @@
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Reson8;
 
-public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed partial class Reson8Plugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     internal const string DefaultModelId = "__default__";
     internal const string DefaultBaseUrl = "https://api.reson8.dev";
@@ -18,29 +27,30 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private const string SelectedModelSettingName = "selectedModel";
     private const string CustomBaseUrlSettingName = "customBaseURL";
     private const string CustomAuthHeaderSettingName = "customAuthHeader";
-    private const string FetchedCustomModelsSettingName = "fetchedCustomModels";
 
-    private static readonly IReadOnlyList<string> Languages =
+    private static readonly IReadOnlyList<string> s_languages =
     [
-        "nl", "en", "fr", "de", "it", "pl", "pt", "es", "sv"
+        "nl", "en", "fr", "de", "it", "pl", "pt", "es", "sv",
     ];
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly DictionaryTermsBudget s_phrasesBudget = new(MaxTerms: 250, MaxCharsPerTerm: 255);
+
+    // Phrases go in the request URL; this keeps it inside common request-line limits.
+    internal const int MaxPhrasesQueryLength = 6000;
+
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
     private IPluginHostServices? _host;
-    private string? _apiKey;
     private string _selectedModelId = DefaultModelId;
-    private string _customBaseUrl = DefaultBaseUrl;
-    private string _customAuthHeader = DefaultAuthHeader;
-    private IReadOnlyList<Reson8CustomModel> _fetchedCustomModels = [];
 
+    // A redirect would forward a custom auth header to the new host, so none are followed.
     public Reson8Plugin()
-        : this(CreateHttpClient())
+        : this(new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(120) })
     {
     }
 
@@ -51,15 +61,15 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     public string PluginId => "com.typewhisper.reson8";
     public string PluginName => "Reson8";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
-        _customBaseUrl = NormalizeBaseUrl(host.GetSetting<string>(CustomBaseUrlSettingName));
-        _customAuthHeader = NormalizeAuthHeader(host.GetSetting<string>(CustomAuthHeaderSettingName));
-        _fetchedCustomModels = host.GetSetting<List<Reson8CustomModel>>(FetchedCustomModelsSettingName) ?? [];
+        ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
+        CustomBaseUrl = NormalizeBaseUrl(host.GetSetting<string>(CustomBaseUrlSettingName));
+        CustomAuthHeader = NormalizeAuthHeader(host.GetSetting<string>(CustomAuthHeaderSettingName));
+        RestoreCatalog(host);
         _selectedModelId = NormalizeModelId(host.GetSetting<string>(SelectedModelSettingName));
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
@@ -72,18 +82,32 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
 
     public string ProviderId => "reson8";
     public string ProviderDisplayName => "Reson8";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
     public IReadOnlyList<PluginModelInfo> TranscriptionModels =>
-        [new PluginModelInfo(DefaultModelId, Loc.L("Settings.DefaultModel")), .. _fetchedCustomModels.Select(m => new PluginModelInfo(m.Id, m.Name))];
+        [new(DefaultModelId, Loc.L("Settings.DefaultModel")), .. FetchedCustomModels.Select(m => new PluginModelInfo(m.Id, m.Name))];
+    // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
-    public IReadOnlyList<string> SupportedLanguages => Languages;
+    public bool SupportsLanguageHints => true;
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_phrasesBudget;
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
+    public IReadOnlyList<string> SupportedLanguages => s_languages;
 
-    internal string? ApiKey => _apiKey;
-    internal string CustomBaseUrl => _customBaseUrl;
-    internal string CustomAuthHeader => _customAuthHeader;
-    internal IReadOnlyList<Reson8CustomModel> FetchedCustomModels => _fetchedCustomModels;
+    internal string? ApiKey { get; private set; }
+
+    internal string CustomBaseUrl { get; private set; } = DefaultBaseUrl;
+
+    internal string CustomAuthHeader { get; private set; } = DefaultAuthHeader;
+
+    internal TimeSpan StreamingConnectTimeout { get; init; } = TimeSpan.FromSeconds(15);
+
+    internal TimeSpan StreamingFinalizeGrace { get; init; } = TimeSpan.FromSeconds(15);
+
+    internal Func<Reson8StreamingRequest, CancellationToken, Task<IStreamingSession>>? StreamingSessionFactory { get; init; }
+
     private IPluginLocalization? _injectedLocalization;
 
     public void SetLocalization(IPluginLocalization localization) =>
@@ -97,13 +121,34 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     public void SelectModel(string modelId)
     {
         var normalized = NormalizeModelId(modelId);
-        _selectedModelId = normalized;
-        _host?.SetSetting(SelectedModelSettingName, normalized);
+        lock (_catalogLock)
+        {
+            _host?.SetSetting(SelectedModelSettingName, normalized);
+            _selectedModelId = normalized;
+        }
     }
 
-    public async Task<PluginTranscriptionResult> TranscribeAsync(
+    public Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
         string? language,
+        bool translate,
+        string? prompt,
+        CancellationToken ct) =>
+        TranscribeCoreAsync(wavAudio, NormalizeLanguage(language), translate, prompt, ct);
+
+    public Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
+        byte[] wavAudio,
+        IReadOnlyList<string> languageHints,
+        bool translate,
+        string? prompt,
+        CancellationToken ct) =>
+        TranscribeCoreAsync(wavAudio, AdvisoryLanguageList(languageHints), translate, prompt, ct);
+
+    // language is one code, which pins it, or a comma-separated list Reson8 detects among.
+    private async Task<PluginTranscriptionResult> TranscribeCoreAsync(
+        byte[] wavAudio,
+        string? language,
+        // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local -- the one translation check for every batch path, including the streaming fallback.
         bool translate,
         string? prompt,
         CancellationToken ct)
@@ -111,27 +156,44 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         if (translate)
             throw new InvalidOperationException("Reson8 does not support translation.");
 
-        if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+        var connection = EnsureReadyForRequest();
+        var phrases = PhrasesFor(prompt, connection.ModelId);
 
         var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            BuildPrerecordedUri(_customBaseUrl, _selectedModelId, NormalizeLanguage(language)));
-        AddAuthHeader(request, _apiKey!, _customAuthHeader);
+            BuildPrerecordedUri(connection.BaseUrl, connection.ModelId, language, phrases));
+        AddAuthHeader(request, connection.ApiKey, connection.AuthHeader);
         request.Content = new ByteArrayContent(pcm16);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => FormatApiError(errorResponse.StatusCode, errorBody));
         var json = await response.Content.ReadAsStringAsync(ct);
 
-        if (!response.IsSuccessStatusCode)
-            ThrowForApiError(response.StatusCode, json);
-
-        return ParseTranscriptionResponse(json, NormalizeLanguage(language), pcm16.Length);
+        return ParseTranscriptionResponse(json, PinnedLanguage(language), pcm16.Length);
     }
 
-    public async Task<PluginTranscriptionResult> TranscribeStreamingAsync(
+    public Task<PluginTranscriptionResult> TranscribeStreamingAsync(
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        Func<string, bool> onProgress,
+        CancellationToken ct) =>
+        TranscribeStreamingCoreAsync(wavAudio, NormalizeLanguage(language), translate, prompt, onProgress, ct);
+
+    public Task<PluginTranscriptionResult> TranscribeStreamingWithLanguageHintsAsync(
+        byte[] wavAudio,
+        IReadOnlyList<string> languageHints,
+        bool translate,
+        string? prompt,
+        Func<string, bool> onProgress,
+        CancellationToken ct) =>
+        TranscribeStreamingCoreAsync(wavAudio, AdvisoryLanguageList(languageHints), translate, prompt, onProgress, ct);
+
+    private async Task<PluginTranscriptionResult> TranscribeStreamingCoreAsync(
         byte[] wavAudio,
         string? language,
         bool translate,
@@ -142,63 +204,165 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         if (translate)
             throw new InvalidOperationException("Reson8 does not support translation.");
 
-        if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+        var connection = EnsureReadyForRequest();
+        var streamingRequest = new Reson8StreamingRequest(language, PhrasesFor(prompt, connection.ModelId), connection.ModelId);
 
+        return await RunStreamingWithBatchFallbackAsync(
+            async markProgressStopped =>
+            {
+                var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
+
+                // onProgress returning false means the host wants to stop (e.g.
+                // recording ended). Honor it by cancelling a token linked to ct so
+                // the send/finalize flow halts instead of streaming the whole clip
+                // and returning a result the caller no longer wants.
+                using var streamingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                await using var session = await WithDeadlineAsync(
+                    token => ConnectStreamingSessionAsync(streamingRequest, token),
+                    StreamingConnectTimeout,
+                    "The Reson8 streaming connection timed out.",
+                    streamingCts.Token);
+                var collector = new Reson8TranscriptCollector();
+
+                session.TranscriptReceived += evt =>
+                {
+                    var text = collector.ApplyEvent(evt);
+                    if (string.IsNullOrWhiteSpace(text) || onProgress(text))
+                        return;
+
+                    markProgressStopped();
+                    // ReSharper disable once AccessToDisposedClosure -- the closure runs only within the using-scope (or the source is disposed after the captured resource), so the access is safe.
+                    streamingCts.Cancel();
+                };
+
+                const int chunkSize = 8192;
+                for (var offset = 0;
+                    offset < pcm16.Length && !streamingCts.IsCancellationRequested;
+                    offset += chunkSize)
+                {
+                    var count = Math.Min(chunkSize, pcm16.Length - offset);
+                    await session.SendAudioAsync(pcm16.AsMemory(offset, count), streamingCts.Token);
+                }
+
+                streamingCts.Token.ThrowIfCancellationRequested();
+                // Recorded audio is sent faster than realtime, so the server may still be
+                // transcribing up to its full duration when the flush request goes out.
+                await WithDeadlineAsync(
+                    async token =>
+                    {
+                        await session.FinalizeAsync(token);
+                        return true;
+                    },
+                    StreamingFinalizeGrace + TimeSpan.FromSeconds(PcmDurationSeconds(pcm16.Length)),
+                    "Reson8 did not confirm the end of the stream in time.",
+                    streamingCts.Token);
+
+                var text = collector.FinalText;
+                return string.IsNullOrWhiteSpace(text)
+                    ? null
+                    : new PluginTranscriptionResult(
+                        text,
+                        PinnedLanguage(language) ?? collector.DetectedLanguage,
+                        PcmDurationSeconds(pcm16.Length),
+                        NoSpeechProbability: null
+                    );
+            },
+            () => TranscribeCoreAsync(wavAudio, language, translate, prompt, ct),
+            ct
+        );
+    }
+
+    // A TimeoutException falls back to batch; caller cancellation does not.
+    private static async Task<T> WithDeadlineAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        TimeSpan deadline,
+        string timeoutMessage,
+        CancellationToken ct)
+    {
+        using var timeout = new CancellationTokenSource(deadline);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try
         {
-            var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
-
-            // onProgress returning false means the host wants to stop (e.g.
-            // recording ended). Honor it by cancelling a token linked to ct so
-            // the send/finalize flow halts instead of streaming the whole clip
-            // and returning a result the caller no longer wants.
-            using var streamingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            await using var session = await StartStreamingAsync(language, streamingCts.Token);
-            var collector = new Reson8TranscriptCollector();
-
-            session.TranscriptReceived += evt =>
-            {
-                var text = collector.ApplyEvent(evt);
-                if (!string.IsNullOrWhiteSpace(text) && !onProgress(text))
-                    streamingCts.Cancel();
-            };
-
-            const int chunkSize = 8192;
-            for (var offset = 0;
-                offset < pcm16.Length && !streamingCts.IsCancellationRequested;
-                offset += chunkSize)
-            {
-                var count = Math.Min(chunkSize, pcm16.Length - offset);
-                await session.SendAudioAsync(pcm16.AsMemory(offset, count), streamingCts.Token);
-            }
-
-            streamingCts.Token.ThrowIfCancellationRequested();
-            await session.FinalizeAsync(streamingCts.Token);
-
-            var text = collector.FinalText;
-            return string.IsNullOrWhiteSpace(text)
-                ? await TranscribeAsync(wavAudio, language, translate, prompt, ct)
-                : new PluginTranscriptionResult(text, NormalizeLanguage(language), PcmDurationSeconds(pcm16.Length), NoSpeechProbability: null);
+            return await operation(linked.Token);
         }
-        catch (OperationCanceledException) { throw; }
-        catch
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
         {
-            return await TranscribeAsync(wavAudio, language, translate, prompt, ct);
+            throw new TimeoutException(timeoutMessage, ex);
         }
     }
 
-    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
+    private Task<IStreamingSession> ConnectStreamingSessionAsync(Reson8StreamingRequest request, CancellationToken ct) =>
+        StreamingSessionFactory?.Invoke(request, ct) ?? StartStreamingCoreAsync(request, ct);
+
+    internal static async Task<T> RunStreamingWithBatchFallbackAsync<T>(
+        Func<Action, Task<T?>> runStreaming,
+        Func<Task<T>> runBatch,
+        CancellationToken callerToken
+    ) where T : class
     {
-        if (!IsConfigured)
-            throw new InvalidOperationException(Loc.L("Settings.NotConfiguredApiKeyRequired"));
+        var progressStopped = 0;
+        T? streamed;
+        try
+        {
+            streamed = await runStreaming(() => Volatile.Write(ref progressStopped, 1));
+        }
+        catch (Exception) when (callerToken.IsCancellationRequested)
+        {
+            // Caller cancellation has precedence over a simultaneous dependency fault.
+            throw new OperationCanceledException(callerToken);
+        }
+        catch (OperationCanceledException) when (Volatile.Read(ref progressStopped) != 0)
+        {
+            throw;
+        }
+        catch (Exception) when (Volatile.Read(ref progressStopped) != 0)
+        {
+            throw new OperationCanceledException("Streaming stopped by the progress callback.");
+        }
+        catch
+        {
+            return await runBatch();
+        }
+
+        callerToken.ThrowIfCancellationRequested();
+        return streamed ?? await runBatch();
+    }
+
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        ConnectStreamingSessionAsync(new Reson8StreamingRequest(NormalizeLanguage(language), []), ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+        IReadOnlyList<string> languageHints,
+        CancellationToken ct) =>
+        ConnectStreamingSessionAsync(new Reson8StreamingRequest(AdvisoryLanguageList(languageHints), []), ct);
+
+    // This call cannot tell an explicit language from an advisory hint, so a lone hint pins the
+    // session. Dictation, its only caller, sends hints only when a language is selected.
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct)
+    {
+        var connection = EnsureReadyForRequest();
+        return ConnectStreamingSessionAsync(
+            new Reson8StreamingRequest(
+                LanguageList(languageHints),
+                PhrasesFor(prompt, connection.ModelId),
+                connection.ModelId),
+            ct);
+    }
+
+    private async Task<IStreamingSession> StartStreamingCoreAsync(Reson8StreamingRequest request, CancellationToken ct)
+    {
+        var connection = EnsureReadyForRequest();
 
         return await Reson8StreamingSession.ConnectAsync(
-            _apiKey!,
-            _customBaseUrl,
-            _customAuthHeader,
-            _selectedModelId,
-            NormalizeLanguage(language),
+            connection.ApiKey,
+            connection.BaseUrl,
+            connection.AuthHeader,
+            request.ModelId ?? connection.ModelId,
+            request.Language,
+            request.Phrases,
             ct);
     }
 
@@ -214,12 +378,10 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             new(
                 Key: SelectedModelSettingName,
                 Label: Loc.L("Settings.Model"),
-                Description: _fetchedCustomModels.Count > 0
-                    ? Loc.L("Settings.CustomModelsLoaded", _fetchedCustomModels.Count)
+                Description: FetchedCustomModels.Count > 0
+                    ? Loc.L("Settings.CustomModelsLoaded", FetchedCustomModels.Count)
                     : Loc.L("Settings.NoCustomModels"),
-                Options: TranscriptionModels
-                    .Select(m => new PluginSettingOption(m.Id, m.DisplayName))
-                    .ToList(),
+                Options: ModelOptions(),
                 Kind: PluginSettingKind.Dropdown),
             new(
                 Key: CustomBaseUrlSettingName,
@@ -235,14 +397,23 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
                 Kind: PluginSettingKind.Text),
         ];
 
+    // A saved custom model hidden by a connection change stays listed so the choice is visible.
+    private List<PluginSettingOption> ModelOptions()
+    {
+        var options = TranscriptionModels.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList();
+        if (options.All(o => o.Value != _selectedModelId))
+            options.Add(new PluginSettingOption(_selectedModelId, Loc.L("Settings.UnavailableModelOption", _selectedModelId)));
+        return options;
+    }
+
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(
             key switch
             {
-                ApiKeySecretName => _apiKey,
+                ApiKeySecretName => ApiKey,
                 SelectedModelSettingName => _selectedModelId,
-                CustomBaseUrlSettingName => _customBaseUrl == DefaultBaseUrl ? null : _customBaseUrl,
-                CustomAuthHeaderSettingName => _customAuthHeader == DefaultAuthHeader ? null : _customAuthHeader,
+                CustomBaseUrlSettingName => CustomBaseUrl == DefaultBaseUrl ? null : CustomBaseUrl,
+                CustomAuthHeaderSettingName => CustomAuthHeader == DefaultAuthHeader ? null : CustomAuthHeader,
                 _ => null,
             });
 
@@ -252,8 +423,6 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         {
             case ApiKeySecretName:
                 await SetApiKeyAsync(value ?? string.Empty);
-                if (!IsConfigured)
-                    SetFetchedCustomModels([]);
                 break;
             case SelectedModelSettingName:
                 if (!string.IsNullOrWhiteSpace(value))
@@ -268,28 +437,6 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         }
     }
 
-    public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
-    {
-        if (string.IsNullOrEmpty(_apiKey))
-            return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
-
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
-        if (!valid)
-            return new PluginSettingsValidationResult(false, Loc.L("Settings.InvalidApiKey"));
-
-        // A valid key gates the custom model catalog; refresh it so the model
-        // dropdown reflects the account's custom models (mirrors the desktop
-        // "Test" → "Refresh models" flow).
-        var models = await FetchCustomModelsAsync(ct);
-        SetFetchedCustomModels(models);
-
-        return new PluginSettingsValidationResult(
-            true,
-            models.Count > 0
-                ? Loc.L("Settings.ApiKeyValidWithModels", models.Count)
-                : Loc.L("Settings.ApiKeyValidShort"));
-    }
-
     internal async Task SetApiKeyAsync(string apiKey)
     {
         var normalized = NormalizeApiKey(apiKey);
@@ -299,7 +446,7 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         try
         {
             var wasConfigured = IsConfigured;
-            var changed = !string.Equals(_apiKey, normalized, StringComparison.Ordinal);
+            var changed = !string.Equals(ApiKey, normalized, StringComparison.Ordinal);
 
             if (!changed)
                 return;
@@ -317,9 +464,9 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
             // Update in-memory state only after the secret write/delete
             // succeeds, so a failing store leaves the plugin unconfigured (no
             // unsaved key) and a failing delete keeps the running key intact.
-            _apiKey = normalized;
+            var catalogChanged = ChangeConnection(() => ApiKey = normalized);
 
-            if (wasConfigured == IsConfigured)
+            if (wasConfigured == IsConfigured && !catalogChanged)
                 hostToNotify = null;
         }
         finally
@@ -330,99 +477,45 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         hostToNotify?.NotifyCapabilitiesChanged();
     }
 
-    internal async Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken ct = default)
-    {
-        var normalized = NormalizeApiKey(apiKey);
-        if (normalized is null)
-            return false;
-
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            BuildPrerecordedUri(_customBaseUrl, DefaultModelId, language: null));
-        AddAuthHeader(request, normalized, _customAuthHeader);
-        request.Content = new ByteArrayContent([]);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-
-        try
-        {
-            using var response = await _httpClient.SendAsync(request, ct);
-            return response.StatusCode != HttpStatusCode.Unauthorized;
-        }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return false;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (HttpRequestException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
-
-    internal async Task<IReadOnlyList<Reson8CustomModel>> FetchCustomModelsAsync(CancellationToken ct = default)
-    {
-        if (!IsConfigured)
-            return [];
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{_customBaseUrl}/v1/custom-model");
-        AddAuthHeader(request, _apiKey!, _customAuthHeader);
-
-        try
-        {
-            using var response = await _httpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-                return [];
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            return JsonSerializer.Deserialize<List<Reson8CustomModel>>(json, JsonOptions) ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-        catch (HttpRequestException)
-        {
-            return [];
-        }
-    }
-
-    internal void SetFetchedCustomModels(IReadOnlyList<Reson8CustomModel> models)
-    {
-        _fetchedCustomModels = models.ToArray();
-        _host?.SetSetting(FetchedCustomModelsSettingName, _fetchedCustomModels);
-
-        if (_selectedModelId != DefaultModelId && _fetchedCustomModels.All(m => m.Id != _selectedModelId))
-        {
-            _selectedModelId = DefaultModelId;
-            _host?.SetSetting(SelectedModelSettingName, _selectedModelId);
-        }
-
-        _host?.NotifyCapabilitiesChanged();
-    }
-
+    // Saved as typed so the user can correct it; requests and Validate report an invalid value.
     internal void SetCustomBaseUrl(string? url)
     {
-        _customBaseUrl = NormalizeBaseUrl(url);
-        _host?.SetSetting(CustomBaseUrlSettingName, _customBaseUrl == DefaultBaseUrl ? null : _customBaseUrl);
+        var normalized = NormalizeBaseUrl(url);
+        if (ChangeConnection(() =>
+            {
+                _host?.SetSetting(CustomBaseUrlSettingName, normalized == DefaultBaseUrl ? null : normalized);
+                CustomBaseUrl = normalized;
+            }))
+        {
+            _host?.NotifyCapabilitiesChanged();
+        }
     }
 
     internal void SetCustomAuthHeader(string? header)
     {
-        _customAuthHeader = NormalizeAuthHeader(header);
-        _host?.SetSetting(CustomAuthHeaderSettingName, _customAuthHeader == DefaultAuthHeader ? null : _customAuthHeader);
+        var normalized = NormalizeAuthHeader(header);
+        if (ChangeConnection(() =>
+            {
+                _host?.SetSetting(CustomAuthHeaderSettingName, normalized == DefaultAuthHeader ? null : normalized);
+                CustomAuthHeader = normalized;
+            }))
+        {
+            _host?.NotifyCapabilitiesChanged();
+        }
     }
 
-    internal static Uri BuildPrerecordedUri(string baseUrl, string? modelId, string? language)
+    internal static Uri BuildPrerecordedUri(
+        string baseUrl,
+        string? modelId,
+        string? language,
+        IReadOnlyList<string>? phrases = null)
     {
         var query = new List<string>
         {
             "encoding=pcm_s16le",
             "sample_rate=16000",
-            "channels=1"
+            "channels=1",
+            "include_language=true",
         };
 
         if (!string.IsNullOrWhiteSpace(language))
@@ -433,6 +526,9 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         {
             query.Add($"custom_model_id={Uri.EscapeDataString(modelId)}");
         }
+
+        if (phrases is { Count: > 0 })
+            query.Add($"phrases={EncodePhrases(phrases)}");
 
         return new Uri($"{NormalizeBaseUrl(baseUrl)}/v1/speech-to-text/prerecorded?{string.Join("&", query)}");
     }
@@ -446,7 +542,9 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         var root = doc.RootElement;
 
         var text = GetString(root, "text")?.Trim() ?? "";
-        var language = GetString(root, "language") ?? GetString(root, "detected_language") ?? fallbackLanguage;
+        var language = NonEmpty(GetString(root, "language"))
+            ?? NonEmpty(GetString(root, "detected_language"))
+            ?? fallbackLanguage;
         return new PluginTranscriptionResult(text, language, PcmDurationSeconds(pcm16ByteLength), NoSpeechProbability: null);
     }
 
@@ -470,10 +568,64 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
         }
     }
 
-    internal static string? NormalizeLanguage(string? language) =>
-        string.IsNullOrWhiteSpace(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase)
+    internal static string EncodePhrases(IReadOnlyList<string> phrases) =>
+        Uri.EscapeDataString(string.Join(",", phrases));
+
+    // Dictionary terms are sent only with the default model: Reson8 does not document combining
+    // phrases with a custom model, which already carries its own phrases.
+    internal static IReadOnlyList<string> PhrasesFor(string? prompt, string modelId)
+    {
+        var terms = PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms;
+        if (!string.Equals(modelId, DefaultModelId, StringComparison.Ordinal))
+            return [];
+
+        var phrases = new List<string>();
+        var queryLength = 0;
+        foreach (var term in PluginDictionaryTerms.Clip(terms, s_phrasesBudget))
+        {
+            // Reson8 splits phrases on commas, so such a term would arrive as several.
+            if (term.Contains(','))
+                continue;
+
+            var nextLength = queryLength + (phrases.Count == 0 ? 0 : 3) + Uri.EscapeDataString(term).Length;
+            if (nextLength > MaxPhrasesQueryLength)
+                break;
+
+            phrases.Add(term);
+            queryLength = nextLength;
+        }
+
+        return phrases;
+    }
+
+    // A comma-separated list restricts Reson8's per-utterance detection to those languages.
+    internal static string? LanguageList(IReadOnlyList<string> languageHints)
+    {
+        var languages = languageHints
+            .Select(NormalizeLanguage)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return languages.Count == 0 ? null : string.Join(",", languages);
+    }
+
+    // The host sends a lone hint through these overloads only under automatic detection; as
+    // Reson8's language it would force that language, so detection stays open instead.
+    internal static string? AdvisoryLanguageList(IReadOnlyList<string> languageHints) =>
+        LanguageList(languageHints) is { } list && list.Contains(',') ? list : null;
+
+    private static string? PinnedLanguage(string? language) =>
+        language is not null && !language.Contains(',') ? language : null;
+
+    // The typed invoker maps "auto" to null already; this only catches direct/legacy callers.
+    internal static string? NormalizeLanguage(string? language)
+    {
+        var trimmed = language?.Trim();
+        return string.IsNullOrEmpty(trimmed)
+            || trimmed.Equals("auto", StringComparison.OrdinalIgnoreCase)
             ? null
-            : language.Trim();
+            : trimmed;
+    }
 
     internal static void AddAuthHeader(HttpRequestMessage request, string apiKey, string authHeader)
     {
@@ -510,36 +662,31 @@ public sealed class Reson8Plugin : ITranscriptionEnginePlugin, IPluginSettingsPr
     private static string NormalizeAuthHeader(string? header) =>
         string.IsNullOrWhiteSpace(header) ? DefaultAuthHeader : header.Trim();
 
+    private static string? NonEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static string? GetString(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var property)
         && property.ValueKind == JsonValueKind.String
             ? property.GetString()
             : null;
 
-    private void ThrowForApiError(HttpStatusCode statusCode, string json)
+    private string FormatApiError(HttpStatusCode statusCode, string json)
     {
         var message = ExtractApiError(json);
-        switch (statusCode)
+        return statusCode switch
         {
-            case HttpStatusCode.Unauthorized:
-                throw new UnauthorizedAccessException(Loc.L("Settings.InvalidApiKey"));
-            case HttpStatusCode.NotFound:
-                throw new KeyNotFoundException($"Reson8 custom model not found: {message}");
-            case HttpStatusCode.RequestEntityTooLarge:
-                throw new InvalidOperationException($"Reson8 file too large: {message}");
-            case HttpStatusCode.TooManyRequests:
-                throw new HttpRequestException($"Reson8 rate limit exceeded: {message}");
-            case HttpStatusCode.InternalServerError:
-                throw new HttpRequestException($"Reson8 server error: {message}");
-            default:
-                throw new HttpRequestException($"Reson8 API error {(int)statusCode}: {message}");
-        }
+            HttpStatusCode.Unauthorized => Loc.L("Settings.InvalidApiKey"),
+            HttpStatusCode.NotFound => $"Reson8 custom model not found: {message}",
+            HttpStatusCode.RequestEntityTooLarge => $"Reson8 file too large: {message}",
+            HttpStatusCode.TooManyRequests => $"Reson8 rate limit exceeded: {message}",
+            HttpStatusCode.InternalServerError => $"Reson8 server error: {message}",
+            _ => $"Reson8 API error {(int)statusCode}: {message}",
+        };
     }
 
     private static double PcmDurationSeconds(int pcm16ByteLength) =>
         pcm16ByteLength <= 0 ? 0 : pcm16ByteLength / 2.0 / 16000.0;
-
-    private static HttpClient CreateHttpClient() => new() { Timeout = TimeSpan.FromSeconds(120) };
 
     public void Dispose()
     {
@@ -562,38 +709,56 @@ internal static class WavPcm16Extractor
         var offset = 12;
         short audioFormat = 0;
         short channels = 0;
-        int sampleRate = 0;
+        var sampleRate = 0;
         short bitsPerSample = 0;
         byte[]? data = null;
 
         while (offset + 8 <= wavAudio.Length)
         {
             var chunkId = Encoding.ASCII.GetString(wavAudio, offset, 4);
-            var chunkSize = BitConverter.ToInt32(wavAudio, offset + 4);
+            var chunkSize = BitConverter.ToUInt32(wavAudio, offset + 4);
             offset += 8;
-            if (chunkSize < 0 || offset + chunkSize > wavAudio.Length)
+            var remaining = wavAudio.Length - offset;
+
+            if (chunkId == "data")
+            {
+                // A non-seekable muxer (ffmpeg's `-f wav pipe:1`) can't backfill
+                // the data size and writes 0xFFFFFFFF; treat any size past the
+                // buffer end as "everything remaining".
+                var dataLength = chunkSize > (uint)remaining ? remaining : (int)chunkSize;
+                data = wavAudio.Skip(offset).Take(dataLength).ToArray();
+                offset += dataLength + dataLength % 2;
+                continue;
+            }
+
+            // Any other chunk claiming more than the buffer holds means a
+            // truncated or corrupt file, so stop scanning.
+            if (chunkSize > (uint)remaining)
                 break;
 
-            if (chunkId == "fmt " && chunkSize >= 16)
+            var size = (int)chunkSize;
+            if (chunkId == "fmt " && size >= 16)
             {
                 audioFormat = BitConverter.ToInt16(wavAudio, offset);
                 channels = BitConverter.ToInt16(wavAudio, offset + 2);
                 sampleRate = BitConverter.ToInt32(wavAudio, offset + 4);
                 bitsPerSample = BitConverter.ToInt16(wavAudio, offset + 14);
             }
-            else if (chunkId == "data")
-            {
-                data = wavAudio.Skip(offset).Take(chunkSize).ToArray();
-            }
 
-            offset += chunkSize + (chunkSize % 2);
+            offset += size + size % 2;
         }
 
         if (data is null)
             return wavAudio;
 
-        if (audioFormat == 1 && channels == 1 && sampleRate == 16000 && bitsPerSample == 16)
-            return data;
+        // The endpoints advertise the body as raw pcm_s16le/16 kHz/mono, so any
+        // other format would be mislabeled and transcribed as noise; reject it.
+        if (audioFormat != 1 || channels != 1 || sampleRate != 16000 || bitsPerSample != 16)
+        {
+            throw new NotSupportedException(
+                "Reson8 requires 16-bit little-endian PCM, 16 kHz, mono audio, but received "
+                + $"format={audioFormat}, channels={channels}, sampleRate={sampleRate}, bitsPerSample={bitsPerSample}.");
+        }
 
         return data;
     }
@@ -603,6 +768,7 @@ internal static class WavPcm16Extractor
         if (offset + value.Length > bytes.Length)
             return false;
 
+        // ReSharper disable once LoopCanBeConvertedToQuery -- explicit loop kept; clearer than the LINQ form here.
         for (var i = 0; i < value.Length; i++)
         {
             if (bytes[offset + i] != value[i])

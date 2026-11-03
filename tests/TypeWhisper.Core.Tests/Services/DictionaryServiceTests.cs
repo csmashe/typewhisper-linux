@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 
@@ -29,6 +30,280 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void TryGetEntries_DistinguishesAnUnreadableDictionaryFromAnEmptyOne()
+    {
+        var directory = Path.Join(Path.GetTempPath(), $"tw_dictionary_unreadable_{Guid.NewGuid():N}");
+        Assert.True(new DictionaryService(Path.Join(directory, "missing.json")).TryGetEntries(out var empty));
+        Assert.Empty(empty);
+
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var unreadable = new DictionaryService(directory);
+
+            Assert.False(unreadable.TryGetEntries(out var entries));
+            Assert.Empty(entries);
+        }
+        finally
+        {
+            Directory.Delete(directory);
+        }
+    }
+
+    [Fact]
+    public void TryGetEntries_TreatsACorruptDictionaryResetToEmptyAsUnreadable()
+    {
+        File.WriteAllText(_filePath, "{ not json");
+        var corrupt = new DictionaryService(_filePath);
+
+        Assert.False(corrupt.TryGetEntries(out var entries));
+        Assert.Empty(entries);
+
+        corrupt.AddEntry(new DictionaryEntry { Id = "term", EntryType = DictionaryEntryType.Term, Original = "Avalonia" });
+
+        Assert.True(corrupt.TryGetEntries(out var healed));
+        Assert.Single(healed);
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexEntry_ReplacesMatches()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+
+        Assert.Equal("the color and the color", _sut.ApplyCorrections("the colour and the color"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexEntry_BypassesLiteralPrefilter()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+
+        Assert.Equal("color", _sut.ApplyCorrections("colour"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexEntry_KeepsGroupTokensLiteral()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = @"(\w+)@example\.com", Replacement = "$1@corp.example", IsRegex = true,
+        });
+
+        Assert.Equal("$1@corp.example", _sut.ApplyCorrections("alice@example.com"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_LiteralEntryWithRegexMetacharacters_StaysLiteral()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "c++", Replacement = "C++", IsRegex = false,
+        });
+
+        Assert.Equal("C++", _sut.ApplyCorrections("c++"));
+    }
+
+    [Theory]
+    [InlineData(false, "color")]
+    [InlineData(true, "Colour")]
+    public void ApplyCorrections_RegexEntry_IsCaseInsensitiveUnlessCaseSensitive(bool caseSensitive, string expected)
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true, CaseSensitive = caseSensitive,
+        });
+
+        Assert.Equal(expected, _sut.ApplyCorrections("Colour"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_InvalidRegexEntry_IsSkippedWithoutBreakingOthers()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "[unclosed", Replacement = "x", IsRegex = true,
+        });
+        _sut.UpsertCorrection("teh", "the", false);
+
+        Assert.Equal("the [unclosed", _sut.ApplyCorrections("teh [unclosed"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_PathologicalRegexEntry_TimesOutWithoutBreakingOthers()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "(a+)+$", Replacement = "x", IsRegex = true,
+        });
+        _sut.UpsertCorrection("teh", "the", false);
+        var input = "teh " + new string('a', 40) + "!";
+        var stopwatch = Stopwatch.StartNew();
+
+        var result = _sut.ApplyCorrections(input);
+
+        stopwatch.Stop();
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Elapsed: {stopwatch.Elapsed}");
+        Assert.StartsWith("the ", result);
+        Assert.Equal("the " + new string('a', 40) + "!", result);
+    }
+
+    [Fact]
+    public void GetCorrections_ExposesIsRegex()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+
+        Assert.True(Assert.Single(_sut.GetCorrections()).IsRegex);
+    }
+
+    [Fact]
+    public void ImportFromCsv_WithoutIsRegexColumn_DefaultsToLiteral()
+    {
+        Assert.Equal(1, _sut.ImportFromCsv("""
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes
+            Correction,colou?r,color,False,True,False,0,Import,False
+            """));
+
+        Assert.False(Assert.Single(_sut.Entries).IsRegex);
+        Assert.Equal("colour", _sut.ApplyCorrections("colour"));
+    }
+
+    [Fact]
+    public void ExportToCsv_ImportFromCsv_RoundTripsIsRegex()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "regex", EntryType = DictionaryEntryType.Correction,
+            Original = "colou?r", Replacement = "color", IsRegex = true,
+        });
+        var csv = _sut.ExportToCsv();
+        var importedPath = Path.GetTempFileName();
+        try
+        {
+            var imported = new DictionaryService(importedPath);
+            Assert.Equal(1, imported.ImportFromCsv(csv));
+            Assert.True(Assert.Single(imported.Entries).IsRegex);
+            Assert.Equal(1, imported.ImportFromCsv("Term,vocabulary,,False,True,False,0,Import,False,True"));
+            Assert.False(imported.Entries.Single(e => e.EntryType == DictionaryEntryType.Term).IsRegex);
+        }
+        finally
+        {
+            File.Delete(importedPath);
+        }
+    }
+
+    [Fact]
+    public void CtcSimilarity_RoundTripsJson()
+    {
+        _sut.AddEntry(CtcTerm("term", .65f));
+        Assert.Equal(
+            .65f,
+            Assert.Single(new DictionaryService(_filePath).Entries).CtcMinSimilarity
+        );
+    }
+
+    [Theory]
+    [InlineData("1.5")]
+    [InlineData("\"NaN\"")]
+    [InlineData("\"Infinity\"")]
+    public void CtcSimilarity_LoadSanitizesInvalidValues(string value)
+    {
+        File.WriteAllText(
+            _filePath,
+            $$"""[{"Id":"term","EntryType":0,"Original":"term","CtcMinSimilarity":{{value}}}]"""
+        );
+        Assert.Null(Assert.Single(new DictionaryService(_filePath).Entries).CtcMinSimilarity);
+    }
+
+    [Theory]
+    [InlineData(1.5f)]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    [InlineData(.39f)]
+    public void CtcSimilarity_MutationsSanitizeInvalidValues(float value)
+    {
+        _sut.AddEntry(CtcTerm("first", value));
+        _sut.AddEntries([CtcTerm("second", value)]);
+        _sut.UpdateEntry(CtcTerm("first", value));
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.All(_sut.Entries, entry => Assert.Null(entry.CtcMinSimilarity));
+    }
+
+    [Fact]
+    public void CtcSimilarity_CsvRoundTripsAndKeepsExistingTermThreshold()
+    {
+        _sut.AddEntries([
+            CtcTerm("threshold", .65f),
+            CtcTerm("auto", null),
+            CtcTerm("precise", .734f),
+        ]);
+        var csv = _sut.ExportToCsv();
+        Assert.EndsWith(",CtcMinSimilarity", csv.Split('\n')[0].TrimEnd('\r'));
+        Assert.Contains(",False,False,0.65", csv);
+        Assert.Contains(",False,False,0.734", csv);
+        Assert.Contains(",False,False,", csv);
+        var path = Path.Join(Path.GetTempPath(), "ctc-csv-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var imported = new DictionaryService(path);
+            Assert.Equal(3, imported.ImportFromCsv(csv));
+            Assert.Equal(
+                .65f,
+                imported.Entries.Single(e => e.Original == "threshold").CtcMinSimilarity
+            );
+            Assert.Equal(
+                .734f,
+                imported.Entries.Single(e => e.Original == "precise").CtcMinSimilarity
+            );
+            Assert.Null(imported.Entries.Single(e => e.Original == "auto").CtcMinSimilarity);
+            Assert.Equal(0, imported.ImportFromCsv(csv.Replace("0.65", "0.8")));
+            Assert.Equal(
+                .65f,
+                imported.Entries.Single(e => e.Original == "threshold").CtcMinSimilarity
+            );
+            Assert.Equal(
+                1,
+                imported.ImportFromCsv("Term,invalid,,False,True,False,0,Import,False,False,2")
+            );
+            Assert.Null(imported.Entries.Single(e => e.Original == "invalid").CtcMinSimilarity);
+            Assert.Equal(
+                1,
+                imported.ImportFromCsv("Term,legacy,,False,True,False,0,Import,False,False")
+            );
+            Assert.Null(imported.Entries.Single(e => e.Original == "legacy").CtcMinSimilarity);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static DictionaryEntry CtcTerm(string original, float? threshold) =>
+        new()
+        {
+            Id = original,
+            Original = original,
+            EntryType = DictionaryEntryType.Term,
+            CtcMinSimilarity = threshold,
+        };
+
+    [Fact]
     public void AddEntry_AppearsInEntries()
     {
         _sut.AddEntry(
@@ -36,7 +311,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -52,7 +327,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -69,7 +344,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "A"
+                Original = "A",
             }
         );
         _sut.AddEntry(
@@ -77,7 +352,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "B"
+                Original = "B",
             }
         );
         _sut.AddEntry(
@@ -85,7 +360,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "3",
                 EntryType = DictionaryEntryType.Term,
-                Original = "C"
+                Original = "C",
             }
         );
 
@@ -115,7 +390,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "existing",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -175,7 +450,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "manual",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeScript"
+                Original = "TypeScript",
             }
         );
 
@@ -194,12 +469,191 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
         var result = _sut.ApplyCorrections("I deployed to kubernets");
         Assert.Equal("I deployed to Kubernetes", result);
+    }
+
+    [Theory]
+    [InlineData("Hello, new line.", @"\n", "Hello, \n")]
+    [InlineData("Hello new line.  ", @"\r\n", "Hello \r\n")]
+    [InlineData("new line.", @"\n\n", "\n\n")]
+    [InlineData("new line", @"\n", "\n")]
+    [InlineData("new line Hello.", @"\n", "\n Hello.")]
+    [InlineData("Hello new line. Next sentence.", @"\n", "Hello \nNext sentence.")]
+    [InlineData("Hello new line, next item", @"\n", "Hello \nnext item")]
+    [InlineData("Hello new line ; next", @"\n", "Hello \nnext")]
+    [InlineData("Hello new line: next", @"\n", "Hello \nnext")]
+    [InlineData("Hello new line! Next", @"\n", "Hello \nNext")]
+    [InlineData("Is it new line? Next", @"\n", "Is it \nNext")]
+    [InlineData("A new line. B new line. C", @"\n", "A \nB \nC")]
+    [InlineData("Hello new line.. Next", @"\n", "Hello \n.. Next")]
+    [InlineData("Hello new line .NET is supported", @"\n", "Hello \n .NET is supported")]
+    [InlineData("Copy new line .env now", @"\n", "Copy \n .env now")]
+    [InlineData("Use new line !important here", @"\n", "Use \n !important here")]
+    [InlineData("Hello new line.NET", @"\n", "Hello \n.NET")]
+    [InlineData("Hello new line - next", @"\n", "Hello \n - next")]
+    [InlineData("Hello new line.", "replacement", "Hello replacement.")]
+    [InlineData("Hello new line, next", "replacement", "Hello replacement, next")]
+    [InlineData("Hello new line.", @"\nItem", "Hello \nItem.")]
+    [InlineData("Hello new line.", @"\\n", @"Hello \n.")]
+    [InlineData("Hello new line.\r\n", @"\n", "Hello \n\r\n")]
+    [InlineData("Hello new line.\n\n", @"\n", "Hello \n\n\n")]
+    [InlineData("Hello new line.\nNext", @"\n", "Hello \n\nNext")]
+    public void ApplyCorrections_ConsumesCommandPunctuationForStructuralNewline(string input, string replacement, string expected)
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "layout",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "new line",
+            Replacement = replacement,
+            CaseSensitive = false,
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal(expected, _sut.ApplyCorrections(input));
+        Assert.Equal(expected, _sut.PreviewCorrections(input));
+    }
+
+    [Fact]
+    public void ApplyCorrections_RegexLayoutCommandKeepsExplicitMatchSemantics()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "layout",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "new line",
+            Replacement = @"\n",
+            IsRegex = true,
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal("Hello \n.", _sut.ApplyCorrections("Hello new line."));
+        Assert.Equal("Hello \n, next", _sut.ApplyCorrections("Hello new line, next"));
+    }
+
+    [Theory]
+    [InlineData("I use kubernets. It works", "I use Kubernetes. It works")]
+    [InlineData("kubernets, docker and helm", "Kubernetes, docker and helm")]
+    [InlineData("Do you know kubernets? Yes", "Do you know Kubernetes? Yes")]
+    public void ApplyCorrections_OrdinaryCorrectionKeepsFollowingPunctuation(string input, string expected)
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "word",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "kubernets",
+            Replacement = "Kubernetes",
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal(expected, _sut.ApplyCorrections(input));
+    }
+
+    [Fact]
+    public void ApplyCorrections_SpaceOnlyReplacementKeepsFollowingPunctuation()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "space",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "space bar",
+            Replacement = @"\t",
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal("Hello \t. Next", _sut.ApplyCorrections("Hello space bar. Next"));
+    }
+
+    [Fact]
+    public void ApplyCorrections_LiteralNewlineReplacementKeepsFollowingPunctuation()
+    {
+        _sut.UpsertCorrection("new line", @"\n", caseSensitive: false);
+
+        Assert.Equal(@"Hello \n.", _sut.ApplyCorrections("Hello new line."));
+    }
+
+    [Fact]
+    public void ApplyCorrections_CommandPunctuationPatternIsNotSharedAcrossReplacements()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "layout",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "new line",
+            Replacement = @"\n",
+            CaseSensitive = false,
+            ExpandEscapes = true,
+        });
+
+        Assert.Equal("Hello \n", _sut.ApplyCorrections("Hello new line."));
+
+        _sut.UpdateEntry(Assert.Single(_sut.Entries) with { Replacement = "X" });
+
+        Assert.Equal("Hello X.", _sut.ApplyCorrections("Hello new line."));
+    }
+
+    [Fact]
+    public void PreviewCorrections_ReplacesText()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+            }
+        );
+
+        var result = _sut.PreviewCorrections("I deployed to kubernets");
+        Assert.Equal("I deployed to Kubernetes", result);
+    }
+
+    [Fact]
+    public void PreviewCorrections_DoesNotUpdateUsageMetadata()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+            }
+        );
+
+        _sut.PreviewCorrections("kubernets");
+        _sut.PreviewCorrections("kubernets");
+        _sut.PreviewCorrections("kubernets");
+
+        var entry = _sut.Entries[0];
+        Assert.Equal(0, entry.UsageCount);
+        Assert.Equal(0, entry.TimesApplied);
+        Assert.Null(entry.LastUsedAt);
+    }
+
+    [Fact]
+    public void PreviewCorrections_DoesNotPersistAcrossInstances()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+            }
+        );
+
+        _sut.PreviewCorrections("kubernets");
+
+        var reloadedService = new DictionaryService(_filePath);
+        Assert.Equal(0, reloadedService.Entries[0].UsageCount);
     }
 
     [Fact]
@@ -211,7 +665,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "kubernets",
-                Replacement = "Kubernetes"
+                Replacement = "Kubernetes",
             }
         );
 
@@ -232,7 +686,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "test",
-                Replacement = "exam"
+                Replacement = "exam",
             }
         );
 
@@ -252,7 +706,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "low",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
-                Replacement = "Type Whisper"
+                Replacement = "Type Whisper",
             }
         );
         _sut.AddEntry(
@@ -262,13 +716,331 @@ public sealed class DictionaryServiceTests : IDisposable
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
                 Replacement = "TypeWhisper",
-                Priority = 10
+                Priority = 10,
             }
         );
 
         var result = _sut.ApplyCorrections("type whisper");
 
         Assert.Equal("TypeWhisper", result);
+    }
+
+    [Theory]
+    [InlineData(@"\s", " ")]
+    [InlineData(@"\s-\s", " - ")]
+    [InlineData(@"\s\n", " \n")]
+    [InlineData(@"\s\\n", @" \n")]
+    [InlineData(@"\s\x", @" \x")]
+    [InlineData(" \r\n\t", " \r\n\t")]
+    [InlineData(@"\n", "\n")]
+    [InlineData(@"\n\n", "\n\n")]
+    [InlineData(@"\r\n", "\r\n")]
+    [InlineData(@"\t", "\t")]
+    [InlineData(@"\\", "\\")]
+    [InlineData(@"trailing\", @"trailing\")]
+    public void ApplyCorrections_ExpandsReplacementEscapes(string stored, string expected)
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = stored,
+            }
+        );
+
+        var result = _sut.ApplyCorrections("first new paragraph second");
+
+        Assert.Equal("first " + expected + " second", result);
+    }
+
+    [Fact]
+    public void ApplyCorrections_KeepsDollarTokensLiteralAfterExpansion()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = @"$1\sX",
+            }
+        );
+
+        Assert.Equal("$1 X", _sut.ApplyCorrections("new paragraph"));
+    }
+
+    [Fact]
+    public void PreviewCorrections_ExpandsReplacementEscapes()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = @"\s\n",
+            }
+        );
+
+        Assert.Equal("first  \n second", _sut.PreviewCorrections("first new paragraph second"));
+    }
+
+    [Fact]
+    public void ExportToCsv_KeepsReplacementEscapesLiteral()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                ExpandEscapes = true,
+                Original = "new paragraph",
+                Replacement = @"\n\n",
+            }
+        );
+
+        var csv = _sut.ExportToCsv();
+
+        Assert.Contains(@"Correction,new paragraph,\n\n,", csv);
+        var importFilePath = Path.GetTempFileName();
+        try
+        {
+            var importedService = new DictionaryService(importFilePath);
+            Assert.Equal(1, importedService.ImportFromCsv(csv));
+            var importedEntry = Assert.Single(importedService.Entries);
+            Assert.Equal(@"\n\n", importedEntry.Replacement);
+            Assert.True(importedEntry.ExpandEscapes);
+        }
+        finally
+        {
+            File.Delete(importFilePath);
+        }
+    }
+
+    [Fact]
+    public void ApplyCorrections_WithoutExpandEscapes_KeepsBackslashesLiteral()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "x",
+            Replacement = @"\sqrt{x}\tau",
+        });
+
+        Assert.Equal(@"\sqrt{x}\tau", _sut.ApplyCorrections("x"));
+    }
+
+    [Fact]
+    public void ImportFromCsv_WithoutExpandEscapesColumn_StaysLiteral()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,x,\sqrt{x}\tau,False,True,False,0,Import
+            """;
+
+        Assert.Equal(1, _sut.ImportFromCsv(csv));
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"\sqrt{x}\tau", _sut.ApplyCorrections("x"));
+    }
+
+    [Fact]
+    public void ExportToCsv_ImportFromCsv_RoundTripsExpandEscapes()
+    {
+        _sut.AddEntry(new DictionaryEntry
+        {
+            Id = "1",
+            EntryType = DictionaryEntryType.Correction,
+            Original = "x",
+            Replacement = @"\n",
+            ExpandEscapes = true,
+        });
+
+        var csv = _sut.ExportToCsv();
+        Assert.Contains(@"Correction,x,\n,False,True,False,0,Manual,True,False", csv);
+        _sut.DeleteEntry("1");
+
+        Assert.Equal(1, _sut.ImportFromCsv(csv));
+        Assert.True(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal("\n", _sut.ApplyCorrections("x"));
+        Assert.Equal(1, _sut.ImportFromCsv("Term,vocabulary,,False,True,False,0,Import,True"));
+        Assert.False(_sut.Entries.Single(entry => entry.EntryType == DictionaryEntryType.Term).ExpandEscapes);
+    }
+
+    [Fact]
+    public void UpsertCorrection_StaysLiteral()
+    {
+        _sut.UpsertCorrection("x", @"\n", false);
+
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"\n", _sut.ApplyCorrections("x"));
+    }
+
+    [Fact]
+    public void UpsertCorrection_OverEscapeEnabledEntry_ResetsToLiteral()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "folder",
+                Replacement = @"\n",
+                ExpandEscapes = true,
+            }
+        );
+
+        _sut.UpsertCorrection("folder", @"C:\temp", false);
+
+        var entry = Assert.Single(_sut.Entries);
+        Assert.False(entry.ExpandEscapes);
+        Assert.Equal(@"C:\temp", _sut.ApplyCorrections("folder"));
+        Assert.False(Assert.Single(new DictionaryService(_filePath).Entries).ExpandEscapes);
+    }
+
+    [Fact]
+    public void UpsertCorrection_SameTextOverEscapeEnabledEntry_ResetsToLiteral()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "folder",
+                Replacement = @"a\tb",
+                ExpandEscapes = true,
+            }
+        );
+
+        _sut.UpsertCorrection("folder", @"a\tb", false);
+
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"a\tb", _sut.ApplyCorrections("folder"));
+    }
+
+    [Fact]
+    public void ImportFromCsv_KeepsDistinctRegexPatterns()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex
+            Correction,\s+,SPACE,False,True,False,0,Import,False,True
+            Correction,\S+,WORD,False,True,False,0,Import,False,True
+            """;
+
+        Assert.Equal(2, _sut.ImportFromCsv(csv));
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Equal(0, _sut.ImportFromCsv(csv));
+        Assert.Equal(2, _sut.Entries.Count);
+    }
+
+    [Fact]
+    public void ImportFromCsv_KeepsLiteralAndRegexEntriesWithSameOriginalSeparate()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex
+            Correction,a.b,LITERAL,False,True,False,0,Import,False,False
+            Correction,a.b,REGEX,False,True,False,0,Import,False,True
+            """;
+
+        Assert.Equal(2, _sut.ImportFromCsv(csv));
+
+        var literal = Assert.Single(_sut.Entries, e => !e.IsRegex);
+        var regex = Assert.Single(_sut.Entries, e => e.IsRegex);
+        Assert.Equal("LITERAL", literal.Replacement);
+        Assert.Equal("REGEX", regex.Replacement);
+        Assert.Equal("REGEX", _sut.ApplyCorrections("axb"));
+    }
+
+    [Fact]
+    public void UpsertCorrection_DoesNotSelectRegexEntryWithSameOriginal()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "a.b",
+                Replacement = "X",
+                IsRegex = true,
+            }
+        );
+
+        var result = _sut.UpsertCorrection("a.b", "Y", false);
+
+        Assert.False(result.IsRegex);
+        Assert.Equal(2, _sut.Entries.Count);
+        var regex = Assert.Single(_sut.Entries, e => e.IsRegex);
+        Assert.Equal("X", regex.Replacement);
+        Assert.Equal("X", _sut.ApplyCorrections("axb"));
+    }
+
+    [Fact]
+    public void DeleteCorrection_DoesNotRemoveRegexEntryWithSameOriginal()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "a.b",
+                Replacement = "X",
+                IsRegex = true,
+            }
+        );
+        _sut.UpsertCorrection("a.b", "Y", false);
+
+        _sut.DeleteCorrection("a.b");
+
+        Assert.True(Assert.Single(_sut.Entries).IsRegex);
+    }
+
+    [Fact]
+    public void LearnCorrection_DoesNotSelectRegexEntryWithSameOriginal()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "1",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "a.b",
+                Replacement = "X",
+                IsRegex = true,
+            }
+        );
+
+        _sut.LearnCorrection("a.b", "Z");
+
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.Equal("X", Assert.Single(_sut.Entries, e => e.IsRegex).Replacement);
+    }
+
+    [Fact]
+    public void ImportFromCsv_KeepsRegexOriginalWhitespace()
+    {
+        const string csv = """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex
+            Correction,"foo ",bar,False,True,False,0,Import,False,True
+            Correction," lit ",eral,False,True,False,0,Import,False,False
+            """;
+
+        Assert.Equal(2, _sut.ImportFromCsv(csv));
+
+        Assert.Equal("foo ", Assert.Single(_sut.Entries, e => e.IsRegex).Original);
+        Assert.Equal("lit", Assert.Single(_sut.Entries, e => !e.IsRegex).Original);
+    }
+
+    [Fact]
+    public void LearnCorrection_StaysLiteral()
+    {
+        _sut.LearnCorrection("folder", @"C:\temp");
+
+        Assert.False(Assert.Single(_sut.Entries).ExpandEscapes);
+        Assert.Equal(@"C:\temp", _sut.ApplyCorrections("folder"));
     }
 
     [Fact]
@@ -279,7 +1051,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -287,7 +1059,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Vue"
+                Original = "Vue",
             }
         );
 
@@ -303,7 +1075,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -320,7 +1092,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -329,7 +1101,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "2",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
-                Replacement = "the"
+                Replacement = "the",
             }
         );
 
@@ -347,7 +1119,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.AddEntry(
@@ -356,7 +1128,7 @@ public sealed class DictionaryServiceTests : IDisposable
                 Id = "2",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "teh",
-                Replacement = "the"
+                Replacement = "the",
             }
         );
 
@@ -398,6 +1170,172 @@ public sealed class DictionaryServiceTests : IDisposable
         Assert.Equal(1, _sut.Entries[0].UsageCount);
         Assert.Equal(2, _sut.Entries[0].TimesCorrected);
         Assert.NotNull(_sut.Entries[0].LastCorrectedAt);
+    }
+
+    [Theory]
+    [InlineData(DictionaryEntrySource.Manual)]
+    [InlineData(DictionaryEntrySource.Import)]
+    public void LearnCorrection_DoesNotOverwriteUserAuthoredEntry(DictionaryEntrySource source)
+    {
+        // A user-authored or imported mapping must never be silently replaced by one
+        // observed target-app edit.
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "user-rule",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "kubernets",
+                Replacement = "Kubernetes",
+                Source = source,
+            }
+        );
+
+        _sut.LearnCorrection("kubernets", "kubernetes cluster");
+
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal("Kubernetes", entry.Replacement);
+        Assert.Equal(source, entry.Source);
+    }
+
+    [Fact]
+    public void LearnCorrections_AddsNewCorrectionsAsAutoLearnedAndReturnsIds()
+    {
+        var learned = _sut.LearnCorrections([
+            new CorrectionSuggestion("teh", "the"),
+            new CorrectionSuggestion("recieve", "receive"),
+        ]);
+
+        Assert.Equal(2, learned.Count);
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.All(learned, c => Assert.NotEmpty(c.Id));
+        Assert.All(
+            _sut.Entries,
+            e =>
+            {
+                Assert.Equal(DictionaryEntryType.Correction, e.EntryType);
+                Assert.Equal(DictionaryEntrySource.AutoLearned, e.Source);
+                Assert.Equal(1, e.TimesCorrected);
+                Assert.NotNull(e.LastCorrectedAt);
+            }
+        );
+
+        // Returned ids must be exactly the ids that were persisted.
+        var learnedIds = learned.Select(c => c.Id).ToHashSet();
+        Assert.Equal(learnedIds, _sut.Entries.Select(e => e.Id).ToHashSet());
+    }
+
+    [Theory]
+    [InlineData(DictionaryEntrySource.Manual)]
+    [InlineData(DictionaryEntrySource.Import)]
+    [InlineData(DictionaryEntrySource.CorrectionSuggestion)]
+    [InlineData(DictionaryEntrySource.AutoLearned)]
+    public void LearnCorrections_NeverOverwritesExistingEntryOutsideReplaceableSet(
+        DictionaryEntrySource source
+    )
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "teh",
+                Replacement = "the",
+                Source = source,
+            }
+        );
+
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion("teh", "different")]);
+
+        Assert.Empty(learned);
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal("the", entry.Replacement);
+        Assert.Equal(source, entry.Source);
+    }
+
+    [Fact]
+    public void LearnCorrections_UpdatesEntryWhenIdIsReplaceable()
+    {
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion("teh", "the")]);
+        var id = learned[0].Id;
+
+        var relearned = _sut.LearnCorrections(
+            [new CorrectionSuggestion("teh", "thee")],
+            new HashSet<string> { id }
+        );
+
+        var updated = Assert.Single(relearned);
+        Assert.Equal(id, updated.Id);
+        Assert.Equal("thee", updated.Replacement);
+
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal(id, entry.Id);
+        Assert.Equal("thee", entry.Replacement);
+        Assert.Equal(2, entry.TimesCorrected);
+        Assert.Equal(DictionaryEntrySource.AutoLearned, entry.Source);
+    }
+
+    [Theory]
+    [InlineData("foo!")]
+    [InlineData("(bar")]
+    [InlineData("")]
+    public void LearnCorrections_RejectsUnsafeTokens(string original)
+    {
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion(original, "safe")]);
+
+        Assert.Empty(learned);
+        Assert.Empty(_sut.Entries);
+    }
+
+    [Theory]
+    [InlineData("its", "it's")]
+    [InlineData("email", "e-mail")]
+    [InlineData("kubernets", "Kubernetes")]
+    public void LearnCorrections_AcceptsSafeTokens(string original, string replacement)
+    {
+        var learned = _sut.LearnCorrections([new CorrectionSuggestion(original, replacement)]);
+
+        Assert.Single(learned);
+        Assert.Single(_sut.Entries);
+    }
+
+    [Fact]
+    public void LearnCorrections_WithinBatchDuplicateOriginals_FirstWins()
+    {
+        var learned = _sut.LearnCorrections([
+            new CorrectionSuggestion("teh", "the"),
+            new CorrectionSuggestion("TEH", "thee"),
+        ]);
+
+        Assert.Single(learned);
+        var entry = Assert.Single(_sut.Entries);
+        Assert.Equal("teh", entry.Original);
+        Assert.Equal("the", entry.Replacement);
+    }
+
+    [Fact]
+    public void UndoLearnedCorrections_RemovesOnlyListedIdsAndLeavesTheRest()
+    {
+        var learned = _sut.LearnCorrections([
+            new CorrectionSuggestion("teh", "the"),
+            new CorrectionSuggestion("recieve", "receive"),
+        ]);
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "keep",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "seperate",
+                Replacement = "separate",
+                Source = DictionaryEntrySource.Manual,
+            }
+        );
+
+        _sut.UndoLearnedCorrections([learned[0]]);
+
+        Assert.Equal(2, _sut.Entries.Count);
+        Assert.DoesNotContain(_sut.Entries, e => e.Id == learned[0].Id);
+        Assert.Contains(_sut.Entries, e => e.Id == learned[1].Id);
+        Assert.Contains(_sut.Entries, e => e.Id == "keep");
     }
 
     [Fact]
@@ -443,18 +1381,18 @@ public sealed class DictionaryServiceTests : IDisposable
                 CaseSensitive = true,
                 IsStarred = true,
                 Priority = 7,
-                Source = DictionaryEntrySource.CorrectionSuggestion
+                Source = DictionaryEntrySource.CorrectionSuggestion,
             }
         );
 
         var csv = _sut.ExportToCsv();
 
         Assert.Contains(
-            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source",
+            "EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source,ExpandEscapes,IsRegex",
             csv
         );
         Assert.Contains(
-            "Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion",
+            "Correction,\"wispr, flow\",\"Wispr \"\"Flow\"\"\",True,True,True,7,CorrectionSuggestion,False,False",
             csv
         );
     }
@@ -491,6 +1429,92 @@ public sealed class DictionaryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ImportFromCsv_UpdatesExistingCorrectionByOriginalIgnoringCase()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing-id",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "wispr",
+                Replacement = "Wispr",
+                Priority = 5,
+                Source = DictionaryEntrySource.Manual,
+            }
+        );
+
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,WISPR,Wispr Flow,true,true,true,9,Import
+            """
+        );
+
+        Assert.Equal(1, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("existing-id", correction.Id);
+        Assert.Equal("Wispr Flow", correction.Replacement);
+        Assert.Equal(9, correction.Priority);
+    }
+
+    [Fact]
+    public void ImportFromCsv_ExactDuplicateCorrectionIsNoOp()
+    {
+        _sut.AddEntry(
+            new DictionaryEntry
+            {
+                Id = "existing-id",
+                EntryType = DictionaryEntryType.Correction,
+                Original = "wispr",
+                Replacement = "Wispr",
+                CaseSensitive = true,
+                IsEnabled = false,
+                IsStarred = true,
+                UsageCount = 12,
+                Priority = 5,
+                Source = DictionaryEntrySource.Manual,
+            }
+        );
+
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement,CaseSensitive,IsEnabled,IsStarred,Priority,Source
+            Correction,WISPR,Wispr,true,false,true,5,Manual
+            """
+        );
+
+        Assert.Equal(0, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("existing-id", correction.Id);
+        Assert.Equal(12, correction.UsageCount);
+    }
+
+    [Fact]
+    public void ImportFromCsv_LastCorrectionRowWinsForDuplicateOriginals()
+    {
+        var imported = _sut.ImportFromCsv(
+            """
+            EntryType,Original,Replacement
+            Correction,wispr,First
+            Correction,WISPR,Second
+            """
+        );
+
+        Assert.Equal(2, imported);
+        var correction = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Correction
+        );
+        Assert.Equal("Second", correction.Replacement);
+    }
+
+    [Fact]
     public void ImportFromCsv_SkipsDuplicatesAndInvalidCorrections()
     {
         _sut.AddEntry(
@@ -498,7 +1522,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "existing",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeWhisper"
+                Original = "TypeWhisper",
             }
         );
 
@@ -513,6 +1537,11 @@ public sealed class DictionaryServiceTests : IDisposable
 
         Assert.Equal(1, imported);
         Assert.Equal(2, _sut.Entries.Count);
+        var term = Assert.Single(
+            _sut.Entries,
+            entry => entry.EntryType == DictionaryEntryType.Term
+        );
+        Assert.Equal("existing", term.Id);
         Assert.Contains(
             _sut.Entries,
             entry =>
@@ -528,7 +1557,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
 
@@ -549,7 +1578,7 @@ public sealed class DictionaryServiceTests : IDisposable
             {
                 Id = "1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "React"
+                Original = "React",
             }
         );
         _sut.DeleteEntry("1");

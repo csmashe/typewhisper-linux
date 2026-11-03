@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
@@ -14,137 +15,150 @@ public sealed partial class HistoryService : IHistoryService
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
 
     private readonly string? _audioDirectory;
-    private readonly string _filePath;
-    private readonly Lock _gate = new();
-    private readonly SemaphoreSlim _loadLock = new(1, 1);
-    private List<TranscriptionRecord> _cache = [];
-
-    private bool _cacheLoaded;
-
-    // Set when the on-disk file existed but couldn't be read; SaveToDisk
-    // refuses to write while set to prevent a transient IO error from
-    // replacing the user's history with a one-entry file.
-    private bool _cacheLoadFailed;
-    private List<string> _distinctApps = [];
-    private double _totalDuration;
-
-    private int _totalRecords;
-    private int _totalWords;
+    private readonly AtomicJsonStore<ImmutableArray<TranscriptionRecord>> _store;
 
     public HistoryService(string filePath, string? audioDirectory = null)
     {
-        _filePath = filePath;
         _audioDirectory = audioDirectory;
+        _store = new AtomicJsonStore<ImmutableArray<TranscriptionRecord>>(
+            filePath,
+            static () => [],
+            new AtomicJsonStoreOptions<ImmutableArray<TranscriptionRecord>>
+            {
+                JsonOptions = s_jsonOptions,
+                CorruptFilePolicy = AtomicJsonCorruptFilePolicy.PreserveAndReset,
+                Deserialize = json =>
+                {
+                    var records = JsonSerializer.Deserialize<ImmutableArray<TranscriptionRecord>>(
+                        json,
+                        s_jsonOptions
+                    );
+                    return records.IsDefault
+                        ? throw new JsonException("History JSON deserialized to null.")
+                        : records;
+                },
+                Diagnostic = diagnostic =>
+                    Trace.WriteLine(
+                        $"[HistoryService] {diagnostic.Kind} at '{diagnostic.Path}'."
+                    ),
+            }
+        );
     }
 
-    public IReadOnlyList<TranscriptionRecord> Records
+    public IReadOnlyList<TranscriptionRecord> Records => ReadRecords().ToArray();
+
+    public bool RecordsAvailable { get; private set; } = true;
+    public bool TryGetRecords(out IReadOnlyList<TranscriptionRecord> records)
     {
-        get
-        {
-            EnsureCacheLoaded();
-            lock (_gate)
-            {
-                return _cache.ToList();
-            }
-        }
+        var available = ReadRecords(out var read, out var reset);
+        records = read.ToArray();
+        return available && !reset;
     }
 
     public event Action? RecordsChanged;
 
-    // Fast path when already loaded; the fallback triggers a synchronous load via Records.
-    public int TotalRecords => _cacheLoaded ? _totalRecords : Records.Count;
-    public int TotalWords => _cacheLoaded ? _totalWords : Records.Sum(r => r.WordCount);
+    public int TotalRecords => ReadRecords().Count(r => r.Status == TranscriptionRecordStatus.Succeeded);
+    public int TotalWords => ReadRecords().Where(r => r.Status == TranscriptionRecordStatus.Succeeded).Sum(r => r.WordCount);
+    public double TotalDuration => ReadRecords().Where(r => r.Status == TranscriptionRecordStatus.Succeeded).Sum(r => r.DurationSeconds);
 
-    public double TotalDuration =>
-        _cacheLoaded ? _totalDuration : Records.Sum(r => r.DurationSeconds);
-
-    public async Task EnsureLoadedAsync()
+    /// <summary>
+    ///     A read failure must not stop the app, so it degrades to empty — same contract as
+    ///     <c>ErrorLogService.ReadEntries</c> and <c>WatchFolderService.ReadHistory</c>. Writes
+    ///     still go through the store, which refuses to overwrite an unreadable primary.
+    /// </summary>
+    private ImmutableArray<TranscriptionRecord> ReadRecords()
     {
-        if (_cacheLoaded)
-        {
-            return;
-        }
+        ReadRecords(out var records, out _);
+        return records;
+    }
 
-        await _loadLock.WaitAsync().ConfigureAwait(false);
+    private bool ReadRecords(out ImmutableArray<TranscriptionRecord> records, out bool resetAfterCorruption)
+    {
+        resetAfterCorruption = false;
         try
         {
-            if (_cacheLoaded)
-            {
-                return;
-            }
-
-            var records = await Task.Run(LoadFromDisk).ConfigureAwait(false);
-            lock (_gate)
-            {
-                _cache = records;
-                RebuildStats();
-                _cacheLoaded = true;
-            }
+            records = _store.GetCurrent(out resetAfterCorruption);
+            RecordsAvailable = true;
+            return true;
         }
-        finally
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            _loadLock.Release();
+            RecordsAvailable = false;
+            Trace.WriteLine($"[HistoryService] Failed to load history: {ex.Message}");
+            records = [];
+            return false;
         }
+    }
+
+    public Task EnsureLoadedAsync()
+    {
+        // Keep the completed-synchronously fast path the cached implementation had: reading an
+        // already-loaded snapshot costs nothing, and callers that refresh straight after awaiting
+        // (HistorySectionViewModel's constructor) must not be pushed onto a later turn.
+        if (_store.IsLoaded)
+        {
+            return Task.CompletedTask;
+        }
+
+        return Task.Run(() => _ = ReadRecords());
     }
 
     public IReadOnlyList<string> GetDistinctApps()
     {
-        EnsureCacheLoaded();
-        lock (_gate)
-        {
-            return _distinctApps.ToList();
-        }
+        return ReadRecords()
+            .Select(r => r.AppProcessName)
+            .Where(a => !string.IsNullOrEmpty(a))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList()!;
     }
 
     public void AddRecord(TranscriptionRecord record)
     {
-        EnsureCacheLoaded();
-        lock (_gate)
+        _store.Update(current => current.Insert(0, record));
+        RaiseRecordsChanged();
+    }
+
+    public bool TryReplaceRecord(TranscriptionRecord record)
+    {
+        var changed = false;
+        _store.Update(current =>
         {
-            // Stage on a copy and persist before mutating _cache so a save failure
-            // can't leave in-memory state ahead of disk.
-            var newCache = new List<TranscriptionRecord>(_cache.Count + 1) { record };
-            newCache.AddRange(_cache);
-            SaveToDisk(newCache);
+            var index = FindIndex(current, existing => existing.Id == record.Id);
+            if (index < 0)
+                return current;
 
-            _cache = newCache;
-            _totalRecords++;
-            _totalWords += record.WordCount;
-            _totalDuration += record.DurationSeconds;
-            if (
-                !string.IsNullOrEmpty(record.AppProcessName)
-                && !_distinctApps.Contains(record.AppProcessName, StringComparer.OrdinalIgnoreCase)
-            )
-            {
-                _distinctApps.Add(record.AppProcessName);
-                _distinctApps.Sort(StringComparer.OrdinalIgnoreCase);
-            }
-        }
-
-        RecordsChanged?.Invoke();
+            changed = true;
+            return current.SetItem(index, record);
+        });
+        if (changed)
+            RaiseRecordsChanged();
+        return changed;
     }
 
     public void UpdateRecord(string id, string finalText)
     {
-        EnsureCacheLoaded();
-        lock (_gate)
-        {
-            var idx = _cache.FindIndex(r => r.Id == id);
+        var changed = false;
+        _store.Update(
+            current =>
+            {
+                var idx = FindIndex(current, r => r.Id == id);
             if (idx < 0)
             {
-                return;
+                    return current;
             }
 
-            var old = _cache[idx];
+                changed = true;
+                var old = current[idx];
             var updated = old with { FinalText = finalText };
-            var newCache = new List<TranscriptionRecord>(_cache) { [idx] = updated };
-            SaveToDisk(newCache);
+                return current.SetItem(idx, updated);
+            }
+        );
 
-            _cache = newCache;
-            _totalWords += updated.WordCount - old.WordCount;
+        if (changed)
+        {
+            RaiseRecordsChanged();
         }
-
-        RecordsChanged?.Invoke();
     }
 
     public void SetPendingCorrectionSuggestions(
@@ -152,95 +166,109 @@ public sealed partial class HistoryService : IHistoryService
         IReadOnlyList<CorrectionSuggestion> suggestions
     )
     {
-        EnsureCacheLoaded();
-        lock (_gate)
-        {
-            var idx = _cache.FindIndex(r => r.Id == id);
-            if (idx < 0)
+        var changed = false;
+        _store.Update(
+            current =>
             {
-                return;
+                var idx = FindIndex(current, r => r.Id == id);
+                if (idx < 0)
+                {
+                    return current;
+                }
+
+                changed = true;
+                return current.SetItem(
+                    idx,
+                    current[idx] with { PendingCorrectionSuggestions = suggestions.ToList() }
+                );
             }
+        );
 
-            var newCache = new List<TranscriptionRecord>(_cache);
-            newCache[idx] = newCache[idx] with { PendingCorrectionSuggestions = suggestions.ToList() };
-            SaveToDisk(newCache);
-
-            _cache = newCache;
+        if (changed)
+        {
+            RaiseRecordsChanged();
         }
-
-        RecordsChanged?.Invoke();
     }
 
-    public void DeleteRecord(string id)
+    public void DeleteRecord(string id) => RemoveMatching(record => record.Id == id);
+
+    public void ClearAll() => RemoveMatching(_ => true);
+
+    public bool TryDeleteRecords(IReadOnlyCollection<string> ids)
     {
-        EnsureCacheLoaded();
-        string? removedAudioFileName;
-        lock (_gate)
+        ArgumentNullException.ThrowIfNull(ids);
+        var selected = ids.ToHashSet(StringComparer.Ordinal);
+        if (selected.Count == 0)
         {
-            var idx = _cache.FindIndex(r => r.Id == id);
-            if (idx < 0)
-            {
-                return;
-            }
-
-            var removed = _cache[idx];
-            var newCache = new List<TranscriptionRecord>(_cache);
-            newCache.RemoveAt(idx);
-            SaveToDisk(newCache);
-
-            _cache = newCache;
-            _totalRecords--;
-            _totalWords -= removed.WordCount;
-            _totalDuration -= removed.DurationSeconds;
-            removedAudioFileName = removed.AudioFileName;
-
-            RebuildDistinctApps();
+            return true;
         }
 
-        DeleteAudioFile(removedAudioFileName);
-        RecordsChanged?.Invoke();
+        try
+        {
+            RemoveMatching(record => selected.Contains(record.Id));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Only the bulk caller reports a write failure as a result; DeleteRecord and ClearAll
+            // keep throwing so the HTTP API still answers 500 instead of claiming success.
+            Trace.WriteLine($"[HistoryService] Failed to delete history: {ex.Message}");
+            return false;
+        }
     }
 
-    public void ClearAll()
+    private void RemoveMatching(Func<TranscriptionRecord, bool> remove)
     {
-        EnsureCacheLoaded();
-        List<string?> audioFiles;
-        lock (_gate)
-        {
-            // Persist the empty list before clearing in-memory state; otherwise
-            // a save failure would delete audio files for records still in history.json.
-            audioFiles = _cache.Select(r => r.AudioFileName).ToList();
-            SaveToDisk([]);
+        List<string?> audioFiles = [];
+        var changed = false;
+        _store.Update(
+            current =>
+            {
+                var removed = current.Where(remove).ToArray();
+                if (removed.Length == 0)
+                {
+                    return current;
+                }
 
-            _cache.Clear();
-            _totalRecords = 0;
-            _totalWords = 0;
-            _totalDuration = 0;
-            _distinctApps.Clear();
+                ImmutableArray<TranscriptionRecord> remaining =
+                    [.. current.Where(record => !remove(record))];
+                var references = remaining
+                    .Select(record => record.AudioFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                audioFiles = removed
+                    .Select(record => record.AudioFileName)
+                    .Where(name => !string.IsNullOrWhiteSpace(name) && !references.Contains(name))
+                    .ToList();
+                changed = true;
+                return remaining;
+            }
+        );
+
+        if (!changed)
+        {
+            return;
         }
 
         DeleteAudioFiles(audioFiles);
-        RecordsChanged?.Invoke();
+        RaiseRecordsChanged();
     }
 
     public IReadOnlyList<TranscriptionRecord> Search(string query)
     {
-        EnsureCacheLoaded();
-        lock (_gate)
+        var records = ReadRecords();
+        if (string.IsNullOrWhiteSpace(query))
         {
-            if (string.IsNullOrWhiteSpace(query))
-            {
-                return _cache.ToList();
-            }
-
-            return _cache
-                .Where(r =>
-                    r.FinalText.Contains(query, StringComparison.OrdinalIgnoreCase)
-                    || r.RawText.Contains(query, StringComparison.OrdinalIgnoreCase)
-                    || (r.AppName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                )
-                .ToList();
+            return records.ToArray();
         }
+
+        return records
+            .Where(r =>
+                r.FinalText.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || r.RawText.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || (r.AppName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+            )
+            .ToList();
     }
 
     public void PurgeOldRecords(TimeSpan? retention)
@@ -250,186 +278,75 @@ public sealed partial class HistoryService : IHistoryService
             return;
         }
 
-        EnsureCacheLoaded();
         var cutoff = DateTime.UtcNow - retention.Value;
-        List<string?> removedAudioFiles;
-
-        lock (_gate)
-        {
-            removedAudioFiles = _cache
-                .Where(r => r.CreatedAt < cutoff)
-                .Select(r => r.AudioFileName)
-                .ToList();
-
-            if (removedAudioFiles.Count == 0)
-            {
-                return;
-            }
-
-            var newCache = _cache.Where(r => r.CreatedAt >= cutoff).ToList();
-            SaveToDisk(newCache);
-
-            _cache = newCache;
-            RebuildStats();
-        }
-
-        DeleteAudioFiles(removedAudioFiles);
-        RecordsChanged?.Invoke();
-    }
-
-    // Synchronous fallback. Do not call from a thread that already holds _loadLock — deadlock.
-    private void EnsureCacheLoaded()
-    {
-        if (_cacheLoaded)
+        // Update serializes the whole history to detect a change; skip it when nothing expired,
+        // unless a corrupt file was reset and this no-op write is what commits a clean primary.
+        var snapshot = _store.GetCurrent(out var resetAfterCorruption);
+        if (!resetAfterCorruption && !snapshot.Any(r => r.CreatedAt < cutoff))
         {
             return;
         }
 
-        _loadLock.Wait();
-        try
-        {
-            if (_cacheLoaded)
+        List<string?> removedAudioFiles = [];
+        var changed = false;
+        _store.Update(
+            current =>
             {
-                return;
-            }
+                removedAudioFiles = current
+                    .Where(r => r.CreatedAt < cutoff)
+                    .Select(r => r.AudioFileName)
+                    .ToList();
+                if (removedAudioFiles.Count == 0)
+                {
+                    return current;
+                }
 
-            var records = LoadFromDisk();
-            lock (_gate)
-            {
-                _cache = records;
-                RebuildStats();
-                _cacheLoaded = true;
+                changed = true;
+                return [.. current.Where(r => r.CreatedAt >= cutoff)];
             }
-        }
-        finally
+        );
+
+        if (!changed)
         {
-            _loadLock.Release();
+            return;
+        }
+
+        DeleteAudioFiles(removedAudioFiles);
+        RaiseRecordsChanged();
+    }
+
+    private void RaiseRecordsChanged()
+    {
+        if (RecordsChanged is not { } handlers)
+            return;
+
+        foreach (var handler in handlers.GetInvocationList().Cast<Action>())
+        {
+            try
+            {
+                handler();
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[HistoryService] RecordsChanged handler failed: {ex.GetType().Name}");
+            }
         }
     }
 
-    private List<TranscriptionRecord> LoadFromDisk()
+    private static int FindIndex(
+        ImmutableArray<TranscriptionRecord> records,
+        Func<TranscriptionRecord, bool> predicate
+    )
     {
-        if (!File.Exists(_filePath))
+        for (var index = 0; index < records.Length; index++)
         {
-            return [];
-        }
-
-        string json;
-        try
-        {
-            json = File.ReadAllText(_filePath);
-        }
-        catch (Exception ex)
-        {
-            // Unreadable (transient IO / permissions). Set _cacheLoadFailed so
-            // SaveToDisk won't overwrite existing data on the next AddRecord.
-            Trace.WriteLine($"[HistoryService] Failed to read history from '{_filePath}': {ex}");
-            _cacheLoadFailed = true;
-            return [];
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<List<TranscriptionRecord>>(json) ?? [];
-        }
-        catch (JsonException ex)
-        {
-            Trace.WriteLine($"[HistoryService] Failed to parse history from '{_filePath}': {ex}");
-            PreserveBrokenFile(_filePath);
-            return [];
-        }
-    }
-
-    private void SaveToDisk(IReadOnlyList<TranscriptionRecord> records)
-    {
-        if (_cacheLoadFailed)
-        {
-            Trace.WriteLine(
-                $"[HistoryService] Skipping save to '{_filePath}': previous load failed and overwriting would discard existing data."
-            );
-            throw new IOException(
-                $"Refusing to overwrite '{_filePath}' because the previous load failed."
-            );
-        }
-
-        var dir = Path.GetDirectoryName(_filePath);
-        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        var json = JsonSerializer.Serialize(records, s_jsonOptions);
-
-        // Atomic write via temp file so a mid-write crash can't truncate history.
-        var tempPath = _filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            File.WriteAllText(tempPath, json);
-            if (File.Exists(_filePath))
+            if (predicate(records[index]))
             {
-                File.Replace(tempPath, _filePath, null);
-            }
-            else
-            {
-                File.Move(tempPath, _filePath);
+                return index;
             }
         }
-        catch
-        {
-            if (!File.Exists(tempPath))
-            {
-                throw;
-            }
 
-            try { File.Delete(tempPath); }
-            catch
-            {
-                /* best effort */
-            }
-
-            throw;
-        }
-    }
-
-    private static void PreserveBrokenFile(string path)
-    {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return;
-            }
-
-            var brokenPath = $"{path}.broken-{DateTime.UtcNow:yyyyMMddHHmmss}";
-            File.Move(path, brokenPath);
-            Trace.WriteLine(
-                $"[HistoryService] Preserved unreadable file as {brokenPath}"
-            );
-        }
-        catch (Exception ex)
-        {
-            Trace.WriteLine(
-                $"[HistoryService] Could not preserve unreadable file: {ex.Message}"
-            );
-        }
-    }
-
-    private void RebuildStats()
-    {
-        _totalRecords = _cache.Count;
-        _totalWords = _cache.Sum(r => r.WordCount);
-        _totalDuration = _cache.Sum(r => r.DurationSeconds);
-        RebuildDistinctApps();
-    }
-
-    private void RebuildDistinctApps()
-    {
-        _distinctApps = _cache
-            .Select(r => r.AppProcessName)
-            .Where(a => !string.IsNullOrEmpty(a))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order()
-            .ToList()!;
+        return -1;
     }
 
     private void DeleteAudioFile(string? audioFileName)

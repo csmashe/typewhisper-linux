@@ -1,35 +1,58 @@
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// ReSharper disable UnusedMember.Global
+// ReSharper disable UnusedType.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Net.Http.Headers;
 using System.Text.Json;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.Deepgram;
 
-public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class DeepgramPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginSettingsProvider,
+        IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.deepgram.com";
 
     private readonly HttpClient _httpClient = new();
     private IPluginHostServices? _host;
-    private string? _apiKey;
-    private string? _selectedModelId;
 
-    private static readonly IReadOnlyList<PluginModelInfo> Models =
+    // https://developers.deepgram.com/docs/models-languages-overview (checked 2026-09-10)
+    private static readonly IReadOnlyList<string> s_nova2Languages = Array.AsReadOnly(
+        "multi bg ca zh zh-CN zh-Hans zh-TW zh-Hant zh-HK cs da da-DK nl en en-US en-AU en-GB en-NZ en-IN et fi nl-BE fr fr-CA de de-CH el hi hu id it ja ko ko-KR lv lt ms no pl pt pt-BR pt-PT ro ru sk es es-419 sv sv-SE th th-TH tr uk vi".Split(' ')
+    );
+
+    private static readonly IReadOnlyList<string> s_nova3Languages = Array.AsReadOnly(
+        "multi af af-ZA ar ar-AE ar-SA ar-QA ar-KW ar-SY ar-LB ar-PS ar-JO ar-EG ar-SD ar-TD ar-MA ar-DZ ar-TN ar-IQ ar-IR hy as as-IN be bn bs bg ca zh-HK zh zh-CN zh-Hans zh-TW zh-Hant hr cs cs-CZ da da-DK nl en en-US en-AU en-GB en-IN en-NZ et fi nl-BE fr fr-CA ka ka-GE de de-CH el gu gu-IN he hi hu id it ja kn kk kk-KZ ko ko-KR lv lt mk ms mr mn ne no ps ps-AF fa pl pt pt-BR pt-PT pa pa-IN ro ru sr sk sl es es-419 sv sv-SE tl ta te th th-TH tr tr-TR uk ur vi".Split(' ')
+    );
+
+    private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
-        new("nova-3", "Nova-3"),
-        new("nova-2", "Nova-2"),
+        new("nova-3", "Nova-3")
+        {
+            LanguageCount = s_nova3Languages.Count(code => code != "multi" && !code.Contains('-')),
+        },
+        new("nova-2", "Nova-2")
+        {
+            LanguageCount = s_nova2Languages.Count(code => code != "multi" && !code.Contains('-')),
+        },
     ];
 
     public string PluginId => "com.typewhisper.deepgram";
     public string PluginName => "Deepgram";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
-        _apiKey = await host.LoadSecretAsync("api-key");
-        _selectedModelId = host.GetSetting<string>("selectedModel") ?? Models[0].Id;
+        ApiKey = await host.LoadSecretAsync("api-key");
+        SelectedModelId = host.GetSetting<string>("selectedModel") ?? s_models[0].Id;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -41,24 +64,31 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     public string ProviderId => "deepgram";
     public string ProviderDisplayName => "Deepgram";
-    public bool IsConfigured => !string.IsNullOrEmpty(_apiKey);
+    public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels => Models;
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels => s_models;
+    public IReadOnlyList<string> SupportedLanguages =>
+        SelectedModelId == "nova-2" ? s_nova2Languages : s_nova3Languages;
 
-    public string? SelectedModelId => _selectedModelId;
+    public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => true;
+    // Every Deepgram model accepts an unspecified language: batch sends
+    // detect_language=true and streaming sends language=multi on Nova-3 and
+    // defers to the endpoint default otherwise.
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
     public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
     {
-        if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+        if (!IsConfigured || SelectedModelId is null)
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
         return await DeepgramStreamingSession.ConnectAsync(
-            _apiKey!,
-            _selectedModelId,
+            ApiKey!,
+            SelectedModelId,
             language,
             ct
         );
@@ -66,10 +96,13 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     public void SelectModel(string modelId)
     {
-        if (Models.All(m => m.Id != modelId))
+        if (s_models.All(m => m.Id != modelId))
             throw new ArgumentException($"Unknown model: {modelId}");
-        _selectedModelId = modelId;
+        if (string.Equals(modelId, SelectedModelId, StringComparison.Ordinal))
+            return;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
+        _host?.NotifyCapabilitiesChanged();
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -80,30 +113,27 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         CancellationToken ct
     )
     {
-        if (!IsConfigured || _selectedModelId is null)
-            throw new InvalidOperationException(
-                "Plugin not configured. API key and model required."
+        if (!IsConfigured || SelectedModelId is null)
+            throw new PluginRequestException(
+                "Plugin not configured. API key and model required.", PluginRequestFailureKind.Configuration
             );
 
         var langParam =
-            string.IsNullOrEmpty(language) || language == "auto"
+            string.IsNullOrEmpty(language)
                 ? "&detect_language=true"
                 : $"&language={Uri.EscapeDataString(language)}";
         var url =
-            $"{BaseUrl}/v1/listen?model={Uri.EscapeDataString(_selectedModelId)}&smart_format=true&punctuate=true{langParam}";
+            $"{BaseUrl}/v1/listen?model={Uri.EscapeDataString(SelectedModelId)}&smart_format=true&punctuate=true{langParam}";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Token", _apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Token", ApiKey);
         request.Content = new ByteArrayContent(wavAudio);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
 
-        var response = await _httpClient.SendAsync(request, ct);
+        using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
+            (errorResponse, errorBody) => $"Deepgram API error {(int)errorResponse.StatusCode}: {errorBody}");
         var json = await response.Content.ReadAsStringAsync(ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"Deepgram API error {(int)response.StatusCode}: {json}"
-            );
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -134,7 +164,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         );
     }
 
-    internal string? ApiKey => _apiKey;
+    internal string? ApiKey { get; private set; }
 
     private IPluginLocalization? _injectedLocalization;
 
@@ -148,7 +178,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
-        _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
         if (_host is not null)
         {
             if (string.IsNullOrWhiteSpace(apiKey))
@@ -166,7 +196,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         request.Headers.Authorization = new AuthenticationHeaderValue("Token", apiKey);
         try
         {
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
         catch
@@ -193,7 +223,7 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
                 "selectedModel",
                 Loc.L("Settings.TranscriptionModel"),
                 Description: Loc.L("Settings.ModelDescription"),
-                Options: Models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
+                Options: s_models.Select(m => new PluginSettingOption(m.Id, m.DisplayName)).ToList()
             ),
         ];
 
@@ -201,8 +231,8 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
         Task.FromResult(
             key switch
             {
-                "api-key" => _apiKey,
-                "selectedModel" => _selectedModelId,
+                "api-key" => ApiKey,
+                "selectedModel" => SelectedModelId,
                 _ => null,
             }
         );
@@ -227,10 +257,10 @@ public sealed partial class DeepgramPlugin : ITranscriptionEnginePlugin, IPlugin
 
     public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        if (string.IsNullOrWhiteSpace(ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.EnterApiKey"));
 
-        var valid = await ValidateApiKeyAsync(_apiKey, ct);
+        var valid = await ValidateApiKeyAsync(ApiKey, ct);
         return valid
             ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValid"))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));

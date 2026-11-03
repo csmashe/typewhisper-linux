@@ -1,4 +1,8 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 
@@ -27,8 +31,16 @@ namespace TypeWhisper.Linux.Services.Hotkey.Evdev;
 ///         primitive for <c>/dev/uinput</c>.
 ///     </para>
 /// </summary>
-public sealed class InputAccessSetupHelper
+public sealed partial class InputAccessSetupHelper
 {
+    // One list keeps IsSeatManagerPresent and ManualInstallCommand's shell
+    // condition agreeing on what "no seat manager" means.
+    private static readonly string[] s_seatManagerDirectoryPaths =
+    [
+        "/run/systemd/seats",
+        "/run/elogind/seats",
+    ];
+
     // System config dir holding the udev rule. Always /etc in production. Tests
     // redirect it via SysConfDirOverride so InstallAsync / RemoveAsync stay
     // hermetic instead of reading or writing the host's real /etc.
@@ -39,6 +51,10 @@ public sealed class InputAccessSetupHelper
     // surface. The override is internal, so only the in-process test (via
     // InternalsVisibleTo) can set it.
     internal static string? SysConfDirOverride { get; set; }
+    internal static string? RootManagedArtifactStateRootOverride { get; set; }
+    internal static string? InputGroupGrantStateDirectoryOverride { get; set; }
+    internal static Func<(uint Uid, string UserName)>? CurrentIdentityOverride { get; set; }
+    internal static string[]? SeatManagerDirectoryPathsOverride { get; set; }
 
     private static string SysConfDir => SysConfDirOverride ?? "/etc";
 
@@ -52,6 +68,21 @@ public sealed class InputAccessSetupHelper
     // without this we could nuke a rule a user or distro package installed under
     // the same conventional filename.
     private const string OwnershipMarker = "Installed by TypeWhisper";
+
+    internal const int UdevRuleConflictExitCode = 73;
+    internal const int UdevRuleSymlinkExitCode = 74;
+
+    private const string UdevRuleConflictToken = "TYPEWHISPER_INPUT_UDEV_RULE_CONFLICT";
+    private const string UdevRuleSymlinkToken = "TYPEWHISPER_INPUT_UDEV_RULE_SYMLINK";
+    private const string ActivationFailureToken = "TYPEWHISPER_INPUT_ACTIVATION_FAILED";
+    private const string InputGroupGrantUnsafeToken =
+        "TYPEWHISPER_INPUT_GROUP_GRANT_STATE_UNSAFE";
+    private const string InputGroupAddedToken = "TYPEWHISPER_INPUT_GROUP_ADDED";
+    private const string InputGroupPreexistingToken =
+        "TYPEWHISPER_INPUT_GROUP_PREEXISTING";
+    private const string InputGroupRevokedToken = "TYPEWHISPER_INPUT_GROUP_REVOKED";
+
+    internal const int InputGroupGrantUnsafeExitCode = 75;
 
     internal const string UdevRuleContent =
         "# "
@@ -72,14 +103,77 @@ public sealed class InputAccessSetupHelper
     }
 
     /// <summary>
-    ///     True when our keyboard-access rule file is on disk — i.e. we've already
-    ///     run the install at least once. Distinguishes "we installed the rule and
-    ///     only a non-logind re-login remains" from "stale input-group membership
-    ///     from the old flow, where installing the rule could grant access now".
+    ///     True only when the rule path is a regular, non-symlink file carrying
+    ///     TypeWhisper's anchored first-line ownership marker. This is a UI probe;
+    ///     the privileged removal transaction still revalidates before deleting.
     /// </summary>
-    public static bool IsRuleInstalled()
+    public static bool IsOwnedRuleInstalled()
     {
-        return File.Exists(UdevRulePath);
+        try
+        {
+            var info = new FileInfo(UdevRulePath);
+            info.Refresh();
+            return info is { Exists: true, LinkTarget: null }
+                   && !info.Attributes.HasFlag(FileAttributes.Directory)
+                   && IsFileOwnedByTypeWhisper(UdevRulePath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     True when the current uid's provenance record is a regular, non-symlink
+    ///     file whose content matches the current identity's owned or
+    ///     pending-add state.
+    /// </summary>
+    internal static bool HasMatchingInputGroupGrantProvenance()
+    {
+        try
+        {
+            var identity = GetCurrentIdentity();
+            var directory = new DirectoryInfo(InputGroupGrantStateDirectory);
+            directory.Refresh();
+            if (!directory.Exists || directory.LinkTarget is not null)
+            {
+                return false;
+            }
+
+            var path = InputGroupGrantRecordPath(identity);
+            var record = new FileInfo(path);
+            record.Refresh();
+            if (!record.Exists
+                || record.LinkTarget is not null
+                || record.Attributes.HasFlag(FileAttributes.Directory))
+            {
+                return false;
+            }
+
+            var content = File.ReadAllText(path);
+            return content == InputGroupGrantRecordContent("owned", identity)
+                   || content == InputGroupGrantRecordContent("pending-add", identity);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     True when systemd-logind or elogind exposes its seat runtime directory.
+    ///     Deliberately a filesystem check, not D-Bus: manager presence is what
+    ///     gates the <c>input</c>-group fallback, even if the session can't reach it.
+    /// </summary>
+    public static bool IsSeatManagerPresent()
+    {
+        return IsSeatManagerPresent(Directory.Exists);
+    }
+
+    internal static bool IsSeatManagerPresent(Func<string, bool> directoryExists)
+    {
+        ArgumentNullException.ThrowIfNull(directoryExists);
+        return Array.Exists(SeatManagerDirectoryPaths, path => directoryExists(path));
     }
 
     /// <summary>
@@ -102,24 +196,7 @@ public sealed class InputAccessSetupHelper
             );
         }
 
-        // Pipe content via a here-doc, not command-line args, to avoid shell
-        // metadata issues. Order: write file → reload udev → retrigger the
-        // input subsystem so the rule applies to the keyboards that are already
-        // plugged in. The retrigger (action=change) is what removes the reboot:
-        // it re-evaluates the rule against live devices and applies the uaccess
-        // ACL to the active session now.
-        var script =
-            "set -e\n"
-            + $"cat > {UdevRulePath} <<'EOF'\n"
-            + UdevRuleContent
-            + "EOF\n"
-            + "udevadm control --reload\n"
-            + "udevadm trigger --subsystem-match=input --action=change\n"
-            // Block until udev has finished applying the rule (the uaccess ACL is
-            // set during event processing) so the caller's immediate re-probe of
-            // keyboard access sees the granted access rather than racing it.
-            // Bounded so a stuck udev can't wedge the setup flow.
-            + "udevadm settle --timeout=5 || true\n";
+        var script = BuildPrivilegedInstallScript();
 
         // Bounded so a hidden/stalled polkit prompt or a stuck privileged command
         // can't wedge the required first-run setup task forever (it runs with
@@ -150,6 +227,25 @@ public sealed class InputAccessSetupHelper
             return new Result(true, "Installed the keyboard-access rule.");
         }
 
+        if (MatchesPrivilegedFailure(run, UdevRuleConflictExitCode, UdevRuleConflictToken))
+        {
+            return ForeignConfigRefusal();
+        }
+
+        if (MatchesPrivilegedFailure(run, UdevRuleSymlinkExitCode, UdevRuleSymlinkToken))
+        {
+            return SymlinkRefusal();
+        }
+
+        if (run.StandardError.Contains(ActivationFailureToken, StringComparison.Ordinal))
+        {
+            return new Result(
+                false,
+                Loc.Instance["Shortcuts.KeyboardAccessActivationFailed"],
+                run.StandardError.Trim()
+            );
+        }
+
         // pkexec exits 126/127 when the auth dialog is dismissed or denied —
         // surface that distinctly so the caller can offer the manual command.
         if (run.ExitCode is 126 or 127)
@@ -172,6 +268,174 @@ public sealed class InputAccessSetupHelper
     }
 
     /// <summary>
+    ///     Builds the root-side installation transaction. Ownership, file-type,
+    ///     and symlink checks deliberately run inside this script so an
+    ///     unprivileged preflight cannot race the privileged write.
+    /// </summary>
+    private static string BuildPrivilegedInstallScript(bool includeGroupFallback = false)
+    {
+        var afterCommit =
+            "if ! udevadm control --reload; then\n"
+            + $"  echo '{ActivationFailureToken}' >&2; exit 80\n"
+            + "fi\n"
+            + "if ! udevadm trigger --subsystem-match=input --action=change; then\n"
+            + $"  echo '{ActivationFailureToken}' >&2; exit 80\n"
+            + "fi\n"
+            + "udevadm settle --timeout=5 || true\n";
+        if (includeGroupFallback)
+        {
+            afterCommit +=
+                "# Only on systems without systemd-logind/elogind (where uaccess is inert):\n"
+                + $"if {SeatManagerAbsentShellCondition()}; then\n"
+                + BuildInputGroupGrantAddShellFragment()
+                + "fi\n";
+        }
+
+        return PrivilegedManagedFileTransaction.BuildInstallScript(
+            RootStateRoot,
+            [RootSpec],
+            afterCommit
+        );
+    }
+
+    /// <summary>
+    ///     Builds the root-side removal transaction. Re-validates ownership
+    ///     immediately before <c>rm</c>, so an unprivileged marker check that went
+    ///     stale during the auth prompt cannot delete foreign config that replaced
+    ///     ours.
+    /// </summary>
+    private static string BuildPrivilegedRemoveScript(bool removeManagedGroupGrant)
+    {
+        return PrivilegedManagedFileTransaction.BuildRemoveScript(
+            RootStateRoot,
+            [RootSpec],
+            "udevadm control --reload\n"
+            + "udevadm trigger --subsystem-match=input --action=change\n"
+            + (removeManagedGroupGrant
+                ? BuildInputGroupGrantRemoveShellFragment()
+                : string.Empty)
+        );
+    }
+
+    private static string BuildPrivilegedGroupFallbackScript()
+    {
+        // The supplementary group grant is independent of the udev-rule file,
+        // but shares the same root-side lock with its managed transaction.
+        return BuildPrivilegedLockPrefix() + BuildInputGroupGrantAddShellFragment();
+    }
+
+    private static string BuildPrivilegedGroupOnlyRemoveScript()
+    {
+        return BuildPrivilegedLockPrefix() + BuildInputGroupGrantRemoveShellFragment();
+    }
+
+    private static bool MatchesPrivilegedFailure(
+        ProcessRunResult run,
+        int exitCode,
+        string token
+    )
+    {
+        return run.ExitCode == exitCode
+               && run.StandardError.Contains(token, StringComparison.Ordinal);
+    }
+
+    private static Result ForeignConfigRefusal()
+    {
+        return new Result(
+            false,
+            Loc.Instance.GetString("Shortcuts.KeyboardAccessForeignConfigRefused", UdevRulePath),
+            Loc.Instance["Shortcuts.KeyboardAccessForeignConfigRefusedDetail"],
+            Refused: true
+        );
+    }
+
+    private static Result SymlinkRefusal()
+    {
+        return new Result(
+            false,
+            Loc.Instance.GetString("Shortcuts.KeyboardAccessSymlinkRefused", UdevRulePath),
+            Loc.Instance["Shortcuts.KeyboardAccessSymlinkRefusedDetail"],
+            Refused: true
+        );
+    }
+
+    /// <summary>
+    ///     Adds the current user to the input group on a non-logind host while
+    ///     recording exact root-owned provenance. The root-side fragment rechecks
+    ///     membership before writing pending state or invoking usermod.
+    /// </summary>
+    public async Task<Result> AddToInputGroupFallbackAsync(CancellationToken ct)
+    {
+        if (!DesktopDetector.BinaryExists("pkexec"))
+        {
+            return new Result(
+                false,
+                "pkexec is not available, so input-group access can't be configured automatically.",
+                ManualInstallCommand()
+            );
+        }
+
+        string script;
+        try
+        {
+            script = BuildPrivilegedGroupFallbackScript();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new Result(false, ex.Message);
+        }
+
+        var run = await _runner
+            .RunAsync(
+                "pkexec",
+                ["/bin/sh"],
+                standardInput: script,
+                timeout: TimeSpan.FromMinutes(2),
+                ct: ct
+            )
+            .ConfigureAwait(false);
+
+        if (run.TimedOut)
+        {
+            return new Result(
+                false,
+                "Adding input-group access timed out waiting for admin authorization.",
+                ManualInstallCommand()
+            );
+        }
+
+        if (run.Succeeded)
+        {
+            return new Result(
+                true,
+                "Input-group access is configured.",
+                GroupMembershipAdded: run.StandardOutput.Contains(
+                    InputGroupAddedToken,
+                    StringComparison.Ordinal
+                )
+            );
+        }
+
+        if (run.ExitCode is 126 or 127)
+        {
+            return new Result(
+                false,
+                "Admin authorization was cancelled or denied.",
+                ManualInstallCommand(),
+                Cancelled: true
+            );
+        }
+
+        return new Result(
+            false,
+            "Could not configure input-group access.",
+            string.IsNullOrWhiteSpace(run.StandardError)
+                ? run.StandardOutput
+                : run.StandardError
+        );
+    }
+
+    /// <summary>
     ///     Removes the keyboard-access rule if (and only if) TypeWhisper installed
     ///     it, then reloads + retriggers udev so the access ACL is revoked from
     ///     the active session. A file at our path that lacks the ownership marker
@@ -179,37 +443,45 @@ public sealed class InputAccessSetupHelper
     /// </summary>
     public async Task<Result> RemoveAsync(CancellationToken ct)
     {
-        if (!File.Exists(UdevRulePath))
+        var entryExists = EntryExistsIncludingSymlink(UdevRulePath);
+        var ownedRule = IsOwnedRuleInstalled();
+        var managedGroupGrant = HasMatchingInputGroupGrantProvenance();
+        var pkexecAvailable = DesktopDetector.BinaryExists("pkexec");
+        if (!entryExists && !managedGroupGrant && !pkexecAvailable)
         {
-            return new Result(true, "No keyboard-access rule to remove.");
+            return new Result(true, "No managed keyboard access to remove.");
         }
 
-        if (!IsFileOwnedByTypeWhisper(UdevRulePath))
+        if (!pkexecAvailable)
         {
-            return new Result(
-                true,
-                "Keyboard-access rule left in place.",
-                $"Left {UdevRulePath} untouched — it doesn't carry TypeWhisper's ownership marker, so we won't delete it. Remove it manually if you want to."
-            );
-        }
+            // Fail closed: without pkexec we can't delete root-owned config, so don't
+            // report success while it's still there. Existence alone is not ownership —
+            // the privileged path checks the marker before deleting, so manual guidance
+            // must too, or we'd tell the user to erase a distro-installed rule.
+            if (!ownedRule && !managedGroupGrant)
+            {
+                return new Result(
+                    false,
+                    $"Could not remove {UdevRulePath} — pkexec is not available to delete root-owned config.",
+                    $"{UdevRulePath} exists but does not carry TypeWhisper's ownership marker, so it may belong to your distribution. Inspect it yourself before deleting anything: sudo cat {UdevRulePath}"
+                );
+            }
 
-        if (!DesktopDetector.BinaryExists("pkexec"))
-        {
-            // Fail closed: the file is ours and still on disk, but without pkexec
-            // we can't delete root-owned config. Don't report success while
-            // leaving privileged state behind.
             return new Result(
                 false,
-                $"Could not remove {UdevRulePath} — pkexec is not available to delete root-owned config.",
-                $"Remove it manually: sudo rm -f {UdevRulePath} && sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=input --action=change"
+                "Could not revoke managed keyboard access automatically because pkexec is not available.",
+                ManualRemoveCommand(ownedRule, managedGroupGrant)
             );
         }
 
-        var script =
-            "set -e\n"
-            + $"rm -f {UdevRulePath}\n"
-            + "udevadm control --reload\n"
-            + "udevadm trigger --subsystem-match=input --action=change\n";
+        // A foreign rule is not ours to touch. If matching group provenance also
+        // exists, revoke that independent grant without aiming a command at the
+        // foreign file. With no managed grant, retain privileged revalidation so
+        // direct callers still receive the established foreign-file refusal.
+        var includeRule = ownedRule || !managedGroupGrant;
+        var script = includeRule
+            ? BuildPrivilegedRemoveScript(managedGroupGrant)
+            : BuildPrivilegedGroupOnlyRemoveScript();
 
         var rm = await _runner
             .RunAsync(
@@ -229,6 +501,63 @@ public sealed class InputAccessSetupHelper
             );
         }
 
+        // A refusal exit means the root-side re-validation found a foreign file or
+        // symlink that replaced ours while the auth prompt was open. The managed
+        // group grant is independent, so retry just that revoke under the shared
+        // lock instead of leaving it blocked by the rule conflict.
+        Result? refusal = null;
+        if (MatchesPrivilegedFailure(rm, UdevRuleConflictExitCode, UdevRuleConflictToken))
+        {
+            refusal = ForeignConfigRefusal();
+        }
+        else if (MatchesPrivilegedFailure(rm, UdevRuleSymlinkExitCode, UdevRuleSymlinkToken))
+        {
+            refusal = SymlinkRefusal();
+        }
+
+        if (refusal is not null)
+        {
+            if (!managedGroupGrant)
+            {
+                return refusal;
+            }
+
+            var groupRemoval = await _runner
+                .RunAsync(
+                    "pkexec",
+                    ["/bin/sh"],
+                    standardInput: BuildPrivilegedGroupOnlyRemoveScript(),
+                    timeout: TimeSpan.FromMinutes(2),
+                    ct: ct
+                )
+                .ConfigureAwait(false);
+            if (groupRemoval.Succeeded)
+            {
+                return refusal with
+                {
+                    RequiresRelogin = true,
+                    GroupRevocationCompleted = true,
+                };
+            }
+
+            var groupFailure = groupRemoval.TimedOut
+                ? "The independent input-group revoke timed out."
+                : "The independent input-group revoke failed: "
+                  + (string.IsNullOrWhiteSpace(groupRemoval.StandardError)
+                      ? groupRemoval.StandardOutput.Trim()
+                      : groupRemoval.StandardError.Trim());
+            return refusal with { GroupRevocationFailure = groupFailure };
+        }
+
+        if (rm.StandardError.Contains(ActivationFailureToken, StringComparison.Ordinal))
+        {
+            return new Result(
+                false,
+                Loc.Instance["Shortcuts.KeyboardAccessActivationFailed"],
+                rm.StandardError.Trim()
+            );
+        }
+
         if (!rm.Succeeded)
         {
             return new Result(
@@ -237,40 +566,256 @@ public sealed class InputAccessSetupHelper
             );
         }
 
-        return new Result(true, "Keyboard-access rule removed.");
+        return new Result(
+            true,
+            "Managed keyboard access removed.",
+            RequiresRelogin: managedGroupGrant
+        );
     }
 
     /// <summary>
-    ///     The exact shell command sequence the privileged install runs, shown to
-    ///     the user when <c>pkexec</c> is unavailable or as a copyable fallback in
-    ///     the Shortcuts panel. Pure — no disk touch.
+    ///     A copyable shell command that installs the rule, shown to the user when
+    ///     <c>pkexec</c> is unavailable or as a fallback in the Shortcuts panel. Pure
+    ///     — no disk touch. The entire sequence runs in a single <c>sudo sh -c</c>
+    ///     (one password prompt) under one <c>set -e</c>, so the symlink /
+    ///     non-regular-file / foreign-marker guard fails closed: on refusal the udev
+    ///     reload/trigger and the input-group fallback never run, matching the
+    ///     automated path.
     /// </summary>
     public static string ManualInstallCommand()
     {
-        return $"sudo tee {UdevRulePath} > /dev/null <<'EOF'\n"
-               + UdevRuleContent
-               + "EOF\n"
-               + "sudo udevadm control --reload\n"
-               + "sudo udevadm trigger --subsystem-match=input --action=change\n"
-               + "sudo udevadm settle --timeout=5\n"
-               // Self-correcting fallback. TAG+="uaccess" grants keyboard access on
-               // systems with a logind/elogind seat manager (the common case), so
-               // this only acts where uaccess is inert — detected directly by the
-               // ABSENCE of a seat-manager runtime dir, rather than by probing node
-               // readability (which can't tell a readable mouse from a readable
-               // keyboard). There it joins the input group and asks for a re-login.
-               + "# Only on systems without systemd-logind/elogind (where uaccess is\n"
-               + "# inert): join the input group, then log out and back in.\n"
-               + "if [ ! -d /run/systemd/seats ] && [ ! -d /run/elogind/seats ]; then\n"
-               + "  sudo usermod -aG input \"$USER\"\n"
-               + "fi";
+        string body;
+        try
+        {
+            body = BuildPrivilegedInstallScript(includeGroupFallback: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // The udev rule itself does not depend on the current identity. If the
+            // username cannot be represented safely, omit only the non-logind
+            // input-group fallback instead of making every manual-command caller fail.
+            body = BuildPrivilegedInstallScript();
+        }
+
+        return "sudo sh -c " + PrivilegedManagedFileTransaction.QuoteAsShCArgument(body);
+    }
+
+    private static string ManualRemoveCommand(bool includeRule, bool removeManagedGroupGrant)
+    {
+        var commands = new List<string>();
+        if (includeRule)
+        {
+            commands.Add(ToManualSudoCommand(BuildPrivilegedRemoveScript(false)));
+        }
+
+        // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
+        if (removeManagedGroupGrant)
+        {
+            try
+            {
+                commands.Add(ToManualSudoCommand(BuildPrivilegedGroupOnlyRemoveScript()));
+            }
+            catch (InvalidOperationException)
+            {
+                // The independent rule-removal command above remains useful. A
+                // group-only request has no safe command without a valid identity.
+            }
+        }
+
+        return commands.Count == 0
+            ? "Manual input-group revocation is unavailable because the current username cannot be represented safely."
+            : string.Join('\n', commands);
+    }
+
+    private static string ToManualSudoCommand(string body)
+    {
+        return "sudo sh -c " + PrivilegedManagedFileTransaction.QuoteAsShCArgument(body);
+    }
+
+    private static string SeatManagerAbsentShellCondition()
+    {
+        return string.Join(
+            " && ",
+            SeatManagerDirectoryPaths.Select(
+                path =>
+                    $"[ ! -d {PrivilegedManagedFileTransaction.QuoteAsShCArgument(path)} ]"
+            )
+        );
+    }
+
+    private static string BuildInputGroupGrantAddShellFragment()
+    {
+        var identity = GetCurrentIdentity();
+        var common = BuildInputGroupGrantCommonShell(identity);
+        return common
+               + $"""
+            if input_group_member; then
+              echo '{InputGroupPreexistingToken}'
+            else
+              ensure_input_group_grant_directory
+              write_input_group_grant_record "$input_group_pending_content"
+              if usermod -aG input -- "$input_group_user"; then
+                write_input_group_grant_record "$input_group_owned_content"
+                echo '{InputGroupAddedToken}'
+              else
+                status=$?
+                if ! input_group_member; then
+                  rm -f "$input_group_record"
+                fi
+                exit "$status"
+              fi
+            fi
+            """
+               + "\n";
+    }
+
+    private static string BuildInputGroupGrantRemoveShellFragment()
+    {
+        var identity = GetCurrentIdentity();
+        var common = BuildInputGroupGrantCommonShell(identity);
+        return common
+               + $"""
+            classify_input_group_grant_record
+            if [ "$input_group_record_state" != managed ]; then
+              echo '{InputGroupGrantUnsafeToken}' >&2
+              exit {InputGroupGrantUnsafeExitCode}
+            fi
+            if input_group_member; then
+              if command -v gpasswd >/dev/null 2>&1; then
+                if gpasswd -d "$input_group_user" input >/dev/null; then
+                  :
+                else
+                  status=$?
+                  echo "gpasswd -d exited with status $status" >&2
+                  exit "$status"
+                fi
+              elif usermod -rG input -- "$input_group_user"; then
+                :
+              else
+                status=$?
+                echo "usermod -rG exited with status $status" >&2
+                exit "$status"
+              fi
+            fi
+            classify_input_group_grant_record
+            if [ "$input_group_record_state" != managed ]; then
+              echo '{InputGroupGrantUnsafeToken}' >&2
+              exit {InputGroupGrantUnsafeExitCode}
+            fi
+            rm -f "$input_group_record"
+            echo '{InputGroupRevokedToken}'
+            """
+               + "\n";
+    }
+
+    private static string BuildInputGroupGrantCommonShell((uint Uid, string UserName) identity)
+    {
+        var recordPath = InputGroupGrantRecordPath(identity);
+        var pending = InputGroupGrantRecordContent("pending-add", identity);
+        var owned = InputGroupGrantRecordContent("owned", identity);
+        var quote = PrivilegedManagedFileTransaction.QuoteAsShCArgument;
+        return $$"""
+            input_group_grant_dir={{quote(InputGroupGrantStateDirectory)}}
+            input_group_record={{quote(recordPath)}}
+            input_group_uid={{quote(identity.Uid.ToString(CultureInfo.InvariantCulture))}}
+            input_group_user={{quote(identity.UserName)}}
+            input_group_pending_content={{quote(pending)}}
+            input_group_owned_content={{quote(owned)}}
+
+            ensure_input_group_grant_directory() {
+              if [ -L "$input_group_grant_dir" ] || { [ -e "$input_group_grant_dir" ] && [ ! -d "$input_group_grant_dir" ]; }; then
+                echo '{{InputGroupGrantUnsafeToken}}' >&2
+                exit {{InputGroupGrantUnsafeExitCode}}
+              fi
+              mkdir -p "$input_group_grant_dir"
+              if [ -L "$input_group_grant_dir" ] || [ ! -d "$input_group_grant_dir" ]; then
+                echo '{{InputGroupGrantUnsafeToken}}' >&2
+                exit {{InputGroupGrantUnsafeExitCode}}
+              fi
+              chown root:root "$input_group_grant_dir"
+              chmod 0755 "$input_group_grant_dir"
+              [ "$(stat -c '%a' "$input_group_grant_dir")" = 755 ]
+            }
+
+            classify_input_group_grant_record() {
+              input_group_record_state=absent
+              if [ ! -e "$input_group_grant_dir" ] && [ ! -L "$input_group_grant_dir" ]; then
+                return 0
+              fi
+              if [ -L "$input_group_grant_dir" ] || [ ! -d "$input_group_grant_dir" ]; then
+                echo '{{InputGroupGrantUnsafeToken}}' >&2
+                exit {{InputGroupGrantUnsafeExitCode}}
+              fi
+              if [ ! -e "$input_group_record" ] && [ ! -L "$input_group_record" ]; then
+                return 0
+              fi
+              if [ -L "$input_group_record" ] || [ ! -f "$input_group_record" ]; then
+                echo '{{InputGroupGrantUnsafeToken}}' >&2
+                exit {{InputGroupGrantUnsafeExitCode}}
+              fi
+              input_group_actual=$(cat "$input_group_record")
+              if [ "$input_group_actual" = "$input_group_pending_content" ] || [ "$input_group_actual" = "$input_group_owned_content" ]; then
+                input_group_record_state=managed
+              else
+                input_group_record_state=foreign
+              fi
+            }
+
+            write_input_group_grant_record() {
+              ensure_input_group_grant_directory
+              classify_input_group_grant_record
+              if [ "$input_group_record_state" = foreign ]; then
+                echo '{{InputGroupGrantUnsafeToken}}' >&2
+                exit {{InputGroupGrantUnsafeExitCode}}
+              fi
+              input_group_stage=$(mktemp "$input_group_grant_dir/.$input_group_uid.XXXXXX")
+              printf '%s' "$1" > "$input_group_stage"
+              chown root:root "$input_group_stage"
+              chmod 0644 "$input_group_stage"
+              [ "$(stat -c '%a' "$input_group_stage")" = 644 ]
+              mv -f "$input_group_stage" "$input_group_record"
+            }
+
+            input_group_member() {
+              if input_group_names=$(id -nG -- "$input_group_user"); then
+                :
+              else
+                echo 'Could not look up input-group membership.' >&2
+                exit 76
+              fi
+              set -f
+              for input_group_name in $input_group_names; do
+                if [ "$input_group_name" = input ]; then
+                  set +f
+                  return 0
+                fi
+              done
+              set +f
+              return 1
+            }
+
+            """
+               + "\n";
+    }
+
+    private static string BuildPrivilegedLockPrefix()
+    {
+        return PrivilegedManagedFileTransaction.BuildLockPrefix(RootStateRoot);
     }
 
     private static bool IsFileOwnedByTypeWhisper(string path)
     {
         try
         {
-            return File.ReadAllText(path).Contains(OwnershipMarker, StringComparison.Ordinal);
+            // Only a first-line "# <marker>" header counts — bare or followed by a
+            // space. Mid-body mentions and longer prefixes ("# Installed by
+            // TypeWhisperer") are foreign. Mirrors the privileged scripts' `case` glob.
+            using var reader = new StreamReader(path);
+            var firstLine = reader.ReadLine();
+            const string header = "# " + OwnershipMarker;
+            return firstLine is not null
+                   && (firstLine == header
+                       || firstLine.StartsWith(header + " ", StringComparison.Ordinal));
         }
         catch
         {
@@ -281,11 +826,93 @@ public sealed class InputAccessSetupHelper
         }
     }
 
+    private static string RootStateRoot =>
+        RootManagedArtifactStateRootOverride
+        ?? "/var/lib/typewhisper/managed-artifacts";
+
+    internal static string InputGroupGrantStateDirectory =>
+        InputGroupGrantStateDirectoryOverride
+        ?? "/var/lib/typewhisper/input-group-grants";
+
+    internal static string CurrentUserName => GetCurrentIdentity().UserName;
+
+    internal static string CurrentInputGroupGrantRecordPath =>
+        InputGroupGrantRecordPath(GetCurrentIdentity());
+
+    private static string[] SeatManagerDirectoryPaths =>
+        SeatManagerDirectoryPathsOverride ?? s_seatManagerDirectoryPaths;
+
+    private static (uint Uid, string UserName) GetCurrentIdentity()
+    {
+        var identity = CurrentIdentityOverride?.Invoke() ?? (LibcGetEUid(), Environment.UserName);
+        if (string.IsNullOrWhiteSpace(identity.UserName)
+            || identity.UserName.StartsWith('-')
+            || identity.UserName.IndexOfAny(['\0', '\r', '\n']) >= 0)
+        {
+            throw new InvalidOperationException(
+                "The current username cannot be represented safely in input-group provenance."
+            );
+        }
+
+        return identity;
+    }
+
+    private static string InputGroupGrantRecordPath((uint Uid, string UserName) identity)
+    {
+        return Path.Join(
+            InputGroupGrantStateDirectory,
+            identity.Uid.ToString(CultureInfo.InvariantCulture)
+        );
+    }
+
+    private static string InputGroupGrantRecordContent(
+        string state,
+        (uint Uid, string UserName) identity
+    )
+    {
+        return $"state={state}\nuid={identity.Uid.ToString(CultureInfo.InvariantCulture)}\nusername={identity.UserName}";
+    }
+
+    private static PrivilegedManagedFileSpec RootSpec =>
+        new(
+            "evdev-udev-rule",
+            UdevRulePath,
+            UdevRuleContent,
+            UdevRuleConflictExitCode,
+            UdevRuleConflictToken,
+            UdevRuleSymlinkExitCode,
+            UdevRuleSymlinkToken
+        );
+
+    private static bool EntryExistsIncludingSymlink(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            info.Refresh();
+            return info.Exists || info.LinkTarget is not null || Directory.Exists(path);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
     public sealed record Result(
         bool Success,
-        // ReSharper disable once NotAccessedPositionalProperty.Global  carried in the setup result record's data shape (status message for callers/diagnostics)
         string Message,
         string? Detail = null,
-        bool Cancelled = false
+        bool Cancelled = false,
+        // Set when we refused to touch a foreign file or symlink at our path.
+        // Callers must surface Message/Detail as-is and must NOT offer the manual
+        // install command aimed at the very file the guard just protected.
+        bool Refused = false,
+        bool RequiresRelogin = false,
+        bool GroupMembershipAdded = false,
+        bool GroupRevocationCompleted = false,
+        string? GroupRevocationFailure = null
     );
+
+    [LibraryImport("libc", EntryPoint = "geteuid")]
+    private static partial uint LibcGetEUid();
 }

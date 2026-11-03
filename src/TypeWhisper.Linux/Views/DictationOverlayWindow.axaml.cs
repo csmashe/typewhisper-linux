@@ -15,10 +15,14 @@ public partial class DictationOverlayWindow : Window
 {
     private readonly ISettingsService? _settings;
     private readonly DictationOverlayViewModel? _viewModel;
-    private bool _userDragging;
+    // X11 never reports the end of a WM-driven move (the WM owns the pointer grab, so no release
+    // reaches us); save the position once the WM stops moving the window for this long.
+    private static readonly TimeSpan s_dragSettleDelay = TimeSpan.FromMilliseconds(750);
+
+    private readonly DictationOverlayPlacementState _placementState = new();
+    private readonly DictationOverlayDragSession _dragSession = new();
     private bool _programmaticPositionChange;
-    private DispatcherTimer? _dragSaveTimer;
-    private PixelPoint? _pendingDragPosition;
+    private DispatcherTimer? _dragSettleTimer;
 
     public DictationOverlayWindow()
     {
@@ -160,23 +164,66 @@ public partial class DictationOverlayWindow : Window
         // WORKAROUND (backlog item 16): Show() once and drive visibility via Opacity instead of
         // Hide() — Avalonia's Show() after Hide() is unreliable on GNOME Mutter for utility windows
         // (ShowActivated=False / Topmost / ShowInTaskbar=False): some shows leave the window
-        // invisible until restart. Fully transparent surface is free; inner Border bindings
-        // still control which content is drawn.
+        // invisible until restart. Inner Border bindings still control which content is drawn.
         var hasContent = _viewModel.HasVisibleContent;
 
         if (!IsVisible)
         {
+            // Keep the first mapping transparent too: OnOverlayOpened parks it before
+            // _placementState.Show() runs, so a content-bearing first show is only revealed
+            // by the Loaded-priority reposition below.
+            Opacity = 0.0;
+            IsHitTestVisible = false;
             Show();
             MakeStickyAcrossWorkspaces();
         }
 
-        Opacity = hasContent ? 1.0 : 0.0;
-        IsHitTestVisible = hasContent;
-
         if (hasContent)
         {
-            Dispatcher.UIThread.Post(PositionOverlay, DispatcherPriority.Loaded);
+            _placementState.Show();
+
+            // Post at Loaded so a size-changing transition uses final dimensions; staying
+            // transparent at the parked position until this runs avoids a visible jump.
+            Dispatcher.UIThread.Post(
+                () =>
+                {
+                    if (!_placementState.IsShown)
+                    {
+                        return;
+                    }
+
+                    PositionOverlay();
+                    if (!_placementState.IsShown)
+                    {
+                        return;
+                    }
+
+                    SetClickThrough(false);
+                    Opacity = 1.0;
+                    IsHitTestVisible = true;
+                },
+                DispatcherPriority.Loaded
+            );
+            return;
         }
+
+        // Opacity and Avalonia's IsHitTestVisible do not clear a mapped toplevel's native X11
+        // input region, so this Topmost window would leave a dead-click rectangle. Empty that
+        // region, since Mutter clamps the off-screen park back onto the nearest monitor.
+        Opacity = 0.0;
+        IsHitTestVisible = false;
+        SetClickThrough(true);
+
+        // A settled drag has nothing left to save; stop tracking so later moves aren't
+        // mistaken for it.
+        if (_dragSession is { IsActive: true, IsMoving: false })
+        {
+            _dragSession.Complete();
+        }
+
+        SetPositionProgrammatically(
+            _placementState.Hide(CollectScreenBounds(), Position)
+        );
     }
 
     // Cached — the desktop environment can't change within a session.
@@ -202,16 +249,42 @@ public partial class DictationOverlayWindow : Window
             DispatcherPriority.Loaded);
     }
 
+    private void SetClickThrough(bool passThrough)
+    {
+        if (TryGetPlatformHandle() is { Handle: var xid } && xid != IntPtr.Zero)
+        {
+            X11InputPassthrough.Set((nuint)xid, passThrough);
+        }
+    }
+
     private void PositionOverlay()
     {
-        if (!IsVisible || _settings is null)
+        if (!IsVisible)
+        {
+            return;
+        }
+
+        var screenBounds = CollectScreenBounds();
+
+        // IsVisible stays true for the mapped-once Mutter workaround. Consult our own content
+        // state instead, so settings, screen, and size events recompute (or preserve) an offscreen
+        // parked position rather than moving the transparent X11 input rectangle back on-screen.
+        if (!_placementState.IsShown)
+        {
+            SetPositionProgrammatically(
+                _placementState.Reposition(Position, screenBounds, Position)
+            );
+            return;
+        }
+
+        if (_settings is null)
         {
             return;
         }
 
         // Don't fight the user while they're dragging the overlay
         // — a SizeChanged mid-drag would otherwise yank the window.
-        if (_userDragging)
+        if (_dragSession.IsMoving)
         {
             return;
         }
@@ -248,24 +321,67 @@ public partial class DictationOverlayWindow : Window
                 width,
                 height);
             SetPositionProgrammatically(
-                new PixelPoint(
-                    (int)Math.Round(clampedLeft),
-                    (int)Math.Round(clampedTop)));
+                _placementState.Reposition(
+                    new PixelPoint(
+                        (int)Math.Round(clampedLeft),
+                        (int)Math.Round(clampedTop)
+                    ),
+                    screenBounds,
+                    Position
+                )
+            );
             return;
         }
 
         var workArea = primaryScreen.WorkingArea;
-        var x = workArea.X + (workArea.Width - (int)Math.Ceiling(width)) / 2;
-        var y =
-            _settings.Current.OverlayPosition == OverlayPosition.Top
-                ? workArea.Y + 12
-                : workArea.Bottom - (int)Math.Ceiling(height) - 12;
+        var configuredPosition = DictationOverlayPlacementState.ComputeConfiguredPosition(
+            _settings.Current.OverlayPosition,
+            workArea,
+            new PixelSize(
+                (int)Math.Ceiling(width),
+                (int)Math.Ceiling(height)
+            )
+        );
 
-        SetPositionProgrammatically(new PixelPoint(x, y));
+        SetPositionProgrammatically(
+            _placementState.Reposition(
+                configuredPosition,
+                screenBounds,
+                Position
+            )
+        );
+    }
+
+    private List<PixelRect> CollectScreenBounds()
+    {
+        var result = new List<PixelRect>();
+
+        var screens = Screens;
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- Avalonia annotates Screens non-null, but it can be null before the platform window is realized; the placement state tolerates an empty list (mirrors LearnedCorrectionToastWindow).
+        if (screens is null)
+        {
+            return result;
+        }
+
+        // Put the primary first so parking uses a stable Y coordinate, matching the correction
+        // toast's documented native-X11 workaround.
+        if (screens.Primary is { } primary)
+        {
+            result.Add(primary.Bounds);
+        }
+
+        result.AddRange(
+            screens.All
+                .Where(screen => !ReferenceEquals(screen, screens.Primary))
+                .Select(screen => screen.Bounds)
+        );
+
+        return result;
     }
 
     private void SetPositionProgrammatically(PixelPoint point)
     {
+        _dragSession.NoteProgrammaticMove(point);
         _programmaticPositionChange = true;
         try
         {
@@ -279,7 +395,7 @@ public partial class DictationOverlayWindow : Window
 
     private void OnUserPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (_settings is null)
+        if (_settings is null || ActionResultButton?.IsPointerOver == true)
         {
             return;
         }
@@ -289,18 +405,90 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        _userDragging = true;
-        BeginMoveDrag(e);
+        // X11 never delivers the previous drag's release, so save its drop before starting over.
+        EndUserDrag();
+        _dragSession.Begin(() => BeginMoveDrag(e));
+
+        // Also covers a press the WM never turns into a move: no PositionChanged arrives.
+        RestartDragSettleTimer();
     }
 
     private void OnUserPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        _userDragging = false;
+        EndUserDrag();
     }
 
     private void OnUserPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
-        _userDragging = false;
+        // On X11, BeginMoveDrag releases our pointer capture synchronously while handing the
+        // pointer to the WM. That is the start of the move, not its end.
+        if (_dragSession.IsStartingMove)
+        {
+            return;
+        }
+
+        EndUserDrag();
+    }
+
+    private void RestartDragSettleTimer()
+    {
+        _dragSettleTimer ??= new DispatcherTimer(
+            s_dragSettleDelay,
+            DispatcherPriority.Background,
+            (_, _) => OnDragSettled());
+        _dragSettleTimer.Stop();
+        _dragSettleTimer.Start();
+    }
+
+    private void OnDragSettled()
+    {
+        _dragSettleTimer?.Stop();
+
+        if (!_placementState.IsShown)
+        {
+            EndUserDrag();
+            return;
+        }
+
+        // A pause doesn't end the WM's move, so save where the window is but keep tracking: if
+        // the move resumes, its later drop is saved too.
+        SaveDragPosition(_dragSession.Settle());
+    }
+
+    private void EndUserDrag()
+    {
+        _dragSettleTimer?.Stop();
+
+        if (!_dragSession.IsActive)
+        {
+            return;
+        }
+
+        // End the session before saving so the SettingsChanged reposition isn't suppressed.
+        SaveDragPosition(_dragSession.Complete());
+
+        // A move-drag that outlived a hide (content cleared mid-drag) leaves the still-mapped
+        // window on-screen wherever the WM's interactive move dropped it — that grab overrides
+        // our one-off park while active. Its native X11 input region stays live regardless of
+        // IsHitTestVisible, so re-park now rather than waiting for a later screen/settings/size event.
+        if (!_placementState.IsShown)
+        {
+            PositionOverlay();
+        }
+    }
+
+    private void SaveDragPosition(PixelPoint? droppedAt)
+    {
+        if (droppedAt is not { } position || _settings is null)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with
+        {
+            OverlayCustomLeft = (double)position.X,
+            OverlayCustomTop = (double)position.Y,
+        });
     }
 
     private void OnUserPositionChanged(object? sender, PixelPointEventArgs e)
@@ -310,37 +498,179 @@ public partial class DictationOverlayWindow : Window
             return;
         }
 
-        if (!_userDragging)
+        // The drag stays tracked after a pause, so an X11 echo of our own move (a clamp or a
+        // placement reset) would otherwise be saved as if the user had dragged there.
+        if (!_dragSession.IsActive || _dragSession.IsProgrammaticEcho(e.Point))
         {
             return;
         }
 
-        _pendingDragPosition = e.Point;
+        // Keep the session open while the WM is still moving the window, even if it is
+        // hidden, so EndUserDrag's re-park runs after the WM's move has stopped.
+        _dragSession.MarkMoving();
+        RestartDragSettleTimer();
 
-        _dragSaveTimer ??= new DispatcherTimer(
-            TimeSpan.FromMilliseconds(250),
-            DispatcherPriority.Background,
-            OnDragSaveTimerTick);
-        _dragSaveTimer.Stop();
-        _dragSaveTimer.Start();
+        // A hidden overlay is only ever moved programmatically (parked off-screen). On X11 the
+        // move's PositionChanged arrives asynchronously — after SetPositionProgrammatically has
+        // cleared _programmaticPositionChange — so if content clears mid-drag the parked sentinel
+        // could be mistaken for a user drag and persisted as the saved position. Never persist a
+        // position while parked.
+        if (_placementState.IsShown)
+        {
+            _dragSession.RecordMove(e.Point);
+        }
+    }
+}
+
+/// <summary>
+///     Tracks one user move-drag of the overlay, kept free of Window/timers so the X11
+///     capture-loss ordering can be unit tested without a live compositor.
+/// </summary>
+internal sealed class DictationOverlayDragSession
+{
+    private PixelPoint? _lastPosition;
+    private PixelPoint? _lastProgrammaticTarget;
+
+    public bool IsActive { get; private set; }
+
+    /// <summary>True from the press until the WM-driven move pauses; repositioning waits for it.</summary>
+    public bool IsMoving { get; private set; }
+
+    /// <summary>True only while the native move is being handed to the window manager.</summary>
+    public bool IsStartingMove { get; private set; }
+
+    public void Begin(Action startNativeMove)
+    {
+        IsActive = true;
+        IsMoving = true;
+        _lastPosition = null;
+        IsStartingMove = true;
+        try
+        {
+            startNativeMove();
+        }
+        finally
+        {
+            IsStartingMove = false;
+        }
     }
 
-    private void OnDragSaveTimerTick(object? sender, EventArgs e)
+    /// <summary>
+    ///     Remembers where we last moved the window ourselves: on X11 its PositionChanged arrives
+    ///     after the programmatic flag is cleared.
+    /// </summary>
+    public void NoteProgrammaticMove(PixelPoint target)
     {
-        _dragSaveTimer?.Stop();
+        _lastProgrammaticTarget = target;
+    }
 
-        if (_settings is null || _pendingDragPosition is null)
+    public bool IsProgrammaticEcho(PixelPoint position)
+    {
+        return position == _lastProgrammaticTarget;
+    }
+
+    /// <summary>A user move was accepted, so any echo still expected is stale.</summary>
+    public void MarkMoving()
+    {
+        _lastProgrammaticTarget = null;
+        if (IsActive)
         {
-            return;
+            IsMoving = true;
+        }
+    }
+
+    public void RecordMove(PixelPoint position)
+    {
+        if (IsActive)
+        {
+            IsMoving = true;
+            _lastPosition = position;
+        }
+    }
+
+    /// <summary>
+    ///     The move paused: returns the position to save, if it moved, but keeps the drag active
+    ///     because the WM may still own the pointer and resume the move.
+    /// </summary>
+    public PixelPoint? Settle()
+    {
+        var settledAt = _lastPosition;
+        IsMoving = false;
+        _lastPosition = null;
+        return settledAt;
+    }
+
+    /// <summary>Ends the drag and returns where the window was dropped, if it moved.</summary>
+    public PixelPoint? Complete()
+    {
+        var droppedAt = Settle();
+        IsActive = false;
+        return droppedAt;
+    }
+}
+
+/// <summary>
+///     Deterministic visibility and placement decisions for the mapped-once dictation overlay,
+///     kept independent of Window/Screens so it can be unit tested without a live compositor.
+/// </summary>
+internal sealed class DictationOverlayPlacementState
+{
+    private const int ScreenEdgeInset = 12;
+
+    public bool IsShown { get; private set; }
+
+    public void Show()
+    {
+        IsShown = true;
+    }
+
+    public PixelPoint Hide(
+        IReadOnlyList<PixelRect> screenBounds,
+        PixelPoint currentPosition
+    )
+    {
+        IsShown = false;
+        return ComputeParkedPosition(screenBounds, currentPosition);
+    }
+
+    public PixelPoint Reposition(
+        PixelPoint configuredPosition,
+        IReadOnlyList<PixelRect> screenBounds,
+        PixelPoint currentPosition
+    )
+    {
+        return IsShown
+            ? configuredPosition
+            : ComputeParkedPosition(screenBounds, currentPosition);
+    }
+
+    public static PixelPoint ComputeConfiguredPosition(
+        OverlayPosition overlayPosition,
+        PixelRect workArea,
+        PixelSize overlaySize
+    )
+    {
+        var x = workArea.X + (workArea.Width - overlaySize.Width) / 2;
+        var y = overlayPosition == OverlayPosition.Top
+            ? workArea.Y + ScreenEdgeInset
+            : workArea.Bottom - overlaySize.Height - ScreenEdgeInset;
+
+        return new PixelPoint(x, y);
+    }
+
+    private static PixelPoint ComputeParkedPosition(
+        IReadOnlyList<PixelRect> screenBounds,
+        PixelPoint currentPosition
+    )
+    {
+        if (screenBounds.Count == 0)
+        {
+            return currentPosition;
         }
 
-        var pos = _pendingDragPosition.Value;
-        _pendingDragPosition = null;
-
-        _settings.Save(_settings.Current with
-        {
-            OverlayCustomLeft = (double)pos.X,
-            OverlayCustomTop = (double)pos.Y
-        });
+        // Match LearnedCorrectionToastWindow: the left edge just beyond the union's right boundary
+        // puts the entire mapped window outside every monitor, including negative-origin layouts.
+        var right = screenBounds.Max(bounds => bounds.Right);
+        return new PixelPoint(right + 1, screenBounds[0].Y);
     }
 }

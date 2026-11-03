@@ -1,6 +1,7 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Core.Services.AppImport;
 
 namespace TypeWhisper.Core.Tests.Services;
 
@@ -15,7 +16,7 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeWhisper"
+                Original = "TypeWhisper",
             }
         );
 
@@ -32,7 +33,7 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Parakeet"
+                Original = "Parakeet",
             }
         );
 
@@ -49,7 +50,7 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeWhisper"
+                Original = "TypeWhisper",
             }
         );
 
@@ -66,7 +67,7 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Parakeet"
+                Original = "Parakeet",
             }
         );
 
@@ -83,13 +84,13 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Parakeet"
+                Original = "Parakeet",
             },
             new DictionaryEntry
             {
                 Id = "manual-2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Parakeat"
+                Original = "Parakeat",
             }
         );
 
@@ -106,13 +107,13 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Visual Studio"
+                Original = "Visual Studio",
             },
             new DictionaryEntry
             {
                 Id = "manual-2",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Studio"
+                Original = "Studio",
             }
         );
 
@@ -129,13 +130,13 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "pack:dotnet:typewhisper",
                 EntryType = DictionaryEntryType.Term,
-                Original = "typewhisper"
+                Original = "typewhisper",
             },
             new DictionaryEntry
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "TypeWhisper"
+                Original = "TypeWhisper",
             }
         );
 
@@ -153,7 +154,7 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "TypeWhisper",
-                IsEnabled = false
+                IsEnabled = false,
             }
         );
 
@@ -171,7 +172,7 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Correction,
                 Original = "type whisper",
-                Replacement = "TypeWhisper"
+                Replacement = "TypeWhisper",
             }
         );
 
@@ -188,7 +189,7 @@ public class VocabularyBoostingServiceTests
             {
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
-                Original = "Type-Whisper"
+                Original = "Type-Whisper",
             }
         );
 
@@ -206,7 +207,7 @@ public class VocabularyBoostingServiceTests
                 Id = "manual-1",
                 EntryType = DictionaryEntryType.Term,
                 Original = "Type visped.",
-                Replacement = "TypeWhisper"
+                Replacement = "TypeWhisper",
             }
         );
 
@@ -263,12 +264,32 @@ public class VocabularyBoostingServiceTests
             return text;
         }
 
+        public string PreviewCorrections(string text)
+        {
+            return text;
+        }
+
         public string? GetTermsForPrompt()
         {
             return null;
         }
 
         public void LearnCorrection(string original, string replacement)
+        {
+            throw new NotSupportedException();
+        }
+
+        public IReadOnlyList<LearnedDictionaryCorrection> LearnCorrections(
+            IEnumerable<CorrectionSuggestion> suggestions,
+            IReadOnlySet<string>? replaceableEntryIds = null
+        )
+        {
+            throw new NotSupportedException();
+        }
+
+        public void UndoLearnedCorrections(
+            IEnumerable<LearnedDictionaryCorrection> learnedCorrections
+        )
         {
             throw new NotSupportedException();
         }
@@ -328,6 +349,11 @@ public class VocabularyBoostingServiceTests
         }
 
         public int ImportFromCsv(string csv)
+        {
+            throw new NotSupportedException();
+        }
+
+        public DictionaryImportCommitResult CommitReviewedImport(DictionaryImportReview review)
         {
             throw new NotSupportedException();
         }

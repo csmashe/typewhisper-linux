@@ -1,0 +1,18 @@
+{
+  "Settings.ApiKey": "API密钥",
+  "Settings.ApiKeyDescription": "Speechmatics转录需要此项。",
+  "Settings.TranscriptionModel": "转录模型",
+  "Settings.ModelDescription": "Enhanced最准确。Standard费用更低。",
+  "Settings.NotConfiguredApiKeyRequired": "插件未配置。需要API密钥。",
+  "Settings.Region": "区域",
+  "Settings.RegionDescription": "Speechmatics处理音频的位置，适用于录音转录和实时转录。",
+  "Settings.RegionEu": "欧洲",
+  "Settings.RegionUs": "美国",
+  "Settings.RegionAu": "澳大利亚",
+  "Settings.LiveLanguage": "实时转录语言",
+  "Settings.LiveLanguageDescription": "实时转录需要固定的语言。当说话语言为“自动”时使用此语言。如未设置，“自动”听写会在你停止录音后再转录。",
+  "Settings.LiveLanguageNone": "无（录音后转录）",
+  "Settings.LiveLanguageRequired": "Speechmatics实时转录需要固定的语言。请在Speechmatics设置中选择说话语言或实时转录语言。",
+  "Manifest.Name": "Speechmatics",
+  "Manifest.Description": "Speechmatics语音转文字转录引擎"
+}

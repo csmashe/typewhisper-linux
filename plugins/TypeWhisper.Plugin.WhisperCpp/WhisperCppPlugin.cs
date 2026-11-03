@@ -1,9 +1,12 @@
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Globalization;
-using System.IO;
-using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using TypeWhisper.Plugins.Shared.Cuda;
+using TypeWhisper.Plugins.Shared.Net;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using Whisper.net;
@@ -12,15 +15,22 @@ using Whisper.net.LibraryLoader;
 
 namespace TypeWhisper.Plugin.WhisperCpp;
 
+internal sealed record WhisperCppTranscriptionSegment(
+    string Text,
+    string? Language,
+    TimeSpan End,
+    float NoSpeechProbability
+);
+
 public sealed class WhisperCppPlugin
-    : ITypeWhisperPlugin,
-        ITranscriptionEnginePlugin,
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
         IPluginLocalizationAware
 {
     private const string NoSpeechThresholdKey = "noSpeechThreshold";
     private const float DefaultNoSpeechThreshold = 0.6f;
-    private static readonly IReadOnlyList<ModelDefinition> Models =
+    private static readonly IReadOnlyList<ModelDefinition> s_models =
     [
         new(
             "tiny",
@@ -86,7 +96,7 @@ public sealed class WhisperCppPlugin
             "~57 MB",
             57,
             99,
-            true
+            false
         ),
         new(
             "small",
@@ -162,7 +172,7 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3-turbo.bin",
             "~1.6 GB",
             1620,
-            99,
+            100,
             false
         ),
         new(
@@ -173,7 +183,7 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3-turbo-q5_0.bin",
             "~684 MB",
             684,
-            99,
+            100,
             false
         ),
         // Full large-v3 (32-layer decoder, not turbo's distilled 4-layer) garbles
@@ -186,7 +196,7 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3.bin",
             "~3.1 GB",
             3095,
-            99,
+            100,
             false
         ),
         new(
@@ -197,12 +207,15 @@ public sealed class WhisperCppPlugin
             "ggml-large-v3-q5_0.bin",
             "~1.1 GB",
             1081,
-            99,
+            100,
             false
         ),
     ];
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    // Downloads touch only their own files, so another model can load or transcribe meanwhile.
+    private readonly SemaphoreSlim _downloadGate = new(1, 1);
+    private CancellationTokenSource _downloadLifetime = new();
 
     // Drives the on-demand CUDA runtime downloads (cudart/cuBLAS wheels + the ~167 MB
     // whisper CUDA nupkg). HttpClient.Timeout bounds the WHOLE request including the
@@ -213,13 +226,12 @@ public sealed class WhisperCppPlugin
     private readonly HttpClient _httpClient =
         new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
         {
-            Timeout = TimeSpan.FromHours(2)
+            Timeout = TimeSpan.FromHours(2),
         };
     private IPluginHostServices? _host;
     private WhisperFactory? _factory;
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private WhisperCudaRuntimeInstaller? _whisperCudaInstaller;
-    private string? _selectedModelId;
     private string? _loadedModelId;
     private string _computeBackend = "cpu";
     private bool _runtimeLibraryOrderInitialized;
@@ -239,15 +251,12 @@ public sealed class WhisperCppPlugin
     // an app restart. We short-circuit subsequent loads instead of re-entering
     // FromPath and re-throwing Whisper.net's cached failure.
     private bool _nativeRuntimeLoadFailed;
-    private TranscriptionAccelerationPreference _accelerationPreference =
-        TranscriptionAccelerationPreference.Auto;
-    private TranscriptionAccelerationStatus _accelerationStatus =
-        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
+
     private float _noSpeechThreshold = DefaultNoSpeechThreshold;
 
     public string PluginId => "com.typewhisper.whisper-cpp";
     public string PluginName => "whisper.cpp (Local)";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "whisper-cpp";
     public string ProviderDisplayName => "Local (whisper.cpp)";
@@ -262,13 +271,17 @@ public sealed class WhisperCppPlugin
     // injected at load so settings labels/validation resolve even when this
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
-    public string? SelectedModelId => _selectedModelId;
-    public bool SupportsTranslation => true;
+    public string? SelectedModelId { get; private set; }
+
+    public bool SupportsTranslation => SupportsTranslationFor(SelectedModelId);
+    public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public bool SupportsModelDownload => true;
-    public IReadOnlyList<string> SupportedLanguages => [];
+    public IReadOnlyList<string> SupportedLanguages => LanguagesFor(SelectedModelId);
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
-        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
+        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda,
+            TranscriptionAccelerationBackend.Vulkan];
 
     // LoadModelAsync downloads + preloads the CUDA runtime on demand and falls back to
     // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
@@ -281,44 +294,95 @@ public sealed class WhisperCppPlugin
         _cudaProvisioner?.IsProfileSatisfied(CudaRuntimeProfile.WhisperCublas) == true
         && _whisperCudaInstaller?.IsInstalled == true;
 
-    public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
+    public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Auto;
 
-    public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
+    public TranscriptionAccelerationStatus AccelerationStatus { get; private set; } = new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        Models
+        s_models
             .Select(model => new PluginModelInfo(model.Id, model.DisplayName)
             {
                 SizeDescription = model.SizeDescription,
                 EstimatedSizeMB = model.EstimatedSizeMB,
                 IsRecommended = model.IsRecommended,
                 LanguageCount = model.LanguageCount,
+                SupportsTranslation = SupportsTranslationFor(model.Id),
             })
             .ToList();
 
+    // Whisper's languages in whisper.cpp's order ("jw" is its tag for Javanese); large-v3 adds Cantonese.
+    private static readonly IReadOnlyList<string> s_multilingualLanguages =
+    [
+        "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi",
+        "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la",
+        "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy",
+        "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be",
+        "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl",
+        "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su",
+    ];
+
+    private static readonly IReadOnlyList<string> s_largeV3Languages = [.. s_multilingualLanguages, "yue"];
+
+    // English-only models declare none: whisper.cpp ignores their language, so no saved choice fails validation.
+    internal static IReadOnlyList<string> LanguagesFor(string? modelId) =>
+        s_models.FirstOrDefault(model => model.Id == modelId) switch
+        {
+            { LanguageCount: 1 } => [],
+            { Type: GgmlType.LargeV3 or GgmlType.LargeV3Turbo } => s_largeV3Languages,
+            _ => s_multilingualLanguages,
+        };
+
+    // English-only and Turbo weights were not trained to translate.
+    internal static bool SupportsTranslationFor(string? modelId) =>
+        s_models.FirstOrDefault(model => model.Id == modelId)?.Type is { } and not (GgmlType.TinyEn
+            or GgmlType.BaseEn or GgmlType.SmallEn or GgmlType.MediumEn or GgmlType.LargeV3Turbo);
+
     public Task ActivateAsync(IPluginHostServices host)
     {
+        // Disabling and re-enabling a plugin activates the same instance again.
+        if (_downloadLifetime.IsCancellationRequested)
+        {
+            _downloadLifetime.Dispose();
+            _downloadLifetime = new CancellationTokenSource();
+        }
+
         _host = host;
-        _selectedModelId = host.GetSetting<string>("selectedModel");
+        SelectedModelId = host.GetSetting<string>("selectedModel");
         _noSpeechThreshold = ReadNoSpeechThreshold(host);
 
         // Create the CUDA provisioner/installer eagerly so IsCudaRuntimeProvisioned can
         // report a warm cache immediately after a restart (the host gates CUDA selection
         // on it), not only after a download has been attempted. Both are cheap to build;
         // the ?? lets tests inject fakes before activate.
-        _cudaProvisioner ??= new CudaRuntimeProvisioner(
-            CudaRuntimeProvisioner.DefaultCacheRoot(),
-            _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
-        );
-        _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
-            host.PluginAssetDirectory,
-            _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
-        );
+        InitializeCudaDependencies(host);
 
         host.Log(PluginLogLevel.Info, "Activated");
         return Task.CompletedTask;
+    }
+
+    // Also serves the not-yet-activated path, where host is null.
+    private (CudaRuntimeProvisioner Provisioner, WhisperCudaRuntimeInstaller Installer)
+        InitializeCudaDependencies(IPluginHostServices? host)
+    {
+        _cudaProvisioner ??= new CudaRuntimeProvisioner(
+            CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
+                host?.PluginAssetDirectory
+            ),
+            _httpClient,
+            msg => _host?.Log(PluginLogLevel.Info, msg),
+            // Resolved per call, not captured: the provisioner outlives a disable/re-enable
+            // cycle, and the first activation's process scope is retired by then.
+            () => _host?.Processes
+                  ?? throw new NotSupportedException(
+                      "The plugin host does not provide process supervision."
+                  )
+        );
+        _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
+            host?.PluginAssetDirectory ?? ".",
+            _httpClient,
+            msg => _host?.Log(PluginLogLevel.Info, msg)
+        );
+        return (_cudaProvisioner, _whisperCudaInstaller);
     }
 
     private static float ReadNoSpeechThreshold(IPluginHostServices host)
@@ -343,6 +407,12 @@ public sealed class WhisperCppPlugin
 
     public async Task DeactivateAsync()
     {
+        // Stop and drain a running download, which holds no other gate the unload would wait for.
+        // The token stays canceled until the next activation, so no download starts meanwhile.
+        await _downloadLifetime.CancelAsync();
+        await _downloadGate.WaitAsync();
+        _downloadGate.Release();
+
         await UnloadModelAsync();
         _host = null;
     }
@@ -350,7 +420,7 @@ public sealed class WhisperCppPlugin
     public void SelectModel(string modelId)
     {
         _ = GetModel(modelId);
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
         _host?.SetSetting("selectedModel", modelId);
     }
 
@@ -361,9 +431,7 @@ public sealed class WhisperCppPlugin
 
     private bool TryConfigureComputeBackend(string backend)
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
-            ? "cuda"
-            : "cpu";
+        var normalized = backend.ToLowerInvariant() is "cuda" or "vulkan" ? backend.ToLowerInvariant() : "cpu";
 
         // Hold the same gate used by load/transcribe paths so the backend
         // swap and the factory disposal don't race a concurrent operation.
@@ -381,17 +449,23 @@ public sealed class WhisperCppPlugin
             //                        new UseGpu (no RuntimeLibraryOrder change needed).
             //   - pinned to "cpu"  → CPU stays fine; CUDA genuinely needs the [Cuda] .so
             //                        set, which can't load twice — refuse (restart only).
-            if (_pinnedRuntimeBackend == "cpu" && normalized == "cuda")
+            switch (_pinnedRuntimeBackend)
             {
-                _host?.Log(
-                    PluginLogLevel.Warning,
-                    "Cannot switch compute backend to 'cuda': the native runtime is pinned "
-                        + "to CPU. Restart the app to load the CUDA runtime."
-                );
-                return false;
+                case "cpu" when normalized is "cuda" or "vulkan":
+                    _host?.Log(
+                        PluginLogLevel.Warning,
+                        $"Cannot switch compute backend to '{normalized}': the native runtime is pinned "
+                            + "to CPU. Restart the app to load the GPU runtime."
+                    );
+                    return false;
+                case "cuda" or "vulkan" when normalized is "cuda" or "vulkan" && _pinnedRuntimeBackend != normalized:
+                    _host?.Log(PluginLogLevel.Warning,
+                        $"Cannot switch compute backend to '{normalized}': the native runtime is pinned to '{_pinnedRuntimeBackend}'. Restart the app to change GPU runtime.");
+                    return false;
             }
 
             _computeBackend = normalized;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if (_factory is not null)
             {
                 DisposeFactoryUnsafe();
@@ -410,15 +484,15 @@ public sealed class WhisperCppPlugin
         var backend = preference switch
         {
             TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
-            TranscriptionAccelerationPreference.Cpu => "cpu",
+            TranscriptionAccelerationPreference.Vulkan => "vulkan",
             _ => "cpu",
         };
 
         // Always record the host's last requested preference so the SDK getter
         // reflects user intent, even when the runtime can't honour it yet.
-        _accelerationPreference = preference;
+        AccelerationPreference = preference;
 
-        _accelerationStatus = TryConfigureComputeBackend(backend)
+        AccelerationStatus = TryConfigureComputeBackend(backend)
             ? CreatePendingAccelerationStatus(preference)
             // Swap was rejected because the native runtime is already pinned.
             // Report the still-active backend with RequiresRestart=true so the UI
@@ -434,7 +508,9 @@ public sealed class WhisperCppPlugin
         CancellationToken ct
     )
     {
-        await _gate.WaitAsync(ct);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadLifetime.Token);
+        ct = lifetime.Token;
+        await _downloadGate.WaitAsync(ct);
         try
         {
             var model = GetModel(modelId);
@@ -447,6 +523,15 @@ public sealed class WhisperCppPlugin
                 progress?.Report(1.0);
                 return;
             }
+
+            // The ggml stream exposes no length, so check against the catalog size.
+            var spaceDescription = $"the {model.DisplayName} model";
+            DownloadSpace.EnsureAvailable(
+                modelDirectory,
+                model.EstimatedSizeMB * 1024L * 1024L,
+                spaceDescription,
+                SpaceProbe
+            );
 
             var tempPath = Path.Join(
                 modelDirectory,
@@ -504,15 +589,21 @@ public sealed class WhisperCppPlugin
                 File.Move(tempPath, modelPath, overwrite: true);
                 progress?.Report(1.0);
             }
-            catch
+            catch (Exception ex)
             {
                 TryDeleteFile(tempPath);
+                if (
+                    DownloadSpace.TranslateWriteFailure(ex, modelDirectory, spaceDescription)
+                        is { } full
+                    && !ReferenceEquals(full, ex)
+                )
+                    throw full;
                 throw;
             }
         }
         finally
         {
-            _gate.Release();
+            _downloadGate.Release();
         }
     }
 
@@ -543,10 +634,22 @@ public sealed class WhisperCppPlugin
             _gate.Release();
         }
 
-        // Set if a CUDA attempt fails and we fall back to CPU, so the final status
-        // can explain why rather than hard-failing an explicit CUDA request.
+        var requestedBackend = desiredBackend;
+
+        // Set if a GPU attempt fails and we fall back to CPU, so the final status
+        // can explain why rather than hard-failing an explicit acceleration request.
         string? cudaUnavailableDetail = null;
         var downgradedToCpu = false;
+
+        if (desiredBackend == "vulkan" && !alreadyPinned
+            && CheckVulkanAvailability(
+                Path.GetDirectoryName(typeof(WhisperCppPlugin).Assembly.Location) ?? AppContext.BaseDirectory,
+                VulkanAvailability.GetUnavailableReason) is { } vulkanUnavailableDetail)
+        {
+            cudaUnavailableDetail = vulkanUnavailableDetail;
+            desiredBackend = "cpu";
+            downgradedToCpu = true;
+        }
 
         // Provision + download the GPU runtime before touching the factory. Skipped
         // once the native runtime is pinned: it's already loaded, so re-fetching it
@@ -619,15 +722,18 @@ public sealed class WhisperCppPlugin
             if (string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
                 && _whisperCudaInstaller is not null)
                 RuntimeOptions.LibraryPath = _whisperCudaInstaller.LibraryPath;
+            else if (_computeBackend == "vulkan")
+                RuntimeOptions.LibraryPath = Path.Join(
+                    Path.GetDirectoryName(typeof(WhisperCppPlugin).Assembly.Location) ?? AppContext.BaseDirectory,
+                    "whisper"
+                );
 
             DisposeFactoryUnsafe();
             // The order ApplyRuntimeLibraryOrderUnsafe is about to apply (it reads
             // _computeBackend) IS the native pin. Capture it now, before the GPU-context
             // fallback below can downgrade _computeBackend to "cpu", so the pin records
             // "cuda" even when this load ends up running CPU compute.
-            var appliedOrder = string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
-                ? "cuda"
-                : "cpu";
+            var appliedOrder = _computeBackend is "cuda" or "vulkan" ? _computeBackend : "cpu";
             ApplyRuntimeLibraryOrderUnsafe();
 
             // Two distinct failure layers here, handled differently:
@@ -653,7 +759,7 @@ public sealed class WhisperCppPlugin
                 _factory = WhisperFactory.FromPath(modelPath, CreateFactoryOptions());
             }
             catch (Exception ex)
-                when (string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+                when (_computeBackend is "cuda" or "vulkan"
                     && RuntimeOptions.LoadedLibrary is null)
             {
                 // The CUDA native library SET failed to load (a driver/runtime symbol
@@ -674,25 +780,25 @@ public sealed class WhisperCppPlugin
                 _nativeRuntimeLoadFailed = true;
                 _host?.Log(
                     PluginLogLevel.Warning,
-                    $"whisper.cpp CUDA native runtime failed to load ({ex.Message}); "
+                    $"whisper.cpp {_computeBackend} native runtime failed to load ({ex.Message}); "
                         + "restart required to use CPU."
                 );
                 // The one-shot native loader is poisoned for the process; only a restart
                 // can recover, so this is genuinely restart-required (the pin isn't even
                 // set yet here — it's recorded only after a successful validation below).
-                _accelerationStatus = CreateCudaUnavailableStatus(
+                AccelerationStatus = CreateGpuUnavailableStatus(_computeBackend,
                     "The GPU runtime could not be loaded. Restart TypeWhisper to use CPU.",
                     requiresRestart: true
                 );
                 throw new InvalidOperationException(
-                    $"Failed to load the whisper.cpp CUDA runtime for model '{modelId}'; "
+                    $"Failed to load the whisper.cpp {_computeBackend} runtime for model '{modelId}'; "
                         + "restart TypeWhisper to use CPU.",
                     ex
                 );
             }
 
             if (!TryValidateFactory(_factory)
-                && string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase))
+                && _computeBackend is "cuda" or "vulkan")
             {
                 _host?.Log(
                     PluginLogLevel.Warning,
@@ -725,15 +831,15 @@ public sealed class WhisperCppPlugin
             _pinnedRuntimeBackend ??= appliedOrder;
             _runtimeLibraryOrderInitialized = true;
             _loadedModelId = modelId;
-            _selectedModelId = modelId;
+            SelectedModelId = modelId;
             _host?.SetSetting("selectedModel", modelId);
             // Restart is required only if the process pinned the [Cpu] .so set (a
             // provisioning-failure downgrade). A GPU-context fallback pinned [Cuda], so CUDA
             // is reachable again by a reload — no restart (matches CreateLoadedAcceleration
             // Status / TryConfigureComputeBackend).
-            _accelerationStatus = cudaUnavailableDetail is null
-                ? CreateLoadedAccelerationStatus(_computeBackend, _accelerationPreference)
-                : CreateCudaUnavailableStatus(
+            AccelerationStatus = cudaUnavailableDetail is null
+                ? CreateLoadedAccelerationStatus(_computeBackend, AccelerationPreference)
+                : CreateGpuUnavailableStatus(requestedBackend,
                     cudaUnavailableDetail,
                     requiresRestart: _pinnedRuntimeBackend == "cpu"
                 );
@@ -759,6 +865,16 @@ public sealed class WhisperCppPlugin
         await _gate.WaitAsync(ct);
         try
         {
+            // Ahead of the load check, so an unloaded model is refused the same way.
+            var taskModelId = _loadedModelId ?? SelectedModelId;
+            if (translate && taskModelId is not null && !SupportsTranslationFor(taskModelId))
+                throw new NotSupportedException(
+                    Loc.L(
+                        "Errors.TranslationUnsupported",
+                        s_models.FirstOrDefault(model => model.Id == taskModelId)?.DisplayName ?? taskModelId
+                    )
+                );
+
             if (_factory is null || _loadedModelId is null)
                 throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
 
@@ -778,49 +894,80 @@ public sealed class WhisperCppPlugin
             await using var processor = builder.Build();
             await using var audioStream = new MemoryStream(wavAudio, writable: false);
 
-            var text = new StringBuilder();
-            string? detectedLanguage = null;
-            double durationSeconds = 0;
-            float? noSpeechProbability = null;
-
-            await foreach (var segment in processor.ProcessAsync(audioStream, ct))
+            // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
+            async IAsyncEnumerable<WhisperCppTranscriptionSegment> GetSegmentsAsync()
             {
-                if (
-                    string.IsNullOrWhiteSpace(detectedLanguage)
-                    && !string.IsNullOrWhiteSpace(segment.Language)
-                )
-                    detectedLanguage = segment.Language;
-
-                durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
-                noSpeechProbability = segment.NoSpeechProbability;
-
-                // whisper.cpp returns every segment, including ones it has
-                // flagged as silence. Skip those so training-bias phrases like
-                // "Thank you." don't leak into the output during silent gaps.
-                if (segment.NoSpeechProbability > threshold)
-                    continue;
-
-                var segmentText = segment.Text.Trim();
-                if (segmentText.Length > 0)
+                // AccumulateSegmentsAsync awaits this enumerable to completion before the
+                // await-using scope exits, so processor/audioStream stay alive throughout.
+                // ReSharper disable AccessToDisposedClosure
+                await foreach (var segment in processor.ProcessAsync(audioStream, ct))
                 {
-                    if (text.Length > 0)
-                        text.Append(' ');
-
-                    text.Append(segmentText);
+                    yield return new WhisperCppTranscriptionSegment(
+                        segment.Text,
+                        segment.Language,
+                        segment.End,
+                        segment.NoSpeechProbability
+                    );
                 }
+                // ReSharper restore AccessToDisposedClosure
             }
 
-            return new PluginTranscriptionResult(
-                text.ToString().Trim(),
-                detectedLanguage,
-                durationSeconds,
-                noSpeechProbability
-            );
+            return await AccumulateSegmentsAsync(GetSegmentsAsync(), threshold);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    internal static async Task<PluginTranscriptionResult> AccumulateSegmentsAsync(
+        IAsyncEnumerable<WhisperCppTranscriptionSegment> segments,
+        float threshold
+    )
+    {
+        var text = new StringBuilder();
+        string? detectedLanguage = null;
+        double durationSeconds = 0;
+        float? noSpeechProbability = null;
+
+        await foreach (var segment in segments)
+        {
+            if (
+                string.IsNullOrWhiteSpace(detectedLanguage)
+                && !string.IsNullOrWhiteSpace(segment.Language)
+            )
+                detectedLanguage = segment.Language;
+
+            durationSeconds = Math.Max(durationSeconds, segment.End.TotalSeconds);
+
+            // Min, so downstream silence checks trigger only when ALL segments are silent.
+            noSpeechProbability = noSpeechProbability is null
+                ? segment.NoSpeechProbability
+                : Math.Min(noSpeechProbability.Value, segment.NoSpeechProbability);
+
+            // whisper.cpp returns every segment, including ones it has
+            // flagged as silence. Skip those so training-bias phrases like
+            // "Thank you." don't leak into the output during silent gaps.
+            if (segment.NoSpeechProbability > threshold)
+                continue;
+
+            var segmentText = segment.Text.Trim();
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+            if (segmentText.Length > 0)
+            {
+                if (text.Length > 0)
+                    text.Append(' ');
+
+                text.Append(segmentText);
+            }
+        }
+
+        return new PluginTranscriptionResult(
+            text.ToString().Trim(),
+            detectedLanguage,
+            durationSeconds,
+            noSpeechProbability
+        );
     }
 
     public async Task UnloadModelAsync()
@@ -830,7 +977,7 @@ public sealed class WhisperCppPlugin
         {
             DisposeFactoryUnsafe();
             _loadedModelId = null;
-            _selectedModelId = null;
+            SelectedModelId = null;
         }
         finally
         {
@@ -850,9 +997,9 @@ public sealed class WhisperCppPlugin
                 _loadedModelId = null;
             }
 
-            if (_selectedModelId == modelId)
+            if (SelectedModelId == modelId)
             {
-                _selectedModelId = null;
+                SelectedModelId = null;
                 _host?.SetSetting("selectedModel", "");
             }
 
@@ -868,6 +1015,8 @@ public sealed class WhisperCppPlugin
     {
         DisposeFactoryUnsafe();
         _gate.Dispose();
+        _downloadGate.Dispose();
+        _downloadLifetime.Dispose();
         _httpClient.Dispose();
     }
 
@@ -888,21 +1037,12 @@ public sealed class WhisperCppPlugin
                 "NVIDIA CUDA acceleration for whisper.cpp is only available on Linux x64."
             );
 
-        _cudaProvisioner ??= new CudaRuntimeProvisioner(
-            CudaRuntimeProvisioner.DefaultCacheRoot(),
-            _httpClient,
-            msg => _host?.Log(PluginLogLevel.Info, msg)
-        );
-        _whisperCudaInstaller ??= new WhisperCudaRuntimeInstaller(
-            _host?.PluginAssetDirectory ?? ".",
-            _httpClient,
-            msg => _host?.Log(PluginLogLevel.Info, msg)
-        );
+        var (provisioner, installer) = InitializeCudaDependencies(_host);
 
         // The two stages map to a single monotonic 0→1 bar for the host: cudart + cuBLAS
         // are the bulk on a cold host, so weight them 70% and the native build 30%.
         // 1. Preload cudart + cuBLAS, downloading any the host doesn't provide.
-        await _cudaProvisioner
+        await provisioner
             .EnsureReadyAsync(
                 CudaRuntimeProfile.WhisperCublas,
                 ProvisionProgress("CUDA libraries", progress, 0.0, 0.7),
@@ -911,7 +1051,7 @@ public sealed class WhisperCppPlugin
             .ConfigureAwait(false);
 
         // 2. Download + extract whisper.cpp's CUDA native build on first use.
-        await _whisperCudaInstaller
+        await installer
             .EnsureInstalledAsync(
                 ProvisionProgress("whisper.cpp GPU runtime", progress, 0.7, 1.0),
                 ct
@@ -1022,7 +1162,7 @@ public sealed class WhisperCppPlugin
             return Task.FromResult<string?>(null);
 
         var raw = _host?.GetSetting<string>(NoSpeechThresholdKey);
-        return Task.FromResult<string?>(string.IsNullOrWhiteSpace(raw) ? null : raw);
+        return Task.FromResult(string.IsNullOrWhiteSpace(raw) ? null : raw);
     }
 
     public Task SetSettingValueAsync(
@@ -1102,8 +1242,8 @@ public sealed class WhisperCppPlugin
         );
     }
 
-    private ModelDefinition GetModel(string modelId) =>
-        Models.FirstOrDefault(model => model.Id == modelId)
+    private static ModelDefinition GetModel(string modelId) =>
+        s_models.FirstOrDefault(model => model.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private string GetModelPath(string modelId)
@@ -1142,7 +1282,7 @@ public sealed class WhisperCppPlugin
 
     private WhisperFactoryOptions CreateFactoryOptions() =>
         CreateFactoryOptions(
-            string.Equals(_computeBackend, "cuda", StringComparison.OrdinalIgnoreCase)
+            !string.Equals(_computeBackend, "cpu", StringComparison.OrdinalIgnoreCase)
         );
 
     // Points Whisper.net's runtime order at the current _computeBackend. The order
@@ -1163,13 +1303,32 @@ public sealed class WhisperCppPlugin
         if (_runtimeLibraryOrderInitialized)
             return;
 
-        RuntimeOptions.RuntimeLibraryOrder = string.Equals(
-            _computeBackend,
-            "cuda",
-            StringComparison.OrdinalIgnoreCase
-        )
-            ? [RuntimeLibrary.Cuda]
-            : [RuntimeLibrary.Cpu];
+        RuntimeOptions.RuntimeLibraryOrder = _computeBackend switch
+        {
+            "cuda" => [RuntimeLibrary.Cuda],
+            "vulkan" => [RuntimeLibrary.Vulkan],
+            _ => [RuntimeLibrary.Cpu],
+        };
+    }
+
+    private static readonly string[] s_vulkanRuntimeFiles =
+    [
+        "libwhisper.so",
+        "libggml-whisper.so",
+        "libggml-vulkan-whisper.so",
+        "libggml-cpu-whisper.so",
+        "libggml-base-whisper.so",
+    ];
+
+    internal static string? CheckVulkanAvailability(string pluginDirectory, Func<string?> probe)
+    {
+        if (probe() is { } reason) return reason;
+        var missing = s_vulkanRuntimeFiles
+            .Select(name => Path.Join(pluginDirectory, "runtimes", "vulkan", "linux-x64", name))
+            .FirstOrDefault(path => !File.Exists(path));
+        return missing is null
+            ? null
+            : $"The Vulkan runtime file is missing: {missing}. Reinstall the whisper.cpp plugin.";
     }
 
     // Test seam: simulate the native runtime having loaded and pinned itself to a
@@ -1182,14 +1341,14 @@ public sealed class WhisperCppPlugin
         string? effectiveCompute = null
     )
     {
-        var pin = string.Equals(pinnedBackend, "cuda", StringComparison.OrdinalIgnoreCase)
-            ? "cuda"
+        var pin = pinnedBackend.ToLowerInvariant() is "cuda" or "vulkan"
+            ? pinnedBackend.ToLowerInvariant()
             : "cpu";
         var effective =
             effectiveCompute is null
                 ? pin
-                : string.Equals(effectiveCompute, "cuda", StringComparison.OrdinalIgnoreCase)
-                    ? "cuda"
+                : effectiveCompute.ToLowerInvariant() is "cuda" or "vulkan"
+                    ? effectiveCompute.ToLowerInvariant()
                     : "cpu";
         _gate.Wait();
         try
@@ -1220,6 +1379,9 @@ public sealed class WhisperCppPlugin
         }
     }
 
+    // Test seam: free-space probe for model downloads (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; set; }
+
     // Test seam: pre-seed the CUDA provisioner + installer with fakes before ActivateAsync
     // (whose ??= lazy-create then skips), so the LoadModelAsync provisioning/fallback state
     // machine can be driven without a network or GPU.
@@ -1232,23 +1394,41 @@ public sealed class WhisperCppPlugin
         _whisperCudaInstaller = installer;
     }
 
+    // Test seam: exercise the same eager construction path as ActivateAsync without
+    // invoking unrelated activation work.
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host)
+    {
+        _host = host;
+        InitializeCudaDependencies(host);
+    }
+
+    internal string? CudaRuntimeCacheRootForTests =>
+        _cudaProvisioner is null
+            ? null
+            : Directory.GetParent(_cudaProvisioner.CacheDirectory)?.FullName;
+
     private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
         TranscriptionAccelerationPreference preference
     )
     {
         return preference switch
         {
-            TranscriptionAccelerationPreference.NvidiaCuda => new(
+            TranscriptionAccelerationPreference.NvidiaCuda => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.NvidiaCuda,
                 "Preparing NVIDIA CUDA",
                 "The GPU runtime downloads on the next model load."
             ),
-            TranscriptionAccelerationPreference.Cpu => new(
+            TranscriptionAccelerationPreference.Vulkan => new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Vulkan,
+                "Preparing Vulkan",
+                "The system Vulkan driver will be used on the next model load."
+            ),
+            TranscriptionAccelerationPreference.Cpu => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing CPU",
                 "Will apply on next model load."
             ),
-            _ => new(
+            _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing acceleration",
                 "Will apply on next model load."
@@ -1262,31 +1442,42 @@ public sealed class WhisperCppPlugin
     // without a restart. A [Cuda]-pinned runtime currently running CPU compute therefore
     // reports ActiveBackend=Cpu with no restart flag — a CUDA preference just triggers a
     // reload, which the caller can do.
-    private TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
+    internal TranscriptionAccelerationStatus CreateLoadedAccelerationStatus(
         string effectiveBackend,
         TranscriptionAccelerationPreference preference
     )
     {
-        var active = string.Equals(effectiveBackend, "cuda", StringComparison.OrdinalIgnoreCase)
-            ? TranscriptionAccelerationBackend.NvidiaCuda
-            : TranscriptionAccelerationBackend.Cpu;
+        var active = effectiveBackend switch
+        {
+            "cuda" => TranscriptionAccelerationBackend.NvidiaCuda,
+            "vulkan" => TranscriptionAccelerationBackend.Vulkan,
+            _ => TranscriptionAccelerationBackend.Cpu,
+        };
 
         var displayText =
-            active == TranscriptionAccelerationBackend.NvidiaCuda
-                ? "Using NVIDIA CUDA"
-                : "Using CPU";
+            active switch
+            {
+                TranscriptionAccelerationBackend.NvidiaCuda => "Using NVIDIA CUDA",
+                TranscriptionAccelerationBackend.Vulkan => "Using Vulkan",
+                _ => "Using CPU",
+            };
 
-        // The ONLY toggle that needs a restart is loading the [Cuda] .so set on a process
-        // pinned to [Cpu]. CPU↔GPU on a [Cuda] pin, and CPU on a [Cpu] pin, are reloads.
-        var requiresRestart =
-            _pinnedRuntimeBackend == "cpu"
-            && preference == TranscriptionAccelerationPreference.NvidiaCuda;
+        // A GPU runtime is process-pinned. CPU compute can use any loaded GPU runtime,
+        // but switching between CUDA and Vulkan requires a restart.
+        var requestedRuntime = preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
+            TranscriptionAccelerationPreference.Vulkan => "vulkan",
+            _ => "cpu",
+        };
+        var requiresRestart = requestedRuntime != "cpu"
+            && !string.Equals(_pinnedRuntimeBackend, requestedRuntime, StringComparison.OrdinalIgnoreCase);
 
         if (requiresRestart)
             return new TranscriptionAccelerationStatus(
                 active,
                 displayText,
-                "Process is pinned to CPU. Restart to switch to NVIDIA CUDA.",
+                $"Process is pinned to {BackendDisplayName(_pinnedRuntimeBackend)}. Restart to switch to {BackendDisplayName(requestedRuntime)}.",
                 true
             );
 
@@ -1300,16 +1491,24 @@ public sealed class WhisperCppPlugin
     // or library-load failure) genuinely needs a restart to reach CUDA, but a [Cuda]-pinned
     // process that merely fell back to CPU compute (GPU-context failure) can retry CUDA with
     // a reload, so it must NOT claim a restart is required (the whole point of M6).
-    private static TranscriptionAccelerationStatus CreateCudaUnavailableStatus(
+    private static TranscriptionAccelerationStatus CreateGpuUnavailableStatus(
+        string backend,
         string detail,
         bool requiresRestart
     ) =>
         new(
             TranscriptionAccelerationBackend.Cpu,
             "Using CPU",
-            $"CUDA unavailable: {detail}",
+            $"{BackendDisplayName(backend)} unavailable: {detail}",
             RequiresRestart: requiresRestart
         );
+
+    private static string BackendDisplayName(string? backend) => backend switch
+    {
+        "cuda" => "NVIDIA CUDA",
+        "vulkan" => "Vulkan",
+        _ => "CPU",
+    };
 
     private static void TryDeleteFile(string path)
     {
@@ -1318,7 +1517,10 @@ public sealed class WhisperCppPlugin
             if (File.Exists(path))
                 File.Delete(path);
         }
-        catch { }
+        catch
+        {
+            //nada
+        }
     }
 
     private sealed record ModelDefinition(
@@ -1328,6 +1530,7 @@ public sealed class WhisperCppPlugin
         QuantizationType Quantization,
         string FileName,
         string SizeDescription,
+        // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
         long EstimatedSizeMB,
         int LanguageCount,
         bool IsRecommended

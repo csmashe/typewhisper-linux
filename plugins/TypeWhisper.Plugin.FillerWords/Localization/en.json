@@ -1,0 +1,7 @@
+{
+  "Settings.Title": "Filler words",
+  "Settings.Hint": "One word per line; commas and semicolons also separate words. Start a line with a language code and a colon (de: äh, ähm) to apply it to that spoken language only; other lines apply to every language.",
+  "Settings.WordCount": "Words in the list: {0}",
+  "Manifest.Name": "Filler Words",
+  "Manifest.Description": "Remove filler words such as um and uh from transcriptions"
+}

@@ -1,12 +1,25 @@
 {
   "Settings.ApiKey": "API key",
-  "Settings.ApiKeyDescription": "Required for Voxtral transcription via Mistral.",
+  "Settings.ApiKeyDescription": "Required for Voxtral transcription and Mistral text processing. Validating also loads the Mistral text models available to this key.",
   "Settings.TranscriptionModel": "Transcription model",
   "Settings.ModelDescription": "Choose the Voxtral model.",
+  "Settings.StreamResponses": "Stream text responses",
+  "Settings.StreamResponsesDescription": "Render Mistral prompt-action output token-by-token as it is generated, instead of waiting for the full reply.",
+  "Settings.TemperatureMode": "Text temperature",
+  "Settings.TemperatureModeDescription": "Provider default sends no temperature, so Mistral uses each model's own default; custom sends the value below.",
+  "Settings.TemperatureProviderDefault": "Provider default",
+  "Settings.TemperatureCustom": "Custom",
+  "Settings.TemperatureValue": "Text temperature value",
+  "Settings.TemperatureValueDescription": "From 0 to 1.5. Lower values give more consistent results. Used only with the custom temperature mode.",
+  "Settings.TemperatureInvalid": "Enter a temperature from 0 to 1.5 using a decimal point.",
   "Settings.EnterApiKey": "Enter an API key first.",
-  "Settings.ApiKeyValid": "API key is valid.",
+  "Settings.ApiKeyValidFetchedTextModels": "API key is valid. Loaded {0} Mistral text model(s) available to this account.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
+  "Settings.ModelRefreshFailed": "Could not load Mistral text models: {0} The saved model list is unchanged.",
+  "Settings.ModelRefreshStale": "The API key changed while models were loading. Validate again.",
+  "Errors.ModelRefreshTimedOut": "Loading timed out.",
+  "Errors.ModelCatalogInvalid": "Mistral returned an invalid or oversized model list, or one without text models.",
   "Settings.NotConfiguredMistralApiKeyRequired": "Plugin not configured. Mistral API key required.",
   "Manifest.Name": "Voxtral",
-  "Manifest.Description": "Voxtral (Mistral) audio transcription and translation"
+  "Manifest.Description": "Voxtral (Mistral) audio transcription and Mistral text processing"
 }

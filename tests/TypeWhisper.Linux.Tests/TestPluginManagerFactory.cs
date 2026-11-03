@@ -5,16 +5,19 @@ using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
+using TypeWhisper.Tests;
 
 namespace TypeWhisper.Linux.Tests;
 
 internal static class TestPluginManagerFactory
 {
     public static PluginManager Create(
-        IReadOnlyList<ILlmProviderPlugin>? llmProviders = null,
+        IReadOnlyList<ILlmProviderRole>? llmProviders = null,
         IReadOnlyList<IActionPlugin>? actionPlugins = null,
         IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
-        IReadOnlyList<LoadedPlugin>? loadedPlugins = null
+        IReadOnlyList<LoadedPlugin>? loadedPlugins = null,
+        IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null,
+        IEnumerable<string>? activatedPluginIds = null
     )
     {
         var activeWindow = new Mock<IActiveWindowService>();
@@ -23,12 +26,16 @@ internal static class TestPluginManagerFactory
         profiles.SetupGet(service => service.Profiles).Returns([]);
 
         var pluginManager = new PluginManager(
-            new PluginLoader(),
+            new PluginLoader(TestPaths.NewTempPath("TypeWhisper.TestPluginManager.PluginData")),
             new PluginEventBus(),
             activeWindow.Object,
             profiles.Object,
-            settings.Object
+            settings.Object,
+            []
         );
+
+        if (transcriptionEngines is not null)
+            SetPrivateField(pluginManager, "_transcriptionEngines", transcriptionEngines.ToList());
 
         if (llmProviders is not null)
         {
@@ -50,39 +57,58 @@ internal static class TestPluginManagerFactory
             SetPrivateField(pluginManager, "_allPlugins", loadedPlugins.ToList());
         }
 
+        // IsEnabled(id) reports activation, so seed the activated set directly rather than
+        // driving the async enable path (which needs a real host + settings round-trip).
+        if (activatedPluginIds is not null)
+        {
+            SetPrivateField(
+                pluginManager,
+                "_activatedPlugins",
+                new HashSet<string>(activatedPluginIds)
+            );
+        }
+
         return pluginManager;
     }
 
     public static Mock<ISettingsService> CreateSettings(AppSettings current)
     {
         var settings = new Mock<ISettingsService>();
-        settings.SetupGet(service => service.Current).Returns(current);
+        settings.SetupGet(service => service.Current).Returns(() => current);
         settings
-            .Setup(service => service.Save(It.IsAny<AppSettings>()))
-            .Callback<AppSettings>(saved =>
-                settings.SetupGet(service => service.Current).Returns(saved)
-            );
+            .Setup(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Returns((Func<AppSettings, AppSettings> mutate) =>
+            {
+                current = mutate(current);
+                return current;
+            });
         return settings;
     }
 
     public static LoadedPlugin CreateLoadedPlugin(
         string pluginDir,
         string pluginId,
-        ITypeWhisperPlugin plugin
+        ITypeWhisperPlugin plugin,
+        PluginNetworkAccess networkAccess = PluginNetworkAccess.Network,
+        IReadOnlyList<PluginCategory>? categories = null
     )
     {
+        var manifest = new PluginManifest
+        {
+            Id = pluginId,
+            Name = plugin.PluginName,
+            Version = plugin.PluginVersion,
+            AssemblyName = "fake.dll",
+            PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name,
+            NetworkAccess = networkAccess,
+            Categories = (categories ?? [PluginCategory.Utility]).ToArray(),
+        };
         return new LoadedPlugin(
-            new PluginManifest
-            {
-                Id = pluginId,
-                Name = plugin.PluginName,
-                Version = plugin.PluginVersion,
-                AssemblyName = "fake.dll",
-                PluginClass = plugin.GetType().FullName ?? plugin.GetType().Name
-            },
+            manifest,
             plugin,
             new PluginAssemblyLoadContext(pluginDir),
-            pluginDir
+            pluginDir,
+            PluginLoader.ResolveMetadata(manifest)
         );
     }
 

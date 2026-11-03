@@ -1,67 +1,121 @@
-using TypeWhisper.Core;
+using TypeWhisper.Core.Interfaces;
 
 namespace TypeWhisper.Linux.Services;
 
-/// <summary>
-///     Manages per-session dictation capture WAV files. Captures are
-///     scoped to one app session — they are deleted at startup (to clear
-///     any orphans from a previous crash) and at shutdown, so persisted
-///     history retains the transcribed text but not the raw audio.
-/// </summary>
+/// <summary>Stores dictation captures and prunes expired or unreferenced recordings.</summary>
 public sealed class SessionAudioFileService
 {
     private const string DictationFilePattern = "dictation-*.wav";
+    private readonly string _audioDirectory;
+    private readonly IHistoryService? _history;
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
+    public SessionAudioFileService(string audioDirectory, IHistoryService? history = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(audioDirectory);
+        _audioDirectory = Path.GetFullPath(audioDirectory);
+        _history = history;
+    }
+
     public string SaveDictationCapture(byte[] wav)
     {
-        Directory.CreateDirectory(TypeWhisperEnvironment.AudioPath);
-        var fileName = $"dictation-{Guid.NewGuid():N}.wav";
-        var path = Path.Join(TypeWhisperEnvironment.AudioPath, fileName);
+        Directory.CreateDirectory(_audioDirectory);
+        var path = NewCapturePath();
         File.WriteAllBytes(path, wav);
         return path;
     }
 
-    private static string? GetAudioPath(string? audioFileName)
+    /// <summary>
+    ///     Like <see cref="SaveDictationCapture" />, but returns null when the capture cannot be
+    ///     written (full disk, permissions) and removes any partial file.
+    /// </summary>
+    public string? TrySaveDictationCapture(byte[] wav, out Exception? failure)
     {
-        if (string.IsNullOrWhiteSpace(audioFileName))
+        var path = NewCapturePath();
+        try
+        {
+            Directory.CreateDirectory(_audioDirectory);
+            File.WriteAllBytes(path, wav);
+            failure = null;
+            return path;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            failure = ex;
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                // Retention removes an unreferenced partial capture later.
+            }
+
+            return null;
+        }
+    }
+
+    private string NewCapturePath() => Path.Join(_audioDirectory, $"dictation-{Guid.NewGuid():N}.wav");
+
+    public string? GetAudioPath(string? audioFileName)
+    {
+        if (string.IsNullOrWhiteSpace(audioFileName) || Path.GetFileName(audioFileName) != audioFileName)
         {
             return null;
         }
 
-        var path = Path.Join(TypeWhisperEnvironment.AudioPath, audioFileName);
-        return File.Exists(path) ? path : null;
+        var path = Path.Join(_audioDirectory, audioFileName);
+        try
+        {
+            return File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0 ? path : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
-    // kept instance: member of a DI/test seam type
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public bool HasAudio(string? audioFileName)
     {
         return GetAudioPath(audioFileName) is not null;
     }
 
-    public static void DeleteSessionCaptures()
+    /// <summary>
+    ///     Deletes captures older than <paramref name="days" />, plus any capture no history record
+    ///     still points at. <c>-1</c> is the "keep nothing" sentinel and deletes every capture; any
+    ///     other value is clamped to 1..365. Orphans are only pruned when the history could be read,
+    ///     so an unreadable history never looks like an empty one.
+    /// </summary>
+    public void ApplyRetention(int days)
     {
         try
         {
-            if (!Directory.Exists(TypeWhisperEnvironment.AudioPath))
+            if (!Directory.Exists(_audioDirectory))
             {
                 return;
             }
 
+            var cutoff = DateTime.UtcNow.AddDays(-Math.Clamp(days, 1, 365));
+            var canPruneOrphans = false;
+            var referenced = new HashSet<string?>(StringComparer.Ordinal);
+            if (_history is not null)
+            {
+                canPruneOrphans = _history.TryGetRecords(out var records);
+                foreach (var record in records)
+                    referenced.Add(record.AudioFileName);
+            }
+
             foreach (
                 var file in Directory.GetFiles(
-                    TypeWhisperEnvironment.AudioPath,
+                    _audioDirectory,
                     DictationFilePattern
                 )
             )
             {
                 try
                 {
-                    File.Delete(file);
+                    if (days == -1 || File.GetLastWriteTimeUtc(file) < cutoff
+                        || (canPruneOrphans && !referenced.Contains(Path.GetFileName(file))))
+                        File.Delete(file);
                 }
                 catch
                 {

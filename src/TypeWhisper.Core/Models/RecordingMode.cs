@@ -5,5 +5,5 @@ public enum RecordingMode
 {
     Toggle,
     PushToTalk,
-    Hybrid
+    Hybrid,
 }

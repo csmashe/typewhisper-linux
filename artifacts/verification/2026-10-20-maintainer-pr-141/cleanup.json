@@ -1,0 +1,8 @@
+{
+  "user_pid": 1628450,
+  "user_state": "idle",
+  "user_api_enabled": false,
+  "fixture_sink_remaining": false,
+  "private_desktops_remaining": false,
+  "note": "No live_verify.py, ui_controls.py or owned headless mutter process remained after their context managers stopped. User app was not restarted."
+}

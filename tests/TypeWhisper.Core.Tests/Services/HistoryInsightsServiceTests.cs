@@ -40,7 +40,7 @@ public sealed class HistoryInsightsServiceTests
                 true,
                 promptApplied: true,
                 translationApplied: true
-            )
+            ),
         };
 
         var result = _sut.Build(records);
@@ -64,6 +64,23 @@ public sealed class HistoryInsightsServiceTests
         Assert.Equal(1, result.DictionaryCorrectionAppliedCount);
         Assert.Equal(1, result.PromptActionAppliedCount);
         Assert.Equal(1, result.TranslationAppliedCount);
+    }
+
+    [Fact]
+    public void Build_IncludesActionOutcomesInSuccessMetrics()
+    {
+        var records = Enumerable.Range(0, 9)
+            .Select(_ => Record("done", "app", 1, TextInsertionStatus.ActionHandled))
+            .Append(Record("done", "app", 1, TextInsertionStatus.ActionFailed))
+            .Append(Record("done", "app", 1, TextInsertionStatus.ActionUnavailable))
+            .ToArray();
+
+        var result = _sut.Build(records);
+
+        Assert.Equal(9, result.SuccessfulInsertionCount);
+        Assert.Equal(2, result.FailedInsertionCount);
+        Assert.Equal(11, result.InsertionAttemptCount);
+        Assert.Equal(81.8, result.InsertionSuccessRate);
     }
 
     private static TranscriptionRecord Record(
@@ -91,7 +108,7 @@ public sealed class HistoryInsightsServiceTests
             SnippetApplied = snippetApplied,
             DictionaryCorrectionApplied = dictionaryApplied,
             PromptActionApplied = promptApplied,
-            TranslationApplied = translationApplied
+            TranslationApplied = translationApplied,
         };
     }
 }

@@ -1,0 +1,23 @@
+{
+  "Settings.ApiKey": "APIキー",
+  "Settings.ApiKeyDescription": "CerebrasのLLMリクエストに必要です。",
+  "Settings.StreamResponses": "応答をストリーミング",
+  "Settings.StreamResponsesDescription": "プロンプトアクションの出力を、完全な応答を待たずに生成されたトークンから順に表示します。",
+  "Settings.TemperatureMode": "温度",
+  "Settings.TemperatureModeDescription": "「プロバイダーの既定」では温度を送信せず、「カスタム」では下の値を送信します。",
+  "Settings.TemperatureProviderDefault": "プロバイダーの既定",
+  "Settings.TemperatureCustom": "カスタム",
+  "Settings.TemperatureValue": "温度の値",
+  "Settings.TemperatureValueDescription": "0から2まで。値が低いほど結果が安定します。温度モードが「カスタム」の場合にのみ使用されます。",
+  "Settings.TemperatureInvalid": "温度を0から2の範囲で、小数点（.）を使って入力してください。",
+  "Settings.EnterApiKey": "先にAPIキーを入力してください。",
+  "Settings.ApiKeyValidFetchedModels": "APIキーは有効です。このアカウントで利用できるCerebrasモデルを{0}件読み込みました。",
+  "Settings.ApiKeyRejected": "CerebrasがこのAPIキーを拒否しました。キーを確認して、もう一度お試しください。",
+  "Settings.ModelRefreshFailed": "Cerebrasのモデルを読み込めませんでした: {0} 保存済みのモデル一覧は変更されていません。",
+  "Settings.ModelRefreshStale": "モデルの読み込み中にAPIキーが変更されました。もう一度検証してください。",
+  "Errors.ModelRefreshTimedOut": "読み込みがタイムアウトしました。",
+  "Errors.ModelCatalogInvalid": "Cerebrasから返されたモデル一覧が空、無効、または大きすぎます。",
+  "Settings.ApiKeyNotConfigured": "APIキーが設定されていません",
+  "Manifest.Name": "Cerebras",
+  "Manifest.Description": "Cerebrasによる高速LLM推論"
+}

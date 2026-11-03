@@ -14,5 +14,5 @@ namespace TypeWhisper.Core.Models;
 public enum ProfileHotkeyBehavior
 {
     StartDictation,
-    ProcessSelectedText
+    ProcessSelectedText,
 }

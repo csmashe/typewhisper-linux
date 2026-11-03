@@ -67,9 +67,14 @@ internal static class ResilientDownloader
     /// </param>
     /// <param name="verifyComplete">
     ///     Caller integrity check run on the completed partial <em>before</em> the
-    ///     atomic move; it must throw on mismatch. Required when resuming.
+    ///     atomic move; it must throw on mismatch. Required when resuming, or when
+    ///     the server omits an exact total (Content-Length/Content-Range).
     /// </param>
     /// <param name="ct">Cancellation for the whole operation (user cancel).</param>
+    /// <param name="space">
+    ///     Checked once the body length is declared, before writing. A full disk or
+    ///     quota mid-write surfaces as <see cref="InsufficientDownloadSpaceException" />.
+    /// </param>
     public static async Task DownloadToFileAsync(
         HttpClient client,
         string url,
@@ -80,7 +85,8 @@ internal static class ResilientDownloader
         bool allowResume,
         Action<long>? onBytesOnDisk,
         Action<string>? verifyComplete,
-        CancellationToken ct)
+        CancellationToken ct,
+        DownloadSpaceRequirement? space = null)
     {
         // Invariant: resume with no integrity gate is unrepresentable. Without a
         // full-file hash a corrupt/rotated prefix could be re-appended to forever.
@@ -157,6 +163,14 @@ internal static class ResilientDownloader
                     declaredTotal = response.Content.Headers.ContentLength;
                 }
 
+                // Net growth excludes the existing partial: a 206 appends to it, a 200 truncates it.
+                if (space is not null)
+                    DownloadSpace.EnsureAvailable(
+                        partialPath,
+                        Math.Max(0, (declaredTotal ?? existing) - existing) + space.AdditionalBytes,
+                        space.Description,
+                        space.Probe);
+
                 long onDisk;
                 await using (var contentStream = await response.Content
                     .ReadAsStreamAsync(ct).ConfigureAwait(false))
@@ -202,8 +216,14 @@ internal static class ResilientDownloader
                     }
                 }
 
-                // Only a server-declared total gates here (approxTotalBytes never does); a
-                // missing total falls through to verifyComplete rather than a false incomplete.
+                // approxTotalBytes never gates completeness. Without a declared total, a
+                // verifier is mandatory: clean EOF alone can't prove the object ended.
+                if (declaredTotal is null && verifyComplete is null)
+                    throw new DownloadIncompleteException(
+                        "Download cannot be verified: the server did not declare an exact "
+                            + "total length and the caller supplied no completion verifier."
+                    );
+
                 if (onDisk < declaredTotal)
                     throw new DownloadIncompleteException(
                         $"Download incomplete: wrote {onDisk} of {declaredTotal.Value} "
@@ -212,13 +232,19 @@ internal static class ResilientDownloader
                 break;
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Transient / idle / network / length failure. With resume, we KEEP the
             // partial so the next attempt picks up where this one stopped; without
             // resume a kept partial is useless, so drop it (truncate-restart parity).
             if (!allowResume)
                 TryDelete(partialPath);
+            if (DownloadSpace.TranslateWriteFailure(
+                    ex,
+                    partialPath,
+                    space?.Description ?? Path.GetFileName(destinationPath)) is { } full
+                && !ReferenceEquals(full, ex))
+                throw full;
             throw;
         }
 
@@ -264,8 +290,8 @@ internal static class ResilientDownloader
 internal sealed class DownloadStalledException(string message) : Exception(message);
 
 /// <summary>
-///     Thrown when the server declared a total length (Content-Length on a 200,
-///     Content-Range total on a 206) but the body ended before that many bytes
-///     arrived.
+///     Thrown when the body ended before a server-declared total length
+///     (Content-Length on a 200, Content-Range total on a 206), or when neither
+///     a total nor a caller verifier can establish completeness.
 /// </summary>
 internal sealed class DownloadIncompleteException(string message) : Exception(message);

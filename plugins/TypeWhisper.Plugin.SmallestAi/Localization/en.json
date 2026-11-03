@@ -1,10 +1,25 @@
 {
   "Settings.ApiKey": "API key",
-  "Settings.ApiKeyDescription": "Required for Smallest AI Pulse transcription and streaming.",
+  "Settings.ApiKeyDescription": "Used for Pulse transcription and streaming, and for Lightning text-to-speech.",
   "Settings.EnterApiKey": "Enter an API key first.",
   "Settings.ApiKeyValid": "API key is valid.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin not configured. API key required.",
-  "Manifest.Name": "Smallest AI Pulse",
-  "Manifest.Description": "Smallest AI Pulse speech-to-text transcription engine"
+  "Manifest.Name": "Smallest AI",
+  "Manifest.Description": "Smallest AI Pulse transcription and Lightning text-to-speech",
+  "Settings.ApiKeyValidVoices": "API key is valid. {0} voice(s) are available under Spoken feedback.",
+  "Settings.ApiKeyValidVoicesKept": "API key is valid, but the voices could not be refreshed, so the previous list is kept: {0}",
+  "Settings.SpeechSpeed": "Speech speed",
+  "Settings.SpeechSpeedDescription": "How fast Lightning voices speak. Choose the voice under Spoken feedback.",
+  "Settings.RefreshVoices": "Refresh voices",
+  "Settings.RefreshVoicesDescription": "Load the current Lightning and Lightning Pro voices from Smallest AI.",
+  "Speech.VoicesRefreshed": "{0} voice(s) are available under Spoken feedback.",
+  "Speech.InvalidVoiceCatalog": "Smallest AI returned a voice list that could not be read. The previous list is kept.",
+  "Speech.NoVoices": "Smallest AI returned no voices. The previous list is kept.",
+  "Speech.ConnectionChanged": "The API key changed while the voices were loading. Refresh the voices again.",
+  "Speech.TextTooLong": "This text is too long for Smallest AI to speak at once: it would take more than about two minutes at the current speed.",
+  "Speech.AudioTooLarge": "Smallest AI returned more than 12 MB of audio, so it was not played.",
+  "Speech.AudioTooLong": "Smallest AI returned more than two minutes of audio, so it was not played.",
+  "Speech.UnplayableAudio": "Smallest AI returned audio that cannot be played.",
+  "Speech.TimedOut": "Smallest AI took too long to return the speech audio."
 }

@@ -1,0 +1,50 @@
+<Project>
+    <!-- Without this, plugin projects would stop seeing the repository-root
+         Directory.Build.props (Version, Company, Product, Copyright). -->
+    <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+    <Target Name="GeneratePluginBuildInfo"
+            BeforeTargets="CoreCompile">
+        <PropertyGroup>
+            <_PluginManifestPath>$(MSBuildProjectDirectory)/manifest.json</_PluginManifestPath>
+            <_PluginBuildInfoPath>$(IntermediateOutputPath)PluginBuildInfo.g.cs</_PluginBuildInfoPath>
+        </PropertyGroup>
+
+        <Error Condition="!Exists('$(_PluginManifestPath)')"
+               Text="Plugin manifest does not exist: $(_PluginManifestPath)" />
+        <ReadLinesFromFile File="$(_PluginManifestPath)">
+            <Output TaskParameter="Lines" ItemName="_PluginManifestLine" />
+        </ReadLinesFromFile>
+
+        <ItemGroup>
+            <_PluginVersionLine Include="@(_PluginManifestLine)"
+                                Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(Identity)', '^\s*&quot;version&quot;\s*:'))" />
+        </ItemGroup>
+        <Error Condition="'@(_PluginVersionLine)' == ''"
+               Text="Plugin manifest must contain a string version: $(_PluginManifestPath)" />
+        <PropertyGroup>
+            <_PluginVersionLineText>@(_PluginVersionLine)</_PluginVersionLineText>
+            <_PluginManifestVersion>$([System.Text.RegularExpressions.Regex]::Replace('$(_PluginVersionLineText)', '^\s*&quot;version&quot;\s*:\s*&quot;([^&quot;]+)&quot;.*$', '$1'))</_PluginManifestVersion>
+        </PropertyGroup>
+        <!-- The SemVer 2.0 grammar, matching AppVersion.TryParseStrict: anything looser
+             builds fine here and is then filtered out of the registry at runtime. -->
+        <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(_PluginManifestVersion)', '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'))"
+               Text="Plugin manifest version must be a semantic version string: $(_PluginManifestPath)" />
+
+        <ItemGroup>
+            <_PluginBuildInfoLine Include="// &lt;auto-generated /&gt;" />
+            <_PluginBuildInfoLine Include="internal static class PluginBuildInfo" />
+            <_PluginBuildInfoLine Include="{" />
+            <_PluginBuildInfoLine Include="    internal const string Version = &quot;$(_PluginManifestVersion)&quot;%3B" />
+            <_PluginBuildInfoLine Include="}" />
+        </ItemGroup>
+        <WriteLinesToFile File="$(_PluginBuildInfoPath)"
+                          Lines="@(_PluginBuildInfoLine)"
+                          Overwrite="true"
+                          WriteOnlyWhenDifferent="true" />
+        <ItemGroup>
+            <Compile Include="$(_PluginBuildInfoPath)" Visible="false" />
+            <FileWrites Include="$(_PluginBuildInfoPath)" />
+        </ItemGroup>
+    </Target>
+</Project>

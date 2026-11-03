@@ -19,7 +19,7 @@ internal static class RecordCommand
             "stop" => JsonControlProtocol.CmdRecordStop,
             "toggle" => JsonControlProtocol.CmdRecordToggle,
             "cancel" => JsonControlProtocol.CmdRecordCancel,
-            _ => null
+            _ => null,
         };
         if (cmd is null)
         {

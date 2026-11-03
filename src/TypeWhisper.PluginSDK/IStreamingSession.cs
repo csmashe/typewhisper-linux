@@ -5,10 +5,18 @@ namespace TypeWhisper.PluginSDK;
 
 /// <summary>
 ///     Represents an active real-time streaming transcription session (e.g. WebSocket connection).
-///     Created by <see cref="ITranscriptionEnginePlugin.StartStreamingAsync" /> and fed audio by the host.
+///     Created by <see cref="ITranscriptionEngineRole.StartStreamingAsync" /> and fed audio by the host.
 ///     The host always calls <c>DisposeAsync</c>, even on cancellation or error paths — plugins must
 ///     tolerate disposal before <see cref="FinalizeAsync" /> completes.
 /// </summary>
+/// <remarks>
+///     Async members use the SDK cancellation-origin contract: success is a clean stream terminal;
+///     caller cancellation throws <see cref="OperationCanceledException" /> only when the supplied
+///     token is requested; private deadlines throw <see cref="TimeoutException" /> (or a
+///     provider-specific subclass); every other exception, including an OCE while the supplied
+///     token is live, is a dependency fault. At catch time caller cancellation wins over a private
+///     timeout, which wins over a dependency fault; if both tokens are requested, caller wins.
+/// </remarks>
 // ReSharper disable once UnusedType.Global
 public interface IStreamingSession : IAsyncDisposable
 {
@@ -27,4 +35,11 @@ public interface IStreamingSession : IAsyncDisposable
 /// <param name="Text">The transcript text (partial or final segment).</param>
 /// <param name="IsFinal">True if this segment is confirmed and will not change.</param>
 // ReSharper disable once UnusedType.Global
-public sealed record StreamingTranscriptEvent(string Text, bool IsFinal);
+public sealed record StreamingTranscriptEvent(string Text, bool IsFinal)
+{
+    /// <summary>Provider-reported language of this segment, when unambiguous.</summary>
+    // ReSharper disable once UnusedMember.Global
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
+    public string? DetectedLanguage { get; init; }
+}

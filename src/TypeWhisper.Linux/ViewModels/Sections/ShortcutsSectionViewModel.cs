@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using TypeWhisper.Core.Interfaces;
@@ -9,16 +10,34 @@ using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
+internal enum ManagedDesktopIntegrationState
+{
+    Unknown,
+    Absent,
+    Current,
+    Stale,
+}
+
 // MVVM Toolkit [ObservableProperty] generates the On<Property>Changed(value) partial hooks; the
 // value parameter is part of the generated signature and cannot be dropped even when ignored here.
 // ReSharper disable UnusedParameterInPartialMethod
-public partial class ShortcutsSectionViewModel : ObservableObject
+public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDisposable
 {
     private const string DictationShortcutId = DictationShortcutSpecFactory.DictationShortcutId;
 
     private readonly HotkeyService _hotkey;
+    private readonly DictationOrchestrator? _dictation;
+
+    [ObservableProperty]
+    private bool _isCapturingHotkey;
+
+    public bool CanStartHotkeyCapture => !IsCapturingHotkey && _dictation?.IsRecording != true;
+    private readonly Action<Action> _post;
     private readonly ISettingsService _settings;
     private readonly IReadOnlyList<IDeShortcutWriter> _writers;
+    private readonly Lock _managedSpecInputsGate = new();
+    private (string ToggleHotkey, RecordingMode Mode) _managedSpecInputs;
+    private int _disposed;
 
     // Cached lazily: IsCurrentDesktop hits the filesystem (BinaryExists) so
     // we don't want to rerun it for every UI-bound property. The resolved writer
@@ -26,9 +45,9 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     private bool _activeWriterCached;
 
     // Cached keyboard-access probe result, populated off the UI thread by
-    // RefreshKeyboardAccessAsync. InputDeviceAccessCheck.HasKeyboardAccess() opens
-    // every /dev/input keyboard node and ioctls it — ~0.5s on a typical desktop — so
-    // it must never run during view render. null = not yet probed (treated as "has
+    // RefreshKeyboardAccessAsync. InputDeviceAccessCheck.HasKeyboardAccess() can fall
+    // back to opening every /dev/input node — ~0.5s on a typical desktop — so it must
+    // never run during view render. null = not yet probed (treated as "has
     // access" so the no-access banner/fallback don't flash before the probe returns).
     private bool? _hasKeyboardAccess;
 
@@ -36,6 +55,15 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     // prior probe is still running) only let the newest one write back; an older
     // probe that finishes late must not clobber the latest result.
     private int _keyboardAccessRefreshVersion;
+
+    // Desktop-integration and startup ownership probes classify persisted managed specs, not live
+    // desktop routes. Suppressing on a persisted match avoids duplicate routes after re-login, at
+    // the cost of a transient dead route after an app-only KDE restart. The generation prevents an
+    // old spec probe from overwriting a later setting change or explicit refresh/removal result.
+    private int _desktopIntegrationRefreshVersion;
+    private ManagedDesktopIntegrationState _desktopIntegrationState =
+        ManagedDesktopIntegrationState.Unknown;
+    private Task _pendingDesktopIntegrationRefresh = Task.CompletedTask;
 
     // While false, the compositor-bind fallback auto-tracks keyboard access: every
     // probe re-applies ComputeCompositorBindsRelevant() so the disclosure stays in
@@ -48,7 +76,16 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     private string _copyLastTranscriptionHotkeyText = "";
 
     [ObservableProperty]
+    private string _readLastTranscriptionHotkeyText = "";
+
+    [ObservableProperty]
+    private string _pasteLastTranscriptionHotkeyText = "";
+
+    [ObservableProperty]
     private string _hotkeyText = "";
+
+    // Saved ToggleHotkey that HotkeyText last reflected; written on the UI thread only.
+    private string _displayedToggleHotkey;
 
     [ObservableProperty]
     private string _integrationStatusMessage = "";
@@ -88,26 +125,183 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     public ShortcutsSectionViewModel(
         HotkeyService hotkey,
         ISettingsService settings,
-        IEnumerable<IDeShortcutWriter> writers
+        IEnumerable<IDeShortcutWriter> writers,
+        DictationOrchestrator? dictation = null
+    )
+        : this(hotkey, settings, writers, PostToUiThread, dictation)
+    {
+    }
+
+    internal ShortcutsSectionViewModel(
+        HotkeyService hotkey,
+        ISettingsService settings,
+        IEnumerable<IDeShortcutWriter> writers,
+        Action<Action> post,
+        DictationOrchestrator? dictation = null
     )
     {
         _hotkey = hotkey;
+        _dictation = dictation;
+        if (_dictation is not null) _dictation.RecordingStateChanged += OnRecordingStateChanged;
+        _post = post;
         _settings = settings;
         _writers = writers.ToArray();
+        _managedSpecInputs = GetManagedSpecInputs(settings.Current);
         HotkeyText = _hotkey.CurrentHotkeyString;
+        _displayedToggleHotkey = settings.Current.ToggleHotkey;
         PromptPaletteHotkeyText = settings.Current.PromptPaletteHotkey;
         RecentTranscriptionsHotkeyText = settings.Current.RecentTranscriptionsHotkey;
         CopyLastTranscriptionHotkeyText = settings.Current.CopyLastTranscriptionHotkey;
+        ReadLastTranscriptionHotkeyText = settings.Current.ReadLastTranscriptionHotkey;
+        PasteLastTranscriptionHotkeyText = settings.Current.PasteLastTranscriptionHotkey;
         TransformSelectionHotkeyText = settings.Current.TransformSelectionHotkey;
         Mode = settings.Current.Mode;
         _waylandEvdevHotkeysEnabled = settings.Current.WaylandEvdevHotkeysEnabled;
         _compositorBindsExpanded = ComputeCompositorBindsRelevant();
+        _settings.SettingsChanged += OnSettingsChanged;
 
         // Keyboard access is probed on section activation (RefreshKeyboardAccess),
         // not here: the probe is expensive (see RefreshKeyboardAccessAsync) and this
         // VM is built eagerly at startup, before first-run onboarding can grant
         // access — probing in the ctor would both stall startup and cache a stale
         // pre-onboarding result.
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        IsCapturingHotkey = false;
+        if (_dictation is not null) _dictation.RecordingStateChanged -= OnRecordingStateChanged;
+        _settings.SettingsChanged -= OnSettingsChanged;
+        Interlocked.Increment(ref _keyboardAccessRefreshVersion);
+        Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
+    }
+
+    private void OnRecordingStateChanged(object? sender, bool recording) => _post(() =>
+    {
+        if (recording) IsCapturingHotkey = false;
+        OnPropertyChanged(nameof(CanStartHotkeyCapture));
+        StartHotkeyCaptureCommand.NotifyCanExecuteChanged();
+    });
+
+    partial void OnIsCapturingHotkeyChanged(bool value)
+    {
+        _hotkey.IsSuspended = value;
+        OnPropertyChanged(nameof(CanStartHotkeyCapture));
+        StartHotkeyCaptureCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanStartHotkeyCapture))]
+    private void StartHotkeyCapture()
+    {
+        if (!CanStartHotkeyCapture) return;
+        StatusMessage = "";
+        IsCapturingHotkey = true;
+    }
+
+    [RelayCommand]
+    private void CancelHotkeyCapture()
+    {
+        if (!IsCapturingHotkey) return;
+        IsCapturingHotkey = false;
+        StatusMessage = Loc.Instance["Shortcuts.CaptureCancelled"];
+    }
+
+    public void ReportUnsupportedHotkey() => StatusMessage = Loc.Instance["Shortcuts.UnsupportedCaptureKey"];
+
+    public async Task ApplyCapturedHotkeyAsync(string hotkey)
+    {
+        if (!IsCapturingHotkey) return;
+        Task apply;
+        try
+        {
+            HotkeyText = hotkey;
+            // The chord is bound and saved before ApplyHotkeyAsync awaits the integration probe,
+            // so capture ends now; a cancel or restart during the probe can't misreport it.
+            apply = ApplyHotkeyAsync();
+            // A captured chord always parses, so a mismatch means it collided (ApplyHotkeyAsync
+            // already reported that). Show the live binding instead of the rejected chord.
+            if (HotkeyText != _hotkey.CurrentHotkeyString)
+            {
+                HotkeyText = _hotkey.CurrentHotkeyString;
+            }
+        }
+        finally
+        {
+            IsCapturingHotkey = false;
+        }
+
+        await apply;
+    }
+
+    // Pre-filter on the delivered snapshot but never update the cache here: only the
+    // posted callback advances it, so a burst of events collapses to one probe of the
+    // final state and the VM's own save (which updates the cache first) becomes a no-op.
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        if (Volatile.Read(ref _disposed) != 0
+            || (settings.ToggleHotkey == Volatile.Read(ref _displayedToggleHotkey)
+                && !ManagedSpecInputsChanged(settings)))
+        {
+            return;
+        }
+
+        _post(() =>
+        {
+            SyncHotkeyTextFromSettings();
+            RefreshDesktopIntegrationForCurrentSettings();
+        });
+    }
+
+    // Follows hotkey changes saved elsewhere (e.g. the wizard). Only a changed saved chord
+    // replaces the field, so an unapplied draft survives unrelated saves.
+    private void SyncHotkeyTextFromSettings()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        var saved = _settings.Current.ToggleHotkey;
+        if (saved == _displayedToggleHotkey)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _displayedToggleHotkey, saved);
+        HotkeyText = _hotkey.CurrentHotkeyString;
+        OnPropertyChanged(nameof(IntegrationPreview));
+        OnPropertyChanged(nameof(CanWriteDesktopIntegration));
+        OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
+    }
+
+    // Deliberately re-reads _settings.Current instead of replaying the event payload:
+    // an older posted callback then converges the cache forward to the newest state,
+    // preserving "latest Current wins with at least one probe after the last change".
+    private void RefreshDesktopIntegrationForCurrentSettings()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        _ = ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(_settings.Current);
+    }
+
+    private static void PostToUiThread(Action action)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(action);
+        }
     }
 
     // ReSharper disable once UnusedMember.Global  public ViewModel property (recording-mode options for selection UI); not currently bound in-tree
@@ -214,18 +408,26 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         return _hasKeyboardAccess == false;
     }
 
-    // Called by the view each time the Shortcuts section is shown. Re-probes so the
+    // Invoked via RefreshSectionState each time the Shortcuts section is shown. Re-probes so the
     // banner/fallback reflect access granted since construction — e.g. by first-run
     // onboarding, which grants access via HotkeyService outside this VM. Fire-and-forget:
     // the probe updates the bound properties on completion.
-    public void RefreshKeyboardAccess()
+    private void RefreshKeyboardAccess()
     {
         _ = RefreshKeyboardAccessAsync();
     }
 
+    // Both checks are read-only; desktop settings change only via the explicit
+    // setup/remove commands below.
+    public void RefreshSectionState()
+    {
+        RefreshKeyboardAccess();
+        _ = ScheduleDesktopIntegrationRefresh();
+    }
+
     // Probe keyboard access off the UI thread, then refresh the access-dependent
-    // properties. InputDeviceAccessCheck.HasKeyboardAccess() opens every /dev/input
-    // keyboard node (~0.5s) — running it during the constructor or a binding getter
+    // properties. InputDeviceAccessCheck.HasKeyboardAccess() can fall back to opening
+    // every /dev/input node (~0.5s) — running it during the constructor or a binding getter
     // froze the Shortcuts tab on open. No ConfigureAwait(false): the continuation
     // touches bound properties and must resume on the UI thread.
     private async Task RefreshKeyboardAccessAsync()
@@ -237,11 +439,11 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
         // Claim this probe's version before awaiting (runs on the UI thread, so the
         // increment and the post-await check below never interleave with each other).
-        var version = ++_keyboardAccessRefreshVersion;
+        var version = Interlocked.Increment(ref _keyboardAccessRefreshVersion);
         var hasAccess = await Task.Run(InputDeviceAccessCheck.HasKeyboardAccess);
 
         // A newer probe superseded us while we awaited — drop this stale result.
-        if (version != _keyboardAccessRefreshVersion)
+        if (version != Volatile.Read(ref _keyboardAccessRefreshVersion))
         {
             return;
         }
@@ -271,7 +473,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             // times per second. The orchestrator is idempotent so it's safe,
             // just noisy.
             "Sway" => "bindsym --no-repeat $mod+space exec typewhisper record start",
-            _ => ""
+            _ => "",
         };
 
     // ReSharper disable once MemberCanBeMadeStatic.Global
@@ -281,7 +483,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             "Hyprland" => "bindr = CTRL SHIFT, SPACE, exec, typewhisper record stop",
             "Sway" => "bindsym --release $mod+space exec typewhisper record stop",
-            _ => ""
+            _ => "",
         };
 
     // ReSharper disable once MemberCanBeMadeStatic.Global
@@ -291,7 +493,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
         {
             "Hyprland" => Loc.Instance["Shortcuts.PushToTalkSnippetHintHyprland"],
             "Sway" => Loc.Instance["Shortcuts.PushToTalkSnippetHintSway"],
-            _ => ""
+            _ => "",
         };
 
     // DesktopDetector normalizes edge cases like "ubuntu:GNOME".
@@ -319,7 +521,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             "XFCE" => Loc.Instance["Shortcuts.DesktopInstructionsXfce"],
             "Cinnamon" => Loc.Instance["Shortcuts.DesktopInstructionsCinnamon"],
             "MATE" => Loc.Instance["Shortcuts.DesktopInstructionsMate"],
-            _ => Loc.Instance["Shortcuts.DesktopInstructionsGeneric"]
+            _ => Loc.Instance["Shortcuts.DesktopInstructionsGeneric"],
         };
 
     private IDeShortcutWriter? ActiveWriter
@@ -356,25 +558,317 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     public bool CanSetupAutomatically => ActiveWriter is not null;
 
+    public bool CanWriteDesktopIntegration
+    {
+        get
+        {
+            var writer = ActiveWriter;
+            return writer is not null && BuildSpec(writer) is not null;
+        }
+    }
+
+    public bool ShowStaleIntegrationBanner =>
+        _desktopIntegrationState == ManagedDesktopIntegrationState.Stale;
+
+    public bool CanRefreshDesktopIntegration =>
+        ShowStaleIntegrationBanner && CanWriteDesktopIntegration;
+
+    public bool CanRemoveDesktopIntegration =>
+        _desktopIntegrationState is ManagedDesktopIntegrationState.Current
+            or ManagedDesktopIntegrationState.Stale;
+
+    public string StaleIntegrationMessage
+    {
+        get
+        {
+            var writer = ActiveWriter;
+            if (!ShowStaleIntegrationBanner || writer is null)
+            {
+                return string.Empty;
+            }
+
+            if (BuildSpec(writer) is not null)
+                return Loc.Instance["Shortcuts.DesktopIntegrationStaleHint"];
+            if (IsNativeModifierUnsupported(writer))
+                return Loc.Instance.GetString("Shortcuts.NativeModifierUnsupported", writer.DisplayName);
+            return Loc.Instance.GetString(
+                "Shortcuts.DesktopIntegrationStaleUnsupported",
+                writer.DisplayName,
+                GetModeDisplayName()
+            );
+        }
+    }
+
+    // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- backing field is mutated by the deliberate versioned-probe race guard / invalidate-around-mutation pattern; keep it a field.
+    internal ManagedDesktopIntegrationState DesktopIntegrationState =>
+        _desktopIntegrationState;
+
+    // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- backing field is reassigned by ScheduleDesktopIntegrationRefresh under the deliberate race-guard pattern; keep it a field.
+    internal Task PendingDesktopIntegrationRefresh => _pendingDesktopIntegrationRefresh;
+
     public string SetupAutomaticallyLabel =>
         ActiveWriter is null
             ? Loc.Instance["TextInsertion.SetUpAutomatically"]
-            : Loc.Instance.GetString("Shortcuts.SetupAutomaticallyOn", ActiveWriter.DisplayName);
+            : Loc.Instance.GetString(
+                ShowStaleIntegrationBanner
+                    ? "Shortcuts.RefreshDesktopIntegrationOn"
+                    : "Shortcuts.SetupAutomaticallyOn",
+                ActiveWriter.DisplayName
+            );
 
     public string IntegrationPreview
     {
         get
         {
             var w = ActiveWriter;
-            return w is null ? string.Empty : w.PreviewLines(BuildSpec(w));
+            if (w is null)
+            {
+                return string.Empty;
+            }
+
+            var spec = BuildSpec(w);
+            return spec is null ? GetUnsupportedIntegrationMessage(w) : w.PreviewLines(spec);
         }
     }
 
     // Uses the shared factory so this panel and the onboarding checklist register
     // identical shortcuts — otherwise one could install a bind the other wouldn't recognize.
-    private DeShortcutSpec BuildSpec(IDeShortcutWriter writer)
+    private DeShortcutSpec? BuildSpec(IDeShortcutWriter writer)
     {
         return DictationShortcutSpecFactory.Build(_settings, writer);
+    }
+
+    internal async Task RefreshDesktopIntegrationStateAsync(CancellationToken ct)
+    {
+        var version = Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
+        try
+        {
+            // Capture both before the first await. Later setting changes start a newer version,
+            // so this result cannot describe a different hotkey/mode by accident.
+            var writer = ActiveWriter;
+            var spec = writer is null ? null : BuildSpec(writer);
+            if (writer is null)
+            {
+                SetDesktopIntegrationStateIfCurrent(
+                    version,
+                    ManagedDesktopIntegrationState.Absent
+                );
+                return;
+            }
+
+            if (spec is not null)
+            {
+                var exact = await writer.IsInstalledAsync(spec, ct).ConfigureAwait(true);
+                if (exact)
+                {
+                    SetDesktopIntegrationStateIfCurrent(
+                        version,
+                        ManagedDesktopIntegrationState.Current
+                    );
+                    return;
+                }
+            }
+
+            var present = await writer
+                .IsManagedShortcutPresentAsync(DictationShortcutId, ct)
+                .ConfigureAwait(true);
+            SetDesktopIntegrationStateIfCurrent(
+                version,
+                present
+                    ? ManagedDesktopIntegrationState.Stale
+                    : ManagedDesktopIntegrationState.Absent
+            );
+        }
+        catch (OperationCanceledException)
+        {
+            // Rethrown for callers passing a real token; traced first so an internal probe
+            // timeout doesn't fault ScheduleDesktopIntegrationRefresh's task silently.
+            System.Diagnostics.Trace.WriteLine(
+                "[Shortcuts] Desktop integration status probe was canceled."
+            );
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // An indeterminate probe must not erase a known stale/current state.
+            System.Diagnostics.Trace.WriteLine(
+                $"[Shortcuts] Desktop integration status probe failed: {ex.Message}"
+            );
+        }
+    }
+
+    private Task ScheduleDesktopIntegrationRefresh()
+    {
+        var task = RefreshDesktopIntegrationStateAsync(CancellationToken.None);
+        _pendingDesktopIntegrationRefresh = task;
+        return task;
+    }
+
+    private Task ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
+        AppSettings settings,
+        Action? beforeSchedule = null
+    )
+    {
+        // The cache advances BEFORE beforeSchedule runs its Update so the resulting
+        // SettingsChanged echo compares equal at the pre-filter and cannot double-probe;
+        // an Update failure rolls the cache back below.
+        var inputs = GetManagedSpecInputs(settings);
+        (string ToggleHotkey, RecordingMode Mode) previousInputs;
+        bool changed;
+        lock (_managedSpecInputsGate)
+        {
+            previousInputs = _managedSpecInputs;
+            changed = inputs != previousInputs;
+            if (changed)
+            {
+                _managedSpecInputs = inputs;
+            }
+        }
+
+        try
+        {
+            beforeSchedule?.Invoke();
+        }
+        catch
+        {
+            lock (_managedSpecInputsGate)
+            {
+                if (changed && _managedSpecInputs == inputs)
+                {
+                    _managedSpecInputs = previousInputs;
+                }
+            }
+
+            throw;
+        }
+
+        return changed && Volatile.Read(ref _disposed) == 0
+            ? ScheduleDesktopIntegrationRefresh()
+            : Task.CompletedTask;
+    }
+
+    private bool ManagedSpecInputsChanged(AppSettings settings)
+    {
+        lock (_managedSpecInputsGate)
+        {
+            return GetManagedSpecInputs(settings) != _managedSpecInputs;
+        }
+    }
+
+    private static (string ToggleHotkey, RecordingMode Mode) GetManagedSpecInputs(
+        AppSettings settings
+    )
+    {
+        return (settings.ToggleHotkey, settings.Mode);
+    }
+
+    private void SetDesktopIntegrationStateIfCurrent(
+        int version,
+        ManagedDesktopIntegrationState state
+    )
+    {
+        if (version != Volatile.Read(ref _desktopIntegrationRefreshVersion))
+        {
+            return;
+        }
+
+        SetDesktopIntegrationState(state);
+    }
+
+    private void SetDesktopIntegrationState(ManagedDesktopIntegrationState state)
+    {
+        if (_desktopIntegrationState == state)
+        {
+            return;
+        }
+
+        _desktopIntegrationState = state;
+        OnPropertyChanged(nameof(DesktopIntegrationState));
+        OnPropertyChanged(nameof(ShowStaleIntegrationBanner));
+        OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
+        OnPropertyChanged(nameof(CanRemoveDesktopIntegration));
+        OnPropertyChanged(nameof(StaleIntegrationMessage));
+        OnPropertyChanged(nameof(SetupAutomaticallyLabel));
+    }
+
+    private void CompleteDesktopIntegrationMutation(
+        IDeShortcutWriter writer,
+        DeShortcutSpec writtenSpec
+    )
+    {
+        // Invalidate every probe that could have observed the pre-commit state.
+        Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
+        var currentSpec = BuildSpec(writer);
+        if (currentSpec == writtenSpec)
+        {
+            SetDesktopIntegrationState(ManagedDesktopIntegrationState.Current);
+            return;
+        }
+
+        _ = ScheduleDesktopIntegrationRefresh();
+    }
+
+    private void InvalidateDesktopIntegrationProbes()
+    {
+        Interlocked.Increment(ref _desktopIntegrationRefreshVersion);
+    }
+
+    // Reconcile suppression with the current persisted managed spec. An exact KDE file match is
+    // deliberately treated as desktop ownership before KGlobalAccel loads it: this avoids duplicate
+    // routes after re-login, but an app-only restart can transiently leave no live dictation route.
+    internal async Task RefreshNativeDictationBindingStateAsync(CancellationToken ct)
+    {
+        try
+        {
+            var writer = ActiveWriter;
+            var spec = writer is null ? null : BuildSpec(writer);
+            if (writer is null || spec is null)
+            {
+                _hotkey.SetNativeDictationBindingActive(false);
+                return;
+            }
+
+            var isInstalled = await writer.IsInstalledAsync(spec, ct).ConfigureAwait(false);
+            _hotkey.SetNativeDictationBindingActive(isInstalled);
+        }
+        catch (OperationCanceledException)
+        {
+            _hotkey.SetNativeDictationBindingActive(false);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine(
+                $"[Shortcuts] Native dictation binding probe failed: {ex.Message}"
+            );
+            _hotkey.SetNativeDictationBindingActive(false);
+        }
+    }
+
+    private bool IsNativeModifierUnsupported(IDeShortcutWriter writer) =>
+        DesktopShortcutKey.IsSideSpecificModifier(_settings.Current.ToggleHotkey)
+        && !DictationShortcutSpecFactory.NativeSupportsModifierOnly(writer);
+
+    private string GetUnsupportedIntegrationMessage(IDeShortcutWriter writer)
+    {
+        if (IsNativeModifierUnsupported(writer))
+            return Loc.Instance.GetString("Shortcuts.NativeModifierUnsupported", writer.DisplayName);
+        return Loc.Instance.GetString(
+            "Shortcuts.AutoSetupModeUnsupported",
+            writer.DisplayName,
+            GetModeDisplayName()
+        );
+    }
+
+    private string GetModeDisplayName()
+    {
+        return _settings.Current.Mode switch
+        {
+            RecordingMode.Toggle => Loc.Instance["Common.ModeToggle"],
+            RecordingMode.PushToTalk => Loc.Instance["Common.ModePushToTalk"],
+            RecordingMode.Hybrid => Loc.Instance["Common.ModeHybrid"],
+            _ => "",
+        };
     }
 
     // VMs don't have direct clipboard access in Avalonia — the view
@@ -383,11 +877,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
     private static bool IsWaylandSession()
     {
-        return string.Equals(
-            Environment.GetEnvironmentVariable("XDG_SESSION_TYPE"),
-            "wayland",
-            StringComparison.OrdinalIgnoreCase
-        );
+        return WaylandSessionDetector.IsWaylandSession();
     }
 
     [RelayCommand]
@@ -395,8 +885,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetRecentTranscriptionsHotkeyFromString(RecentTranscriptionsHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString }
+            _settings.Update(current =>
+                current with { RecentTranscriptionsHotkey = _hotkey.CurrentRecentTranscriptionsHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(
                 _hotkey.CurrentRecentTranscriptionsHotkeyString
@@ -420,10 +910,10 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetCopyLastTranscriptionHotkeyFromString(CopyLastTranscriptionHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with
+            _settings.Update(current =>
+                current with
                 {
-                    CopyLastTranscriptionHotkey = _hotkey.CurrentCopyLastTranscriptionHotkeyString
+                    CopyLastTranscriptionHotkey = _hotkey.CurrentCopyLastTranscriptionHotkeyString,
                 }
             );
             StatusMessage = string.IsNullOrWhiteSpace(
@@ -444,12 +934,68 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void ApplyReadLastTranscriptionHotkey()
+    {
+        if (_hotkey.TrySetReadLastTranscriptionHotkeyFromString(ReadLastTranscriptionHotkeyText))
+        {
+            _settings.Update(current =>
+                current with
+                {
+                    ReadLastTranscriptionHotkey = _hotkey.CurrentReadLastTranscriptionHotkeyString,
+                }
+            );
+            StatusMessage = string.IsNullOrWhiteSpace(
+                _hotkey.CurrentReadLastTranscriptionHotkeyString
+            )
+                ? Loc.Instance["Shortcuts.ReadLastTranscriptionHotkeyCleared"]
+                : Loc.Instance.GetString(
+                    "Shortcuts.ReadLastTranscriptionHotkeySet",
+                    _hotkey.CurrentReadLastTranscriptionHotkeyString
+                );
+            ReadLastTranscriptionHotkeyText = _hotkey.CurrentReadLastTranscriptionHotkeyString;
+        }
+        else
+        {
+            StatusMessage =
+                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", ReadLastTranscriptionHotkeyText);
+        }
+    }
+
+    [RelayCommand]
+    private void ApplyPasteLastTranscriptionHotkey()
+    {
+        if (_hotkey.TrySetPasteLastTranscriptionHotkeyFromString(PasteLastTranscriptionHotkeyText))
+        {
+            _settings.Update(current =>
+                current with
+                {
+                    PasteLastTranscriptionHotkey = _hotkey.CurrentPasteLastTranscriptionHotkeyString,
+                }
+            );
+            StatusMessage = string.IsNullOrWhiteSpace(
+                _hotkey.CurrentPasteLastTranscriptionHotkeyString
+            )
+                ? Loc.Instance["Shortcuts.PasteLastTranscriptionHotkeyCleared"]
+                : Loc.Instance.GetString(
+                    "Shortcuts.PasteLastTranscriptionHotkeySet",
+                    _hotkey.CurrentPasteLastTranscriptionHotkeyString
+                );
+            PasteLastTranscriptionHotkeyText = _hotkey.CurrentPasteLastTranscriptionHotkeyString;
+        }
+        else
+        {
+            StatusMessage =
+                Loc.Instance.GetString("Shortcuts.HotkeyParseOrCollide", PasteLastTranscriptionHotkeyText);
+        }
+    }
+
+    [RelayCommand]
     private void ApplyTransformSelectionHotkey()
     {
         if (_hotkey.TrySetTransformSelectionHotkeyFromString(TransformSelectionHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
+            _settings.Update(current =>
+                current with { TransformSelectionHotkey = _hotkey.CurrentTransformSelectionHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentTransformSelectionHotkeyString)
                 ? Loc.Instance["Shortcuts.TransformSelectionHotkeyCleared"]
@@ -476,17 +1022,53 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return;
         }
 
+        var spec = BuildSpec(writer);
+        if (spec is null)
+        {
+            IntegrationStatusMessage = GetUnsupportedIntegrationMessage(writer);
+            return;
+        }
+
         IntegrationStatusMessage =
             Loc.Instance.GetString("Shortcuts.InstallingShortcut", writer.DisplayName);
+        InvalidateDesktopIntegrationProbes();
         try
         {
             var result = await writer
-                .WriteAsync(BuildSpec(writer), CancellationToken.None)
+                .WriteAsync(spec, CancellationToken.None)
                 .ConfigureAwait(true);
             IntegrationStatusMessage = FormatResultMessage(result);
+
+            if (result.Success)
+            {
+                var appliesImmediately =
+                    !writer.RequiresSessionRestartToApply && result.Warning is null;
+                if (appliesImmediately)
+                {
+                    _hotkey.SetNativeDictationBindingActive(true);
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationOwnershipActive"];
+                }
+                else
+                {
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationInstallDeferred"];
+                }
+
+                CompleteDesktopIntegrationMutation(writer, spec);
+            }
+            else
+            {
+                // A write can partially mutate config before failing (e.g. GNOME's managed
+                // path added, then gsettings set fails); re-probe so it surfaces as stale, not silent.
+                _ = ScheduleDesktopIntegrationRefresh();
+            }
         }
         catch (Exception ex)
         {
+            _ = ScheduleDesktopIntegrationRefresh();
             IntegrationStatusMessage = Loc.Instance.GetString("Shortcuts.SetupFailed", ex.Message);
         }
     }
@@ -503,15 +1085,45 @@ public partial class ShortcutsSectionViewModel : ObservableObject
 
         IntegrationStatusMessage =
             Loc.Instance.GetString("Shortcuts.RemovingShortcut", writer.DisplayName);
+        InvalidateDesktopIntegrationProbes();
         try
         {
             var result = await writer
                 .RemoveAsync(DictationShortcutId, CancellationToken.None)
                 .ConfigureAwait(true);
             IntegrationStatusMessage = FormatResultMessage(result);
+
+            if (result.Success)
+            {
+                var appliesImmediately =
+                    !writer.RequiresSessionRestartToApply && result.Warning is null;
+                if (appliesImmediately)
+                {
+                    _hotkey.SetNativeDictationBindingActive(false);
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationRemovalActive"];
+                }
+                else
+                {
+                    IntegrationStatusMessage =
+                        $"{IntegrationStatusMessage} "
+                        + Loc.Instance["Shortcuts.NativeDictationRemovalDeferred"];
+                }
+
+                InvalidateDesktopIntegrationProbes();
+                SetDesktopIntegrationState(ManagedDesktopIntegrationState.Absent);
+            }
+            else
+            {
+                // A failed removal may leave the managed block partially in place;
+                // re-probe rather than trust the pre-removal state.
+                _ = ScheduleDesktopIntegrationRefresh();
+            }
         }
         catch (Exception ex)
         {
+            _ = ScheduleDesktopIntegrationRefresh();
             IntegrationStatusMessage = Loc.Instance.GetString("Shortcuts.RemovalFailed", ex.Message);
         }
     }
@@ -586,18 +1198,43 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ApplyHotkey()
+    private async Task ApplyHotkeyAsync()
     {
         if (_hotkey.TrySetHotkeyFromString(HotkeyText))
         {
-            _settings.Save(_settings.Current with { ToggleHotkey = _hotkey.CurrentHotkeyString });
-            StatusMessage = Loc.Instance.GetString("Shortcuts.HotkeySet", _hotkey.CurrentHotkeyString);
-            HotkeyText = _hotkey.CurrentHotkeyString;
+            var hotkey = _hotkey.CurrentHotkeyString;
+            var proposed = _settings.Current with
+            {
+                ToggleHotkey = hotkey,
+            };
+            // Applying an unchanged chord deliberately skips the re-probe; tab reattach
+            // and the explicit refresh affordance cover externally-deleted binds.
+            await ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
+                proposed,
+                () =>
+                {
+                    // Set before Update so its SettingsChanged echo is not taken for an outside change.
+                    Volatile.Write(ref _displayedToggleHotkey, hotkey);
+                    _settings.Update(current => current with { ToggleHotkey = hotkey });
+                    StatusMessage = Loc.Instance.GetString(
+                        "Shortcuts.HotkeySet",
+                        _hotkey.CurrentHotkeyString
+                    );
+                    HotkeyText = _hotkey.CurrentHotkeyString;
+                    OnPropertyChanged(nameof(IntegrationPreview));
+                    OnPropertyChanged(nameof(CanWriteDesktopIntegration));
+                    OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
+                }
+            );
         }
         else
         {
-            StatusMessage =
-                Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", HotkeyText);
+            StatusMessage = Loc.Instance.GetString(
+                HotkeyService.IsParsableHotkey(HotkeyText)
+                    ? "Shortcuts.HotkeyCollides"
+                    : "Shortcuts.HotkeyParseFailed",
+                HotkeyText
+            );
         }
     }
 
@@ -606,8 +1243,8 @@ public partial class ShortcutsSectionViewModel : ObservableObject
     {
         if (_hotkey.TrySetPromptPaletteHotkeyFromString(PromptPaletteHotkeyText))
         {
-            _settings.Save(
-                _settings.Current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
+            _settings.Update(current =>
+                current with { PromptPaletteHotkey = _hotkey.CurrentPromptPaletteHotkeyString }
             );
             StatusMessage = string.IsNullOrWhiteSpace(_hotkey.CurrentPromptPaletteHotkeyString)
                 ? Loc.Instance["Shortcuts.PromptPaletteHotkeyCleared"]
@@ -631,15 +1268,27 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { Mode = value });
-        StatusMessage = value switch
-        {
-            RecordingMode.Toggle => Loc.Instance["Shortcuts.ModeToggleStatus"],
-            RecordingMode.PushToTalk => Loc.Instance["Shortcuts.ModePushToTalkStatus"],
-            RecordingMode.Hybrid => Loc.Instance["Shortcuts.ModeHybridStatus"],
-            _ => ""
-        };
-        OnPropertyChanged(nameof(ShowCapabilityMismatch));
+        var mode = value;
+        var proposed = _settings.Current with { Mode = mode };
+        _ = ScheduleDesktopIntegrationRefreshIfManagedSpecInputsChanged(
+            proposed,
+            () =>
+            {
+                _settings.Update(current => current with { Mode = mode });
+                StatusMessage = mode switch
+                {
+                    RecordingMode.Toggle => Loc.Instance["Shortcuts.ModeToggleStatus"],
+                    RecordingMode.PushToTalk => Loc.Instance["Shortcuts.ModePushToTalkStatus"],
+                    RecordingMode.Hybrid => Loc.Instance["Shortcuts.ModeHybridStatus"],
+                    _ => "",
+                };
+                OnPropertyChanged(nameof(ShowCapabilityMismatch));
+                OnPropertyChanged(nameof(IntegrationPreview));
+                OnPropertyChanged(nameof(CanWriteDesktopIntegration));
+                OnPropertyChanged(nameof(CanRefreshDesktopIntegration));
+                OnPropertyChanged(nameof(StaleIntegrationMessage));
+            }
+        );
     }
 
     partial void OnWaylandEvdevHotkeysEnabledChanged(bool value)
@@ -649,7 +1298,7 @@ public partial class ShortcutsSectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { WaylandEvdevHotkeysEnabled = value });
+        _settings.Update(current => current with { WaylandEvdevHotkeysEnabled = value });
         StatusMessage = value
             ? Loc.Instance["Shortcuts.GlobalReadsEnabled"]
             : Loc.Instance["Shortcuts.FocusedOnlyFallback"];

@@ -10,18 +10,31 @@ namespace TypeWhisper.Core.Models;
 /// </summary>
 public sealed record Profile
 {
+    /// <summary>The <see cref="MemorySourceId" /> that turns memory recall off for the profile.</summary>
+    public const string MemorySourceOff = "off";
+
     public required string Id { get; init; }
     public required string Name { get; init; }
     public bool IsEnabled { get; init; } = true;
     public int Priority { get; init; }
     public IReadOnlyList<string> ProcessNames { get; init; } = [];
     public IReadOnlyList<string> UrlPatterns { get; init; } = [];
+    /// <summary>Only matters when both ProcessNames and UrlPatterns are non-empty.</summary>
+    public ProfileContextMatchMode ContextMatchMode { get; init; } = ProfileContextMatchMode.All;
     public string? InputLanguage { get; init; }
+    public IReadOnlyList<string> InputLanguageHints { get; init; } = [];
     public string? TranslationTarget { get; init; }
     public string? SelectedTask { get; init; }
     public bool? WhisperModeOverride { get; init; }
     public string? TranscriptionModelOverride { get; init; }
     public string? PromptActionId { get; init; }
+
+    /// <summary>
+    ///     Where the profile's prompt actions recall memories from: null follows the global
+    ///     memory setting, <see cref="MemorySourceOff" /> recalls nothing, and a memory plugin
+    ///     ID queries only that plugin, failing the action while it is unavailable.
+    /// </summary>
+    public string? MemorySourceId { get; init; }
     public string? HotkeyData { get; init; }
     public ProfileHotkeyBehavior HotkeyBehavior { get; init; } = ProfileHotkeyBehavior.StartDictation;
     public ProfileStylePreset StylePreset { get; init; } = ProfileStylePreset.Raw;
@@ -34,4 +47,23 @@ public sealed record Profile
     public bool? ClipboardContextOverride { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; init; } = DateTime.UtcNow;
+
+    /// <summary>
+    ///     A blank InputLanguage inherits the global hints and "auto" clears them; otherwise the
+    ///     profile language leads and any stored hints only extend it. The editor writes
+    ///     InputLanguage alone, so hints never outrank what it shows.
+    /// </summary>
+    public IReadOnlyList<string> GetLanguageHints(IReadOnlyList<string> globalHints)
+    {
+        if (string.IsNullOrWhiteSpace(InputLanguage))
+        {
+            return AppSettings.NormalizeLanguageHints(globalHints);
+        }
+
+        // A hand-edited profiles.json may carry an explicit null in the hints.
+        // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract
+        return InputLanguage.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase)
+            ? []
+            : AppSettings.NormalizeLanguageHints([InputLanguage, .. InputLanguageHints ?? []]);
+    }
 }

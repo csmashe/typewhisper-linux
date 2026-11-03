@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -28,6 +30,22 @@ internal sealed class LlmStreamPump
     }
 
     public bool Faulted { get; private set; }
+    public Exception? Failure { get; private set; }
+
+    /// <summary>
+    ///     Rethrows a configuration fault — a signed-out or uninstalled selected provider — because
+    ///     the batch path resolves that same selection and fails identically. Every other fault
+    ///     keeps the caller's streaming&#8594;batch fallback, including non-transient ones that can be
+    ///     specific to the streaming request (a gateway rejecting <c>stream=true</c>, a stream-parse
+    ///     error reported as <see cref="PluginRequestFailureKind.Unknown" />).
+    /// </summary>
+    public void ThrowIfNonRetryableFault()
+    {
+        if (Failure is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
+        {
+            ExceptionDispatchInfo.Capture(Failure).Throw();
+        }
+    }
 
     /// <summary>
     ///     True once the source yielded at least one item (even ""). Distinguishes
@@ -72,18 +90,27 @@ internal sealed class LlmStreamPump
                 lastFlushMs = stopwatch.Elapsed.TotalMilliseconds;
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // User stopped — rethrow so the caller skips the batch retry.
+            // Caller stopped — rethrow so the caller skips the batch retry.
             EmitFinal();
             throw;
         }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            // Caller cancellation wins if a dependency fault completes in the
+            // same race window.
+            EmitFinal();
+            throw new OperationCanceledException(ct);
+        }
         catch (Exception ex)
         {
-            // Plugin enumerators can throw arbitrary types. Treat all non-cancel
-            // faults as recoverable: keep the partial and let the caller fall back.
-            Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}: {ex.Message}");
+            // Plugin enumerators can throw arbitrary types, including an OCE while
+            // the caller token is still live. Treat every dependency fault as
+            // recoverable: keep the partial and let the caller fall back.
+            Trace.WriteLine($"[LlmStreamPump] Fault: {ex.GetType().Name}");
             Faulted = true;
+            Failure = ex;
             EmitFinal();
             return _sb.ToString();
         }

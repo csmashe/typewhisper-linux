@@ -1,6 +1,8 @@
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -20,7 +22,8 @@ public sealed record FileTranscriptionProcessOptions(
     string? EngineId = null,
     string? ModelId = null,
     string? Language = null,
-    TranscriptionTask? Task = null
+    TranscriptionTask? Task = null,
+    IReadOnlyList<string>? LanguageHints = null
 );
 
 public sealed record FileTranscriptionProcessProgress(
@@ -39,9 +42,27 @@ public sealed class FileTranscriptionProcessor(
     AudioFileService audioFile,
     IDictionaryService dictionary,
     IVocabularyBoostingService vocabularyBoosting,
+    IVocabularyRescoringService vocabularyRescoring,
     IPostProcessingPipeline pipeline
 ) : IFileTranscriptionProcessor
 {
+    // An explicit language wins; a supplied list is the caller's snapshot even when empty (that
+    // means automatic), and only an absent list falls back to the settings at processing time.
+    internal static IReadOnlyList<string> ResolveLanguageHints(
+        FileTranscriptionProcessOptions? options,
+        AppSettings currentSettings
+    )
+    {
+        if (!string.IsNullOrWhiteSpace(options?.Language))
+        {
+            return AppSettings.NormalizeLanguageHints([options.Language]);
+        }
+
+        return options?.LanguageHints is { } snapshot
+            ? AppSettings.NormalizeLanguageHints(snapshot)
+            : currentSettings.GetLanguageHints();
+    }
+
     public async Task<FileTranscriptionProcessResult> ProcessAsync(
         string filePath,
         Action<FileTranscriptionProcessProgress> onProgress,
@@ -62,6 +83,19 @@ public sealed class FileTranscriptionProcessor(
             throw new InvalidOperationException("No transcription model loaded.");
         }
 
+        var task =
+            options?.Task
+            ?? (
+                settings.Current.TranscriptionTask == "translate"
+                    ? TranscriptionTask.Translate
+                    : TranscriptionTask.Transcribe
+            );
+        // Ahead of decoding, so a refused task costs nothing.
+        if (task == TranscriptionTask.Translate && modelManager.GetTranslationRejection(modelId) is { } rejection)
+        {
+            throw new InvalidOperationException(rejection);
+        }
+
         // Decode audio before acquiring the lease — ffmpeg shells out and must
         // not monopolize the global model lock while no transcription runs.
         var wav = await audioFile.LoadAudioAsWavAsync(filePath, cancellationToken);
@@ -74,15 +108,9 @@ public sealed class FileTranscriptionProcessor(
         );
 
         var currentSettings = settings.Current;
-        var configuredLanguage = options?.Language ?? currentSettings.Language;
-        var language = configuredLanguage == "auto" ? null : configuredLanguage;
-        var task =
-            options?.Task
-            ?? (
-                currentSettings.TranscriptionTask == "translate"
-                    ? TranscriptionTask.Translate
-                    : TranscriptionTask.Transcribe
-            );
+        var languageHints = ResolveLanguageHints(options, currentSettings);
+        var languageSelection = LanguageSelectionResolver.ResolvePrimary(languageHints);
+        string? configuredLanguage;
 
         var startedAt = DateTime.UtcNow;
 
@@ -90,17 +118,74 @@ public sealed class FileTranscriptionProcessor(
         // the post-processing pipeline would block a concurrent dictation or
         // watch-folder transcription from loading a different model.
         PluginTranscriptionResult pluginResult;
+        bool engineSupportsTranslation;
+        string engineProviderId;
+        string? engineModelId;
         await using (
-            var lease = await modelManager.AcquireTranscriptionAsync(modelId, cancellationToken)
+            var lease = await modelManager.AcquireTranscriptionAsync(
+                modelId,
+                cancellationToken: cancellationToken
+            )
         )
         {
+            engineSupportsTranslation = lease.Plugin.SupportsTranslation;
+            engineProviderId = lease.Plugin.ProviderId;
+            engineModelId = lease.Plugin.SelectedModelId;
+            (languageSelection, languageHints) = lease.Plugin.ResolveEffectiveLanguage(
+                languageSelection,
+                languageHints
+            );
+            configuredLanguage = languageSelection.LanguageTag;
             pluginResult = await lease.Plugin.TranscribeAsync(
                 wav,
-                language,
+                languageSelection,
+                languageHints,
                 task == TranscriptionTask.Translate,
-                null,
+                TranscriptionPromptComposer.ForDictation(lease.Plugin, dictionary.GetEnabledTerms()),
                 cancellationToken
             );
+        }
+
+        if (!currentSettings.TranscribeShortQuietClipsAggressively)
+        {
+            pluginResult = TerminalHallucinationTrimmer.Trim(pluginResult);
+        }
+
+        // An engine that ignores the translate task returns source-language text; reporting
+        // Translate downstream would make number normalization treat it as English.
+        var effectiveTask =
+            task == TranscriptionTask.Translate && engineSupportsTranslation
+                ? TranscriptionTask.Translate
+                : TranscriptionTask.Transcribe;
+
+        // Token timings align against the engine text, so rescoring precedes spelling
+        // normalization; the pipeline normalizes the refined text itself.
+        var translate = task == TranscriptionTask.Translate;
+        var rescoreEligible = vocabularyRescoring.IsEligible(
+            pluginResult.TokenTimings,
+            translate,
+            engineProviderId,
+            engineModelId
+        );
+        string? rescoredText = null;
+        if (rescoreEligible)
+        {
+            var refined = await vocabularyRescoring.RefineAsync(
+                new VocabularyRescoringInput(
+                    Guid.NewGuid(),
+                    pluginResult.Text,
+                    wav,
+                    pluginResult.TokenTimings,
+                    translate,
+                    engineProviderId,
+                    engineModelId
+                ),
+                cancellationToken
+            );
+            rescoredText = refined.Text;
+            // The service re-checks eligibility; a model or settings change in between
+            // must not leave the text booster disabled as well.
+            rescoreEligible = refined.Eligible;
         }
 
         var result = new TranscriptionResult
@@ -115,23 +200,37 @@ public sealed class FileTranscriptionProcessor(
                     segment.Text,
                     segment.Start,
                     segment.End
-                ))
-                .ToArray()
+                )
+                {
+                    NoSpeechProbability = segment.NoSpeechProbability,
+                })
+                .ToArray(),
         };
 
+        // Segments feed subtitle export and never pass through the pipeline.
+        result = EnglishOutputNormalizationService.NormalizeResult(result, currentSettings.EnglishOutputVariant, effectiveTask, configuredLanguage, configuredLanguageCandidates: languageHints);
+        result = GermanOutputNormalizationService.NormalizeResult(result, currentSettings.GermanOutputVariant, effectiveTask, configuredLanguage, configuredLanguageCandidates: languageHints);
+
         var pipelineResult = await pipeline.ProcessAsync(
-            result.Text,
+            rescoredText ?? result.Text,
             new PipelineOptions
             {
-                VocabularyBooster = currentSettings.VocabularyBoostingEnabled
+                VocabularyBooster = !rescoreEligible && currentSettings.VocabularyBoostingEnabled
                     ? vocabularyBoosting.Apply
                     : null,
-                DictionaryCorrector = dictionary.ApplyCorrections
+                DictionaryCorrector = dictionary.ApplyCorrections,
+                TranscriptionTask = effectiveTask,
+                DetectedLanguage = result.DetectedLanguage,
+                ConfiguredLanguage = configuredLanguage,
+                ConfiguredLanguageCandidates = languageHints,
+                TranscriptionNumberNormalizationEnabled =
+                    currentSettings.TranscriptionNumberNormalizationEnabled,
+                EnglishOutputVariant = currentSettings.EnglishOutputVariant,
+                GermanOutputVariant = currentSettings.GermanOutputVariant,
+                ShortUtterancePunctuationEnabled = currentSettings.ShortUtterancePunctuationEnabled,
             },
             cancellationToken
         );
-
-        modelManager.ScheduleAutoUnload();
 
         return new FileTranscriptionProcessResult(result, pipelineResult.Text);
     }
@@ -205,7 +304,7 @@ public sealed class FileTranscriptionProcessor(
                 $"Ambiguous transcription model '{options.ModelId}': provided by multiple engines. "
                     + "Specify the engine explicitly or use the full plugin-qualified model id."
             ),
-            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId)
+            _ => ModelManagerService.GetPluginModelId(matches[0].GetTranscriptionSelectionId(), options.ModelId),
         };
     }
 }

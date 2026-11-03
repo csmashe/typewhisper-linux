@@ -11,7 +11,7 @@ public sealed class AppInsertionStrategyRowTests
         new(TextInsertionStrategy.Auto, "Auto"),
         new(TextInsertionStrategy.ClipboardPaste, "Clipboard paste"),
         new(TextInsertionStrategy.DirectTyping, "Direct typing"),
-        new(TextInsertionStrategy.CopyOnly, "Copy only")
+        new(TextInsertionStrategy.CopyOnly, "Copy only"),
     ];
 
     [Fact]
@@ -25,7 +25,7 @@ public sealed class AppInsertionStrategyRowTests
             () => changeCount++
         ) { SelectedStrategyOption = s_options.First(option =>
                 option.Value == TextInsertionStrategy.DirectTyping
-            )
+            ),
         };
 
         Assert.Equal(TextInsertionStrategy.DirectTyping, sut.Strategy);

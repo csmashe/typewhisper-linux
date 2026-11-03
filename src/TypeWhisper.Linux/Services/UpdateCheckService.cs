@@ -101,7 +101,7 @@ public sealed class UpdateCheckService
                 LatestVersion = known,
                 ReleaseUrl = string.IsNullOrWhiteSpace(_prefs.Current.LastKnownLatestUrl)
                     ? ReleasesPage
-                    : _prefs.Current.LastKnownLatestUrl
+                    : _prefs.Current.LastKnownLatestUrl,
             }
         );
     }
@@ -140,7 +140,7 @@ public sealed class UpdateCheckService
                         Checked = true,
                         Faulted = true,
                         CurrentVersion = current,
-                        Error = "No published release was found."
+                        Error = "No published release was found.",
                     };
                 }
                 else
@@ -151,7 +151,7 @@ public sealed class UpdateCheckService
                         UpdateAvailable = AppVersion.Compare(current, latest) < 0,
                         CurrentVersion = current,
                         LatestVersion = latest,
-                        ReleaseUrl = string.IsNullOrWhiteSpace(latestUrl) ? ReleasesPage : latestUrl
+                        ReleaseUrl = string.IsNullOrWhiteSpace(latestUrl) ? ReleasesPage : latestUrl,
                     };
                 }
             }
@@ -166,7 +166,7 @@ public sealed class UpdateCheckService
                 Debug.WriteLine($"[UpdateCheckService] Check failed: {ex.Message}");
                 result = new UpdateCheckResult
                 {
-                    Checked = true, Faulted = true, CurrentVersion = current, Error = ex.Message
+                    Checked = true, Faulted = true, CurrentVersion = current, Error = ex.Message,
                 };
             }
 
@@ -174,14 +174,26 @@ public sealed class UpdateCheckService
             // the rate-limit clock or wipe the cached latest version.
             if (!result.Faulted)
             {
-                _prefs.Save(
-                    _prefs.Current with
-                    {
-                        LastUpdateCheckUtc = DateTime.UtcNow,
-                        LastKnownLatestVersion = result.LatestVersion,
-                        LastKnownLatestUrl = result.ReleaseUrl
-                    }
-                );
+                try
+                {
+                    _prefs.Update(
+                        preferences =>
+                            preferences with
+                            {
+                                LastUpdateCheckUtc = DateTime.UtcNow,
+                                LastKnownLatestVersion = result.LatestVersion,
+                                LastKnownLatestUrl = result.ReleaseUrl,
+                            }
+                    );
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // A successful check still publishes its result; only the rate-limit
+                    // bookkeeping is lost when preferences can't be written.
+                    Trace.WriteLine(
+                        $"[UpdateCheck] Could not persist the check timestamp: {ex.Message}"
+                    );
+                }
             }
 
             Publish(result);
@@ -201,7 +213,16 @@ public sealed class UpdateCheckService
             return;
         }
 
-        _prefs.Save(_prefs.Current with { DismissedUpdateVersion = version });
+        try
+        {
+            _prefs.Update(current => current with { DismissedUpdateVersion = version });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Dismissal is a UI command; a write failure must not tear down the banner path.
+            Trace.WriteLine($"[UpdateCheck] Could not persist the dismissal: {ex.Message}");
+            return;
+        }
 
         // Re-raise so banner listeners recompute visibility.
         ResultChanged?.Invoke(LastResult);

@@ -14,6 +14,16 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// </summary>
 public sealed class HyprlandActiveWindowProvider : IActiveWindowProvider
 {
+    private readonly ProviderProcessRunner _processRunner;
+
+    public HyprlandActiveWindowProvider()
+        : this(new ProcessRunner()) { }
+
+    public HyprlandActiveWindowProvider(IProcessRunner processRunner)
+    {
+        _processRunner = new ProviderProcessRunner(processRunner);
+    }
+
     public string Name => "hyprland";
 
     public bool IsApplicable()
@@ -26,8 +36,8 @@ public sealed class HyprlandActiveWindowProvider : IActiveWindowProvider
     {
         try
         {
-            var (exit, output) = await ProviderProcessRunner
-                .RunAsync("hyprctl", "activewindow -j", ct)
+            var (exit, output) = await _processRunner
+                .RunAsync("hyprctl", ["activewindow", "-j"], ct)
                 .ConfigureAwait(false);
             if (exit != 0 || string.IsNullOrWhiteSpace(output))
             {

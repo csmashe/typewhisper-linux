@@ -35,7 +35,7 @@ public partial class AboutSection : UserControl
                     Title = Loc.Instance["Dialog.ExportDiagnostics"],
                     SuggestedFileName = "typewhisper-diagnostics.json",
                     DefaultExtension = "json",
-                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }]
+                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }],
                 }
             );
 
@@ -48,6 +48,44 @@ public partial class AboutSection : UserControl
         catch (Exception ex)
         {
             await ShowMessage("Export diagnostics failed", ex.Message);
+        }
+    }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnExportSupportReport(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AboutSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.StorageProvider is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+                new FilePickerSaveOptions
+                {
+                    Title = Loc.Instance["Dialog.ExportSupportReport"],
+                    SuggestedFileName = $"typewhisper-support-report-{DateTime.Now:yyyyMMdd-HHmmss}.json",
+                    DefaultExtension = "json",
+                    FileTypeChoices = [new FilePickerFileType("JSON") { Patterns = ["*.json"] }],
+                }
+            );
+
+            var path = file?.TryGetLocalPath();
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                await viewModel.ExportSupportReportAsync(path);
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowMessage("Export support report failed", ex.Message);
         }
     }
 
@@ -75,7 +113,7 @@ public partial class AboutSection : UserControl
                         $"typewhisper-settings-backup-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
                     DefaultExtension = "zip",
                     FileTypeChoices =
-                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
                 }
             );
 
@@ -119,7 +157,7 @@ public partial class AboutSection : UserControl
                     Title = Loc.Instance["Dialog.RestoreSettings"],
                     AllowMultiple = false,
                     FileTypeFilter =
-                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }]
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
                 }
             );
 
@@ -131,13 +169,97 @@ public partial class AboutSection : UserControl
 
             var result = await viewModel.RestoreSettingsBackupAsync(path);
             await ShowMessage(
-                "Settings restored",
-                $"Restored {result.FileCount} file(s). Some restored settings may require an app restart."
+                "Settings restore staged",
+                $"Validated and staged {result.FileCount} file(s). Quit and reopen TypeWhisper to apply the restore."
             );
         }
         catch (Exception ex)
         {
             await ShowMessage("Settings restore failed", ex.Message);
+        }
+    }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnExportAllData(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AboutSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.StorageProvider is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+                new FilePickerSaveOptions
+                {
+                    Title = Loc.Instance["Dialog.ExportAllData"],
+                    SuggestedFileName = $"typewhisper-data-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+                    DefaultExtension = "zip",
+                    FileTypeChoices =
+                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
+                }
+            );
+
+            var path = file?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            var result = await viewModel.ExportAllDataAsync(path);
+            var message = Loc.Instance.GetString("About.DataExported", result.FileCount);
+            if (!result.IncludesSettingsBackup)
+            {
+                message += "\n\n" + Loc.Instance["About.DataExportNoSettingsBackup"];
+            }
+
+            if (result.Skipped.Count > 0)
+            {
+                message += "\n\n" + Loc.Instance.GetString("About.DataExportSkipped", result.Skipped.Count);
+            }
+
+            await ShowMessage(Loc.Instance["About.AllData"], message);
+        }
+        catch (OperationCanceledException)
+        {
+            // The status line already says the export was canceled.
+        }
+        catch (Exception ex)
+        {
+            await ShowMessage(Loc.Instance["About.DataExportFailed"], ex.Message);
+        }
+    }
+
+    // ReSharper disable once AsyncVoidEventHandlerMethod -- Avalonia UI event handler; void return is mandated by the RoutedEventHandler/EventHandler delegate signature.
+    private async void OnDeleteAllData(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AboutSectionViewModel viewModel)
+        {
+            return;
+        }
+
+        try
+        {
+            var confirmed = await new MessageDialogWindow().ShowConfirmationAsync(
+                Loc.Instance["About.ResetConfirmTitle"],
+                Loc.Instance[viewModel.DeleteModelsOnReset ? "About.ResetConfirmWithModels" : "About.ResetConfirm"],
+                Loc.Instance["About.ResetConfirmButton"],
+                acknowledgement: Loc.Instance["About.ResetAcknowledge"]
+            );
+            if (confirmed)
+            {
+                await viewModel.ResetAllDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowMessage(Loc.Instance["About.ResetFailed"], ex.Message);
         }
     }
 

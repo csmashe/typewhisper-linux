@@ -1,8 +1,10 @@
 using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using SherpaOnnx;
 using TypeWhisper.Plugins.Shared.Cuda;
 using TypeWhisper.Plugins.Shared.Net;
@@ -11,14 +13,36 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.SherpaOnnx;
 
-public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEnginePlugin
+public sealed partial class SherpaOnnxPlugin
+    : ITranscriptionEnginePlugin,
+        ITranscriptionLanguageSelectionCapabilities
 {
+    // csukuangfj's sherpa-onnx exports, pinned to a commit (main on 2026-10-10) and each file to its
+    // size and SHA-256 (the LFS oids; tokens.txt, not in LFS, hashed from a download).
     private const string ParakeetRepo =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78";
     private const string CanaryRepo =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/main";
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/9077164e0d3dd1d5353743e89ceaa1d3a770838c";
 
-    private static readonly IReadOnlyList<string> CanarySupportedLanguages =
+    // Upstream TypeWhisper's export of moondream/parakeet-ultra (retrained parakeet-tdt-0.6b-v3)
+    // with the sherpa-onnx v3 script, mirrored unchanged; it shares the TDT tokenizer.
+    private const string ParakeetUltraRepo =
+        "https://github.com/csmashe/typewhisper-linux/releases/download/model-parakeet-ultra-int8-v1";
+
+    // The sherpa-onnx author's per-file upload of the official 0.6B release archive, pinned to a
+    // commit; each file's size and SHA-256 match that archive's contents.
+    private const string Qwen06BRepo =
+        "https://huggingface.co/csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/68818b2313fe77bd06f6a7c5068ff3ef59d02b8a";
+
+    // No official 1.7B build exists. This community export uses the 0.6B archive's converter;
+    // upstream TypeWhisper ships the same revision and file hashes.
+    private const string Qwen17BRepo =
+        "https://huggingface.co/thieunv-asilla/sherpa-onnx-qwen3-asr-1.7B-int8/resolve/69eb686fd94a4a865bb5340a3d6ac0d7f1fec0d5";
+
+    internal const string Qwen06BModelId = "qwen3-asr-0.6b";
+    internal const string Qwen17BModelId = "qwen3-asr-1.7b";
+
+    private static readonly IReadOnlyList<string> s_canarySupportedLanguages =
     [
         "en",
         "de",
@@ -26,21 +50,146 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         "es",
     ];
 
-    private static readonly IReadOnlyList<ModelDefinition> Models =
+    // Qwen3-ASR takes the language as its English name.
+    private static readonly Dictionary<string, string> s_qwenLanguageNames = new(StringComparer.Ordinal)
+    {
+        ["zh"] = "Chinese",
+        ["en"] = "English",
+        ["yue"] = "Cantonese",
+        ["ar"] = "Arabic",
+        ["de"] = "German",
+        ["fr"] = "French",
+        ["es"] = "Spanish",
+        ["pt"] = "Portuguese",
+        ["id"] = "Indonesian",
+        ["it"] = "Italian",
+        ["ko"] = "Korean",
+        ["ru"] = "Russian",
+        ["th"] = "Thai",
+        ["vi"] = "Vietnamese",
+        ["ja"] = "Japanese",
+        ["tr"] = "Turkish",
+        ["hi"] = "Hindi",
+        ["ms"] = "Malay",
+        ["nl"] = "Dutch",
+        ["sv"] = "Swedish",
+        ["da"] = "Danish",
+        ["fi"] = "Finnish",
+        ["pl"] = "Polish",
+        ["cs"] = "Czech",
+        ["fil"] = "Filipino",
+        ["fa"] = "Persian",
+        ["el"] = "Greek",
+        ["hu"] = "Hungarian",
+        ["mk"] = "Macedonian",
+        ["ro"] = "Romanian",
+    };
+
+    private static readonly IReadOnlyList<string> s_qwenSupportedLanguages = [.. s_qwenLanguageNames.Keys];
+
+    // Both Qwen exports share one file layout and tokenizer.
+    private static readonly string[] s_qwenFileNames =
     [
+        "conv_frontend.onnx",
+        "encoder.int8.onnx",
+        "decoder.int8.onnx",
+        "tokenizer/merges.txt",
+        "tokenizer/vocab.json",
+        "tokenizer/tokenizer_config.json",
+    ];
+
+    // Native-library parse diagnostics from org.k2fsa.sherpa.onnx 1.12.23. Match only
+    // these artifact-specific signatures; generic InvalidOperationException failures
+    // (CUDA/provider/runtime setup) must leave the downloaded model intact.
+    private static readonly string[] s_invalidModelLoadMessageFragments =
+    [
+        "INVALID_PROTOBUF",
+        "INVALID_GRAPH",
+        "Failed to load model because protobuf parsing failed",
+        "Protobuf parsing failed",
+        "ModelProto does not have a graph",
+        "model format error",
+        "Missing opset in the model",
+        "number of lines in tokens.txt",
+        "tokens.txt does not include the blank token",
+        "We expect that tokens.txt contains the symbol",
+        "Error when reading tokens",
+        "tokens.size()",
+        " != output_size:",
+    ];
+
+    private static readonly IReadOnlyList<ModelDefinition> s_models =
+    [
+        new(
+            "parakeet-ultra-0.6b",
+            "Parakeet Ultra 0.6B",
+            "~670 MB",
+            670,
+            25,
+            true,
+            false,
+            true,
+            [
+                new ModelFileDefinition(
+                    "encoder.int8.onnx",
+                    $"{ParakeetUltraRepo}/encoder.int8.onnx",
+                    652_282_332,
+                    "b42621d3c0f40fe0236a629fd6c3fad13575e5f9d22ed1a5addba14091931211"
+                ),
+                new ModelFileDefinition(
+                    "decoder.int8.onnx",
+                    $"{ParakeetUltraRepo}/decoder.int8.onnx",
+                    11_845_274,
+                    "1fab98fe6c12aded87d2da66272cc9e148d0a0044ce3850a12fe56302ec4a922"
+                ),
+                new ModelFileDefinition(
+                    "joiner.int8.onnx",
+                    $"{ParakeetUltraRepo}/joiner.int8.onnx",
+                    6_355_277,
+                    "8a71aaccfdba3d451775507a889afd2257d2e754463fd81095a8c8f290f924c2"
+                ),
+                new ModelFileDefinition(
+                    "tokens.txt",
+                    $"{ParakeetUltraRepo}/tokens.txt",
+                    93_939,
+                    "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"
+                ),
+            ]
+        ),
         new(
             "parakeet-tdt-0.6b",
             "Parakeet TDT 0.6B",
             "~670 MB",
             670,
             25,
-            true,
             false,
+            false,
+            true,
             [
-                new("encoder.int8.onnx", $"{ParakeetRepo}/encoder.int8.onnx", 652),
-                new("decoder.int8.onnx", $"{ParakeetRepo}/decoder.int8.onnx", 12),
-                new("joiner.int8.onnx", $"{ParakeetRepo}/joiner.int8.onnx", 6),
-                new("tokens.txt", $"{ParakeetRepo}/tokens.txt", 1),
+                new ModelFileDefinition(
+                    "encoder.int8.onnx",
+                    $"{ParakeetRepo}/encoder.int8.onnx",
+                    652_184_281,
+                    "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247"
+                ),
+                new ModelFileDefinition(
+                    "decoder.int8.onnx",
+                    $"{ParakeetRepo}/decoder.int8.onnx",
+                    11_845_275,
+                    "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e"
+                ),
+                new ModelFileDefinition(
+                    "joiner.int8.onnx",
+                    $"{ParakeetRepo}/joiner.int8.onnx",
+                    6_355_277,
+                    "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3"
+                ),
+                new ModelFileDefinition(
+                    "tokens.txt",
+                    $"{ParakeetRepo}/tokens.txt",
+                    93_939,
+                    "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"
+                ),
             ]
         ),
         new(
@@ -51,15 +200,78 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             4,
             false,
             true,
+            false,
             [
-                new("encoder.int8.onnx", $"{CanaryRepo}/encoder.int8.onnx", 127),
-                new("decoder.int8.onnx", $"{CanaryRepo}/decoder.int8.onnx", 71),
-                new("tokens.txt", $"{CanaryRepo}/tokens.txt", 1),
-            ]
+                new ModelFileDefinition(
+                    "encoder.int8.onnx",
+                    $"{CanaryRepo}/encoder.int8.onnx",
+                    132_678_643,
+                    "7a75b4e2a5857a6dcc0819503bbe3fad66943db4a3ccf21d3f27c633667d303f"
+                ),
+                new ModelFileDefinition(
+                    "decoder.int8.onnx",
+                    $"{CanaryRepo}/decoder.int8.onnx",
+                    74_437_848,
+                    "e41a2ab9c0c2fe81a1e8ade5a45fb02a74bc4db7d1f91b89a54a25e2cf79cba2"
+                ),
+                new ModelFileDefinition(
+                    "tokens.txt",
+                    $"{CanaryRepo}/tokens.txt",
+                    53_555,
+                    "2dae6fc7815f9640645e0c765522b278ee0cef49b482d91f6913e334628d3e77"
+                ),
+            ],
+            SherpaModelFamily.Canary
+        ),
+        new(
+            Qwen06BModelId,
+            "Qwen3-ASR 0.6B",
+            "~990 MB",
+            987,
+            s_qwenLanguageNames.Count,
+            false,
+            false,
+            false,
+            QwenFiles(
+                Qwen06BRepo,
+                (44_148_281, "d22dc4423e0940e49884e903d2ea2f7e5567c14fc1aed97e4e26d6b8f208ef9e"),
+                (182_491_662, "60748d3e6744a57c9c91e1b17424a6c2990567e8adceb0783940c03ed98fa9d9"),
+                (755_914_231, "4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771"),
+                (1_671_853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+                (2_776_833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+                (12_487, "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c")
+            ),
+            SherpaModelFamily.Qwen3Asr
+        ),
+        new(
+            Qwen17BModelId,
+            "Qwen3-ASR 1.7B",
+            "~2.4 GB",
+            2404,
+            s_qwenLanguageNames.Count,
+            false,
+            false,
+            false,
+            QwenFiles(
+                Qwen17BRepo,
+                (48_080_441, "3cb27a9fe94d95c938e476f2012b21aba2ec0bfceef33b0e58acd208946bafdd"),
+                (314_222_162, "a5deedae034ece715de8ed204378d8c77f889af3a60c2566581135e84cced7cd"),
+                (2_037_458_645, "c43c853fa6e97d08365cb8a5502b360b595cd43c00dc60e4d8ca7cc18cad460b"),
+                (1_671_853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+                (2_776_833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+                (12_487, "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c")
+            ),
+            SherpaModelFamily.Qwen3Asr,
+            // Detecting the language itself, it transcribed some windows of English speech
+            // as a single unrelated word ("instrument", "大量"); with the language given, none.
+            RequiresExplicitLanguage: true
         ),
     ];
 
-    private readonly object _sync = new();
+    private static ModelFileDefinition[] QwenFiles(string repo, params (long Size, string Sha256)[] pins) =>
+        [.. s_qwenFileNames.Zip(pins, (name, pin) => new ModelFileDefinition(name, $"{repo}/{name}", pin.Size, pin.Sha256))];
+
+    private readonly Lock _sync = new();
 
     // Drives the model-file downloads and the on-demand CUDA runtime fetches (the
     // ~224 MB sherpa tarball plus CUDA wheels up to ~685 MB). HttpClient.Timeout bounds
@@ -67,18 +279,21 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // large fetches mid-stream; use a generous 2 h ceiling and rely on the per-call token
     // for cancellation. ConnectTimeout bounds a socket that never establishes, and
     // ResilientDownloader's idle watchdog bounds a half-open socket mid-body to seconds.
-    private readonly HttpClient _httpClient =
+    private HttpClient _httpClient =
         new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(30) })
         {
-            Timeout = TimeSpan.FromHours(2)
+            Timeout = TimeSpan.FromHours(2),
         };
+    private IReadOnlyList<ModelDefinition> _models = s_models;
     private IPluginHostServices? _host;
     private OfflineRecognizer? _recognizer;
+    private Func<string, string, OfflineRecognizer> _parakeetRecognizerFactory =
+        CreateParakeetRecognizer;
+    private Func<string, string, OfflineRecognizer> _qwenRecognizerFactory = CreateQwenRecognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _loadedModelId;
     private string? _loadedModelDir;
-    private string? _selectedModelId;
     private string _computeBackend = "cpu";
 
     // The WIRED ORT native runtime, pinned to whichever loads first in the process
@@ -93,24 +308,33 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // Lets a first-load CUDA-recognizer failure pin "cuda" (the runtime is CUDA-capable)
     // rather than "cpu", so a later CPU↔CUDA recognizer swap doesn't read as restart-required.
     private bool _cudaOrtRuntimeWired;
-    private TranscriptionAccelerationPreference _accelerationPreference =
-        TranscriptionAccelerationPreference.Auto;
-    private TranscriptionAccelerationStatus _accelerationStatus =
-        new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     private string _canarySrcLang = "en";
     private string _canaryTgtLang = "en";
 
     public string PluginId => "com.typewhisper.sherpa-onnx";
     public string PluginName => "Local Models (sherpa-onnx)";
-    public string PluginVersion => "1.0.0";
+    public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "sherpa-onnx";
-    public string ProviderDisplayName => "Lokal (sherpa-onnx)";
+    public string ProviderDisplayName => "Local (sherpa-onnx)";
     public bool IsConfigured => true;
-    public string? SelectedModelId => _selectedModelId;
-    public bool SupportsTranslation => _selectedModelId == "canary-180m-flash";
+    public string? SelectedModelId { get; private set; }
+
+    public bool SupportsTranslation => SelectedModelId == "canary-180m-flash";
     public bool SupportsModelDownload => true;
+    public LanguageSelectionSupport AutomaticDetectionSupport =>
+        SelectedModelId == "canary-180m-flash" || SelectedModel?.RequiresExplicitLanguage == true
+            ? LanguageSelectionSupport.Unsupported
+            : LanguageSelectionSupport.Supported;
+    public LanguageSelectionSupport ExplicitSelectionSupport =>
+        SelectedModelId == "canary-180m-flash" || IsQwenSelected
+            ? LanguageSelectionSupport.Supported
+            : LanguageSelectionSupport.Unsupported;
+
+    private ModelDefinition? SelectedModel => _models.FirstOrDefault(m => m.Id == SelectedModelId);
+
+    private bool IsQwenSelected => SelectedModel?.Family == SherpaModelFamily.Qwen3Asr;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
@@ -127,39 +351,34 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _cudaProvisioner?.IsProfileSatisfied(CudaRuntimeProfile.OnnxRuntimeCuda) == true
         && _cudaRuntimeInstaller?.IsInstalled == true;
 
-    public TranscriptionAccelerationPreference AccelerationPreference => _accelerationPreference;
+    public TranscriptionAccelerationPreference AccelerationPreference { get; private set; } = TranscriptionAccelerationPreference.Auto;
 
-    public TranscriptionAccelerationStatus AccelerationStatus => _accelerationStatus;
+    public TranscriptionAccelerationStatus AccelerationStatus { get; private set; } = new(TranscriptionAccelerationBackend.Cpu, "Using CPU");
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-        Models
+        s_models
             .Select(m => new PluginModelInfo(m.Id, m.DisplayName)
             {
                 SizeDescription = m.SizeDescription,
                 EstimatedSizeMB = m.EstimatedSizeMB,
                 IsRecommended = m.IsRecommended,
                 LanguageCount = m.LanguageCount,
+                // The host then refuses a translate task before loading the model.
+                SupportsTranslation = m.Family == SherpaModelFamily.Qwen3Asr ? false : null,
             })
             .ToList();
 
     public IReadOnlyList<string> SupportedLanguages =>
-        _selectedModelId == "canary-180m-flash" ? CanarySupportedLanguages : [];
+        SelectedModelId == "canary-180m-flash" ? s_canarySupportedLanguages
+        : IsQwenSelected ? s_qwenSupportedLanguages
+        : [];
 
     public Task ActivateAsync(IPluginHostServices host)
     {
         _host = host;
 
         // Lazily provisioned on demand; the ?? lets tests inject fakes before activate.
-        _cudaRuntimeInstaller ??= new SherpaCudaRuntimeInstaller(
-            host.PluginAssetDirectory,
-            _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
-        );
-        _cudaProvisioner ??= new CudaRuntimeProvisioner(
-            CudaRuntimeProvisioner.DefaultCacheRoot(),
-            _httpClient,
-            msg => host.Log(PluginLogLevel.Info, msg)
-        );
+        InitializeCudaDependencies(host);
 
         // Register the import resolver now; until CUDA is configured it defers to
         // the default loader, which picks up the CPU runtime from the managed nuget.
@@ -167,6 +386,28 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
         MigrateModelFiles();
         return Task.CompletedTask;
+    }
+
+    private void InitializeCudaDependencies(IPluginHostServices host)
+    {
+        _cudaRuntimeInstaller ??= new SherpaCudaRuntimeInstaller(
+            host.PluginAssetDirectory,
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
+        _cudaProvisioner ??= new CudaRuntimeProvisioner(
+            CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
+                host.PluginAssetDirectory
+            ),
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg),
+            // Resolved per call, not captured: the provisioner outlives a disable/re-enable
+            // cycle, and the first activation's process scope is retired by then.
+            () => _host?.Processes
+                  ?? throw new NotSupportedException(
+                      "The plugin host does not provide process supervision."
+                  )
+        );
     }
 
     public Task DeactivateAsync()
@@ -178,7 +419,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     public void SelectModel(string modelId)
     {
         _ = GetModelDefinition(modelId);
-        _selectedModelId = modelId;
+        SelectedModelId = modelId;
     }
 
     public Task ConfigureComputeBackendAsync(string backend)
@@ -218,7 +459,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
     public void SetAccelerationPreference(TranscriptionAccelerationPreference preference)
     {
-        _accelerationPreference = preference;
+        AccelerationPreference = preference;
 
         var desired = preference == TranscriptionAccelerationPreference.NvidiaCuda ? "cuda" : "cpu";
 
@@ -229,11 +470,15 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         // otherwise overwrite it). The CUDA runtime is provisioned lazily on the
         // next LoadModelAsync.
         _ = ConfigureComputeBackendAsync(desired);
-        _accelerationStatus = _loadedNativeProvider is null
+        AccelerationStatus = _loadedNativeProvider is null
             ? CreatePendingAccelerationStatus(preference)
             // Pass the EFFECTIVE provider (_computeBackend) for the "active backend"; the
             // restart flag is derived from the wired runtime inside the helper.
-            : CreateLoadedAccelerationStatus(_computeBackend, preference);
+            : CreateLoadedStatusForModel(
+                _models.FirstOrDefault(model => model.Id == _loadedModelId),
+                _computeBackend,
+                preference
+            );
     }
 
     public bool IsModelDownloaded(string modelId)
@@ -253,8 +498,8 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             if (_loadedModelId == modelId)
                 UnloadRecognizerUnsafe();
 
-            if (_selectedModelId == modelId)
-                _selectedModelId = null;
+            if (SelectedModelId == modelId)
+                SelectedModelId = null;
         }
 
         if (Directory.Exists(dir))
@@ -273,55 +518,133 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var dir = GetModelDirectory(modelId);
         Directory.CreateDirectory(dir);
 
-        var totalBytes = model.Files.Sum(f => (long)f.EstimatedSizeMB * 1024 * 1024);
+        // Another app or CLI process would append to the same resumable partials.
+        await using var lease = await InterProcessFileLock
+            .AcquireAsync(Path.Join(Path.GetDirectoryName(dir), $".{modelId}.download.lock"), ct)
+            .ConfigureAwait(false);
+        RemoveAbandonedUniquePartials(model, dir);
+
+        var totalBytes = model.Files.Sum(f => f.SizeBytes);
         long cumulativeBytesRead = 0;
         // Single throttle across all files (MinValue so the first report always fires).
         var lastReport = DateTime.MinValue;
 
-        foreach (var file in model.Files)
+        // Checked before any request; each file re-checks its declared remainder.
+        var spaceDescription = $"the {model.DisplayName} model";
+        var missingBytes = model.Files
+            .Where(f => !File.Exists(Path.Join(dir, f.FileName)))
+            .Sum(f => RemainingBytes(f, Path.Join(dir, f.FileName)));
+        DownloadSpace.EnsureAvailable(dir, missingBytes, spaceDescription, SpaceProbe);
+
+        try
         {
-            var filePath = Path.Join(dir, file.FileName);
-            if (File.Exists(filePath))
+            foreach (var file in model.Files)
             {
-                // Credit an already-downloaded file's size so a resumed multi-file
-                // download starts the bar where it really is instead of at 0.
-                cumulativeBytesRead += new FileInfo(filePath).Length;
-                continue;
-            }
-
-            // Model files have no published checksum, so resume can't be made safe.
-            // allowResume:false still gives the idle/connect watchdog (a stall aborts and
-            // restarts clean instead of hanging) but each file re-downloads from zero.
-            long fileOnDisk = 0;
-            await ResilientDownloader.DownloadToFileAsync(
-                _httpClient,
-                file.DownloadUrl,
-                filePath,
-                approxTotalBytes: null,
-                idleTimeout: TimeSpan.FromSeconds(60),
-                allowResume: false,
-                onBytesOnDisk: onDisk =>
+                var filePath = Path.Join(dir, file.FileName);
+                if (File.Exists(filePath))
                 {
-                    fileOnDisk = onDisk;
-                    var now = DateTime.UtcNow;
-                    if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
-                    {
-                        // Clamp: real on-disk sizes sum against an estimated total, so a
-                        // slight overshoot past 1.0 is possible.
-                        progress?.Report(
-                            Math.Min(1.0, (double)(cumulativeBytesRead + onDisk) / totalBytes)
-                        );
-                        lastReport = now;
-                    }
-                },
-                verifyComplete: null,
-                ct
-            );
+                    // Kept whichever version downloaded it; the load still checks its structure.
+                    cumulativeBytesRead += new FileInfo(filePath).Length;
+                    continue;
+                }
 
-            cumulativeBytesRead += fileOnDisk;
+                missingBytes -= RemainingBytes(file, filePath);
+                // Qwen keeps its tokenizer in a subdirectory.
+                Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+
+                long fileOnDisk = 0;
+                await ResilientDownloader.DownloadToFileAsync(
+                    _httpClient,
+                    file.DownloadUrl,
+                    filePath,
+                    approxTotalBytes: file.SizeBytes,
+                    idleTimeout: TimeSpan.FromSeconds(60),
+                    allowResume: true,
+                    onBytesOnDisk: onDisk =>
+                    {
+                        fileOnDisk = onDisk;
+                        var now = DateTime.UtcNow;
+                        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+                        if ((now - lastReport).TotalMilliseconds > 250 && totalBytes > 0)
+                        {
+                            progress?.Report(
+                                Math.Min(1.0, (double)(cumulativeBytesRead + onDisk) / totalBytes)
+                            );
+                            lastReport = now;
+                        }
+                    },
+                    verifyComplete: path =>
+                    {
+                        VerifyPinnedFile(path, file);
+                        VerifyModelArtifact(path, file.FileName, model.RequiresBlankToken);
+                    },
+                    ct,
+                    // Leave room for the files after this one as well.
+                    new DownloadSpaceRequirement(spaceDescription, missingBytes, SpaceProbe)
+                );
+
+                cumulativeBytesRead += fileOnDisk;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // A dropped connection keeps its partials to resume; a user who cancels gets the
+            // space back, since the app offers no delete until a model is complete.
+            foreach (var file in model.Files)
+                TryDeleteFile(Path.Join(dir, file.FileName) + ".partial");
+            throw;
         }
 
         progress?.Report(1.0);
+    }
+
+    private static long RemainingBytes(ModelFileDefinition file, string filePath)
+    {
+        var partial = new FileInfo(filePath + ".partial");
+        return Math.Max(0, file.SizeBytes - (partial.Exists ? partial.Length : 0));
+    }
+
+    // Before downloads were pinned they could not resume, so each attempt staged into
+    // <file>.<guid>.partial; an interrupted one stays behind forever.
+    private static void RemoveAbandonedUniquePartials(ModelDefinition model, string dir)
+    {
+        foreach (var file in model.Files)
+        {
+            var fileDir = Path.GetDirectoryName(Path.Join(dir, file.FileName))!;
+            if (!Directory.Exists(fileDir))
+                continue;
+            var name = Path.GetFileName(file.FileName);
+            foreach (var path in Directory.EnumerateFiles(fileDir, name + ".*.partial"))
+            {
+                var guid = Path.GetFileName(path)[(name.Length + 1)..^".partial".Length];
+                if (Guid.TryParseExact(guid, "N", out _))
+                    TryDeleteFile(path);
+            }
+        }
+    }
+
+    // A file that cannot be deleted now is retried on the next download.
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static void VerifyPinnedFile(string path, ModelFileDefinition file)
+    {
+        using var stream = File.OpenRead(path);
+        if (stream.Length != file.SizeBytes)
+            throw new InvalidDataException(
+                $"The downloaded {file.FileName} is {stream.Length} bytes; expected {file.SizeBytes}."
+            );
+        var actual = Convert.ToHexStringLower(SHA256.HashData(stream));
+        if (!string.Equals(actual, file.Sha256, StringComparison.Ordinal))
+            throw new InvalidDataException(
+                $"The downloaded {file.FileName} does not match its pinned SHA-256."
+            );
     }
 
     public Task LoadModelAsync(string modelId, CancellationToken ct) =>
@@ -354,6 +677,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             {
                 await EnsureCudaRuntimeReadyAsync(progress, ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _host?.Log(
@@ -370,80 +697,92 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             }
         }
 
-        await Task.Run(
-            () =>
-            {
-                lock (_sync)
+        try
+        {
+            await Task.Run(
+                () =>
                 {
-                    // Provisioning can take minutes; the backend may have been
-                    // switched out from under us in that window. Abort the stale
-                    // load rather than pinning the process to a runtime the user
-                    // no longer wants (and possibly after downloading it for nothing).
-                    if (!string.Equals(_computeBackend, desiredProvider, StringComparison.Ordinal))
-                        throw new InvalidOperationException(
-                            "Compute backend changed during model load; reload to apply the new backend."
-                        );
-
-                    UnloadRecognizerUnsafe();
-
-                    var activeProvider = desiredProvider;
-                    try
+                    lock (_sync)
                     {
-                        _recognizer = model.SupportsTranslation
-                            ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
-                            : CreateParakeetRecognizer(dir, activeProvider);
-                    }
-                    catch (Exception ex)
-                        when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
-                    {
-                        // Recreate with the CPU execution provider. The GPU ONNX
-                        // Runtime is already wired in by ConfigureCudaRuntime and runs
-                        // the CPU provider correctly, so this yields working CPU
-                        // transcription rather than failing the load outright.
-                        _host?.Log(
-                            PluginLogLevel.Warning,
-                            $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
+                        // Provisioning can take minutes; the backend may have been
+                        // switched out from under us in that window. Abort the stale
+                        // load rather than pinning the process to a runtime the user
+                        // no longer wants (and possibly after downloading it for nothing).
+                        if (!string.Equals(_computeBackend, desiredProvider, StringComparison.Ordinal))
+                            throw new InvalidOperationException(
+                                "Compute backend changed during model load; reload to apply the new backend."
+                            );
+
+                        // Revalidate cached/pre-fix artifacts before the native loader
+                        // (guarantees below, at VerifyModelArtifact).
+                        UnloadRecognizerUnsafe();
+                        VerifyModelArtifacts(model, dir);
+
+                        // Qwen stays on the CPU even when CUDA is wired: on an RTX 3090 it ran no
+                        // faster there, and cuDNN has no kernel for its convolution on older cards.
+                        var activeProvider = model.Family == SherpaModelFamily.Qwen3Asr ? "cpu" : desiredProvider;
+                        try
+                        {
+                            _recognizer = CreateRecognizer(model, dir, activeProvider);
+                        }
+                        catch (Exception ex)
+                            when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
+                        {
+                            // Recreate with the CPU execution provider. The GPU ONNX
+                            // Runtime is already wired in by ConfigureCudaRuntime and runs
+                            // the CPU provider correctly, so this yields working CPU
+                            // transcription rather than failing the load outright.
+                            _host?.Log(
+                                PluginLogLevel.Warning,
+                                $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
+                            );
+                            cudaUnavailableDetail = ex.Message;
+                            activeProvider = "cpu";
+                            _computeBackend = "cpu";
+                            _recognizer = CreateRecognizer(model, dir, activeProvider);
+                        }
+
+                        // First successful load pins the native runtime for the process.
+                        // Record the WIRED runtime (CUDA-capable vs CPU-only), not the
+                        // recognizer's active provider: a CUDA-wired runtime whose recognizer
+                        // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
+                        // CPU↔CUDA swap needs no restart.
+                        _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
+
+                        _loadedModelId = modelId;
+                        _loadedModelDir = dir;
+                        SelectedModelId = modelId;
+                        _canarySrcLang = "en";
+                        _canaryTgtLang = "en";
+                        // Restart is required only if the wired runtime is CPU-only (a
+                        // provisioning failure). A CUDA-wired runtime whose recognizer fell back
+                        // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
+                        // restart (matches CreateLoadedAccelerationStatus / the swap logic).
+                        AccelerationStatus = cudaUnavailableDetail is null
+                            ? CreateLoadedStatusForModel(model, activeProvider, AccelerationPreference)
+                            : CreateCudaUnavailableStatus(
+                                cudaUnavailableDetail,
+                                requiresRestart: string.Equals(
+                                    _loadedNativeProvider,
+                                    "cpu",
+                                    StringComparison.Ordinal
+                                )
+                            );
+
+                        Debug.WriteLine(
+                            $"[SherpaOnnx] Model {modelId} loaded from {dir} ({activeProvider})"
                         );
-                        cudaUnavailableDetail = ex.Message;
-                        activeProvider = "cpu";
-                        _computeBackend = "cpu";
-                        _recognizer = model.SupportsTranslation
-                            ? CreateCanaryRecognizer(dir, "en", "en", activeProvider)
-                            : CreateParakeetRecognizer(dir, activeProvider);
                     }
-
-                    // First successful load pins the native runtime for the process.
-                    // Record the WIRED runtime (CUDA-capable vs CPU-only), not the
-                    // recognizer's active provider: a CUDA-wired runtime whose recognizer
-                    // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
-                    // CPU↔CUDA swap needs no restart.
-                    _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
-
-                    _loadedModelId = modelId;
-                    _loadedModelDir = dir;
-                    _selectedModelId = modelId;
-                    _canarySrcLang = "en";
-                    _canaryTgtLang = "en";
-                    // Restart is required only if the wired runtime is CPU-only (a
-                    // provisioning failure). A CUDA-wired runtime whose recognizer fell back
-                    // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
-                    // restart (matches CreateLoadedAccelerationStatus / the swap logic).
-                    _accelerationStatus = cudaUnavailableDetail is null
-                        ? CreateLoadedAccelerationStatus(activeProvider, _accelerationPreference)
-                        : CreateCudaUnavailableStatus(
-                            cudaUnavailableDetail,
-                            requiresRestart: string.Equals(
-                                _loadedNativeProvider, "cpu", StringComparison.Ordinal)
-                        );
-
-                    Debug.WriteLine(
-                        $"[SherpaOnnx] Model {modelId} loaded from {dir} ({activeProvider})"
-                    );
-                }
-            },
-            ct
-        )
-            .ConfigureAwait(false);
+                },
+                ct
+            )
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsArtifactInvalidLoadFailure(ex))
+        {
+            DeleteInvalidModelArtifacts(model, dir, ex);
+            throw;
+        }
     }
 
     public async Task EnsureCudaRuntimeReadyAsync(IProgress<double>? progress, CancellationToken ct)
@@ -595,6 +934,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             );
     }
 
+    // Idle/API unload. _sync makes it wait for an in-flight decode, so hop off the caller's
+    // thread like ConfigureComputeBackendAsync does.
+    public Task UnloadModelAsync() => Task.Run(UnloadRecognizer);
+
     public Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
         string? language,
@@ -606,8 +949,10 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return Task.Run(
             () =>
             {
+                ct.ThrowIfCancellationRequested();
                 var audioSamples = DecodeWav(wavAudio);
                 var audioDuration = audioSamples.Length / 16000.0;
+                ct.ThrowIfCancellationRequested();
 
                 lock (_sync)
                 {
@@ -618,30 +963,107 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
 
                     var model = GetModelDefinition(_loadedModelId);
 
+                    if (model.Family == SherpaModelFamily.Qwen3Asr)
+                        return translate
+                            ? throw new NotSupportedException("Qwen3-ASR transcribes speech; it cannot translate it.")
+                            : TranscribeQwen(model, _recognizer, audioSamples, language, ct);
+
                     if (model.SupportsTranslation)
                         EnsureCanaryLanguage(language, translate);
 
-                    using var stream = _recognizer.CreateStream();
-                    stream.AcceptWaveform(16000, audioSamples);
-                    _recognizer.Decode(stream);
+                    var coordinator = new SherpaDecodeCoordinator(
+                        chunk =>
+                        {
+                            using var stream = _recognizer.CreateStream();
+                            stream.AcceptWaveform(SherpaDecodeCoordinator.SampleRate, chunk);
+                            ct.ThrowIfCancellationRequested();
+                            _recognizer.Decode(stream);
+                            ct.ThrowIfCancellationRequested();
+                            var result = stream.Result;
+                            // result.Durations is garbage in this binding; see SherpaNativeDurations.
+                            return new SherpaDecodeChunk(
+                                result.Text,
+                                result.Tokens,
+                                result.Timestamps,
+                                SherpaNativeDurations.Read(stream, result.Timestamps)
+                            );
+                        },
+                        message => _host?.Log(PluginLogLevel.Warning, message)
+                    );
+                    var decoded = coordinator.Decode(
+                        audioSamples,
+                        model.SupportsTranslation,
+                        ct
+                    );
 
-                    var rawText = stream.Result.Text.Trim();
-
-                    var (text, detectedLanguage) = model.SupportsTranslation
-                        ? ParseCanaryResult(rawText)
-                        : (rawText, (string?)null);
-
+                    ct.ThrowIfCancellationRequested();
                     return new PluginTranscriptionResult(
-                        text,
-                        detectedLanguage,
+                        decoded.Text,
+                        decoded.DetectedLanguage,
                         audioDuration,
                         NoSpeechProbability: null
-                    );
+                    )
+                    {
+                        TokenTimings = decoded.TokenTimings,
+                    };
                 }
             },
             ct
         );
     }
+
+    // Called under _sync with the loaded Qwen recognizer.
+    private PluginTranscriptionResult TranscribeQwen(
+        ModelDefinition model,
+        OfflineRecognizer recognizer,
+        float[] audioSamples,
+        string? language,
+        CancellationToken ct
+    )
+    {
+        var languageName = QwenLanguageName(language);
+        if (languageName is null && model.RequiresExplicitLanguage)
+            throw new NotSupportedException($"{model.DisplayName} needs the spoken language to be set.");
+        var decoded = new SherpaDecodeCoordinator(
+            chunk =>
+            {
+                using var stream = recognizer.CreateStream();
+                if (languageName is not null)
+                    stream.SetOption("language", languageName);
+                stream.AcceptWaveform(SherpaDecodeCoordinator.SampleRate, chunk);
+                ct.ThrowIfCancellationRequested();
+                recognizer.Decode(stream);
+                ct.ThrowIfCancellationRequested();
+                return new SherpaDecodeChunk(StripQwenLanguageMarkers(stream.Result.Text));
+            },
+            message => _host?.Log(PluginLogLevel.Warning, message)
+        ).DecodeQwen(audioSamples, ct);
+
+        return new PluginTranscriptionResult(
+            decoded.Text,
+            null,
+            audioSamples.Length / (double)SherpaDecodeCoordinator.SampleRate,
+            NoSpeechProbability: null
+        );
+    }
+
+    // The host passes one of SupportedLanguages, or null for automatic detection.
+    internal static string? QwenLanguageName(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+            return null;
+        return s_qwenLanguageNames.TryGetValue(language.Trim().ToLowerInvariant(), out var name)
+            ? name
+            : throw new NotSupportedException($"Qwen3-ASR does not support the language '{language}'.");
+    }
+
+    // sherpa-onnx removes the "language X<asr_text>" prefix the 0.6B model writes, but the 1.7B
+    // export leaves it in some windows, sometimes mid-window.
+    internal static string StripQwenLanguageMarkers(string text) =>
+        QwenLanguageMarker().Replace(text, "").Trim();
+
+    [GeneratedRegex(@"(?:language\s+[A-Za-z]+(?:\s[A-Za-z]+)?\s*)?<asr_text>", RegexOptions.CultureInvariant)]
+    private static partial Regex QwenLanguageMarker();
 
     public void Dispose()
     {
@@ -666,9 +1088,11 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
     // unit-tested. effectiveProvider defaults to the wired runtime but can differ for a
     // CUDA-wired runtime running a CPU recognizer (the first-load CUDA-recognizer-failure
     // case): MarkNativeRuntimeLoadedForTests("cuda", effectiveProvider: "cpu").
+    // loadedModelId marks that model's recognizer as loaded.
     internal void MarkNativeRuntimeLoadedForTests(
         string wiredRuntime,
-        string? effectiveProvider = null
+        string? effectiveProvider = null,
+        string? loadedModelId = null
     )
     {
         var wired = string.Equals(wiredRuntime, "cuda", StringComparison.OrdinalIgnoreCase)
@@ -685,6 +1109,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
             _loadedNativeProvider = wired;
             _cudaOrtRuntimeWired = wired == "cuda";
             _computeBackend = effective;
+            _loadedModelId = loadedModelId;
         }
     }
 
@@ -700,8 +1125,96 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _cudaRuntimeInstaller = installer;
     }
 
-    private static ModelDefinition GetModelDefinition(string modelId) =>
-        Models.FirstOrDefault(m => m.Id == modelId)
+    // Test seam: exercise the same eager construction path as ActivateAsync without
+    // running the legacy model-file migration against a real per-user directory.
+    internal void InitializeCudaDependenciesForTests(IPluginHostServices host)
+    {
+        _host = host;
+        InitializeCudaDependencies(host);
+    }
+
+    // Test seam: free-space probe for model downloads (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; set; }
+
+    // ReSharper disable once ConvertToAutoPropertyWithPrivateSetter -- test seam over the lock-guarded field; the plugin keeps the field.
+    internal string? LoadedModelIdForTests => _loadedModelId;
+
+    internal string? CudaRuntimeCacheRootForTests =>
+        _cudaProvisioner is null
+            ? null
+            : Directory.GetParent(_cudaProvisioner.CacheDirectory)?.FullName;
+
+    // Test seam: inject a throwing recognizer factory so native-load-failure
+    // classification can be exercised without a real model, native runtime, or GPU.
+    internal void SetParakeetRecognizerFactoryForTests(
+        Func<string, string, OfflineRecognizer> factory
+    )
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        _parakeetRecognizerFactory = factory;
+    }
+
+    // Test seam: observe the provider a Qwen recognizer is created with, without a native runtime.
+    internal void SetQwenRecognizerFactoryForTests(Func<string, string, OfflineRecognizer> factory)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        _qwenRecognizerFactory = factory;
+    }
+
+    // Avoid ActivateAsync's one-shot migration probe in filesystem-isolated load tests.
+    internal void SetHostForTests(IPluginHostServices host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        _host = host;
+    }
+
+    // Test seam: run the structural preflight without the native loader, so per-model
+    // token/ONNX acceptance (e.g. Canary carries no blank token) is testable in isolation.
+    internal static void RunArtifactPreflightForTests(string modelId, string modelDir) =>
+        VerifyModelArtifacts(s_models.First(m => m.Id == modelId), modelDir);
+
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- a test-only view; the catalog stays a private field beside the other static data.
+    internal static IReadOnlyList<ModelDefinition> DefaultModelsForTests => s_models;
+
+    // Test seam: download a catalog whose hashes the test controls from a fake server.
+    internal void SetDownloadSourceForTests(
+        HttpMessageHandler handler,
+        IReadOnlyList<ModelDefinition> models
+    )
+    {
+        _httpClient.Dispose();
+        _httpClient = new HttpClient(handler);
+        _models = models;
+    }
+
+    internal string ComputeBackendForTests
+    {
+        get
+        {
+            lock (_sync)
+                return _computeBackend;
+        }
+    }
+
+    // Test seam: exercise the production lock boundary with a managed delegate, so
+    // cancellation and lock release need no native runtime.
+    internal SherpaDecodeResult RunDecodeTransactionForTests(
+        float[] audioSamples,
+        bool parseCanaryPayload,
+        SherpaDecodeDelegate decode,
+        CancellationToken ct
+    )
+    {
+        lock (_sync)
+            return new SherpaDecodeCoordinator(decode).Decode(
+                audioSamples,
+                parseCanaryPayload,
+                ct
+            );
+    }
+
+    private ModelDefinition GetModelDefinition(string modelId) =>
+        _models.FirstOrDefault(m => m.Id == modelId)
         ?? throw new ArgumentException($"Unknown model: {modelId}");
 
     private void UnloadRecognizer()
@@ -718,6 +1231,358 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _loadedModelDir = null;
         _canarySrcLang = "en";
         _canaryTgtLang = "en";
+    }
+
+    private static void VerifyModelArtifacts(ModelDefinition model, string modelDir)
+    {
+        foreach (var file in model.Files)
+            VerifyModelArtifact(
+                Path.Join(modelDir, file.FileName),
+                file.FileName,
+                model.RequiresBlankToken
+            );
+    }
+
+    // Artifact guarantees:
+    //   *.onnx     — non-empty, well-framed top-level protobuf with a positive ONNX
+    //                IR version and a non-empty GraphProto field. The graph's declared
+    //                byte range must fit inside the file, which detects clean-EOF
+    //                truncation without hashing or parsing hundreds of MB of tensors.
+    //   tokens.txt — non-empty, strict UTF-8 token/id rows with non-negative unique IDs;
+    //                transducer models (requireBlankToken) must also carry sherpa's blank
+    //                symbol, which attention encoder-decoder models (Canary) do not use.
+    // These are structural gates for files on disk; new downloads are also pinned by hash.
+    private static void VerifyModelArtifact(string path, string fileName, bool requireBlankToken)
+    {
+        if (fileName.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
+        {
+            VerifyOnnxProtobuf(path, fileName);
+            return;
+        }
+
+        if (string.Equals(fileName, "tokens.txt", StringComparison.OrdinalIgnoreCase))
+        {
+            VerifyTokensFile(path, fileName, requireBlankToken);
+            return;
+        }
+
+        if (string.Equals(fileName, "tokenizer/merges.txt", StringComparison.Ordinal))
+        {
+            VerifyMergesFile(path, fileName);
+            return;
+        }
+
+        // ReSharper disable once InvertIf -- matches the shape of the preceding per-artifact dispatch block.
+        if (fileName is "tokenizer/vocab.json" or "tokenizer/tokenizer_config.json")
+        {
+            VerifyJsonObjectFile(path, fileName);
+            return;
+        }
+
+        throw new InvalidDataException(
+            $"No structural verification is defined for model artifact '{fileName}'."
+        );
+    }
+
+    private static void VerifyOnnxProtobuf(string path, string fileName)
+    {
+        using var stream = File.OpenRead(path);
+        if (stream.Length == 0)
+            throw new InvalidDataException($"Model artifact '{fileName}' is empty.");
+
+        var hasPositiveIrVersion = false;
+        var hasNonEmptyGraph = false;
+
+        while (stream.Position < stream.Length)
+        {
+            var key = ReadProtobufVarint(stream, fileName);
+            var fieldNumber = key >> 3;
+            var wireType = key & 7;
+            if (fieldNumber == 0)
+                throw new InvalidDataException(
+                    $"Model artifact '{fileName}' has an invalid protobuf field number."
+                );
+
+            switch (wireType)
+            {
+                case 0:
+                {
+                    var value = ReadProtobufVarint(stream, fileName);
+                    if (fieldNumber == 1 && value > 0)
+                        hasPositiveIrVersion = true;
+                    break;
+                }
+                case 1:
+                    SkipProtobufBytes(stream, 8, fileName);
+                    break;
+                case 2:
+                {
+                    var length = ReadProtobufVarint(stream, fileName);
+                    if (fieldNumber == 7 && length > 0)
+                        hasNonEmptyGraph = true;
+                    SkipProtobufBytes(stream, length, fileName);
+                    break;
+                }
+                case 5:
+                    SkipProtobufBytes(stream, 4, fileName);
+                    break;
+                default:
+                    throw new InvalidDataException(
+                        $"Model artifact '{fileName}' uses an invalid top-level protobuf wire type."
+                    );
+            }
+        }
+
+        if (!hasPositiveIrVersion || !hasNonEmptyGraph)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' is not a structurally valid ONNX ModelProto."
+            );
+    }
+
+    private static ulong ReadProtobufVarint(Stream stream, string fileName)
+    {
+        ulong value = 0;
+        for (var i = 0; i < 10; i++)
+        {
+            var next = stream.ReadByte();
+            if (next < 0)
+                throw new InvalidDataException(
+                    $"Model artifact '{fileName}' ends inside a protobuf varint."
+                );
+
+            if (i == 9 && (next & 0xfe) != 0)
+                throw new InvalidDataException(
+                    $"Model artifact '{fileName}' contains an oversized protobuf varint."
+                );
+
+            value |= (ulong)(next & 0x7f) << (i * 7);
+            if ((next & 0x80) == 0)
+                return value;
+        }
+
+        throw new InvalidDataException(
+            $"Model artifact '{fileName}' contains an unterminated protobuf varint."
+        );
+    }
+
+    private static void SkipProtobufBytes(FileStream stream, ulong count, string fileName)
+    {
+        var remaining = stream.Length - stream.Position;
+        if (count > (ulong)remaining)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' ends before its declared protobuf field length."
+            );
+
+        stream.Position += (long)count;
+    }
+
+    private static void VerifyTokensFile(string path, string fileName, bool requireBlankToken)
+    {
+        if (new FileInfo(path).Length == 0)
+            throw new InvalidDataException($"Model artifact '{fileName}' is empty.");
+
+        var ids = new HashSet<int>();
+        var rowCount = 0;
+        var hasBlankSymbol = false;
+        try
+        {
+            using var reader = new StreamReader(
+                path,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
+                detectEncodingFromByteOrderMarks: true
+            );
+
+            while (reader.ReadLine() is { } line)
+            {
+                if (line.Contains('\0'))
+                    throw new InvalidDataException(
+                        $"Model artifact '{fileName}' contains a null character."
+                    );
+
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                var columns = line.Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries
+                );
+                if (
+                    columns.Length != 2
+                    || !int.TryParse(
+                        columns[^1],
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out var id
+                    )
+                    || id < 0
+                    || !ids.Add(id)
+                )
+                    throw new InvalidDataException(
+                        $"Model artifact '{fileName}' has an invalid token/id row."
+                    );
+
+                hasBlankSymbol |= columns[0] is "<blk>" or "<eps>" or "<blank>";
+                rowCount++;
+            }
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' is not valid UTF-8.",
+                ex
+            );
+        }
+
+        if (rowCount == 0)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' contains no token/id rows."
+            );
+
+        if (requireBlankToken && !hasBlankSymbol)
+            throw new InvalidDataException(
+                $"Model artifact '{fileName}' does not contain a required blank token."
+            );
+    }
+
+    // BPE merges: an optional "#version" header, then one "left right" pair per row.
+    private static void VerifyMergesFile(string path, string fileName)
+    {
+        var rows = 0;
+        try
+        {
+            using var reader = new StreamReader(
+                path,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+            );
+            while (reader.ReadLine() is { } line)
+            {
+                if (line.Length == 0 || (rows == 0 && line.StartsWith("#version", StringComparison.Ordinal)))
+                    continue;
+                if (line.Contains('\0') || line.Split(' ').Length != 2)
+                    throw new InvalidDataException($"Model artifact '{fileName}' has an invalid merge row.");
+                rows++;
+            }
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException($"Model artifact '{fileName}' is not valid UTF-8.", ex);
+        }
+
+        if (rows == 0)
+            throw new InvalidDataException($"Model artifact '{fileName}' contains no merge rows.");
+    }
+
+    // A truncated or damaged file no longer parses.
+    private static void VerifyJsonObjectFile(string path, string fileName)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var document = JsonDocument.Parse(stream);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.EnumerateObject().Any())
+                throw new InvalidDataException($"Model artifact '{fileName}' is not a non-empty JSON object.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"Model artifact '{fileName}' is not valid JSON.", ex);
+        }
+    }
+
+    private static bool IsArtifactInvalidLoadFailure(Exception exception)
+    {
+        // ReSharper disable once SuggestVarOrType_SimpleTypes -- var would infer non-nullable Exception, so assigning InnerException in the iterator would warn.
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- two independent type guards in a walk-the-chain loop; a switch would hide that both just return true.
+            if (current is InvalidDataException)
+                return true;
+
+            if (
+                current is InvalidOperationException
+                && s_invalidModelLoadMessageFragments.Any(
+                    fragment => current.Message.Contains(
+                        fragment,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+            )
+                return true;
+        }
+
+        return false;
+    }
+
+    private void DeleteInvalidModelArtifacts(
+        ModelDefinition model,
+        string modelDir,
+        Exception failure
+    )
+    {
+        var deleteFailures = new List<string>();
+        foreach (var file in model.Files)
+        {
+            var path = Path.Join(modelDir, file.FileName);
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                deleteFailures.Add($"{file.FileName}: {ex.Message}");
+            }
+        }
+
+        // Qwen's tokenizer subdirectory is left empty otherwise.
+        foreach (var subdirectory in model.Files.Select(f => Path.GetDirectoryName(f.FileName)).Distinct())
+        {
+            if (string.IsNullOrEmpty(subdirectory))
+                continue;
+            var path = Path.Join(modelDir, subdirectory);
+            try
+            {
+                if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+                    Directory.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+
+        _host?.Log(
+            PluginLogLevel.Warning,
+            $"sherpa-onnx rejected model '{model.Id}' as invalid ({failure.Message}); "
+                + "deleted its artifacts so it can be downloaded again."
+        );
+        if (deleteFailures.Count > 0)
+            _host?.Log(
+                PluginLogLevel.Warning,
+                "Some invalid model artifacts could not be deleted: "
+                    + string.Join("; ", deleteFailures)
+            );
+    }
+
+    private OfflineRecognizer CreateRecognizer(ModelDefinition model, string modelDir, string provider) =>
+        model.Family switch
+        {
+            SherpaModelFamily.Canary => CreateCanaryRecognizer(modelDir, "en", "en", provider),
+            SherpaModelFamily.Qwen3Asr => _qwenRecognizerFactory(modelDir, provider),
+            _ => _parakeetRecognizerFactory(modelDir, provider),
+        };
+
+    private static OfflineRecognizer CreateQwenRecognizer(string modelDir, string provider)
+    {
+        var config = new OfflineRecognizerConfig();
+        config.ModelConfig.Qwen3Asr.ConvFrontend = Path.Join(modelDir, "conv_frontend.onnx");
+        config.ModelConfig.Qwen3Asr.Encoder = Path.Join(modelDir, "encoder.int8.onnx");
+        config.ModelConfig.Qwen3Asr.Decoder = Path.Join(modelDir, "decoder.int8.onnx");
+        config.ModelConfig.Qwen3Asr.Tokenizer = Path.Join(modelDir, "tokenizer");
+        // Room for a full decode window's audio plus its text.
+        config.ModelConfig.Qwen3Asr.MaxTotalLen = 512;
+        config.ModelConfig.Qwen3Asr.MaxNewTokens = 256;
+        config.ModelConfig.Tokens = "";
+        config.ModelConfig.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
+        config.ModelConfig.Provider = provider;
+        config.ModelConfig.Debug = 0;
+        return new OfflineRecognizer(config);
     }
 
     private static OfflineRecognizer CreateParakeetRecognizer(string modelDir, string provider)
@@ -789,17 +1654,32 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         return new TranscriptionAccelerationStatus(active, displayText);
     }
 
+    private TranscriptionAccelerationStatus CreateLoadedStatusForModel(
+        ModelDefinition? model,
+        string effectiveProvider,
+        TranscriptionAccelerationPreference preference
+    ) =>
+        model?.Family == SherpaModelFamily.Qwen3Asr
+            ? new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "Using CPU",
+                "Qwen3-ASR always runs on the CPU; a graphics card does not make it faster.",
+                // The other models still need the restart to reach CUDA.
+                CreateLoadedAccelerationStatus("cpu", preference).RequiresRestart
+            )
+            : CreateLoadedAccelerationStatus(effectiveProvider, preference);
+
     private static TranscriptionAccelerationStatus CreatePendingAccelerationStatus(
         TranscriptionAccelerationPreference preference
     ) =>
         preference switch
         {
-            TranscriptionAccelerationPreference.NvidiaCuda => new(
+            TranscriptionAccelerationPreference.NvidiaCuda => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.NvidiaCuda,
                 "Preparing NVIDIA CUDA",
                 "The GPU runtime downloads on the next model load."
             ),
-            _ => new(
+            _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Preparing CPU",
                 "Will apply on next model load."
@@ -848,43 +1728,25 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         _canaryTgtLang = tgtLang;
     }
 
-    private static string NormalizeCanaryLanguage(string? language)
+    internal static string NormalizeCanaryLanguage(string? language)
     {
-        if (string.IsNullOrWhiteSpace(language) || language == "auto")
-            return "en";
-        var normalized = language.Trim().ToLowerInvariant();
-        return CanarySupportedLanguages.Contains(normalized) ? normalized : "en";
-    }
-
-    private static (string Text, string? DetectedLanguage) ParseCanaryResult(string rawText)
-    {
-        if (string.IsNullOrWhiteSpace(rawText))
-            return (string.Empty, null);
-
-        try
+        var normalized = language?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
         {
-            using var json = JsonDocument.Parse(rawText);
-            if (json.RootElement.ValueKind != JsonValueKind.Object)
-                return (rawText.Trim(), null);
-
-            var text = rawText.Trim();
-            if (json.RootElement.TryGetProperty("text", out var textNode))
-                text = textNode.GetString()?.Trim() ?? string.Empty;
-
-            string? lang = null;
-            if (json.RootElement.TryGetProperty("lang", out var langNode))
-            {
-                var parsed = langNode.GetString();
-                if (!string.IsNullOrWhiteSpace(parsed))
-                    lang = parsed;
-            }
-
-            return (text, lang);
+            throw new NotSupportedException(
+                "Sherpa ONNX Canary requires an explicit source language from the supported set: en, de, fr, es."
+            );
         }
-        catch (JsonException)
+
+        normalized = normalized.ToLowerInvariant();
+        if (!s_canarySupportedLanguages.Contains(normalized))
         {
-            return (rawText.Trim(), null);
+            throw new NotSupportedException(
+                "Sherpa ONNX Canary requires an explicit source language from the supported set: en, de, fr, es."
+            );
         }
+
+        return normalized;
     }
 
     private static float[] DecodeWav(byte[] wavData)
@@ -895,14 +1757,21 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         var pos = 12; // skip the leading RIFF/WAVE header
         while (pos + 8 < wavData.Length)
         {
-            var chunkId = System.Text.Encoding.ASCII.GetString(wavData, pos, 4);
+            var chunkId = Encoding.ASCII.GetString(wavData, pos, 4);
             var chunkSize = BitConverter.ToInt32(wavData, pos + 4);
 
             // chunkSize comes from untrusted WAV bytes — reject anything
             // negative or larger than the remaining buffer before we use it
-            // for allocation or indexing.
-            if (chunkSize < 0 || chunkSize > wavData.Length - (pos + 8))
-                throw new ArgumentException("Invalid WAV data: chunk size out of range");
+            // for allocation or indexing. Except the data chunk: streaming
+            // writers (ffmpeg on pipe:1, as AudioFileService uses it) cannot
+            // seek back and leave -1 there, meaning "to end of stream".
+            var remaining = wavData.Length - (pos + 8);
+            if (chunkSize < 0 || chunkSize > remaining)
+            {
+                if (chunkId != "data")
+                    throw new ArgumentException("Invalid WAV data: chunk size out of range");
+                chunkSize = remaining;
+            }
 
             if (chunkId == "data")
             {
@@ -949,7 +1818,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         if (!Directory.Exists(oldModelsDir))
             return;
 
-        foreach (var model in Models)
+        foreach (var model in _models)
         {
             var oldDir = Path.Join(oldModelsDir, model.Id);
             if (!Directory.Exists(oldDir))
@@ -969,6 +1838,7 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
                 var oldPath = Path.Join(oldDir, file.FileName);
                 var newPath = Path.Join(newDir, file.FileName);
 
+                // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (File.Exists(oldPath) && !File.Exists(newPath))
                 {
                     try
@@ -997,20 +1867,37 @@ public sealed class SherpaOnnxPlugin : ITypeWhisperPlugin, ITranscriptionEngineP
         }
     }
 
-    private sealed record ModelDefinition(
+    internal sealed record ModelDefinition(
         string Id,
         string DisplayName,
         string SizeDescription,
+        // ReSharper disable once InconsistentNaming -- MB (megabyte) is the correct unit; the suggested Mb means megabit.
         int EstimatedSizeMB,
         int LanguageCount,
         bool IsRecommended,
         bool SupportsTranslation,
-        IReadOnlyList<ModelFileDefinition> Files
+        // Transducer/CTC models (Parakeet) carry a blank token in tokens.txt and sherpa's
+        // native reader requires it; attention encoder-decoder models (Canary) do not, so
+        // the token verifier must only demand a blank symbol when this is set.
+        bool RequiresBlankToken,
+        IReadOnlyList<ModelFileDefinition> Files,
+        SherpaModelFamily Family = SherpaModelFamily.Transducer,
+        // Automatic detection is unreliable for this model, so the host asks for a language.
+        bool RequiresExplicitLanguage = false
     );
 
-    private sealed record ModelFileDefinition(
+    internal enum SherpaModelFamily
+    {
+        Transducer,
+        Canary,
+        Qwen3Asr,
+    }
+
+    // A file is published only when it has exactly this size and SHA-256 (lowercase hex).
+    internal sealed record ModelFileDefinition(
         string FileName,
         string DownloadUrl,
-        int EstimatedSizeMB
+        long SizeBytes,
+        string Sha256
     );
 }

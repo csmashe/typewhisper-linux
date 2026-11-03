@@ -1,0 +1,26 @@
+{
+  "language": "es",
+  "rules": [
+    {"phrase": "nuevo párrafo", "replacement": "\n\n", "category": "Structural"},
+    {"phrase": "nueva línea", "replacement": "\n", "category": "Structural"},
+    {"phrase": "tabulador", "replacement": "\t", "category": "Structural"},
+    {"phrase": "signo de interrogación", "replacement": "?", "category": "Punctuation"},
+    {"phrase": "signo de exclamación", "replacement": "!", "category": "Punctuation"},
+    {"phrase": "dos puntos", "replacement": ":", "category": "Punctuation"},
+    {"phrase": "punto y coma", "replacement": ";", "category": "Punctuation"},
+    {"phrase": "abrir paréntesis", "replacement": "(", "category": "Brackets"},
+    {"phrase": "cerrar paréntesis", "replacement": ")", "category": "Brackets"},
+    {"phrase": "abrir comillas", "replacement": "«", "category": "Quotes"},
+    {"phrase": "cerrar comillas", "replacement": "»", "category": "Quotes"},
+    {"phrase": "coma", "replacement": ",", "category": "Punctuation"},
+    {"phrase": "punto", "replacement": ".", "category": "Punctuation"}
+  ],
+  "verificationScenarios": [
+    {"spoken": "hola coma mundo", "expected": "hola, mundo"},
+    {"spoken": "cómo estás signo de interrogación", "expected": "cómo estás?"},
+    {"spoken": "hola nueva línea mundo", "expected": "hola\nmundo"},
+    {"spoken": "primer párrafo nuevo párrafo segundo párrafo", "expected": "primer párrafo\n\nsegundo párrafo"},
+    {"spoken": "nombre tabulador valor", "expected": "nombre\tvalor"},
+    {"spoken": "ella dijo abrir comillas hola cerrar comillas", "expected": "ella dijo «hola»"}
+  ]
+}

@@ -14,6 +14,18 @@
   "Settings.ApiKeyValidWithModels": "API-Schlüssel gültig. {0} eigene(s) Modell(e) geladen.",
   "Settings.ApiKeyValidShort": "API-Schlüssel gültig.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
+  "Settings.InvalidApiKeyCharacters": "Der API-Schlüssel enthält einen Zeilenumbruch oder ein anderes Steuerzeichen.",
+  "Settings.InvalidBaseUrl": "Gib eine absolute http://- oder https://-Basis-URL ohne Zugangsdaten, Query oder Fragment ein.",
+  "Settings.InvalidAuthHeader": "Gib einen gültigen HTTP-Headernamen als eigenen Auth-Header ein.",
+  "Settings.ServerUnreachable": "Der Reson8-Server ist nicht erreichbar. Prüfe die Verbindung und die Basis-URL.",
+  "Settings.ServerRedirected": "Der Reson8-Server hat die Anfrage umgeleitet. Gib die endgültige Adresse als Basis-URL ein.",
+  "Settings.CustomModelsRefreshFailed": "API-Schlüssel gültig, aber die eigenen Modelle konnten nicht aktualisiert werden ({0}). Die bisher geladenen Modelle bleiben erhalten.",
+  "Settings.RefreshReasonStatus": "HTTP {0}",
+  "Settings.RefreshReasonUnreachable": "Server nicht erreichbar",
+  "Settings.RefreshReasonInvalid": "ungültige Antwort",
+  "Settings.SettingsChangedDuringValidation": "Die Einstellungen wurden während der Prüfung geändert. Bitte erneut prüfen.",
+  "Settings.SelectedModelUnavailable": "Das ausgewählte eigene Reson8-Modell ist für diesen API-Schlüssel und Server nicht geladen. Prüfe die Einstellungen, um die eigenen Modelle zu aktualisieren, oder wähle das Standardmodell.",
+  "Settings.UnavailableModelOption": "{0} (nicht verfügbar)",
   "Manifest.Name": "Reson8",
   "Manifest.Description": "Cloud-Transkription über die Reson8-Sprache-zu-Text-API mit Echtzeit-WebSocket-Streaming. Erfordert API-Schlüssel."
 }

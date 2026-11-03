@@ -1,9 +1,10 @@
 namespace TypeWhisper.Linux.Services;
 
 /// <summary>
-///     Immutable snapshot of the dictation overlay's visual state. Published via
-///     <c>OverlayStateChanged</c> and consumed by the overlay window and tray tooltip.
-///     Business logic stays in the orchestrator; only UI-relevant fields belong here.
+///     Immutable snapshot of the overlay's visual state. Producers publish through
+///     <see cref="OverlayCoordinator"/>, which arbitrates and feeds the overlay window
+///     and desktop notifications. Business logic stays in the producers; only
+///     UI-relevant fields belong here.
 /// </summary>
 public sealed record DictationOverlayState
 {
@@ -23,6 +24,9 @@ public sealed record DictationOverlayState
     public string? LlmResponseText { get; init; }
 
     public string? FeedbackText { get; init; }
+    public string? ActionResultUrl { get; init; }
+    public string? NotificationIconName { get; init; }
+    public int? FeedbackDurationMilliseconds { get; init; }
     public string? ActiveProfileName { get; init; }
     public string? ActiveAppName { get; init; }
     public DateTime? SessionStartedAtUtc { get; init; }

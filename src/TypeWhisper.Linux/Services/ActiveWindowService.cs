@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.ActiveWindow;
+using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
 
@@ -24,64 +26,54 @@ public sealed class ActiveWindowService : IActiveWindowService
     private const string SelfAtSpiAppName = "TypeWhisper";
     private static readonly TimeSpan s_providerSyncBudget = TimeSpan.FromMilliseconds(150);
 
-    private static readonly bool s_isXdotoolAvailable = CheckXdotoolAvailable();
-    private static readonly bool s_isXclipAvailable = CheckCommandAvailable("xclip", "-version");
-
-    private static readonly HashSet<string> s_browserProcessNames = new(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        "chrome",
-        "msedge",
-        "brave",
-        "opera",
-        "vivaldi",
-        "chromium",
-        "firefox",
-        "waterfox",
-        "zen",
-        "zen-browser",
-        "zen-bin"
-    };
-
-    private static readonly string[] s_browserAppNameHints =
-    [
-        "google chrome",
-        "chrome",
-        "microsoft edge",
-        "edge",
-        "brave",
-        "opera",
-        "vivaldi",
-        "chromium",
-        "firefox",
-        "waterfox",
-        "zen browser",
-        "zen"
-    ];
-
     private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
+    private readonly bool _isXclipAvailable;
+    private readonly bool _isXdotoolAvailable;
+    private readonly IProcessRunner _processRunner;
 
     private readonly IReadOnlyList<IActiveWindowProvider> _providers;
 
     public ActiveWindowService(
         IEnumerable<IActiveWindowProvider> providers,
-        AtSpiUrlExtractor atSpiUrlExtractor
+        AtSpiUrlExtractor atSpiUrlExtractor,
+        IProcessRunner? processRunner = null
     )
     {
         _providers = providers.ToList();
         _atSpiUrlExtractor = atSpiUrlExtractor;
+        _processRunner = processRunner ?? new ProcessRunner();
+        _isXdotoolAvailable = CheckXdotoolAvailable();
+        _isXclipAvailable = CheckCommandAvailable("xclip", ["-version"]);
     }
 
     public string? GetActiveWindowProcessName()
     {
         var snapshot = GetActiveWindowSnapshotSync();
-        if (snapshot?.ProcessName is { Length: > 0 } name)
+        if (snapshot?.ProcessName is not { Length: > 0 } name)
+        {
+            return BrowserDescriptorCatalog
+                .ResolveSnapshot(snapshot, BrowserCapabilities.ActiveWindowDetection)
+                ?.CanonicalProcessName;
+        }
+
+        if (
+            BrowserDescriptorCatalog.ResolveProcessAlias(
+                name,
+                BrowserCapabilities.ActiveWindowDetection
+            ) is not null
+        )
         {
             return name;
         }
 
-        return TryInferBrowserProcessNameFromTitle(snapshot?.Title);
+        // Only an exact app ID may canonicalize an observed process name (Flatpak wrappers
+        // report their own). Never a title: overwriting a real identity would let a
+        // non-browser window impersonate a browser to plugins and focus-change checks.
+        var browserFromAppId = BrowserDescriptorCatalog.ResolveWindowIdentity(
+            snapshot.AppId,
+            BrowserCapabilities.ActiveWindowDetection
+        );
+        return browserFromAppId?.CanonicalProcessName ?? name;
     }
 
     public string? GetActiveWindowTitle()
@@ -92,28 +84,17 @@ public sealed class ActiveWindowService : IActiveWindowService
     public string? GetBrowserUrl(bool allowInteractiveCapture = true)
     {
         var snapshot = GetActiveWindowSnapshotSync();
-        var title = snapshot?.Title;
-        var processName = snapshot?.ProcessName is { Length: > 0 } name
-            ? name
-            : TryInferBrowserProcessNameFromTitle(title);
-
-        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(processName, title);
-        if (atSpiUrl is not null)
+        var nonInteractiveUrl = GetBrowserUrlForSnapshot(snapshot);
+        if (nonInteractiveUrl is not null)
         {
-            return atSpiUrl;
-        }
-
-        var inferredUrl = TryInferBrowserUrlFromTitle(title);
-        if (inferredUrl is not null)
-        {
-            return inferredUrl;
+            return nonInteractiveUrl;
         }
 
         if (
             !allowInteractiveCapture
-            || !s_isXclipAvailable
-            || !s_isXdotoolAvailable
-            || !IsSupportedBrowserWindow(processName, title)
+            || !_isXclipAvailable
+            || !_isXdotoolAvailable
+            || !IsSupportedBrowserWindow(snapshot)
         )
         {
             return null;
@@ -124,19 +105,38 @@ public sealed class ActiveWindowService : IActiveWindowService
         var windowId = snapshot?.Source == "xdotool" ? snapshot.WindowId : null;
         if (string.IsNullOrWhiteSpace(windowId))
         {
-            windowId = RunXdotool("getactivewindow");
+            windowId = RunXdotool(["getactivewindow"]);
         }
 
         return string.IsNullOrWhiteSpace(windowId) ? null : TryCaptureBrowserUrl(windowId);
     }
 
+    public string? GetBrowserUrlForSnapshot(
+        ActiveWindowSnapshot? snapshot,
+        bool isPolling = false
+    )
+    {
+        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(
+            snapshot?.ProcessName,
+            snapshot?.AppId,
+            snapshot?.Title,
+            isPolling
+        );
+        return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
+    }
+
     public string? GetFocusedScreenContext(string? processName, string? title)
     {
-        // Scoped to the recording's window (passed in by the caller) rather than re-snapshotting
-        // the active window here: a focus change between record-start and harvest must not let
-        // the harvest read a different app. The harvest still requires a STATE_FOCUSED element
-        // inside this app, so it returns null if that window is no longer focused.
         return _atSpiUrlExtractor.TryHarvestFocusedContext(processName, title, SelfAtSpiAppName);
+    }
+
+    /// <summary>
+    ///     Forgets <paramref name="url" /> if a dictation read cached it for <paramref name="snapshot" />
+    ///     and the caller then rejected it, so polling can't reuse it.
+    /// </summary>
+    public void ForgetBrowserUrl(ActiveWindowSnapshot snapshot, string url)
+    {
+        _atSpiUrlExtractor.ForgetCachedUrl(snapshot.ProcessName, snapshot.AppId, snapshot.Title, url);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -206,51 +206,116 @@ public sealed class ActiveWindowService : IActiveWindowService
         return null;
     }
 
-    // kept instance: injected as a DI/test seam by callers
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
-    public string? GetActiveWindowId()
+    /// <summary>
+    ///     Re-activates the window in <paramref name="snapshot" /> through the provider that
+    ///     captured it. False when that provider can't activate windows (only KWin can today).
+    /// </summary>
+    public async Task<bool> TryActivateSnapshotWindowAsync(
+        ActiveWindowSnapshot snapshot,
+        CancellationToken ct
+    )
     {
-        if (!s_isXdotoolAvailable)
-        {
-            return null;
-        }
-
-        var windowId = RunXdotool("getactivewindow");
-        return string.IsNullOrWhiteSpace(windowId) ? null : windowId;
-    }
-
-    // ReSharper disable once UnusedMember.Global  public API surface (window-activation helper paired with GetActiveWindowId); not currently called in-tree
-    public static bool TryActivateWindow(string? windowId)
-    {
-        if (string.IsNullOrWhiteSpace(windowId) || !s_isXdotoolAvailable)
+        if (string.IsNullOrWhiteSpace(snapshot.WindowId))
         {
             return false;
         }
 
-        var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId}", out _);
+        var activator = _providers
+            .OfType<IActiveWindowActivator>()
+            .FirstOrDefault(candidate =>
+                candidate is IActiveWindowProvider provider
+                && string.Equals(provider.Name, snapshot.Source, StringComparison.OrdinalIgnoreCase)
+                && provider.IsApplicable()
+            );
+        if (activator is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await activator
+                .TryActivateWindowAsync(snapshot.WindowId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    // kept instance: injected as a DI/test seam by callers
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam")]
+    // ReSharper disable once MemberCanBeMadeStatic.Global
+    public string? GetActiveWindowId()
+    {
+        if (!_isXdotoolAvailable)
+        {
+            return null;
+        }
+
+        var windowId = RunXdotool(["getactivewindow"]);
+        return string.IsNullOrWhiteSpace(windowId) ? null : windowId;
+    }
+
+    // ReSharper disable once UnusedMember.Global  public API surface (window-activation helper paired with GetActiveWindowId); not currently called in-tree
+    public bool TryActivateWindow(string? windowId)
+    {
+        if (string.IsNullOrWhiteSpace(windowId) || !_isXdotoolAvailable)
+        {
+            return false;
+        }
+
+        var exitCode = RunProcess(
+            "xdotool",
+            ["windowactivate", "--sync", windowId],
+            out _
+        );
         return exitCode == 0;
     }
 
     internal static bool IsSupportedBrowserProcess(string? processName)
     {
-        return !string.IsNullOrWhiteSpace(processName) && s_browserProcessNames.Contains(processName);
+        return BrowserDescriptorCatalog.ResolveProcessAlias(
+            processName,
+            BrowserCapabilities.ActiveWindowDetection
+        ) is not null;
+    }
+
+    internal static BrowserDescriptor? ResolveBrowserDescriptor(
+        ActiveWindowSnapshot? snapshot
+    )
+    {
+        return BrowserDescriptorCatalog.ResolveSnapshot(
+            snapshot,
+            BrowserCapabilities.ActiveWindowDetection
+        );
     }
 
     internal static bool IsSupportedBrowserWindow(string? processName, string? title)
     {
-        return IsSupportedBrowserProcess(processName)
-               || TryInferBrowserProcessNameFromTitle(title) is not null;
+        return BrowserDescriptorCatalog.Resolve(
+            processName,
+            null,
+            title,
+            BrowserCapabilities.InteractiveX11Capture
+        ) is not null;
+    }
+
+    internal static bool IsSupportedBrowserWindow(ActiveWindowSnapshot? snapshot)
+    {
+        return BrowserDescriptorCatalog.ResolveSnapshot(
+            snapshot,
+            BrowserCapabilities.InteractiveX11Capture
+        ) is not null;
     }
 
     internal static string? TryInferBrowserProcessNameFromTitle(string? title)
     {
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            return null;
-        }
-
-        return title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase) ? "zen" : null;
+        return BrowserDescriptorCatalog.ResolveTitle(
+            title,
+            BrowserCapabilities.ActiveWindowDetection
+        )?.CanonicalProcessName;
     }
 
     internal static string? TryInferBrowserUrlFromTitle(string? title)
@@ -263,9 +328,13 @@ public sealed class ActiveWindowService : IActiveWindowService
         // Zen/Firefox Flatpak builds often report no process name (XWayland surface
         // runs under a sandboxed PID). Title-matching avoids needing to focus the
         // address bar, which would be visible and disruptive.
+        var browser = BrowserDescriptorCatalog.ResolveTitle(
+            title,
+            BrowserCapabilities.ActiveWindowDetection
+        );
         if (
-            title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
-            && title.Contains("Zen Browser", StringComparison.OrdinalIgnoreCase)
+            browser?.Id == BrowserDescriptorCatalog.ZenId
+            && title.Contains(" Mail", StringComparison.OrdinalIgnoreCase)
         )
         {
             return "https://mail.google.com";
@@ -281,14 +350,18 @@ public sealed class ActiveWindowService : IActiveWindowService
             return false;
         }
 
-        if (IsSupportedBrowserProcess(identity))
-        {
-            return true;
-        }
-
-        return s_browserAppNameHints.Any(hint =>
-            identity.Contains(hint, StringComparison.OrdinalIgnoreCase)
-        );
+        return BrowserDescriptorCatalog.ResolveProcessAlias(
+                   identity,
+                   BrowserCapabilities.ActiveWindowDetection
+               ) is not null
+               || BrowserDescriptorCatalog.ResolveWindowIdentity(
+                   identity,
+                   BrowserCapabilities.ActiveWindowDetection
+               ) is not null
+               || BrowserDescriptorCatalog.ResolveTitle(
+                   identity,
+                   BrowserCapabilities.ActiveWindowDetection
+               ) is not null;
     }
 
     internal static string? SanitizeCapturedBrowserUrl(string? value)
@@ -442,7 +515,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         return null;
     }
 
-    private static string? TryCaptureBrowserUrl(string windowId)
+    private string? TryCaptureBrowserUrl(string windowId)
     {
         string? previousClipboard = null;
 
@@ -473,63 +546,80 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
-    private static bool SendBrowserAddressBarCaptureKeys(string windowId)
+    private bool SendBrowserAddressBarCaptureKeys(string windowId)
     {
         // X11 last-resort: synthesize Ctrl+L (focus address bar) + Ctrl+C,
         // read the clipboard, then Escape to restore caret position.
-        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+l"))
+        if (!RunXdotoolKey(windowId, ["key", "--clearmodifiers", "ctrl+l"]))
         {
             return false;
         }
 
         Thread.Sleep(60);
 
-        if (!RunXdotoolKey(windowId, "key --clearmodifiers ctrl+c"))
+        if (!RunXdotoolKey(windowId, ["key", "--clearmodifiers", "ctrl+c"]))
         {
             return false;
         }
 
         Thread.Sleep(80);
 
-        RunXdotoolKey(windowId, "key Escape");
+        RunXdotoolKey(windowId, ["key", "Escape"]);
         return true;
     }
 
-    private static bool RunXdotoolKey(string windowId, string args)
+    private bool RunXdotoolKey(
+        string windowId,
+        IReadOnlyList<string> arguments
+    )
     {
-        var exitCode = RunProcess("xdotool", $"windowactivate --sync {windowId} {args}", out _);
+        var args = new List<string> { "windowactivate", "--sync", windowId };
+        args.AddRange(arguments);
+        var exitCode = RunProcess("xdotool", args, out _);
         return exitCode == 0;
     }
 
-    private static string? TryReadClipboardText()
+    private string? TryReadClipboardText()
     {
-        var exitCode = RunProcess("xclip", "-selection clipboard -o", out var output);
+        var exitCode = RunProcess(
+            "xclip",
+            ["-selection", "clipboard", "-o"],
+            out var output
+        );
         return exitCode == 0 ? output : null;
     }
 
-    private static bool TryWriteClipboardText(string text)
+    private bool TryWriteClipboardText(string text)
     {
-        var exitCode = RunProcessWithInput("xclip", "-selection clipboard", text);
+        var exitCode = RunProcessWithInput(
+            "xclip",
+            ["-selection", "clipboard"],
+            text
+        );
         return exitCode == 0;
     }
 
-    private static bool CheckXdotoolAvailable()
+    private bool CheckXdotoolAvailable()
     {
-        return CheckCommandAvailable("xdotool", "--version");
+        return CheckCommandAvailable("xdotool", ["--version"]);
     }
 
-    private static bool CheckCommandAvailable(string command, string args)
+    private bool CheckCommandAvailable(
+        string command,
+        IReadOnlyList<string> args
+    )
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(command, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(command, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            p?.WaitForExit(1000);
-            return p?.ExitCode == 0;
+            return result.Succeeded;
         }
         catch
         {
@@ -537,50 +627,35 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
-    private static string? RunXdotool(string args)
+    private string? RunXdotool(IReadOnlyList<string> args)
     {
         var exitCode = RunProcess("xdotool", args, out var output);
         return exitCode == 0 ? output?.Trim() : null;
     }
 
-    private static int RunProcess(string fileName, string args, out string? output)
+    private int RunProcess(
+        string fileName,
+        IReadOnlyList<string> args,
+        out string? output
+    )
     {
         output = null;
 
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(fileName, args)
-                {
-                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(fileName, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardError: ProcessCaptureMode.Discard
+                )
             );
-            if (p is null)
-            {
-                return -1;
-            }
-
-            // Drain stdout and stderr concurrently to avoid the classic deadlock
-            // where a full stderr pipe blocks the child while we wait for exit.
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(1000))
-            {
-                try
-                {
-                    p.Kill(true);
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
-                return -1;
-            }
-
-            output = stdoutTask.GetAwaiter().GetResult();
-            stderrTask.GetAwaiter().GetResult();
-            return p.ExitCode;
+            output = result.Status == ProcessRunStatus.Exited
+                ? result.StandardOutputText
+                : null;
+            return result.Status == ProcessRunStatus.Exited
+                ? result.ExitCode ?? -1
+                : -1;
         }
         catch
         {
@@ -588,28 +663,29 @@ public sealed class ActiveWindowService : IActiveWindowService
         }
     }
 
-    private static int RunProcessWithInput(string fileName, string args, string input)
+    private int RunProcessWithInput(
+        string fileName,
+        IReadOnlyList<string> args,
+        string input
+    )
     {
         try
         {
-            using var p = Process.Start(
-                new ProcessStartInfo(fileName, args)
-                {
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false
-                }
+            var result = _processRunner.RunProbe(
+                new ProcessCommand(fileName, args),
+                new ProcessOneShotOptions(
+                    Timeout: TimeSpan.FromSeconds(1),
+                    StandardInput: new Utf8ProcessInput(input),
+                    StandardOutput: ProcessCaptureMode.Discard,
+                    StandardError: ProcessCaptureMode.Discard,
+                    // xclip leaves a selection-serving daemon holding our pipes; waiting for EOF
+                    // would burn the whole timeout and report every clipboard write as failed.
+                    PostExitPipePolicy: ProcessPostExitPipePolicy.AbandonAfterGrace
+                )
             );
-            if (p is null)
-            {
-                return -1;
-            }
-
-            p.StandardInput.Write(input);
-            p.StandardInput.Close();
-            p.WaitForExit(1000);
-            return p.ExitCode;
+            return result.Status == ProcessRunStatus.Exited
+                ? result.ExitCode ?? -1
+                : -1;
         }
         catch
         {

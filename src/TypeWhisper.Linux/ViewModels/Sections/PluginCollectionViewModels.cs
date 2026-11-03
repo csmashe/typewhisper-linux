@@ -20,12 +20,15 @@ public partial class PluginCollectionRow : ObservableObject
         AddButtonLabel = definition.AddButtonLabel ?? "Add item";
         ItemFields = definition.ItemFields;
         ItemLabelFieldKey = definition.ItemLabelFieldKey;
+        IsSearchable = definition.IsSearchable;
+        Templates = definition.Templates;
+        ItemTest = definition.ItemTest;
         OwnerRow = ownerRow;
+        _selectedTemplate = Templates.Count > 0 ? Templates[0] : null;
 
         foreach (var item in items)
         {
-            var row = new PluginCollectionItemRow(ItemFields, item, ItemLabelFieldKey) { OwnerCollection = this };
-            Items.Add(row);
+            Items.Add(CreateItemRow(item));
         }
     }
 
@@ -37,11 +40,90 @@ public partial class PluginCollectionRow : ObservableObject
     private IReadOnlyList<PluginSettingDefinition> ItemFields { get; }
     private string? ItemLabelFieldKey { get; }
     public ObservableCollection<PluginCollectionItemRow> Items { get; } = [];
-    // ReSharper disable once UnusedAutoPropertyAccessor.Global  parent back-reference retained in the row's object graph; not safely removable without changing the constructor contract
+    public bool IsSearchable { get; }
+    public IReadOnlyList<PluginCollectionTemplate> Templates { get; }
+    public bool HasTemplates => Templates.Count > 0;
+    private PluginCollectionItemTest? ItemTest { get; }
+    public bool CanTestItems => ItemTest is not null;
+    public string TestButtonLabel => ItemTest?.ButtonLabel ?? string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedTemplateDescription))]
+    [NotifyPropertyChangedFor(nameof(HasSelectedTemplateDescription))]
+    [NotifyCanExecuteChangedFor(nameof(AddTemplateCommand))]
+    private PluginCollectionTemplate? _selectedTemplate;
+
+    public string SelectedTemplateDescription => SelectedTemplate?.Description ?? string.Empty;
+    public bool HasSelectedTemplateDescription => !string.IsNullOrWhiteSpace(SelectedTemplate?.Description);
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasNoMatches))]
+    private string _filterText = string.Empty;
+
+    public bool HasNoMatches => Items.Count > 0 && !Items.Any(item => item.IsMatch);
     public PluginRow OwnerRow { get; }
+
+    // Applied when the query changes, not on every edit, so a row being typed into stays visible.
+    partial void OnFilterTextChanged(string value)
+    {
+        var query = value.Trim();
+        foreach (var item in Items)
+        {
+            item.IsMatch = query.Length == 0 || item.Contains(query);
+        }
+    }
 
     [RelayCommand]
     private void AddItem()
+    {
+        AddSeededItem(CreateSeed());
+    }
+
+    // Only copies values into the draft; the plugin sees the item when the user saves.
+    [RelayCommand(CanExecute = nameof(CanAddTemplate))]
+    private void AddTemplate()
+    {
+        if (SelectedTemplate is not { } template)
+        {
+            return;
+        }
+
+        var seed = CreateSeed();
+        foreach (var (key, value) in template.Values)
+        {
+            if (seed.ContainsKey(key) && !key.StartsWith("__", StringComparison.Ordinal))
+            {
+                seed[key] = value;
+            }
+        }
+
+        AddSeededItem(seed);
+    }
+
+    private bool CanAddTemplate() => SelectedTemplate is not null;
+
+    internal void CancelItemTests()
+    {
+        foreach (var item in Items)
+        {
+            item.CancelTest();
+        }
+    }
+
+    private void AddSeededItem(Dictionary<string, string?> seed)
+    {
+        Items.Add(CreateItemRow(new PluginCollectionItem(seed)));
+        OnPropertyChanged(nameof(HasNoMatches));
+    }
+
+    private PluginCollectionItemRow CreateItemRow(PluginCollectionItem item) =>
+        new(ItemFields, item, ItemLabelFieldKey)
+        {
+            OwnerCollection = this,
+            TestInput = ItemTest?.SampleInput ?? string.Empty,
+        };
+
+    private Dictionary<string, string?> CreateSeed()
     {
         // Seed new items with sensible defaults so the UI shows valid controls
         // before the user touches anything. Fields whose key starts with "__"
@@ -65,22 +147,19 @@ public partial class PluginCollectionRow : ObservableObject
             {
                 PluginSettingKind.Boolean => "true",
                 PluginSettingKind.Dropdown when field.Options is { Count: > 0 } => field.Options[0].Value,
-                _ => string.Empty
+                _ => string.Empty,
             };
         }
 
-        var item = new PluginCollectionItemRow(
-            ItemFields,
-            new PluginCollectionItem(seed),
-            ItemLabelFieldKey
-        ) { OwnerCollection = this };
-        Items.Add(item);
+        return seed;
     }
 
     [RelayCommand]
     private void RemoveItem(PluginCollectionItemRow item)
     {
+        item.CancelTest();
         Items.Remove(item);
+        OnPropertyChanged(nameof(HasNoMatches));
     }
 
     [RelayCommand]
@@ -104,7 +183,7 @@ public partial class PluginCollectionRow : ObservableObject
     }
 }
 
-public class PluginCollectionItemRow : ObservableObject
+public partial class PluginCollectionItemRow : ObservableObject
 {
     private readonly PluginSettingFieldRow? _labelField;
 
@@ -179,6 +258,14 @@ public class PluginCollectionItemRow : ObservableObject
             }
         }
 
+        // Identity repair above is part of initial population, not a user edit.
+        // Reset every field after the item has been fully initialized so only
+        // subsequent changes made through the bound Value setter are tracked.
+        foreach (var field in Fields)
+        {
+            field.ResetUserModifiedState();
+        }
+
         if (string.IsNullOrEmpty(itemLabelFieldKey))
         {
             return;
@@ -196,6 +283,55 @@ public class PluginCollectionItemRow : ObservableObject
     public ObservableCollection<PluginSettingFieldRow> Fields { get; } = [];
 
     public PluginCollectionRow? OwnerCollection { get; init; }
+
+    [ObservableProperty]
+    private bool _isMatch = true;
+
+    // Test state is transient: it never reaches the settings draft or the saved items.
+    [ObservableProperty]
+    private string _testInput = string.Empty;
+
+    [ObservableProperty]
+    private bool _isTestRunning;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTestMessage))]
+    private string? _testMessage;
+
+    [ObservableProperty]
+    private bool _testSucceeded;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTestOutput))]
+    private string? _testOutput;
+
+    public bool CanTest => OwnerCollection?.CanTestItems == true;
+    public bool HasTestMessage => !string.IsNullOrEmpty(TestMessage);
+    public bool HasTestOutput => TestOutput is not null;
+
+    internal CancellationTokenSource? TestCancellation { get; set; }
+
+    internal void CancelTest()
+    {
+        TestCancellation?.Cancel();
+    }
+
+    /// <summary>The item as it would be saved: untouched secrets are null, never their masked value.</summary>
+    internal PluginCollectionItem ToDraft() =>
+        new(
+            Fields.ToDictionary(
+                field => field.Key,
+                string? (field) =>
+                    field is { IsSecretKind: true, IsUserModified: false } ? null : field.Value
+            )
+        );
+
+    // Only visible text counts: a search must not reveal a masked secret or match "true".
+    internal bool Contains(string query) =>
+        Fields.Any(field =>
+            field is { IsHidden: false, IsSecretKind: false, IsSecretMultiline: false, IsBooleanKind: false }
+            && field.Value.Contains(query, StringComparison.OrdinalIgnoreCase)
+        );
 
     public string HiddenId
     {
@@ -228,5 +364,15 @@ public class PluginCollectionItemRow : ObservableObject
         {
             OnPropertyChanged(nameof(HeaderText));
         }
+    }
+}
+
+public sealed partial class PluginSettingFieldRow
+{
+    public bool IsUserModified { get; private set; }
+
+    internal void ResetUserModifiedState()
+    {
+        IsUserModified = false;
     }
 }

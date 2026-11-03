@@ -8,85 +8,327 @@ namespace TypeWhisper.Linux.Services;
 ///     <c>playerctl</c> and resumes them afterward. Silently no-ops when
 ///     playerctl is absent or no players are currently playing.
 /// </summary>
-public sealed class MediaPauseService : IMediaPauseService
+public sealed class MediaPauseService : IMediaPauseService, IDisposable
 {
-    private readonly HashSet<string> _pausedPlayers = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan s_playerctlTimeout = TimeSpan.FromMilliseconds(1500);
+    private static readonly IReadOnlyDictionary<string, string> s_playerctlEnvironment =
+        new Dictionary<string, string>(StringComparer.Ordinal) { ["LC_ALL"] = "C" };
+
+    // A player that never resumes would otherwise pin _pausedPlayers non-empty and disable
+    // pausing for the rest of the session, so each one is dropped after this many failures.
+    private const int MaxResumeAttempts = 3;
+
+    private readonly IProcessRunner _processRunner;
+    private readonly IErrorLogService _errorLog;
+
+    // Paused MPRIS instance -> consecutive failed resume attempts. Guarded by _playersGate;
+    // playerctl itself is always invoked outside the lock.
+    private readonly Dictionary<string, int> _pausedPlayers =
+        new(StringComparer.Ordinal);
+
+    private readonly Lock _playersGate = new();
+
+    // True between a completed pause scan and the next resume. Kept separate from
+    // _pausedPlayers so a player we still owe a resume can't suppress future pause scans.
+    private bool _pauseActive;
+
+    public MediaPauseService(IProcessRunner processRunner, IErrorLogService errorLog)
+    {
+        _processRunner = processRunner;
+        _errorLog = errorLog;
+    }
 
     public void PauseMedia()
     {
-        if (_pausedPlayers.Count > 0)
+        lock (_playersGate)
         {
-            return;
-        }
-
-        try
-        {
-            var players = CommandRunner.Run(
-                "playerctl",
-                "-a",
-                "--format",
-                "{{playerName}} {{status}}",
-                "status"
-            );
-            if (string.IsNullOrWhiteSpace(players))
+            if (_pauseActive)
             {
                 return;
             }
 
-            foreach (
-                var line in players.Split(
+            _pauseActive = true;
+        }
+
+        try
+        {
+            // Instances, not names: two mpv processes share playerName "mpv".
+            var playersResult = RunPlayerctl(
+                ["-a", "--format", "{{playerInstance}} {{status}}", "status"]
+            );
+            if (
+                !playersResult.Succeeded
+                || string.IsNullOrWhiteSpace(playersResult.StandardOutput)
+            )
+            {
+                return;
+            }
+
+            var statuses = playersResult
+                .StandardOutput.Split(
                     '\n',
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
                 )
+                .Select(line =>
+                    line.Split(
+                        ' ',
+                        2,
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    )
+                )
+                .Where(parts => parts.Length == 2)
+                .ToList();
+            var instances = statuses.Select(parts => parts[0]).ToList();
+
+            foreach (
+                var parts in statuses.Where(status =>
+                    string.Equals(status[1], "Playing", StringComparison.OrdinalIgnoreCase)
+                )
             )
             {
-                var parts = line.Split(
-                    ' ',
-                    2,
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
-                );
-                if (
-                    parts.Length != 2
-                    || !string.Equals(parts[1], "Playing", StringComparison.OrdinalIgnoreCase)
-                )
+                if (!RunPlayerctl(TargetInstance(parts[0], instances, "pause")).Succeeded)
                 {
                     continue;
                 }
 
-                if (CommandRunner.Run("playerctl", "-p", parts[0], "pause") is not null)
+                lock (_playersGate)
                 {
-                    _pausedPlayers.Add(parts[0]);
+                    _pausedPlayers[parts[0]] = 0;
                 }
             }
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[MediaPauseService] Pause failed: {ex.Message}");
-            _pausedPlayers.Clear();
+            lock (_playersGate)
+            {
+                _pausedPlayers.Clear();
+                _pauseActive = false;
+            }
         }
     }
 
     public void ResumeMedia()
     {
-        if (_pausedPlayers.Count == 0)
+        string[] players;
+        lock (_playersGate)
         {
-            return;
+            _pauseActive = false;
+            if (_pausedPlayers.Count == 0)
+            {
+                return;
+            }
+
+            players = [.. _pausedPlayers.Keys];
         }
 
+        var liveInstances = ListInstances();
+        foreach (var player in players)
+        {
+            string failure;
+            try
+            {
+                // "-p mpv" would fall through to a surviving "mpv.instance-…" sibling.
+                if (
+                    liveInstances is not null
+                    && !liveInstances.Contains(player, StringComparer.Ordinal)
+                    && liveInstances.Any(instance => IsSiblingInstance(player, instance))
+                )
+                {
+                    WriteDiagnostic(
+                        $"[MediaPauseService] Player {player} vanished; treating resume as completed."
+                    );
+                    lock (_playersGate)
+                    {
+                        _pausedPlayers.Remove(player);
+                    }
+
+                    continue;
+                }
+
+                var result = RunPlayerctl(TargetInstance(player, liveInstances ?? [], "play"));
+                if (result.Succeeded)
+                {
+                    lock (_playersGate)
+                    {
+                        _pausedPlayers.Remove(player);
+                    }
+
+                    continue;
+                }
+
+                // playerctl reports a vanished player on stderr with a trailing newline;
+                // trim before the exact match or the classifier never fires in production.
+                if (
+                    string.Equals(
+                        result.StandardError.Trim(),
+                        "No players found",
+                        StringComparison.Ordinal
+                    )
+                )
+                {
+                    WriteDiagnostic(
+                        $"[MediaPauseService] Player {player} vanished; treating resume as completed."
+                    );
+                    lock (_playersGate)
+                    {
+                        _pausedPlayers.Remove(player);
+                    }
+
+                    continue;
+                }
+
+                failure = DescribeFailure(result);
+            }
+            catch (Exception ex)
+            {
+                failure = $"exception: {ex.Message}";
+            }
+
+            RecordResumeFailure(player, failure);
+        }
+    }
+
+    /// <summary>
+    ///     Reports the failure and stops retrying the player after <see cref="MaxResumeAttempts" />
+    ///     attempts — typically one that exited while paused, which would otherwise cost a
+    ///     playerctl round trip on every later recording.
+    /// </summary>
+    private void RecordResumeFailure(string player, string failure)
+    {
+        bool retired;
+        lock (_playersGate)
+        {
+            if (!_pausedPlayers.TryGetValue(player, out var attempts))
+            {
+                return;
+            }
+
+            attempts++;
+            retired = attempts >= MaxResumeAttempts;
+            if (retired)
+            {
+                // A generation token would be needed to eliminate recycled player-name
+                // restores; bounded eviction only limits that stale-identity exposure.
+                _pausedPlayers.Remove(player);
+            }
+            else
+            {
+                _pausedPlayers[player] = attempts;
+            }
+        }
+
+        ReportResumeFailure(
+            retired
+                ? $"Failed to resume media player {player}: {failure}. Giving up after {MaxResumeAttempts} attempts."
+                : $"Failed to resume media player {player}: {failure}"
+        );
+    }
+
+    public void Dispose()
+    {
+        ResumeMedia();
+    }
+
+    /// <summary>Returns the current MPRIS instances, or null when they could not be listed.</summary>
+    private List<string>? ListInstances()
+    {
         try
         {
-            foreach (var player in _pausedPlayers)
-            {
-                CommandRunner.Run("playerctl", "-p", player, "play");
-            }
+            var result = RunPlayerctl(["-l"]);
+            return result.Succeeded
+                ? [
+                    .. result.StandardOutput.Split(
+                        '\n',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    ),
+                ]
+                : null;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[MediaPauseService] Resume failed: {ex.Message}");
+            WriteDiagnostic($"[MediaPauseService] Listing players failed: {ex.Message}");
+            return null;
         }
-        finally
+    }
+
+    /// <summary>
+    ///     Builds arguments that address exactly <paramref name="instance" />. playerctl's
+    ///     <c>-p</c> also matches <c>instance.*</c> siblings, so those are ignored explicitly.
+    /// </summary>
+    private static List<string> TargetInstance(
+        string instance,
+        IEnumerable<string> knownInstances,
+        string command
+    )
+    {
+        List<string> arguments = ["-p", instance];
+        var siblings = knownInstances
+            .Where(known => IsSiblingInstance(instance, known))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (siblings.Count > 0)
         {
-            _pausedPlayers.Clear();
+            arguments.Add("-i");
+            arguments.Add(string.Join(',', siblings));
+        }
+
+        arguments.Add(command);
+        return arguments;
+    }
+
+    private static bool IsSiblingInstance(string instance, string candidate)
+    {
+        return candidate.Length > instance.Length + 1
+               && candidate.StartsWith(instance + ".", StringComparison.Ordinal);
+    }
+
+    private ProcessRunResult RunPlayerctl(IReadOnlyList<string> arguments)
+    {
+        return _processRunner
+            .RunAsync(
+                "playerctl",
+                arguments,
+                environment: s_playerctlEnvironment,
+                timeout: s_playerctlTimeout
+            )
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private void ReportResumeFailure(string message)
+    {
+        WriteDiagnostic($"[MediaPauseService] {message}");
+        try
+        {
+            _errorLog.AddEntry(message);
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic($"[MediaPauseService] Error reporting failed: {ex.Message}");
+        }
+    }
+
+    private static string DescribeFailure(ProcessRunResult result)
+    {
+        var outcome = !result.Started
+            ? "process did not start (Started=false)"
+            : result.TimedOut
+                ? "process timed out (TimedOut=true)"
+                : $"process exited with ExitCode={result.ExitCode}";
+        var error = result.StandardError.Trim();
+        return string.IsNullOrWhiteSpace(error) ? outcome : $"{outcome}; error: {error}";
+    }
+
+    private static void WriteDiagnostic(string message)
+    {
+        try
+        {
+            Debug.WriteLine(message);
+        }
+        catch
+        {
+            // Restoration and retries must not depend on diagnostic output.
         }
     }
 }

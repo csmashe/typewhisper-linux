@@ -1,3 +1,5 @@
+using TypeWhisper.Core.Models;
+
 namespace TypeWhisper.Core.Interfaces;
 
 /// <summary>
@@ -20,16 +22,23 @@ public interface IActiveWindowService
     /// </summary>
     string? GetBrowserUrl(bool allowInteractiveCapture = true);
 
+    /// <summary>Snapshot of the focused window from the provider chain, or <c>null</c>.</summary>
+    Task<ActiveWindowSnapshot?> GetActiveWindowSnapshotAsync(CancellationToken ct);
+
     /// <summary>
-    ///     Best-effort bounded snippet of the focused element's text (+ nearby labels), used as
-    ///     read-only spelling reference for LLM cleanup. Opt-in and gated by the caller. Scoped to
-    ///     the given window (<paramref name="processName" />/<paramref name="title" />, from the
-    ///     recording's snapshot) so a focus change can't harvest a different app's screen. Returns
-    ///     <c>null</c> when no a11y tree is available, on a password field, or when nothing
-    ///     readable is in focus for that window.
+    ///     Best-effort non-interactive browser URL for <paramref name="snapshot" />.
+    ///     Set <paramref name="isPolling" /> only for high-frequency UI polling, which may reuse a
+    ///     cached URL or miss. Dictation leaves it <c>false</c> and always reads the address bar.
     /// </summary>
-    // ReSharper disable once UnusedMemberInSuper.Global -- part of the window-inspection contract; consumed via the concrete ActiveWindowService today, kept on the interface for parity with the sibling getters
-    string? GetFocusedScreenContext(string? processName, string? title);
+    string? GetBrowserUrlForSnapshot(ActiveWindowSnapshot? snapshot, bool isPolling = false);
+
+    /// <summary>
+    ///     Bounded text reference from the captured window's focused accessible element.
+    ///     Callers must obtain screen-context consent before invoking this method. Missing or
+    ///     unconfirmed window identity and password fields return null. Older implementations
+    ///     expose no screen context.
+    /// </summary>
+    string? GetFocusedScreenContext(string? processName, string? title) => null;
 
     /// <summary>Returns distinct process names of all visible windows (sorted).</summary>
     IReadOnlyList<string> GetRunningAppProcessNames();

@@ -16,6 +16,16 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// </summary>
 public sealed class SwayActiveWindowProvider : IActiveWindowProvider
 {
+    private readonly ProviderProcessRunner _processRunner;
+
+    public SwayActiveWindowProvider()
+        : this(new ProcessRunner()) { }
+
+    public SwayActiveWindowProvider(IProcessRunner processRunner)
+    {
+        _processRunner = new ProviderProcessRunner(processRunner);
+    }
+
     public string Name => "sway";
 
     public bool IsApplicable()
@@ -28,8 +38,8 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
     {
         try
         {
-            var (exit, output) = await ProviderProcessRunner
-                .RunAsync("swaymsg", "-t get_tree", ct)
+            var (exit, output) = await _processRunner
+                .RunAsync("swaymsg", ["-t", "get_tree"], ct)
                 .ConfigureAwait(false);
             if (exit != 0 || string.IsNullOrWhiteSpace(output))
             {

@@ -1,5 +1,7 @@
-using System.IO;
-using System.Net.Http;
+// ReSharper disable MemberCanBePrivate.Global
+// Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
+// and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
+
 using System.Security.Cryptography;
 using SharpCompress.Readers;
 using TypeWhisper.Plugins.Shared.Net;
@@ -20,13 +22,13 @@ internal class SherpaCudaRuntimeInstaller
 {
     // Must stay in lock-step with the managed org.k2fsa.sherpa.onnx package version
     // referenced by the csproj — the C API is not ABI-stable across releases.
-    internal const string RuntimeVersion = "v1.12.23";
+    internal const string RuntimeVersion = "v1.13.8";
 
     internal const string AssetFileName =
-        "sherpa-onnx-v1.12.23-cuda-12.x-cudnn-9.x-linux-x64-gpu.tar.bz2";
+        "sherpa-onnx-v1.13.8-cuda-12.x-cudnn-9.x-onnxruntime1.28.2-linux-x64-gpu.tar.bz2";
 
     internal const string DownloadUrl =
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.23/" + AssetFileName;
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/" + AssetFileName;
 
     // SHA-256 of that release asset, matching GitHub's published asset digest (and a
     // local recompute of the served bytes). These .so files get dlopen'd into the
@@ -35,24 +37,30 @@ internal class SherpaCudaRuntimeInstaller
     // them is extracted — fail closed on mismatch. Mirrors the whisper.cpp and shared
     // CUDA wheel paths, which both verify before extraction.
     internal const string AssetSha256 =
-        "ac5400eb7971b7134d03429727ebdd702c23597e3721f4a3ade84815708d8c3e";
+        "2132af1ae8c84c84f86ac091e4311839287851d2bf5e660332ebce3898a1e0b2";
 
     // Approximate download size, used only as a progress denominator when the
     // server omits Content-Length.
-    private const long ApproxDownloadBytes = 234_120_435L;
+    private const long ApproxDownloadBytes = 393_010_348L;
+
+    // Extracted beside the archive: ~655 MB (almost all libonnxruntime_providers_cuda.so).
+    private const long ExtractedRuntimeBytes = 660L * 1000 * 1000;
+
+    private const string SpaceDescription = "the sherpa-onnx GPU runtime";
 
     // What we keep out of the tarball's lib/ directory. The TensorRT provider
     // (libonnxruntime_providers_tensorrt.so) is deliberately excluded — we only
     // use the CUDA execution provider, and it adds nothing but bulk.
     // internal (not private) so a regression test can assert the CUDA provider is
     // extracted here even though it must never be preloaded (see SherpaOnnxNativeRuntime).
+    // ReSharper disable once InconsistentNaming -- internal static field is part of the test-observable API; PascalCase intended.
     internal static readonly string[] CoreRuntimeFiles =
     [
         "libsherpa-onnx-c-api.so",
         "libsherpa-onnx-cxx-api.so",
         "libonnxruntime.so",
         "libonnxruntime_providers_shared.so",
-        "libonnxruntime_providers_cuda.so"
+        "libonnxruntime_providers_cuda.so",
     ];
 
     private readonly string _runtimeRoot;
@@ -73,6 +81,9 @@ internal class SherpaCudaRuntimeInstaller
 
     /// <summary>Directory containing the extracted GPU <c>.so</c> files.</summary>
     public string RuntimeDirectory => Path.Join(_runtimeRoot, "native");
+
+    // Test seam: free-space probe for the runtime download (null = the real filesystem).
+    internal Func<string, long?>? SpaceProbe { get; init; }
 
     /// <summary>True when every required GPU library has already been extracted.</summary>
     public bool IsInstalled =>
@@ -120,7 +131,16 @@ internal class SherpaCudaRuntimeInstaller
                         await DownloadAsync(tarballPath, progress, ct).ConfigureAwait(false);
 
                         _log?.Invoke("sherpa-onnx GPU runtime: extracting native libraries");
-                        ExtractCoreRuntimeFiles(tarballPath);
+                        try
+                        {
+                            ExtractCoreRuntimeFiles(tarballPath);
+                        }
+                        catch (Exception ex)
+                            when (DownloadSpace.TranslateWriteFailure(ex, _runtimeRoot, SpaceDescription)
+                                is { } full && !ReferenceEquals(full, ex))
+                        {
+                            throw full;
+                        }
                     }
                     finally
                     {
@@ -140,6 +160,7 @@ internal class SherpaCudaRuntimeInstaller
                 );
             }
 
+            RemoveSupersededRuntimes();
             progress?.Report(1.0);
         }
         finally
@@ -187,6 +208,41 @@ internal class SherpaCudaRuntimeInstaller
         }
     }
 
+    // Older binding versions can never load again and each is hundreds of MB. A newer one belongs
+    // to another build, and a held install lock means one is still installing; both stay.
+    internal void RemoveSupersededRuntimes()
+    {
+        var root = Directory.GetParent(_runtimeRoot)?.FullName;
+        if (root is null || !Version.TryParse(RuntimeVersion.TrimStart('v'), out var current))
+            return;
+
+        foreach (var directory in Directory.EnumerateDirectories(root, "v*"))
+        {
+            var name = Path.GetFileName(directory);
+            if (!Version.TryParse(name[1..], out var version) || version >= current)
+                continue;
+
+            var locks = new List<FileStream>();
+            try
+            {
+                // ReSharper disable once LoopCanBeConvertedToQuery -- each opened lock must be in the list before the next open can throw, so finally releases it.
+                foreach (var lockPath in Directory.EnumerateFiles(directory, "*.lock"))
+                    locks.Add(new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None));
+                Directory.Delete(directory, recursive: true);
+                _log?.Invoke($"sherpa-onnx GPU runtime: removed superseded {name}.");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _log?.Invoke($"sherpa-onnx GPU runtime: kept superseded {name}: {ex.Message}");
+            }
+            finally
+            {
+                foreach (var held in locks)
+                    held.Dispose();
+            }
+        }
+    }
+
     private Task DownloadAsync(string destination, IProgress<double>? progress, CancellationToken ct)
     {
         // Map the helper's cumulative bytes-on-disk to a progress fraction over the
@@ -194,9 +250,11 @@ internal class SherpaCudaRuntimeInstaller
         // report (the resume baseline jump) always fires.
         var lastReport = DateTime.MinValue;
 
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
         void OnBytesOnDisk(long onDisk)
         {
             var now = DateTime.UtcNow;
+            // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
             if ((now - lastReport).TotalMilliseconds > 250)
             {
                 progress?.Report(Math.Min(1.0, (double)onDisk / ApproxDownloadBytes));
@@ -213,7 +271,8 @@ internal class SherpaCudaRuntimeInstaller
             allowResume: true,
             onBytesOnDisk: OnBytesOnDisk,
             verifyComplete: path => VerifySha256(path, RuntimeDirectory),
-            ct
+            ct,
+            new DownloadSpaceRequirement(SpaceDescription, ExtractedRuntimeBytes, SpaceProbe)
         );
     }
 

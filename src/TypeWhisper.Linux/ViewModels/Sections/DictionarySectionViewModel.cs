@@ -2,9 +2,13 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
+using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.AppImport;
 using TypeWhisper.Linux.Services.Localization;
+using TypeWhisper.Linux.Services.Vocabulary;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
 
@@ -15,6 +19,8 @@ public partial class DictionarySectionViewModel : ObservableObject
 {
     private readonly IDictionaryService _dict;
     private readonly ISettingsService _settings;
+    private readonly ModelManagerService _models;
+    private readonly IVocabularyRescoringService _rescoring;
 
     [ObservableProperty]
     private bool _caseSensitive;
@@ -24,6 +30,14 @@ public partial class DictionarySectionViewModel : ObservableObject
 
     [ObservableProperty]
     private string _newOriginal = "";
+
+    [ObservableProperty]
+    private bool _newIsRegex;
+
+    [ObservableProperty]
+    private string _regexValidationError = "";
+
+    public bool HasRegexValidationError => !string.IsNullOrWhiteSpace(RegexValidationError);
 
     [ObservableProperty]
     private int _newPriority;
@@ -40,18 +54,56 @@ public partial class DictionarySectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _vocabularyBoostingEnabled;
 
-    public DictionarySectionViewModel(IDictionaryService dict, ISettingsService settings)
+    [ObservableProperty]
+    private bool _acousticVocabularyBoostingEnabled;
+
+    public DictionarySectionViewModel(
+        IDictionaryService dict,
+        ISettingsService settings,
+        ModelManagerService models,
+        IVocabularyRescoringService rescoring,
+        DictionaryAliasSuggestionService aliasSuggestions
+    )
     {
         _dict = dict;
         _settings = settings;
+        _models = models;
+        _rescoring = rescoring;
+        AliasSuggestions = new DictionaryAliasSuggestionsViewModel(dict, aliasSuggestions, settings);
+        AliasSuggestions.Saved += term =>
+        {
+            SelectedTab = 2;
+            SearchText = term;
+        };
+        _acousticVocabularyBoostingEnabled = settings.Current.AcousticVocabularyBoostingEnabled;
         _vocabularyBoostingEnabled = settings.Current.VocabularyBoostingEnabled;
 
         _dict.EntriesChanged += () => Dispatcher.UIThread.Post(Refresh);
         _settings.SettingsChanged += _ =>
-            Dispatcher.UIThread.Post(ReconcileEnabledPacksFromSettings);
+            Dispatcher.UIThread.Post(() =>
+            {
+                VocabularyBoostingEnabled = _settings.Current.VocabularyBoostingEnabled;
+                AcousticVocabularyBoostingEnabled = _settings
+                    .Current
+                    .AcousticVocabularyBoostingEnabled;
+                ReconcileEnabledPacksFromSettings();
+                RefreshAcousticStatus();
+            });
+        _models.PropertyChanged += (_, _) => Dispatcher.UIThread.Post(RefreshAcousticStatus);
+        _models.PluginManager.PluginStateChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                RefreshAcousticStatus();
+                if (AliasSuggestions.IsOpen)
+                {
+                    AliasSuggestions.RefreshModels();
+                }
+            });
         InitializePacks();
         Refresh();
     }
+
+    public DictionaryAliasSuggestionsViewModel AliasSuggestions { get; }
 
     public ObservableCollection<DictionaryEntry> FilteredEntries { get; } = [];
     public ObservableCollection<TermPackItemViewModel> Packs { get; } = [];
@@ -69,10 +121,36 @@ public partial class DictionarySectionViewModel : ObservableObject
     public string VocabularyBoostingStatusText =>
         ActiveBoostingTermCount == 0
             ? Loc.Instance["Dictionary.NoActiveBoostingTerms"]
-            : Loc.Instance.GetString(
-                "Dictionary.ActiveBoostingTerms",
-                ActiveBoostingTermCount
-            );
+            : Loc.Instance.GetString("Dictionary.ActiveBoostingTerms", ActiveBoostingTermCount);
+
+    public string AcousticBoostingStatusText =>
+        _models.PluginManager.VocabularyRescorer is not { IsReady: true }
+            ? Loc.Instance["Dictionary.AcousticBoostingStatusNoPlugin"]
+        : _rescoring.ActiveEngineBlocker is not null
+            ? Loc.Instance.GetString(
+                "Dictionary.AcousticBoostingStatusEngine",
+                _models.ActiveTranscriptionPlugin?.SelectedModelId
+                    ?? _settings.Current.SelectedModelId
+                    ?? Loc.Instance["Dictation.NoModelLoaded"]
+            )
+        : ActiveBoostingTermCount == 0 ? Loc.Instance["Dictionary.AcousticBoostingStatusNoTerms"]
+        : !_settings.Current.AcousticVocabularyBoostingEnabled ? Loc.Instance["Common.Disabled"]
+        : Loc.Instance["Dictionary.AcousticBoostingStatusActive"];
+
+    private void RefreshAcousticStatus() => OnPropertyChanged(nameof(AcousticBoostingStatusText));
+
+    public static string DescribeCtcSimilarity(float? value) =>
+        value switch
+        {
+            null => Loc.Instance["Dictionary.CtcSimilarityAuto"],
+            .50f => Loc.Instance["Dictionary.CtcSimilarityStrong"],
+            .65f => Loc.Instance["Dictionary.CtcSimilarityBalanced"],
+            .80f => Loc.Instance["Dictionary.CtcSimilarityPrecise"],
+            _ => Loc.Instance.GetString(
+                "Dictionary.CtcSimilarityCustom",
+                (value.Value * 100).ToString("0")
+            ),
+        };
 
     public bool IsAllTabSelected => SelectedTab == 0;
     public bool IsTermsTabSelected => SelectedTab == 1;
@@ -92,7 +170,7 @@ public partial class DictionarySectionViewModel : ObservableObject
         {
             1 => Loc.Instance["Dictionary.EmptyTitleTerms"],
             2 => Loc.Instance["Dictionary.EmptyTitleCorrections"],
-            _ => Loc.Instance["Dictionary.EmptyTitleAll"]
+            _ => Loc.Instance["Dictionary.EmptyTitleAll"],
         };
 
     public string EmptyStateSubtitle =>
@@ -100,7 +178,7 @@ public partial class DictionarySectionViewModel : ObservableObject
         {
             1 => Loc.Instance["Dictionary.EmptySubtitleTerms"],
             2 => Loc.Instance["Dictionary.EmptySubtitleCorrections"],
-            _ => Loc.Instance["Dictionary.EmptySubtitleAll"]
+            _ => Loc.Instance["Dictionary.EmptySubtitleAll"],
         };
 
     public bool IsNewTypeCorrection
@@ -135,6 +213,11 @@ public partial class DictionarySectionViewModel : ObservableObject
     public int ImportFromCsv(string csv)
     {
         return _dict.ImportFromCsv(csv);
+    }
+
+    public AppImportViewModel CreateAppImport(AppImportSource source, string path)
+    {
+        return new AppImportViewModel(_dict, source, path);
     }
 
     internal void ReconcileEnabledPacksFromSettings()
@@ -192,13 +275,45 @@ public partial class DictionarySectionViewModel : ObservableObject
             return;
         }
 
-        _settings.Save(_settings.Current with { VocabularyBoostingEnabled = value });
+        _settings.Update(current => current with { VocabularyBoostingEnabled = value });
+    }
+
+    partial void OnAcousticVocabularyBoostingEnabledChanged(bool value)
+    {
+        if (_settings.Current.AcousticVocabularyBoostingEnabled == value)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { AcousticVocabularyBoostingEnabled = value });
+        RefreshAcousticStatus();
+    }
+
+    partial void OnRegexValidationErrorChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasRegexValidationError));
+    }
+
+    partial void OnNewOriginalChanged(string value)
+    {
+        RegexValidationError = "";
+    }
+
+    partial void OnNewIsRegexChanged(bool value)
+    {
+        RegexValidationError = "";
     }
 
     partial void OnNewEntryTypeChanged(DictionaryEntryType value)
     {
         OnPropertyChanged(nameof(IsNewTypeCorrection));
         OnPropertyChanged(nameof(IsNewTypeTerm));
+        // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
+        if (value != DictionaryEntryType.Correction)
+        {
+            NewIsRegex = false;
+            RegexValidationError = "";
+        }
     }
 
     [RelayCommand]
@@ -210,7 +325,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             string stringValue when int.TryParse(stringValue, out var parsed) => parsed,
             // Leave the current tab unchanged for any other value; the
             // [ObservableProperty] setter's equality guard makes this a no-op.
-            _ => SelectedTab
+            _ => SelectedTab,
         };
     }
 
@@ -228,25 +343,75 @@ public partial class DictionarySectionViewModel : ObservableObject
             return;
         }
 
+        var isRegex = NewEntryType == DictionaryEntryType.Correction && NewIsRegex;
+        // Leading and trailing whitespace is significant in a pattern.
+        var original = isRegex ? NewOriginal : NewOriginal.Trim();
+        if (isRegex && !TryValidateRegex(original, out var error))
+        {
+            RegexValidationError = error;
+            return;
+        }
+
         _dict.AddEntry(
             new DictionaryEntry
             {
                 Id = Guid.NewGuid().ToString(),
                 EntryType = NewEntryType,
-                Original = NewOriginal.Trim(),
+                ExpandEscapes = NewEntryType == DictionaryEntryType.Correction,
+                IsRegex = isRegex,
+                Original = original,
                 Replacement = string.IsNullOrWhiteSpace(NewReplacement)
                     ? null
                     : NewReplacement.Trim(),
                 CaseSensitive = CaseSensitive,
                 IsEnabled = true,
-                Priority = Math.Clamp(NewPriority, 0, 999)
+                Priority = Math.Clamp(NewPriority, 0, 999),
             }
         );
 
+        NewIsRegex = false;
         NewOriginal = "";
         NewReplacement = "";
         CaseSensitive = false;
         NewPriority = 0;
+    }
+
+    private static bool TryValidateRegex(string pattern, out string error)
+    {
+        try
+        {
+            _ = new Regex(pattern, RegexOptions.CultureInvariant);
+            error = "";
+            return true;
+        }
+        catch (ArgumentException ex)
+        {
+            error = Loc.Instance.GetString("Dictionary.InvalidRegexFormat", ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Whether an entry names a spelling to suggest aliases for: a term, or a literal correction's
+    ///     replacement. Regex rules and escape-expanded commands (e.g. "\n") are not spellings.
+    /// </summary>
+    public static bool CanSuggestAliasesFor(DictionaryEntry entry) =>
+        entry.EntryType == DictionaryEntryType.Term
+        || entry is { IsRegex: false, Replacement: { Length: > 0 } replacement }
+           && !(entry.ExpandEscapes && replacement.Contains('\\'));
+
+    /// <summary>Opens alias suggestions for a term, or for the spelling a correction produces.</summary>
+    [RelayCommand]
+    private void SuggestAliasesFor(DictionaryEntry entry)
+    {
+        if (!CanSuggestAliasesFor(entry))
+        {
+            return;
+        }
+
+        AliasSuggestions.OpenCommand.Execute(
+            entry.EntryType == DictionaryEntryType.Term ? entry.Original : entry.Replacement
+        );
     }
 
     [RelayCommand]
@@ -265,6 +430,24 @@ public partial class DictionarySectionViewModel : ObservableObject
     private void ToggleStarred(DictionaryEntry entry)
     {
         _dict.UpdateEntry(entry with { IsStarred = !entry.IsStarred });
+    }
+
+    [RelayCommand]
+    private void CycleCtcSimilarity(DictionaryEntry entry)
+    {
+        if (entry.EntryType != DictionaryEntryType.Term)
+        {
+            return;
+        }
+
+        float? next = entry.CtcMinSimilarity switch
+        {
+            null or < .50f => .50f,
+            < .65f => .65f,
+            < .80f => .80f,
+            _ => null,
+        };
+        _dict.UpdateEntry(entry with { CtcMinSimilarity = next });
     }
 
     [RelayCommand]
@@ -312,7 +495,7 @@ public partial class DictionarySectionViewModel : ObservableObject
     private void SaveEnabledPacks()
     {
         var enabledIds = Packs.Where(pack => pack.IsEnabled).Select(pack => pack.Pack.Id).ToArray();
-        _settings.Save(_settings.Current with { EnabledPackIds = enabledIds });
+        _settings.Update(current => current with { EnabledPackIds = enabledIds });
     }
 
     private void Refresh()
@@ -326,7 +509,7 @@ public partial class DictionarySectionViewModel : ObservableObject
             1 => entries.Where(entry => entry.EntryType == DictionaryEntryType.Term),
             2 => entries.Where(entry => entry.EntryType == DictionaryEntryType.Correction),
             3 => [],
-            _ => entries
+            _ => entries,
         };
 
         if (!string.IsNullOrWhiteSpace(SearchText))
@@ -353,6 +536,7 @@ public partial class DictionarySectionViewModel : ObservableObject
         OnPropertyChanged(nameof(EntryCount));
         OnPropertyChanged(nameof(ActiveBoostingTermCount));
         OnPropertyChanged(nameof(VocabularyBoostingStatusText));
+        RefreshAcousticStatus();
         OnPropertyChanged(nameof(ShowEntriesList));
         OnPropertyChanged(nameof(ShowPacksList));
         OnPropertyChanged(nameof(ShowEmptyState));

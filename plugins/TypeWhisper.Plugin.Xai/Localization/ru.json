@@ -20,6 +20,8 @@
   "Settings.TextNormalizationDescription": "Нормализовать числа и символы перед произнесением.",
   "Settings.EnterApiKey": "Сначала введите API-ключ.",
   "Settings.ApiKeyInvalid": "API-ключ недействителен.",
+  "Settings.ApiKeyNoTeamAccess": "xAI принял API-ключ, но его команда пока не может пользоваться API. Новым командам сначала нужны кредиты или лицензия: добавьте их на console.x.ai и проверьте снова.",
+  "Settings.ApiKeyForbidden": "xAI принял API-ключ, но отказал в доступе. Возможно, ключу не разрешено получать список моделей, или ключ либо его команда заблокированы. Проверьте права ключа на console.x.ai и проверьте снова.",
   "Settings.ApiKeyValidFetched": "API-ключ действителен. Загружено моделей LLM: {0} и голосов: {1}.",
   "Settings.ApiKeyValidSaved": "API-ключ действителен. Используются сохранённые/стандартные модели и голоса.",
   "Settings.ApiKeyNotConfigured": "API-ключ не настроен",

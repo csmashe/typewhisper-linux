@@ -1,6 +1,6 @@
 {
   "Settings.AcceptLicense": "I understand that Supertonic 3 model weights are licensed under OpenRAIL-M.",
-  "Settings.Description": "Supertonic runs locally after the model assets are downloaded. The model weights are licensed separately under OpenRAIL-M.",
+  "Settings.Description": "Supertonic runs locally after the model files are downloaded. The model weights are licensed separately under OpenRAIL-M; accept the license, then download the model files.",
   "Settings.Voice": "Voice",
   "Settings.VoiceDescription": "Supertonic voice (M1–M5 male, F1–F5 female).",
   "Settings.Speed": "Speech speed",
@@ -15,6 +15,14 @@
   "Settings.Summary": "Voice: {0}; speed {1}; steps {2}; {3}",
   "Settings.StatusReady": "ready",
   "Settings.StatusDownloadRequired": "download required",
+  "Settings.DownloadRequired": "The model files are not downloaded. Use Download model files.",
+  "Settings.DownloadAction": "Download model files",
+  "Settings.DownloadActionDescription": "Downloads and verifies the Supertonic 3 model ({0}). An interrupted download resumes.",
+  "Settings.RemoveAction": "Remove model files",
+  "Settings.RemoveActionDescription": "Deletes the downloaded model files. Settings and the license choice are kept.",
+  "Settings.RemoveConfirmation": "Remove the Supertonic 3 model files? Speech feedback with Supertonic stops working until you download them again.",
+  "Settings.Removed": "Model files removed.",
+  "Settings.RemoveCancelled": "Removal cancelled.",
   "Manifest.Name": "Supertonic TTS",
   "Manifest.Description": "Local Supertonic 3 text-to-speech provider. Downloads OpenRAIL-M model assets on demand and runs synthesis on-device with ONNX Runtime."
 }

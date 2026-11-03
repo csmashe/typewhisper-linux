@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Tests.Models;
@@ -5,6 +6,101 @@ namespace TypeWhisper.Core.Tests.Models;
 /// <summary>Covers <see cref="AppSettings" /> defaults and its normalize/clamp helpers (auto-hide, acceleration, overlay position).</summary>
 public class AppSettingsTests
 {
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    [Fact]
+    public void DefaultLockPasteToFocusedField_IsFalse() =>
+        Assert.False(AppSettings.Default.LockPasteToFocusedField);
+
+    [Fact]
+    public void GetLanguageHints_AutoLanguage_IsEmpty() => Assert.Empty(AppSettings.Default.GetLanguageHints());
+
+    [Fact]
+    public void GetLanguageHints_SingleLanguage_WrapsLegacyLanguage() =>
+        Assert.Equal(["de"], (AppSettings.Default with { Language = "de" }).GetLanguageHints());
+
+    [Fact]
+    public void GetLanguageHints_ExplicitHints_WinOverLanguage() =>
+        Assert.Equal(["fr", "en"], (AppSettings.Default with { Language = "de", LanguageHints = ["fr", "en"] }).GetLanguageHints());
+
+    [Fact]
+    public void LanguageHints_NullJsonValue_DeserializesAsEmpty()
+    {
+        var settings = JsonSerializer.Deserialize<AppSettings>("""{ "language": "de", "languageHints": null }""", s_jsonOptions);
+
+        Assert.NotNull(settings);
+        Assert.Empty(settings.LanguageHints);
+        Assert.Equal(["de"], settings.GetLanguageHints());
+    }
+
+    [Fact]
+    public void NormalizeLanguageHints_TrimsDedupesAndDropsAuto() =>
+        Assert.Equal(["de", "en"], AppSettings.NormalizeLanguageHints([" de ", "en", "DE", "", "auto", null]));
+
+    [Fact]
+    public void WithLanguageHints_MirrorsFirstHintIntoLanguage()
+    {
+        var settings = AppSettings.Default.WithLanguageHints([" de ", "en"]);
+        Assert.Equal("de", settings.Language);
+        Assert.Equal(["de", "en"], settings.LanguageHints);
+        Assert.Equal("auto", settings.WithLanguageHints([]).Language);
+        Assert.Empty(settings.WithLanguageHints([]).LanguageHints);
+    }
+
+    [Fact]
+    public void DefaultEnglishOutputVariant_PreservesTranscribedSpelling()
+    {
+        Assert.Equal(EnglishOutputVariant.AsTranscribed, AppSettings.Default.EnglishOutputVariant);
+    }
+
+    [Fact]
+    public void DefaultGermanOutputVariant_PreservesTranscribedSpelling()
+    {
+        Assert.Equal(GermanOutputVariant.AsTranscribed, AppSettings.Default.GermanOutputVariant);
+    }
+
+    [Fact]
+    public void MissingToggleHotkey_LoadsTheLinuxDefault()
+    {
+        var settings = JsonSerializer.Deserialize<AppSettings>("{}", s_jsonOptions);
+
+        Assert.NotNull(settings);
+        Assert.Equal("Ctrl+Shift+Space", settings.ToggleHotkey);
+    }
+
+    [Fact]
+    public void LegacyHotkeyProperties_AreIgnoredOnLoadAndOmittedOnSave()
+    {
+        const string legacyJson =
+            """
+            {
+              "pushToTalkHotkey": "Ctrl+Shift+F8",
+              "toggleOnlyHotkey": "Ctrl+Shift+F9",
+              "holdOnlyHotkey": "Ctrl+Shift+F10",
+              "language": "de",
+              "autoPaste": false
+            }
+            """;
+
+        var settings = JsonSerializer.Deserialize<AppSettings>(legacyJson, s_jsonOptions);
+
+        Assert.NotNull(settings);
+        Assert.Equal("de", settings.Language);
+        Assert.False(settings.AutoPaste);
+
+        var reserializedJson = JsonSerializer.Serialize(settings, s_jsonOptions);
+        using var reserialized = JsonDocument.Parse(reserializedJson);
+        var root = reserialized.RootElement;
+
+        Assert.False(root.TryGetProperty("pushToTalkHotkey", out _));
+        Assert.False(root.TryGetProperty("toggleOnlyHotkey", out _));
+        Assert.False(root.TryGetProperty("holdOnlyHotkey", out _));
+    }
+
     [Fact]
     public void DefaultPreviewBubbleAutoHideMilliseconds_IsFifteenHundred()
     {
@@ -32,6 +128,18 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void DefaultShortUtterancePunctuationEnabled_IsTrue()
+    {
+        Assert.True(AppSettings.Default.ShortUtterancePunctuationEnabled);
+    }
+
+    [Fact]
+    public void DefaultTranscriptionNumberNormalizationEnabled_IsTrue()
+    {
+        Assert.True(AppSettings.Default.TranscriptionNumberNormalizationEnabled);
+    }
+
+    [Fact]
     public void DefaultLocalModelAcceleration_IsAuto()
     {
         Assert.Equal(
@@ -51,6 +159,8 @@ public class AppSettingsTests
     [InlineData("NVIDIA-CUDA", "nvidia-cuda")]
     [InlineData("NVIDIA CUDA", "nvidia-cuda")]
     [InlineData("cuda", "nvidia-cuda")]
+    [InlineData("vulkan", "vulkan")]
+    [InlineData("Vulkan", "vulkan")]
     [InlineData("directml", "auto")]
     [InlineData("anything-else", "auto")]
     public void NormalizeLocalModelAcceleration_NormalizesKnownValuesAndFallsBackToAuto(
