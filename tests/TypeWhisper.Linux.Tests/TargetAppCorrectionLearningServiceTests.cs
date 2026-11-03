@@ -1367,6 +1367,43 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
         Assert.Equal(Frame(1510, 39, 820, 547), raised.TargetWindowFrame);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Commit_WhenWindowFrameLookupThrows_StillRaisesWithoutFrame(
+        bool throwOnHandle,
+        bool throwOnFrame
+    )
+    {
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = s_field,
+            ExtentsToReturn = new AtSpiScreenRect(100, 200, 300, 40),
+        };
+        var frames = new FakeWindowFrameLocator
+        {
+            FocusedHandle = "42",
+            Frames = { ["42"] = Frame(1510, 39, 820, 547) },
+            ThrowOnFocusedHandle = throwOnHandle,
+            ThrowOnFrame = throwOnFrame,
+        };
+        using var service = CreateService(client, enabled: true, frames);
+
+        LearnedCorrectionsBatch? raised = null;
+        service.CorrectionsLearned += batch => raised = batch;
+
+        client.TextToReturn = "kubernets";
+        await service.ArmAsync("kubernets");
+        client.TextToReturn = "Kubernetes";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        Assert.NotNull(raised);
+        Assert.Equal(new AtSpiScreenRect(100, 200, 300, 40), raised.SourceExtents);
+        Assert.Null(raised.TargetWindowFrame);
+    }
+
     [Fact]
     public async Task Commit_LearnsNothing_DoesNotRaiseCorrectionsLearnedEvent()
     {
@@ -1503,15 +1540,21 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     {
         public string? FocusedHandle { get; set; }
         public Dictionary<string, CompositorWindowFrame> Frames { get; } = new(StringComparer.Ordinal);
+        public bool ThrowOnFocusedHandle { get; init; }
+        public bool ThrowOnFrame { get; init; }
 
         public Task<string?> TryGetFocusedWindowHandleAsync(CancellationToken ct)
         {
-            return Task.FromResult(FocusedHandle);
+            return ThrowOnFocusedHandle
+                ? Task.FromException<string?>(new InvalidOperationException("handle lookup failed"))
+                : Task.FromResult(FocusedHandle);
         }
 
         public Task<CompositorWindowFrame?> TryGetWindowFrameAsync(string handle, CancellationToken ct)
         {
-            return Task.FromResult<CompositorWindowFrame?>(Frames.TryGetValue(handle, out var frame) ? frame : null);
+            return ThrowOnFrame
+                ? Task.FromException<CompositorWindowFrame?>(new InvalidOperationException("frame lookup failed"))
+                : Task.FromResult<CompositorWindowFrame?>(Frames.TryGetValue(handle, out var frame) ? frame : null);
         }
     }
 

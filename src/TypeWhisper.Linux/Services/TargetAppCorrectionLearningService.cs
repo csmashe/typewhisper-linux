@@ -1032,16 +1032,24 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             var extents = await _client.TryGetScreenExtentsAsync(state.Element).ConfigureAwait(false);
             // Also fetch the window frame: only the toast knows the screens, so it decides whether
             // the extents are usable or the frame is needed (LearnedToastPlacement.ChooseAnchor).
+            // Optional, like the extents: a failed lookup leaves the frame null and still raises.
             CompositorWindowFrame? windowFrame = null;
-            if (
-                _windowFrames is not null
-                && state.TargetWindowHandle is { } handleTask
-                && await handleTask.ConfigureAwait(false) is { } window
-            )
+            try
             {
-                windowFrame = await _windowFrames
-                    .TryGetWindowFrameAsync(window, CancellationToken.None)
-                    .ConfigureAwait(false);
+                if (
+                    _windowFrames is not null
+                    && state.TargetWindowHandle is { } handleTask
+                    && await handleTask.ConfigureAwait(false) is { } window
+                )
+                {
+                    windowFrame = await _windowFrames
+                        .TryGetWindowFrameAsync(window, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[TargetAppLearning] Window frame lookup failed: {ex.Message}");
             }
 
             RaiseCorrectionsLearned(
