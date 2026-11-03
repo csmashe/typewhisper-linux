@@ -986,7 +986,146 @@ public class GladiaPluginTests
         );
 
         Assert.Equal("Hallo Welt", result.Text);
+        // A non-403 cleanup failure is not retried in the background.
+        await sut.WaitForDeferredCleanupsAsync();
         Assert.Equal(1, deleteCount);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_UnfinishedJobDeleteIsRetriedInBackgroundUntilAccepted()
+    {
+        var secondDeleteStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseSecondDelete = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var deletedPaths = new List<string?>();
+        var handler = new AsyncCapturingHandler(async (request, _, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/upload")
+            {
+                return JsonResponse("""{ "audio_url": "https://api.gladia.io/file/upload-456" }""");
+            }
+
+            if (request.Method == HttpMethod.Post
+                && request.RequestUri?.AbsolutePath == "/v2/pre-recorded")
+            {
+                return InitiationResponse();
+            }
+
+            if (request.Method == HttpMethod.Get)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return JsonResponse("""{ "status": "queued" }""");
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                AssertApiKey(request);
+                int attempt;
+                lock (deletedPaths)
+                {
+                    deletedPaths.Add(request.RequestUri?.AbsolutePath);
+                    attempt = deletedPaths.Count;
+                }
+
+                switch (attempt)
+                {
+                    case 1:
+                        return UnfinishedDeleteResponse();
+                    case 2:
+                        secondDeleteStarted.TrySetResult();
+                        await releaseSecondDelete.Task;
+                        return UnfinishedDeleteResponse();
+                    default:
+                        return JsonResponse("", HttpStatusCode.Accepted);
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected request: {request.Method} {request.RequestUri}"
+            );
+        });
+
+        using var sut = await CreateConfiguredPluginAsync(handler);
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, cts.Token)
+        );
+
+        // The caller got its cancellation even though the background retry is still blocked.
+        // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard.
+        await secondDeleteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseSecondDelete.TrySetResult();
+        // ReSharper disable once MethodSupportsCancellation -- fixed hang-guard.
+        await sut.WaitForDeferredCleanupsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            ["/v2/pre-recorded/job-123", "/v2/pre-recorded/job-123", "/v2/pre-recorded/job-123"],
+            deletedPaths
+        );
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_UnfinishedJobDeleteGivesUpAfterCleanupWindow()
+    {
+        var deleteCount = 0;
+        var handler = new SuccessfulFlowHandler(
+            inspectRequest: (request, _) =>
+            {
+                // ReSharper disable once AccessToModifiedClosure -- counts background DELETEs; reads go through Volatile.Read.
+                if (request.Method == HttpMethod.Delete)
+                    Interlocked.Increment(ref deleteCount);
+            },
+            deleteStatusCode: HttpStatusCode.Forbidden
+        );
+
+        using var sut = await CreateConfiguredPluginAsync(
+            handler,
+            deferredCleanupWindow: TimeSpan.FromMilliseconds(200)
+        );
+
+        var result = await sut.TranscribeAsync([1, 2, 3], "de", translate: false, prompt: null, CancellationToken.None);
+        await sut.WaitForDeferredCleanupsAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var countAfterWindow = Volatile.Read(ref deleteCount);
+        // ReSharper disable once MethodSupportsCancellation -- settle delay; nothing to cancel.
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+        Assert.Equal("Hallo Welt", result.Text);
+        Assert.True(countAfterWindow > 1, $"Expected background retries, saw {countAfterWindow} DELETE(s).");
+        Assert.Equal(countAfterWindow, Volatile.Read(ref deleteCount));
+    }
+
+    [Fact]
+    public async Task Dispose_StopsPendingUnfinishedJobCleanup()
+    {
+        var deleteCount = 0;
+        var handler = new SuccessfulFlowHandler(
+            inspectRequest: (request, _) =>
+            {
+                // ReSharper disable once AccessToModifiedClosure -- counts background DELETEs; reads go through Volatile.Read.
+                if (request.Method == HttpMethod.Delete)
+                    Interlocked.Increment(ref deleteCount);
+            },
+            deleteStatusCode: HttpStatusCode.Forbidden
+        );
+
+        var sut = await CreateConfiguredPluginAsync(handler);
+        await sut.TranscribeAsync([1, 2, 3], "de", translate: false, prompt: null, CancellationToken.None);
+        var pending = sut.WaitForDeferredCleanupsAsync();
+        Assert.False(pending.IsCompleted);
+
+        sut.Dispose();
+
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        var countAfterDispose = Volatile.Read(ref deleteCount);
+        // ReSharper disable once MethodSupportsCancellation -- settle delay; nothing to cancel.
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        Assert.Equal(countAfterDispose, Volatile.Read(ref deleteCount));
     }
 
     [Fact]
@@ -1227,13 +1366,16 @@ public class GladiaPluginTests
     private static async Task<GladiaPlugin> CreateConfiguredPluginAsync(
         HttpMessageHandler handler,
         TimeSpan? pollDelay = null,
-        TimeSpan? pollWindow = null
+        TimeSpan? pollWindow = null,
+        TimeSpan? deferredCleanupWindow = null
     )
     {
         var sut = new GladiaPlugin(
             new HttpClient(handler),
             pollDelay ?? TimeSpan.Zero,
-            pollWindow
+            pollWindow,
+            deferredCleanupDelay: TimeSpan.FromMilliseconds(1),
+            deferredCleanupWindow
         );
         await sut.ActivateAsync(
             new TestHost
@@ -1272,6 +1414,13 @@ public class GladiaPluginTests
             }
             """,
             HttpStatusCode.Created
+        );
+
+    // Gladia's live reply when a job is still queued or processing.
+    private static HttpResponseMessage UnfinishedDeleteResponse() =>
+        JsonResponse(
+            """{ "statusCode": 403, "message": "Invalid state: QUEUED not in SUCCESS,ERROR" }""",
+            HttpStatusCode.Forbidden
         );
 
     private static HttpResponseMessage JsonResponse(
