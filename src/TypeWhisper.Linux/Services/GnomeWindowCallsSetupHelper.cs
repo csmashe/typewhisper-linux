@@ -20,7 +20,7 @@ public sealed class GnomeWindowCallsSetupHelper
     }
 
     private const string ExtensionInstallUrl =
-        "https://extensions.gnome.org/extension/4974/window-calls/";
+        "https://extensions.gnome.org/extension/4724/window-calls/";
 
     private const string DBusDest = "org.gnome.Shell";
 

@@ -51,6 +51,22 @@ public sealed class BrowserAccessibilityFirefoxUserJsTests : IDisposable
     }
 
     [Fact]
+    public void LaterSameLineOverride_OfUserAuthoredNegOne_IsPatched()
+    {
+        var userJsPath = NewUserJsPath();
+        const string original =
+            "user_pref(\"accessibility.force_disabled\", -1);\n"
+            + "user_pref(\"accessibility.force_disabled\", 1); user_pref(\"browser.keep_this\", true);\n";
+        File.WriteAllText(userJsPath, original);
+
+        Assert.True(BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath));
+        Assert.EndsWith(OwnedPreference + "\n", File.ReadAllText(userJsPath));
+
+        Assert.True(BrowserAccessibilitySetupHelper.RevertFirefoxUserJs(userJsPath));
+        Assert.Equal(original, File.ReadAllText(userJsPath));
+    }
+
+    [Fact]
     public void SetupTwice_DoesNotStackPreservedOrOwnedEntries_AndRepeatRevertIsClean()
     {
         var userJsPath = NewUserJsPath();
@@ -325,6 +341,43 @@ public sealed class BrowserAccessibilityFirefoxUserJsTests : IDisposable
             BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath)
         );
         Assert.NotNull(new FileInfo(userJsPath).LinkTarget);
+    }
+
+    [Theory]
+    [InlineData("user_pref(\"accessibility.force_disabled\", 1);\r\nuser_pref(\"browser.keep_this\", true);\r\n")]
+    [InlineData("user_pref(\"accessibility.force_disabled\", 1);\nuser_pref(\"browser.keep_this\", true)")]
+    public void Utf8BomUserJs_PatchKeepsBomAndRevertRestoresExactBytes(string text)
+    {
+        var userJsPath = NewUserJsPath();
+        byte[] original = [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(text)];
+        File.WriteAllBytes(userJsPath, original);
+
+        Assert.True(BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath));
+        var patched = File.ReadAllBytes(userJsPath);
+        Assert.Equal(original[..3], patched[..3]);
+        Assert.Contains(OwnedPreference, File.ReadAllText(userJsPath));
+
+        Assert.False(BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath));
+        Assert.Equal(patched, File.ReadAllBytes(userJsPath));
+
+        Assert.True(BrowserAccessibilitySetupHelper.RevertFirefoxUserJs(userJsPath));
+        Assert.Equal(original, File.ReadAllBytes(userJsPath));
+    }
+
+    [Fact]
+    public void Utf8NoBomUserJs_RevertRestoresExactBytesWithoutAddingBom()
+    {
+        var userJsPath = NewUserJsPath();
+        var original = System.Text.Encoding.UTF8.GetBytes(
+            "user_pref(\"accessibility.force_disabled\", 1);\n"
+        );
+        File.WriteAllBytes(userJsPath, original);
+
+        Assert.True(BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath));
+        Assert.NotEqual(0xEF, File.ReadAllBytes(userJsPath)[0]);
+
+        Assert.True(BrowserAccessibilitySetupHelper.RevertFirefoxUserJs(userJsPath));
+        Assert.Equal(original, File.ReadAllBytes(userJsPath));
     }
 
     private string NewUserJsPath()

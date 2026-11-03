@@ -534,6 +534,41 @@ public sealed class WelcomeWizardViewModelTests
         Assert.Equal(ultra.ModelId, WelcomeWizardViewModel.ChooseDefaultModel([ultra], local, null, "ja")?.ModelId);
     }
 
+    [Fact]
+    public async Task NextCommand_OnShortcutStep_ReportsTakenHotkeyAsConflictNotParseError()
+    {
+        using var harness = CreateHarness();
+        harness.Hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+Alt+J");
+        var original = harness.Hotkey.CurrentHotkeyString;
+        harness.ViewModel.StepIndex = 2;
+        harness.ViewModel.HotkeyText = "Ctrl+Alt+J";
+
+        await harness.ViewModel.NextCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyCollides", "Ctrl+Alt+J"),
+            harness.ViewModel.HotkeyStatus
+        );
+        Assert.Equal(2, harness.ViewModel.StepIndex);
+        Assert.Equal(original, harness.Hotkey.CurrentHotkeyString);
+    }
+
+    [Fact]
+    public async Task NextCommand_OnShortcutStep_MalformedHotkeyStillReportsParseError()
+    {
+        using var harness = CreateHarness();
+        harness.ViewModel.StepIndex = 2;
+        harness.ViewModel.HotkeyText = "not-a-key";
+
+        await harness.ViewModel.NextCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            Loc.Instance.GetString("Wizard.HotkeyParseFailed", "not-a-key"),
+            harness.ViewModel.HotkeyStatus
+        );
+        Assert.Equal(2, harness.ViewModel.StepIndex);
+    }
+
     private static FakeCatalogEngine CloudEngine() =>
         new("com.test.cloud", local: false, ("other", false), ("recommended", true));
 
@@ -699,7 +734,7 @@ public sealed class WelcomeWizardViewModelTests
         public Mock<ISettingsService> Settings { get; }
         private ModelManagerService Models { get; }
         public PluginManager PluginManager { get; }
-        private HotkeyService Hotkey { get; }
+        public HotkeyService Hotkey { get; }
         public AudioRecordingService Audio { get; }
 
         public void Dispose()

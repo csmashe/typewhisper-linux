@@ -245,7 +245,7 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
         foreach (
             var path in paths
                 .Where(p => !string.IsNullOrWhiteSpace(p))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Distinct(StringComparer.Ordinal)
         )
         {
             var status = AudioFileService.IsSupported(path)

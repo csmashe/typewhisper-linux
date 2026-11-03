@@ -65,6 +65,9 @@ internal sealed class RecordingAudioBoundary
     internal int ActiveStreams => Volatile.Read(ref _activeStreams);
     internal int MaxActiveStreams => Volatile.Read(ref _maxActiveStreams);
 
+    // Thrown once by the next stream stop, after the stream is released.
+    internal Exception? NextStopFault { get; set; }
+
     internal AudioRecordingService CreateService(IErrorLogService errorLog)
     {
         return new AudioRecordingService(
@@ -88,6 +91,13 @@ internal sealed class RecordingAudioBoundary
             {
                 StopCount++;
                 Interlocked.Decrement(ref _activeStreams);
+                if (NextStopFault is not { } fault)
+                {
+                    return;
+                }
+
+                NextStopFault = null;
+                throw fault;
             },
             errorLog: errorLog,
             postToUiThread: static action => action()
