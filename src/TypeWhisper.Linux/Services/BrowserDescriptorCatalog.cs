@@ -177,7 +177,8 @@ internal static class BrowserDescriptorCatalog
             "chrome",
             "chrome",
             BrowserEngineFamily.Chromium,
-            ["chrome"],
+            // KWin reports Google Chrome's window class, and so its process name, as "google-chrome".
+            ["chrome", "google-chrome"],
             ["Chrome", "Google Chrome", "com.google.Chrome"],
             [],
             ["google-chrome.desktop", "com.google.Chrome.desktop"],
