@@ -192,6 +192,7 @@
   "Command.ApplyingPrompt": "Aplicando prompt: {0}",
   "Command.Done": "Comando aplicado.",
   "Command.Failed": "El comando falló.",
+  "Command.FocusMoved": "Edición cancelada: el foco pasó a otra ventana",
   "Command.NoProvider": "No hay proveedor de IA configurado para comandos",
   "Command.NoResult": "El comando no produjo texto.",
   "Command.NoTerminalSelection": "No se pudo leer la selección: los editores de terminal como Neovim la mantienen interna",

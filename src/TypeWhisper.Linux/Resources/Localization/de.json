@@ -192,6 +192,7 @@
   "Command.ApplyingPrompt": "Prompt wird angewendet: {0}",
   "Command.Done": "Befehl ausgeführt.",
   "Command.Failed": "Befehl fehlgeschlagen.",
+  "Command.FocusMoved": "Bearbeitung abgebrochen: Der Fokus ist in ein anderes Fenster gewechselt",
   "Command.NoProvider": "Kein KI-Anbieter für Befehle konfiguriert",
   "Command.NoResult": "Der Befehl hat keinen Text erzeugt.",
   "Command.NoTerminalSelection": "Auswahl konnte nicht gelesen werden – Terminal-Editoren wie Neovim behalten sie intern",

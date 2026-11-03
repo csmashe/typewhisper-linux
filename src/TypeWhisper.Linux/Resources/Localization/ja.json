@@ -192,6 +192,7 @@
   "Command.ApplyingPrompt": "プロンプトを適用しています：{0}",
   "Command.Done": "コマンドを適用しました。",
   "Command.Failed": "コマンドに失敗しました。",
+  "Command.FocusMoved": "編集をキャンセルしました：フォーカスが別のウィンドウに移動しました",
   "Command.NoProvider": "コマンド用のAIプロバイダーが設定されていません",
   "Command.NoResult": "コマンドからテキストが生成されませんでした。",
   "Command.NoTerminalSelection": "選択範囲を読み取れませんでした。Neovimなどのターミナルエディターは選択範囲を内部で保持しています",
