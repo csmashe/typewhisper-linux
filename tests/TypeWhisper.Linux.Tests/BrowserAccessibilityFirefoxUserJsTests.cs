@@ -51,6 +51,22 @@ public sealed class BrowserAccessibilityFirefoxUserJsTests : IDisposable
     }
 
     [Fact]
+    public void LaterSameLineOverride_OfUserAuthoredNegOne_IsPatched()
+    {
+        var userJsPath = NewUserJsPath();
+        const string original =
+            "user_pref(\"accessibility.force_disabled\", -1);\n"
+            + "user_pref(\"accessibility.force_disabled\", 1); user_pref(\"browser.keep_this\", true);\n";
+        File.WriteAllText(userJsPath, original);
+
+        Assert.True(BrowserAccessibilitySetupHelper.PatchFirefoxUserJs(userJsPath));
+        Assert.EndsWith(OwnedPreference + "\n", File.ReadAllText(userJsPath));
+
+        Assert.True(BrowserAccessibilitySetupHelper.RevertFirefoxUserJs(userJsPath));
+        Assert.Equal(original, File.ReadAllText(userJsPath));
+    }
+
+    [Fact]
     public void SetupTwice_DoesNotStackPreservedOrOwnedEntries_AndRepeatRevertIsClean()
     {
         var userJsPath = NewUserJsPath();

@@ -321,6 +321,175 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         return userJsPath;
     }
 
+    [Fact]
+    public async Task Setup_names_firefox_profile_it_could_not_write()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(SystemApps);
+        File.WriteAllText(
+            Path.Join(SystemApps, "firefox.desktop"),
+            "[Desktop Entry]\nName=Firefox\nExec=/usr/bin/firefox %u\n"
+        );
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        const string userJs = "user_pref(\"accessibility.force_disabled\", 1);\n";
+        File.WriteAllText(Path.Join(profile, "user.js"), userJs);
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+        File.SetUnixFileMode(profile, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            if (CanCreateFileIn(profile))
+            {
+                // Root (or a permission-ignoring filesystem) can still write; nothing to test.
+                return;
+            }
+
+            var result = await new BrowserAccessibilitySetupHelper()
+                .SetUpAsync(CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Equal(["qa.default"], result.SkippedFirefoxProfiles);
+            Assert.Contains("Could not write to: qa.default.", result.Detail!, StringComparison.Ordinal);
+            Assert.DoesNotContain("Restart Firefox", result.Detail!, StringComparison.Ordinal);
+            Assert.Equal(userJs, File.ReadAllText(Path.Join(profile, "user.js")));
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                profile,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+        }
+    }
+
+    [Fact]
+    public async Task Unwritable_profile_already_enabled_in_prefs_js_is_not_reported_as_skipped()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(
+            Path.Join(profile, "prefs.js"),
+            "user_pref(\"accessibility.force_disabled\", -1);\n"
+        );
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+        File.SetUnixFileMode(profile, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            if (CanCreateFileIn(profile))
+            {
+                return;
+            }
+
+            var result = await new BrowserAccessibilitySetupHelper()
+                .SetUpAsync(CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Empty(result.SkippedFirefoxProfiles);
+            Assert.Contains("Already enabled in prefs.js", result.Detail!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                profile,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData("user_pref(\"accessibility.force_disabled\", 1);\n", false)]
+    [InlineData("\n\nuser_pref(\"accessibility.force_disabled\", -1);\n", true)]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"accessibility.force_disabled\", 1); user_pref(\"browser.startup.page\", 3);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"browser.startup.page\", 3); user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", 1); user_pref(\"accessibility.force_disabled\", -1);\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n// user_pref(\"accessibility.force_disabled\", 1);\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n/* user_pref(\"accessibility.force_disabled\", 1); */\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n/*\nuser_pref(\"accessibility.force_disabled\", 1);\n*/\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\n# user_pref(\"accessibility.force_disabled\", 1);\n",
+        true
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1); /* note */ user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", -1);\nuser_pref(\"x\", \"/* # // \\\" \"); user_pref(\"accessibility.force_disabled\", 1);\n",
+        false
+    )]
+    [InlineData(
+        "user_pref(\"accessibility.force_disabled\", 1);\nuser_pref(\"x\", \"user_pref('accessibility.force_disabled', -1);\");\n",
+        false
+    )]
+    [InlineData("user_pref(\"browser.startup.page\", 3);\n", true)]
+    public void Status_lets_user_js_override_prefs_js(string userJs, bool expectedEnabled)
+    {
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(
+            Path.Join(profile, "prefs.js"),
+            "user_pref(\"accessibility.force_disabled\", -1);\n"
+        );
+        File.WriteAllText(Path.Join(profile, "user.js"), userJs);
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+
+        var status = BrowserAccessibilitySetupHelper.IsCurrentlyConfigured();
+
+        Assert.Equal(expectedEnabled, status.FirefoxAccessibilityForceEnabled);
+    }
+
+    [Fact]
+    public async Task Setup_reports_no_skipped_profiles_when_every_profile_is_patched()
+    {
+        var profilesRoot = Path.Join(_root, "firefox-profiles");
+        var profile = Path.Join(profilesRoot, "qa.default");
+        Directory.CreateDirectory(profile);
+        File.WriteAllText(Path.Join(profile, "prefs.js"), "");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [profilesRoot];
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.SkippedFirefoxProfiles);
+        Assert.Contains("Patched profile(s): qa.default.", result.Detail!, StringComparison.Ordinal);
+    }
+
     private string ConfigHome => Path.Join(_root, "config");
     private string DataHome => Path.Join(_root, "data");
     private string StateRoot => Path.Join(_root, "state");
@@ -339,6 +508,25 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
     {
         Directory.CreateDirectory(SystemApps);
         File.WriteAllText(Path.Join(SystemApps, ChromeDesktopId), SystemChromeContent);
+    }
+
+    private static bool CanCreateFileIn(string directory)
+    {
+        var probe = Path.Join(directory, ".write-probe");
+        try
+        {
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
     }
 
     private static string ExpectedPatchedChrome(string source)
