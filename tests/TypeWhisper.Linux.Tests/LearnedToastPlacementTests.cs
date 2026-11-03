@@ -121,4 +121,58 @@ public sealed class LearnedToastPlacementTests
         Assert.True(point.X >= secondary.X, "toast must sit on the secondary monitor");
         Assert.Equal(452, point.Y); // below the element: 440 + 12
     }
+
+    [Fact]
+    public void WindowFrame_AtUnitScale_MapsUnchanged()
+    {
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(2000, 150, 720, 360), new AtSpiScreenRect(0, 0, 3840, 1080));
+        PixelRect[] screens = [s_primary, new(1920, 0, 1920, 1080)];
+
+        Assert.Equal(new AtSpiScreenRect(2000, 150, 720, 360), LearnedToastPlacement.MapToScreens(window, screens));
+    }
+
+    [Fact]
+    public void WindowFrame_UnderScaledXwayland_MapsOntoTheSameMonitor()
+    {
+        // Mutter logical: 1280x800 at 100% + 1280x720 (1600x900 at 125%) to its right. Xwayland
+        // reports the whole desktop at 2x, so the secondary's X screen starts at 2560.
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(1500, 150, 720, 360), new AtSpiScreenRect(0, 0, 2560, 800));
+        PixelRect[] screens = [new(0, 0, 2560, 1600), new(2560, 0, 2560, 1440)];
+
+        var anchor = LearnedToastPlacement.MapToScreens(window, screens);
+        var point = LearnedToastPlacement.Compute(anchor, screens, new PixelSize(758, 140));
+
+        Assert.Equal(new AtSpiScreenRect(3000, 300, 1440, 720), anchor);
+        Assert.Equal(new PixelPoint(3341, 1032), point);
+    }
+
+    [Fact]
+    public void WindowFrame_WithoutScreens_IsNotMapped()
+    {
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(10, 10, 100, 100), new AtSpiScreenRect(0, 0, 1920, 1080));
+
+        Assert.Null(LearnedToastPlacement.MapToScreens(window, []));
+    }
+
+    [Fact]
+    public void Anchor_PrefersPlausibleExtentsOverTheWindowFrame()
+    {
+        var extents = new AtSpiScreenRect(100, 200, 300, 40);
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(2000, 150, 720, 360), new AtSpiScreenRect(0, 0, 3840, 1080));
+
+        Assert.Equal(extents, LearnedToastPlacement.ChooseAnchor(extents, window, [s_primary, new PixelRect(1920, 0, 1920, 1080)]));
+    }
+
+    [Theory]
+    [InlineData(0, 0, 0, 0)]
+    [InlineData(5000, 5000, 300, 40)]
+    public void Anchor_FallsBackToTheWindowFrameWhenExtentsAreUnusable(int x, int y, int width, int height)
+    {
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(2000, 150, 720, 360), new AtSpiScreenRect(0, 0, 3840, 1080));
+
+        Assert.Equal(
+            new AtSpiScreenRect(2000, 150, 720, 360),
+            LearnedToastPlacement.ChooseAnchor(new AtSpiScreenRect(x, y, width, height), window, [s_primary, new PixelRect(1920, 0, 1920, 1080)])
+        );
+    }
 }

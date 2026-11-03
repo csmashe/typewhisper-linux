@@ -95,7 +95,7 @@ public sealed class Qwen3SttPlugin
         var apiKey = _apiKey ?? "";
         var model = SelectedModelId ?? DefaultModel;
 
-        return await OpenAiTranscriptionHelper.TranscribeAsync(
+        var result = await OpenAiTranscriptionHelper.TranscribeAsync(
             _httpClient,
             baseUrl,
             apiKey,
@@ -107,6 +107,28 @@ public sealed class Qwen3SttPlugin
             ct,
             prompt
         );
+        return StripForcedLanguageOutput(result, language);
+    }
+
+    private const string AsrTextMarker = "<asr_text>";
+
+    // qwen3_asr_rs returns the raw model output when a language is forced: the rest of its
+    // "language <Name>" prompt prefix (e.g. "pañol" after "Es"), the <asr_text> marker, then
+    // the speech, with "forced" in place of the language.
+    internal static PluginTranscriptionResult StripForcedLanguageOutput(
+        PluginTranscriptionResult result,
+        string? requestedLanguage
+    )
+    {
+        if (!string.Equals(result.DetectedLanguage, "forced", StringComparison.OrdinalIgnoreCase))
+            return result;
+
+        var markerIndex = result.Text.IndexOf(AsrTextMarker, StringComparison.Ordinal);
+        var text = markerIndex < 0
+            ? result.Text
+            : result.Text[(markerIndex + AsrTextMarker.Length)..].Trim();
+
+        return result with { Text = text, DetectedLanguage = requestedLanguage };
     }
 
     private IPluginLocalization? _injectedLocalization;

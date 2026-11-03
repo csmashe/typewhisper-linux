@@ -44,6 +44,8 @@ public sealed partial class MemoryService
 
     public async Task ExtractAndStoreAsync(
         string text,
+        ILlmProviderRole llm,
+        string model,
         LlmCallCapture? capture = null,
         CancellationToken ct = default
     )
@@ -61,19 +63,6 @@ public sealed partial class MemoryService
         var plugins = _pluginManager.GetPlugins<IMemoryStoragePlugin>();
         var memoryPlugin = plugins.Count > 0 ? plugins[0] : null;
         if (memoryPlugin is null)
-        {
-            return;
-        }
-
-        var llm = _pluginManager.LlmProviders.FirstOrDefault(provider => provider.IsAvailable);
-        // ReSharper disable once UseNullPropagation -- early-return null guard protecting later non-conditional dereferences of llm; there is no member access to fold into a null-conditional, so a rewrite would change control flow.
-        if (llm is null)
-        {
-            return;
-        }
-
-        var model = (llm.SupportedModels.Count > 0 ? llm.SupportedModels[0] : null)?.Id;
-        if (model is null)
         {
             return;
         }

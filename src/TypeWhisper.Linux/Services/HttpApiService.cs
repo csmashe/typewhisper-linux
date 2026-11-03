@@ -949,10 +949,18 @@ public sealed partial class HttpApiService : IDisposable
             return;
         }
 
+        // Settings changes stop the host from the UI thread. Kestrel's stop and dispose
+        // continuations resume on the caller's SynchronizationContext, so blocking that
+        // thread on them deadlocks; run the teardown on the pool instead.
+        Task.Run(() => StopHostAsync(host)).GetAwaiter().GetResult();
+    }
+
+    private static async Task StopHostAsync(WebApplication host)
+    {
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            host.StopAsync(timeout.Token).GetAwaiter().GetResult();
+            await host.StopAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -962,7 +970,7 @@ public sealed partial class HttpApiService : IDisposable
         {
             try
             {
-                host.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                await host.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {

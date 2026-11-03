@@ -212,7 +212,9 @@ public sealed class PromptMemoryRecallTests : IDisposable
         using var manager = CreatePluginManager(_first);
 
         await new MemoryService(manager).ExtractAndStoreAsync(
-            "Today I set up the new laptop with Fedora for work."
+            "Today I set up the new laptop with Fedora for work.",
+            _llm,
+            _llm.SupportedModels[0].Id
         );
 
         Assert.Equal(["Chris uses Fedora at work"], _first.Stored);

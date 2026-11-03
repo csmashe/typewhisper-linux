@@ -511,6 +511,12 @@ public sealed class HotkeyService : IDisposable
         }
     }
 
+    /// <summary>
+    ///     True when <paramref name="text" /> is valid hotkey syntax, regardless of collisions.
+    /// </summary>
+    public static bool IsParsableHotkey(string? text) =>
+        text is not null && TryParseHotkey(text, out var key, out _) && key is not null;
+
     public bool TrySetPromptPaletteHotkeyFromString(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

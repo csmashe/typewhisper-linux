@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Hotkey;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.Tests;
 using Xunit;
@@ -127,38 +128,46 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         await sut.ApplyCapturedHotkeyAsync("Ctrl+Shift+P");
 
         Assert.Equal(original, sut.HotkeyText);
-        Assert.Contains("collides", sut.StatusMessage);
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyCollides", "Ctrl+Shift+P"),
+            sut.StatusMessage
+        );
         Assert.False(sut.IsCapturingHotkey);
     }
 
     [Fact]
-    public void HotkeySavedElsewhere_UpdatesHotkeyText()
+    public async Task ApplyHotkey_CollisionReportsCollisionNotParseError()
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
-        using var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+        hotkey.TrySetRecentTranscriptionsHotkeyFromString("Ctrl+Alt+J");
+        var original = hotkey.CurrentHotkeyString;
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { HotkeyText = "Ctrl+Alt+J" };
 
-        // Mirrors the welcome wizard's shortcut step.
-        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F8"));
-        var bound = hotkey.CurrentHotkeyString;
-        settings.Update(current => current with { ToggleHotkey = bound });
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
 
-        Assert.Equal("Ctrl+Shift+F8", sut.HotkeyText);
+        Assert.Equal(original, hotkey.CurrentHotkeyString);
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyCollides", "Ctrl+Alt+J"),
+            sut.StatusMessage
+        );
     }
 
     [Fact]
-    public void UnrelatedSettingsSave_KeepsUnappliedHotkeyDraft()
+    public async Task ApplyHotkey_MalformedTextStillReportsParseError()
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
         settings.Load();
         using var hotkey = TestShortcutBackend.CreateHotkeyService();
-        using var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { HotkeyText = "not-a-key" };
 
-        sut.HotkeyText = "Alt+F7";
-        settings.Update(current => current with { PromptPaletteHotkey = "Ctrl+Shift+P" });
+        await sut.ApplyHotkeyCommand.ExecuteAsync(null);
 
-        Assert.Equal("Alt+F7", sut.HotkeyText);
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyParseFailed", "not-a-key"),
+            sut.StatusMessage
+        );
     }
 
     [Fact]
@@ -1084,5 +1093,36 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
             null,
             null
         );
+    }
+
+
+    [Fact]
+    public void HotkeySavedElsewhere_UpdatesHotkeyText()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        using var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+
+        // Mirrors the welcome wizard's shortcut step.
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F8"));
+        var bound = hotkey.CurrentHotkeyString;
+        settings.Update(current => current with { ToggleHotkey = bound });
+
+        Assert.Equal("Ctrl+Shift+F8", sut.HotkeyText);
+    }
+
+    [Fact]
+    public void UnrelatedSettingsSave_KeepsUnappliedHotkeyDraft()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        using var sut = new ShortcutsSectionViewModel(hotkey, settings, [], action => action());
+
+        sut.HotkeyText = "Alt+F7";
+        settings.Update(current => current with { PromptPaletteHotkey = "Ctrl+Shift+P" });
+
+        Assert.Equal("Alt+F7", sut.HotkeyText);
     }
 }

@@ -18,15 +18,28 @@ public sealed class GitHubCopilotTransportTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task RejectedModelSwitchSendsNoTextAndCleansUpTheSession(bool deferred)
+    public async Task AModelTheBoundAccountCannotUseSendsNoTextAndCleansUpTheSession(bool missingFromSession)
     {
         // ReSharper disable once UsingStatementResourceInitialization, UsingStatementResourceInitializationExpression -- init-only flags cannot throw.
-        await using var server = new FakeCopilotServer { DeferredSwitch = deferred, MismatchedModel = !deferred };
+        await using var server = new FakeCopilotServer
+        {
+            SessionLacksModel = missingFromSession, MismatchedModel = !missingFromSession,
+        };
         await Assert.ThrowsAsync<CopilotModelUnavailableException>(() =>
             server.CreateTransport().ProcessAsync(s_personal, "s", "private", "model-a", CancellationToken.None));
         Assert.DoesNotContain(server.Requests, r => r.Method == "session.send");
         Assert.Contains(server.Requests, r => r.Method == "session.abort");
         Assert.Contains(server.Requests, r => r.Method == "session.delete");
+    }
+
+    [Fact]
+    public async Task TheSessionStartsOnTheRequestModelInsteadOfSwitchingAfterTheAccountIsBound()
+    {
+        await using var server = new FakeCopilotServer();
+        await server.CreateTransport().ProcessAsync(s_personal, "s", "u", "model-a", CancellationToken.None);
+        Assert.Equal("model-a", server.Parameters("session.create").GetProperty("model").GetString());
+        Assert.True(server.Parameters("session.model.list").GetProperty("skipCache").GetBoolean());
+        Assert.DoesNotContain(server.Requests, r => r.Method == "session.model.switchTo");
     }
 
     [Fact]
@@ -86,7 +99,7 @@ public sealed class GitHubCopilotTransportTests
             r.Params.ValueKind != JsonValueKind.Undefined && r.Params.GetRawText().Contains("fixture-secret"));
         Assert.DoesNotContain(server.Requests, r => r.Method is "account.login" or "account.logout");
         var methods = server.Requests.Select(r => r.Method).ToList();
-        Assert.True(methods.IndexOf("session.gitHubAuth.setCredentials") < methods.IndexOf("session.model.switchTo"));
+        Assert.True(methods.IndexOf("session.gitHubAuth.setCredentials") < methods.IndexOf("session.model.list"));
         Assert.True(methods.IndexOf("session.gitHubAuth.getStatus") < methods.IndexOf("session.send"));
     }
 
@@ -115,7 +128,7 @@ public sealed class GitHubCopilotTransportTests
         await using var server = new FakeCopilotServer { MismatchedSessionAccount = true };
         await Assert.ThrowsAsync<CopilotSignInRequiredException>(() =>
             server.CreateTransport().ProcessAsync(s_personal, "s", "private", "model-a", CancellationToken.None));
-        Assert.DoesNotContain(server.Requests, r => r.Method is "session.send" or "session.model.switchTo");
+        Assert.DoesNotContain(server.Requests, r => r.Method is "session.send" or "session.model.list");
         Assert.Contains(server.Requests, r => r.Method == "session.delete");
     }
 
@@ -310,10 +323,11 @@ internal sealed class FakeCopilotServer : IAsyncDisposable
     internal bool ErrorResponse { get; init; }
     internal bool MismatchedSessionAccount { get; set; }
     internal bool MissingPersonal { get; init; }
-    internal bool DeferredSwitch { get; init; }
+    internal bool SessionLacksModel { get; init; }
     internal bool MismatchedModel { get; init; }
     internal Action<string>? OnSend { get; set; }
     private string _selectedLogin = "personal";
+    private string? _sessionModel;
 
     internal FakeCopilotServer()
     {
@@ -410,6 +424,11 @@ internal sealed class FakeCopilotServer : IAsyncDisposable
                     continue;
                 }
 
+                if (method == "session.create")
+                {
+                    _sessionModel = parameters.TryGetProperty("model", out var model) ? model.GetString() : null;
+                }
+
                 if (method == "session.gitHubAuth.setCredentials")
                 {
                     _selectedLogin = parameters.GetProperty("credentials").GetProperty("login").GetString()!;
@@ -438,12 +457,17 @@ internal sealed class FakeCopilotServer : IAsyncDisposable
                         isAuthenticated = true, authType = "user", host = "https://github.com",
                         login = MismatchedSessionAccount ? "different-account" : _selectedLogin,
                     },
-                    "session.model.switchTo" => new
+                    "session.model.list" => new
                     {
-                        modelId = MismatchedModel ? "different-model" : parameters.GetProperty("modelId").GetString(),
-                        deferred = DeferredSwitch,
-                        status = "applied",
+                        list = SessionLacksModel
+                            ? new object[] { new { id = "other", name = "Other" } }
+                            : new object[]
+                            {
+                                new { id = "model-a", name = "Model A", policy = new { state = "enabled" } },
+                                new { id = "disabled", name = "Disabled", policy = new { state = "disabled" } },
+                            },
                     },
+                    "session.model.getCurrent" => new { modelId = MismatchedModel ? "different-model" : _sessionModel },
                     "models.list" => new
                     {
                         models = new object[]
