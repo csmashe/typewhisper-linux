@@ -28,6 +28,41 @@ public sealed class AppHotkeyReconcileTests
         Assert.Empty(hotkey.CurrentCopyLastTranscriptionHotkeyString);
     }
 
+    [Fact]
+    public void ReconcileHotkeyOnStartup_SavedCtrlShiftF9_IsKept()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(service => service.Current)
+            .Returns(new AppSettings { ToggleHotkey = "Ctrl+Shift+F9" });
+
+        App.ReconcileHotkeyOnStartup(hotkey, settings.Object);
+
+        Assert.Equal("Ctrl+Shift+F9", hotkey.CurrentHotkeyString);
+        settings.Verify(
+            service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()),
+            Times.Never
+        );
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ReconcileHotkeyOnStartup_BlankSavedHotkey_StoresTheLinuxDefault(string persisted)
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var current = new AppSettings { ToggleHotkey = persisted };
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(service => service.Current).Returns(() => current);
+        settings.Setup(service => service.Update(It.IsAny<Func<AppSettings, AppSettings>>()))
+            .Callback<Func<AppSettings, AppSettings>>(update => current = update(current));
+
+        App.ReconcileHotkeyOnStartup(hotkey, settings.Object);
+
+        Assert.Equal("Ctrl+Shift+Space", hotkey.CurrentHotkeyString);
+        Assert.Equal("Ctrl+Shift+Space", current.ToggleHotkey);
+    }
+
     [Theory]
     [InlineData("first appearance", "first", "action-a", 1)]
     [InlineData("persistence", "persistent", "action-a,profile-b/", 2)]
