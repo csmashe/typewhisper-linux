@@ -2590,57 +2590,51 @@ public sealed class TextInsertionServiceTests
     }
 
     [Theory]
-    [InlineData("", true, false)]
-    [InlineData("text/plain;charset=utf-8\n", true, false)]
-    [InlineData("text/plain;charset=utf-8\ntext/html\n", true, true)]
-    [InlineData("image/png\n", true, true)]
+    [InlineData("", false)]
+    [InlineData("text/plain;charset=utf-8\n", false)]
+    [InlineData("text/plain;charset=utf-8\ntext/html\n", true)]
+    [InlineData("image/png\n", true)]
     // Native GTK3 plain-text copy as wl-paste lists it, duplicates included.
     [InlineData(
         "text/plain\ntext/plain;charset=utf-8\nSTRING\nTEXT\nCOMPOUND_TEXT\nUTF8_STRING\nSTRING\nTEXT\n",
-        true,
         false
     )]
     // Native GTK plain-text copy on KDE Wayland also lists SAVE_TARGETS negotiation metadata.
     [InlineData(
         "text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n",
-        true,
         false
     )]
-    [InlineData("SAVE_TARGETS\ntext/html\n", true, true)]
-    [InlineData("COMPOUND_TEXT\ntext/html\n", true, true)]
-    [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false, false)]
+    [InlineData("SAVE_TARGETS\ntext/html\n", true)]
+    [InlineData("COMPOUND_TEXT\ntext/html\n", true)]
+    [InlineData("TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\n", false)]
     [InlineData(
         "TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\ntext/uri-list\n",
-        false,
         true
     )]
     [InlineData(
         "TARGETS\nMULTIPLE\nSTRING\nUTF8_STRING\ntext/plain\nx-special/gnome-copied-files\n",
-        false,
         true
     )]
     // ICCCM metadata / side-effect targets carry no content of their own.
-    [InlineData("TARGETS\nSTRING\nLENGTH\n", false, false)]
-    [InlineData("TARGETS\nSTRING\nDELETE\n", false, false)]
-    [InlineData("TARGETS\nSTRING\nINSERT_SELECTION\n", false, false)]
-    [InlineData("TARGETS\nSTRING\nINSERT_PROPERTY\n", false, false)]
+    [InlineData("TARGETS\nSTRING\nLENGTH\n", false)]
+    [InlineData("TARGETS\nSTRING\nDELETE\n", false)]
+    [InlineData("TARGETS\nSTRING\nINSERT_SELECTION\n", false)]
+    [InlineData("TARGETS\nSTRING\nINSERT_PROPERTY\n", false)]
     [InlineData(
         "TARGETS\nMULTIPLE\nTIMESTAMP\nLENGTH\nDELETE\nINSERT_SELECTION\nINSERT_PROPERTY\nSTRING\nUTF8_STRING\nTEXT\nCOMPOUND_TEXT\n",
-        false,
         false
     )]
     // A real rich format alongside them still counts.
-    [InlineData("TARGETS\nSTRING\nLENGTH\ntext/html\n", false, true)]
+    [InlineData("TARGETS\nSTRING\nLENGTH\ntext/html\n", true)]
+    // Xwayland bridges an X11 owner's targets to Wayland verbatim, TARGETS included.
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nTARGETS\n", false)]
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nTARGETS\ntext/html\n", true)]
     public void LinuxTextInsertionPlatform_ListingHasNonTextFormats_classifies_targets(
         string listing,
-        bool isWayland,
         bool expected
     )
     {
-        Assert.Equal(
-            expected,
-            LinuxTextInsertionPlatform.ListingHasNonTextFormats(listing, isWayland)
-        );
+        Assert.Equal(expected, LinuxTextInsertionPlatform.ListingHasNonTextFormats(listing));
     }
 
     [Fact]
@@ -2894,6 +2888,22 @@ public sealed class TextInsertionServiceTests
         var call = Assert.Single(runner.Invocations);
         Assert.Equal("wl-paste", call.FileName);
         Assert.Equal(["--list-types"], call.Args);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_ClipboardFormatListing_XwaylandPlainTextIsTextOnly()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            "text/plain;charset=utf-8\nUTF8_STRING\nTARGETS\n"
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true),
+            runner
+        );
+
+        Assert.False(await platform.ClipboardHasNonTextFormatsAsync());
     }
 
     [Fact]

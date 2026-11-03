@@ -1287,21 +1287,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
 
-    // GTK owners also advertise the legacy COMPOUND_TEXT encoding for plain-text copies, and
-    // SAVE_TARGETS (clipboard-manager negotiation metadata that carries no content of its own).
-    private static readonly HashSet<string> s_waylandTextSafeTargets =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            "STRING",
-            "UTF8_STRING",
-            "TEXT",
-            "COMPOUND_TEXT",
-            "SAVE_TARGETS",
-        };
-
     // X11 TARGETS listings always include protocol/negotiation targets that carry no
     // content of their own alongside the plain-text encodings. None count as non-text content.
-    private static readonly HashSet<string> s_x11TextSafeTargets = new(
+    // wl-paste listings need the same set: Xwayland bridges an X11 owner's target names to
+    // Wayland verbatim, and GTK owners advertise COMPOUND_TEXT and SAVE_TARGETS there too.
+    private static readonly HashSet<string> s_textSafeTargets = new(
         [
             "TARGETS",
             "MULTIPLE",
@@ -1525,7 +1515,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
 
             return result.Succeeded
-                   && ListingHasNonTextFormats(result.StandardOutput, useWaylandClipboard);
+                   && ListingHasNonTextFormats(result.StandardOutput);
         }
         catch (Exception ex)
         {
@@ -1536,14 +1526,13 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    internal static bool ListingHasNonTextFormats(string listing, bool isWayland)
+    internal static bool ListingHasNonTextFormats(string listing)
     {
-        var textSafe = isWayland ? s_waylandTextSafeTargets : s_x11TextSafeTargets;
         return listing.Split('\n').Any(rawLine =>
         {
             var target = rawLine.Trim();
             return target.Length != 0
-                   && !textSafe.Contains(target)
+                   && !s_textSafeTargets.Contains(target)
                    && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase);
         });
     }
