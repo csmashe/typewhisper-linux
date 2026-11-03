@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using TypeWhisper.Core.Interfaces;
@@ -69,13 +70,6 @@ public sealed partial class AtSpiUrlExtractor
     // background snapshot task and must finish well inside the 4 s stop ceiling.
     private static readonly TimeSpan s_harvestBudget = TimeSpan.FromMilliseconds(1000);
 
-    // The a11y bus address never changes for the process lifetime, so resolving it
-    // once avoids re-spawning gdbus on every capture. Guarded by its own lock; the
-    // "resolved" flag distinguishes "resolved to null" (unavailable) from "not yet tried".
-    private static readonly Lock s_busAddressLock = new();
-    private static string? s_cachedBusAddress;
-    private static bool s_busAddressResolved;
-
     // Each busctl invocation is a separate process + D-Bus round-trip (50–200 ms each on
     // a busy system). Firefox's URL bar also sits under invisible structural containers, so
     // the walker descends into unseen subtrees — 2.5 s gives headroom while remaining
@@ -95,6 +89,7 @@ public sealed partial class AtSpiUrlExtractor
     private readonly bool _isBusctlAvailable;
     private readonly bool _isGdbusAvailable;
     private readonly IProcessRunner _processRunner;
+    private readonly AsyncLocal<CancellationToken> _harvestCallCancellation = new();
     private string? _cachedDescriptorId;
     private string? _cachedTitle;
     private string? _cachedUrl;
@@ -318,30 +313,30 @@ public sealed partial class AtSpiUrlExtractor
     ///     tree. Password fields are never read. Hard caps: ~1 s wall-clock, ~40 node visits,
     ///     ~2500-char output.
     /// </summary>
-    // kept instance: part of the injected extractor's public API, mirroring TryGetBrowserUrl
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "kept instance: injected as a DI/test seam, consistent with TryGetBrowserUrl")]
-    // ReSharper disable once MemberCanBeMadeStatic.Global
     public string? TryHarvestFocusedContext(
         string? processName,
         string? title,
         string? selfAppName
     )
     {
-        if (!s_isBusctlAvailable || !s_isGdbusAvailable)
-        {
-            return null;
-        }
-
-        var address = GetCachedAtSpiBusAddress();
-        if (string.IsNullOrWhiteSpace(address))
+        if (!_isBusctlAvailable || !_isGdbusAvailable
+            || string.IsNullOrWhiteSpace(processName) || string.IsNullOrWhiteSpace(title))
         {
             return null;
         }
 
         using var cts = new CancellationTokenSource(s_harvestBudget);
+        var previousCancellation = _harvestCallCancellation.Value;
+        _harvestCallCancellation.Value = cts.Token;
         try
         {
-            return HarvestFocusedContext(address, processName, title, selfAppName, cts.Token);
+            // Resolve through the current injected runner. A lock/unlock or accessibility-bus
+            // restart must not leave a cached missing/stale address attached to future captures.
+            var address = GetAtSpiBusAddress();
+            cts.Token.ThrowIfCancellationRequested();
+            return string.IsNullOrWhiteSpace(address)
+                ? null
+                : HarvestFocusedContext(address, processName, title, selfAppName, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -352,9 +347,13 @@ public sealed partial class AtSpiUrlExtractor
             Trace.WriteLine($"[AtSpiUrlExtractor] Focused-context harvest failed: {ex.Message}");
             return null;
         }
+        finally
+        {
+            _harvestCallCancellation.Value = previousCancellation;
+        }
     }
 
-    private static string? HarvestFocusedContext(
+    private string? HarvestFocusedContext(
         string address,
         string? processName,
         string? title,
@@ -364,10 +363,8 @@ public sealed partial class AtSpiUrlExtractor
     {
         var remainingVisits = HarvestNodeVisitCap;
 
-        // Without any window hint (no process AND no title — e.g. Wayland without xdotool) we
-        // can't scope the harvest to the recorded window, so we must not read whatever happens
-        // to be focused: a focus change could feed an unrelated app's screen into cleanup. Bail.
-        if (string.IsNullOrWhiteSpace(processName) && string.IsNullOrWhiteSpace(title))
+        // Process and window title are both required before any text can be harvested.
+        if (string.IsNullOrWhiteSpace(processName) || string.IsNullOrWhiteSpace(title))
         {
             return null;
         }
@@ -469,7 +466,7 @@ public sealed partial class AtSpiUrlExtractor
                && title.TrimEnd().EndsWith(appName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static AccessibleRef? FindFocusedElement(
+    private AccessibleRef? FindFocusedElement(
         string address,
         AccessibleRef app,
         ref int remainingVisits,
@@ -503,7 +500,7 @@ public sealed partial class AtSpiUrlExtractor
         return FindFocusedNodeBfs(address, app, ref remainingVisits, ct);
     }
 
-    private static AccessibleRef? TryGetCollectionFocusedMatch(string address, AccessibleRef app)
+    private AccessibleRef? TryGetCollectionFocusedMatch(string address, AccessibleRef app)
     {
         // MatchRule signature (aiia{ss}iaiiasib): states=[1<<12, 0] (STATE_FOCUSED = bit 12),
         // stateMatch=ANY(2), empty attributes/roles/interfaces, invert=false; then
@@ -539,7 +536,7 @@ public sealed partial class AtSpiUrlExtractor
         return values.Count >= 2 ? new AccessibleRef(values[0], values[1]) : null;
     }
 
-    private static AccessibleRef? FindFocusedNodeBfs(
+    private AccessibleRef? FindFocusedNodeBfs(
         string address,
         AccessibleRef app,
         ref int remainingVisits,
@@ -579,7 +576,7 @@ public sealed partial class AtSpiUrlExtractor
         return null;
     }
 
-    private static string? ReadFocusedContext(
+    private string? ReadFocusedContext(
         string address,
         AccessibleRef focused,
         ref int remainingVisits,
@@ -666,11 +663,9 @@ public sealed partial class AtSpiUrlExtractor
     /// <summary>
     ///     Confirms the focused node lives under the recorded window: walk up to the nearest
     ///     frame/window ancestor and require its title to relate to <paramref name="recordedTitle" />.
-    ///     Best-effort — accepts (doesn't reject) when the title is unknown or the frame's own
-    ///     title can't be read, so a legitimate harvest is never dropped on missing data; only a
-    ///     positively-different window title rejects.
+    ///     Missing titles or an unconfirmed frame reject capture before any element text is read.
     /// </summary>
-    private static bool FocusedNodeBelongsToWindow(
+    private bool FocusedNodeBelongsToWindow(
         string address,
         AccessibleRef focused,
         string? recordedTitle,
@@ -680,7 +675,7 @@ public sealed partial class AtSpiUrlExtractor
     {
         if (string.IsNullOrWhiteSpace(recordedTitle))
         {
-            return true;
+            return false;
         }
 
         var node = focused;
@@ -689,11 +684,15 @@ public sealed partial class AtSpiUrlExtractor
             ct.ThrowIfCancellationRequested();
             remainingVisits--;
             var role = GetAccessibleRole(address, node);
+            if (IsPasswordTextRole(role))
+            {
+                return false;
+            }
+
             if (role is AtSpiRoleFrame or AtSpiRoleWindow)
             {
                 var frameTitle = GetAccessibleName(address, node);
-                // Unreadable frame title → can't disprove; keep best-effort behavior.
-                return string.IsNullOrWhiteSpace(frameTitle) || TitlesRelate(frameTitle, recordedTitle);
+                return !string.IsNullOrWhiteSpace(frameTitle) && TitlesRelate(frameTitle, recordedTitle);
             }
 
             ct.ThrowIfCancellationRequested();
@@ -706,26 +705,31 @@ public sealed partial class AtSpiUrlExtractor
             node = parent.Value;
         }
 
-        return true;
+        return false;
     }
 
     /// <summary>
-    ///     True when two window titles plausibly name the same window: exact/contains-either-way,
-    ///     case-insensitive. The compositor snapshot title and the AT-SPI frame Name derive from
-    ///     the same window title in GTK/Qt, so this stays lenient to avoid false rejections while
-    ///     still rejecting a clearly different window's title.
+    ///     True when the AT-SPI frame Name is the recorded window title. Toolkits expose the title
+    ///     verbatim, so a containing title (“Report private”) is a different same-app window; only
+    ///     KWin's duplicate-caption suffix (“Report &lt;2&gt;”) on the recorded title is tolerated.
     /// </summary>
-    internal static bool TitlesRelate(string? a, string? b)
+    internal static bool TitlesRelate(string? frameTitle, string? recordedTitle)
     {
-        var x = a?.Trim();
-        var y = b?.Trim();
-        if (string.IsNullOrEmpty(x) || string.IsNullOrEmpty(y))
+        var frame = frameTitle?.Trim();
+        var recorded = recordedTitle?.Trim();
+        if (string.IsNullOrEmpty(frame) || string.IsNullOrEmpty(recorded))
         {
             return false;
         }
 
-        return x.Contains(y, StringComparison.OrdinalIgnoreCase)
-               || y.Contains(x, StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(frame, recorded, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var duplicateSuffix = KWinDuplicateCaptionSuffixRegex().Match(recorded);
+        return duplicateSuffix.Success
+               && string.Equals(frame, recorded[..duplicateSuffix.Index], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -808,22 +812,7 @@ public sealed partial class AtSpiUrlExtractor
         return role == AtSpiRolePasswordText;
     }
 
-    private static string? GetCachedAtSpiBusAddress()
-    {
-        lock (s_busAddressLock)
-        {
-            if (s_busAddressResolved)
-            {
-                return s_cachedBusAddress;
-            }
-
-            s_cachedBusAddress = GetAtSpiBusAddress();
-            s_busAddressResolved = true;
-            return s_cachedBusAddress;
-        }
-    }
-
-    private static AccessibleRef? GetAccessibleParent(string address, AccessibleRef node)
+    private AccessibleRef? GetAccessibleParent(string address, AccessibleRef node)
     {
         var output = RunBusctlGetProperty(
             address,
@@ -1561,7 +1550,8 @@ public sealed partial class AtSpiUrlExtractor
                 new ProcessOneShotOptions(
                     Timeout: TimeSpan.FromSeconds(1),
                     StandardError: ProcessCaptureMode.Discard
-                )
+                ),
+                _harvestCallCancellation.Value
             );
             output = result.Status == ProcessRunStatus.Exited
                 ? result.StandardOutputText
@@ -1676,6 +1666,10 @@ public sealed partial class AtSpiUrlExtractor
     // Double-quoted string with backslash escapes; group 1 is the (still-escaped) body.
     [GeneratedRegex("\"((?:[^\"\\\\]|\\\\.)*)\"")]
     private static partial Regex QuotedStringRegex();
+
+    // KWin's " <N>" suffix on duplicate window captions.
+    [GeneratedRegex(@" <\d+>$")]
+    private static partial Regex KWinDuplicateCaptionSuffixRegex();
 
     private sealed class WalkStats
     {
