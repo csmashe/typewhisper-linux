@@ -133,16 +133,71 @@ public sealed class AtSpiFocusedContextHelperTests
         ));
         var extractor = new AtSpiUrlExtractor(runner);
         runner.Calls.Clear();
+
+        Assert.Equal(expected, InvokeFocusedNodeBelongsToWindow(extractor, "/org/example/qa/field", 40));
+        Assert.DoesNotContain(runner.Calls, call => call.Args.Contains("GetText"));
+    }
+
+    [Theory]
+    [InlineData("QA Window", "QA Window", false)] // identical titles: either window could be focused
+    [InlineData("QA Window <2>", "QA Window", false)] // KWin numbered the duplicate caption
+    [InlineData("QA Window", "QA Window private", true)] // distinct title is a different window
+    [InlineData("QA Window", "", true)] // untitled sibling cannot be the recorded window
+    public void Harvest_WindowConfirmation_RejectsWhenAnotherAppWindowHasTheSameTitle(
+        string recordedTitle,
+        string siblingName,
+        bool expected
+    )
+    {
+        var runner = SameAppWindowsRunner("QA Window", siblingName);
+        var extractor = new AtSpiUrlExtractor(runner);
+        runner.Calls.Clear();
+
+        Assert.Equal(expected, InvokeFocusedNodeBelongsToWindow(extractor, "/qa/frame", 40, recordedTitle));
+        Assert.DoesNotContain(runner.Calls, call => call.Args.Contains("GetText"));
+    }
+
+    [Fact]
+    public void Harvest_WindowConfirmation_RejectsWhenVisitBudgetEndsBeforeOtherWindowsAreChecked()
+    {
+        var runner = SameAppWindowsRunner("QA Window", "QA Window private");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.False(InvokeFocusedNodeBelongsToWindow(extractor, "/qa/frame", 1));
+    }
+
+    // App "/qa/app" has two top-level children: the focused frame "/qa/frame" and "/qa/other".
+    private static RecordingRunner SameAppWindowsRunner(string frameName, string siblingName)
+    {
+        return new RecordingRunner((_, args) =>
+        {
+            var stdout = args.Contains("GetRole") ? "u 23"
+                : args.Contains("GetChildren") && args.Contains("/qa/app")
+                    ? "a(so) 2 \":1.9\" \"/qa/frame\" \":1.9\" \"/qa/other\""
+                : args.Contains("Name") && args.Contains("/qa/frame") ? $"s \"{frameName}\""
+                : args.Contains("Name") && args.Contains("/qa/other") ? $"s \"{siblingName}\""
+                : "";
+            return new ProcessRunResult(true, false, 0, stdout, "");
+        });
+    }
+
+    private static bool InvokeFocusedNodeBelongsToWindow(
+        AtSpiUrlExtractor extractor,
+        string focusedPath,
+        int remainingVisits,
+        string recordedTitle = "QA Window"
+    )
+    {
         var nodeType = typeof(AtSpiUrlExtractor).GetNestedType("AccessibleRef", BindingFlags.NonPublic)!;
-        var node = Activator.CreateInstance(nodeType, ["org.example.qa", "/org/example/qa/field"]);
+        var app = Activator.CreateInstance(nodeType, [":1.9", "/qa/app"]);
+        var node = Activator.CreateInstance(nodeType, [":1.9", focusedPath]);
         var check = typeof(AtSpiUrlExtractor).GetMethod(
             "FocusedNodeBelongsToWindow",
             BindingFlags.Instance | BindingFlags.NonPublic
         )!;
-        object?[] checkArgs = ["unix:path=/owned-qa-bus", node, "QA Window", 40, CancellationToken.None];
-
-        Assert.Equal(expected, (bool)check.Invoke(extractor, checkArgs)!);
-        Assert.DoesNotContain(runner.Calls, call => call.Args.Contains("GetText"));
+        object?[] checkArgs =
+            ["unix:path=/owned-qa-bus", app, node, recordedTitle, remainingVisits, CancellationToken.None];
+        return (bool)check.Invoke(extractor, checkArgs)!;
     }
 
     private sealed class RecordingRunner(

@@ -404,7 +404,7 @@ public sealed partial class AtSpiUrlExtractor
             // if focus moved. When we know the recorded window's title, require the focused
             // node's top-level frame title to relate to it before reading — otherwise a focus
             // switch to another same-app window could feed unrelated on-screen text into cleanup.
-            if (!FocusedNodeBelongsToWindow(address, focused.Value, title, ref remainingVisits, ct))
+            if (!FocusedNodeBelongsToWindow(address, app, focused.Value, title, ref remainingVisits, ct))
             {
                 continue;
             }
@@ -664,9 +664,12 @@ public sealed partial class AtSpiUrlExtractor
     ///     Confirms the focused node lives under the recorded window: walk up to the nearest
     ///     frame/window ancestor and require its title to relate to <paramref name="recordedTitle" />.
     ///     Missing titles or an unconfirmed frame reject capture before any element text is read.
+    ///     A title is not a window identity, so another top-level window of
+    ///     <paramref name="app" /> with a related title also rejects: either could be the focused one.
     /// </summary>
     private bool FocusedNodeBelongsToWindow(
         string address,
+        AccessibleRef app,
         AccessibleRef focused,
         string? recordedTitle,
         ref int remainingVisits,
@@ -692,7 +695,9 @@ public sealed partial class AtSpiUrlExtractor
             if (role is AtSpiRoleFrame or AtSpiRoleWindow)
             {
                 var frameTitle = GetAccessibleName(address, node);
-                return !string.IsNullOrWhiteSpace(frameTitle) && TitlesRelate(frameTitle, recordedTitle);
+                return !string.IsNullOrWhiteSpace(frameTitle)
+                       && TitlesRelate(frameTitle, recordedTitle)
+                       && !HasOtherWindowWithRelatedTitle(address, app, node, recordedTitle, ref remainingVisits, ct);
             }
 
             ct.ThrowIfCancellationRequested();
@@ -703,6 +708,42 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             node = parent.Value;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     True when another top-level window of <paramref name="app" /> has a title relating to
+    ///     <paramref name="recordedTitle" />, or when the visit budget runs out before that is ruled out.
+    /// </summary>
+    private bool HasOtherWindowWithRelatedTitle(
+        string address,
+        AccessibleRef app,
+        AccessibleRef frame,
+        string recordedTitle,
+        ref int remainingVisits,
+        CancellationToken ct
+    )
+    {
+        ct.ThrowIfCancellationRequested();
+        foreach (var window in GetAccessibleChildren(address, app))
+        {
+            if (window == frame)
+            {
+                continue;
+            }
+
+            if (remainingVisits-- <= 0)
+            {
+                return true;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            if (TitlesRelate(GetAccessibleName(address, window), recordedTitle))
+            {
+                return true;
+            }
         }
 
         return false;
