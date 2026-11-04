@@ -24,6 +24,7 @@
   "State.UnsupportedVersion": "La versión instalada no admite los controles de seguridad necesarios.",
   "State.SignedOut": "Instalada, pero sin sesión iniciada",
   "State.AuthenticationUnknown": "No se puede comprobar el estado de la sesión de forma segura",
+  "State.CredentialRequired": "No hay credenciales de OpenCode Zen guardadas. El uso gratuito sin clave no acepta las solicitudes sin herramientas de TypeWhisper",
   "State.ModelCatalogUnavailable": "Sesión iniciada, pero no se pudo cargar el catálogo actual de modelos Zen gratuitos",
   "State.NoFreeModels": "Actualmente no hay modelos de texto de OpenCode Zen totalmente gratuitos",
   "State.Ready": "Lista",

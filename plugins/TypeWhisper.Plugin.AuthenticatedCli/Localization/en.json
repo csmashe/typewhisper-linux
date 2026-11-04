@@ -24,6 +24,7 @@
   "State.UnsupportedVersion": "Installed version does not support the required safety controls.",
   "State.SignedOut": "Installed, but not signed in",
   "State.AuthenticationUnknown": "Login status cannot be checked safely",
+  "State.CredentialRequired": "No saved OpenCode Zen credential. Keyless free use does not accept TypeWhisper's tool-free requests",
   "State.ModelCatalogUnavailable": "Signed in, but the current free Zen model catalog could not be loaded",
   "State.NoFreeModels": "No fully free OpenCode Zen text models are currently available",
   "State.Ready": "Ready",
