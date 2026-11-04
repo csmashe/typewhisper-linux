@@ -190,6 +190,24 @@ public sealed class ActiveWindowServiceTests
     }
 
     [Fact]
+    public void Packaged_firefox_bin_xdotool_snapshot_resolves_to_firefox()
+    {
+        var snapshot = new ActiveWindowSnapshot(
+            "firefox-bin",
+            "Example — Mozilla Firefox",
+            "123",
+            null,
+            "xdotool"
+        );
+
+        Assert.Equal("firefox", ActiveWindowService.ResolveBrowserDescriptor(snapshot)?.Id);
+        Assert.Equal(
+            "firefox",
+            AtSpiUrlExtractor.ResolveBrowserDescriptor("firefox-bin", null, snapshot.Title)?.Id
+        );
+    }
+
+    [Fact]
     public void LibreWolf_process_and_flatpak_app_id_authorize_X11_fallback()
     {
         Assert.True(ActiveWindowService.IsSupportedBrowserProcess("librewolf"));

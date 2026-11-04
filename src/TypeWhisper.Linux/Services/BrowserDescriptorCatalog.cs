@@ -81,7 +81,8 @@ internal static class BrowserDescriptorCatalog
             "firefox",
             "firefox",
             BrowserEngineFamily.Firefox,
-            ["firefox"],
+            // Mozilla's packaged builds launch /usr/lib/firefox/firefox, which runs as "firefox-bin".
+            ["firefox", "firefox-bin"],
             ["Firefox", "Mozilla Firefox", "org.mozilla.firefox"],
             [],
             ["firefox.desktop", "org.mozilla.firefox.desktop", "firefox-esr.desktop"],
