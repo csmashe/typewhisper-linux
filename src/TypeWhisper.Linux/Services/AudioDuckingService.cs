@@ -18,6 +18,13 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     private static readonly TimeSpan s_pactlTimeout = TimeSpan.FromMilliseconds(1500);
     private static readonly IReadOnlyDictionary<string, string> s_pactlEnvironment =
         new Dictionary<string, string>(StringComparer.Ordinal) { ["LC_ALL"] = "C" };
+    // pactl 16+ looks the sink input up before setting its volume, so a vanished
+    // stream fails that lookup instead of the older "Failure:" wording.
+    private static readonly HashSet<string> s_vanishedSinkInputErrors = new(StringComparer.Ordinal)
+    {
+        "Failure: No such entity",
+        "Failed to get sink input information: No such entity",
+    };
 
     // "Sink Input #593" — block header in `pactl list sink-inputs` output.
     [GeneratedRegex(@"^Sink Input #(\d+)")]
@@ -158,13 +165,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
                 // pactl reports a vanished sink-input on stderr with a trailing newline;
                 // trim before the exact match or the classifier never fires in production.
-                if (
-                    string.Equals(
-                        result.StandardError.Trim(),
-                        "Failure: No such entity",
-                        StringComparison.Ordinal
-                    )
-                )
+                if (s_vanishedSinkInputErrors.Contains(result.StandardError.Trim()))
                 {
                     WriteDiagnostic(
                         $"[AudioDuckingService] Sink input {inputId} vanished; treating restore as completed."
