@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Automation;
 using Avalonia.Automation.Peers;
@@ -97,6 +98,99 @@ public sealed class DictionaryLayoutTests(UiSession ui)
             }
         }, CancellationToken.None);
     }
+
+    [Theory]
+    [MemberData(nameof(MainWindowRenderTests.Languages), MemberType = typeof(MainWindowRenderTests))]
+    public async Task EntryRowsKeepEveryPartApartAndInsideTheRow(string language)
+    {
+        var problems = await ui.Session.Dispatch(() =>
+        {
+            // Long name and every badge, so these rows are about as wide as a row gets.
+            DictionaryEntry[] entries =
+            [
+                new()
+                {
+                    Id = "row-fit-term", Original = "TWQA_München_日本語_Kubernetes", EntryType = DictionaryEntryType.Term,
+                    CaseSensitive = true, UsageCount = 1234, Priority = 10,
+                },
+                new()
+                {
+                    Id = "row-fit-correction", Original = "TWQA_teh_ä", Replacement = "TWQA_the_ü",
+                    EntryType = DictionaryEntryType.Correction, CaseSensitive = true, IsRegex = true, UsageCount = 1234, Priority = 10,
+                },
+            ];
+            var dictionary = ui.Services.GetRequiredService<IDictionaryService>();
+            foreach (var entry in entries)
+                dictionary.AddEntry(entry);
+            Loc.Instance.CurrentLanguage = language;
+            var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
+            var window = new MainWindow(viewModel) { Width = 800, Height = 600 };
+            window.Show();
+            var found = new List<string>();
+            try
+            {
+                viewModel.SelectedItem = viewModel.NavItems.First(item => item.Content is DictionarySectionViewModel);
+                // 800x600 is the smallest size QA got a window manager to accept.
+                for (var width = 800; width <= 1400; width += 20)
+                {
+                    window.Width = width;
+                    MainWindowRenderTests.Settle();
+                    var cards = window.GetVisualDescendants().OfType<Border>()
+                        .Where(border => border.Classes.Contains("entry-card")
+                            && border.DataContext is DictionaryEntry { Id: "row-fit-term" or "row-fit-correction" })
+                        .ToList();
+                    if (cards.Count != entries.Length)
+                    {
+                        found.Add($"{width}px: found {cards.Count} of {entries.Length} rows");
+                        continue;
+                    }
+
+                    foreach (var card in cards)
+                        found.AddRange(RowProblems(card).Select(problem =>
+                            $"{width}px {((DictionaryEntry)card.DataContext!).Id}: {problem}"));
+                }
+            }
+            finally
+            {
+                window.Close();
+                Loc.Instance.CurrentLanguage = "en";
+                foreach (var entry in entries)
+                    dictionary.DeleteEntry(entry.Id);
+            }
+
+            return found;
+        }, CancellationToken.None);
+
+        Assert.True(problems.Count == 0, string.Join("\n", problems.Take(20)));
+    }
+
+    private static IEnumerable<string> RowProblems(Border card)
+    {
+        var grid = (Grid)card.Child!;
+        var name = grid.Children.OfType<StackPanel>().Single(panel => panel.Classes.Contains("entry-name"));
+        var badges = grid.Children.OfType<WrapPanel>().Single(panel => panel.Classes.Contains("entry-badges"));
+        var actions = grid.Children.OfType<WrapPanel>().Single(panel => panel.Classes.Contains("entry-actions"));
+        var parts = new List<(string Label, Rect Bounds)> { ("term", BoundsIn(name, card)) };
+        parts.AddRange(badges.Children.Where(badge => badge.IsVisible)
+            .Select(badge => ($"badge '{((TextBlock)((Border)badge).Child!).Text}'", BoundsIn(badge, card))));
+        parts.AddRange(actions.GetVisualDescendants().OfType<Control>()
+            .Where(control => control is Button or ToggleSwitch && control.IsEffectivelyVisible)
+            .Select(control => ($"{control.GetType().Name} '{(control as ContentControl)?.Content}'", BoundsIn(control, card))));
+
+        var inside = card.Bounds.Width - card.Padding.Right + 0.5;
+        foreach (var (label, bounds) in parts.Where(part => part.Bounds.Right > inside))
+            yield return $"{label} ends at {bounds.Right:0.#}, past the row's {inside - 0.5:0.#}";
+        for (var i = 0; i < parts.Count; i++)
+        for (var j = i + 1; j < parts.Count; j++)
+        {
+            var overlap = parts[i].Bounds.Intersect(parts[j].Bounds);
+            if (overlap.Width > 0.5 && overlap.Height > 0.5)
+                yield return $"{parts[i].Label} overlaps {parts[j].Label}";
+        }
+    }
+
+    private static Rect BoundsIn(Visual visual, Visual ancestor) =>
+        new(visual.TranslatePoint(default, ancestor)!.Value, visual.Bounds.Size);
 
     private static void AssertFullyVisible(Control control, double width, double height)
     {
