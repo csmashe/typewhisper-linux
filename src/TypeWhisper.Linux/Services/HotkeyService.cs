@@ -13,6 +13,7 @@ public enum HotkeyCandidateValidationStatus
     CollidesWithPromptAction,
     CollidesWithProfile,
     MissingEnabledPromptAction,
+    ReservedBySystem,
 }
 
 public sealed record HotkeyCandidateValidationResult(
@@ -516,6 +517,21 @@ public sealed class HotkeyService : IDisposable
     /// </summary>
     public static bool IsParsableHotkey(string? text) =>
         text is not null && TryParseHotkey(text, out var key, out _) && key is not null;
+
+    /// <summary>
+    ///     True for Ctrl+Alt+F1-F12, which switch the Linux virtual terminal. Extra modifiers are
+    ///     reserved too, since Super does not stop the switch.
+    /// </summary>
+    public static bool IsReservedSystemHotkey(string? text) =>
+        text is not null
+        && TryParseHotkeySyntax(text, out var key, out var modifiers)
+        && key is not null
+        && IsReservedSystemChord(key.Value, modifiers);
+
+    private static bool IsReservedSystemChord(KeyCode key, ModifierMask modifiers) =>
+        (modifiers & ModifierMask.Ctrl) != ModifierMask.None
+        && (modifiers & ModifierMask.Alt) != ModifierMask.None
+        && key is >= KeyCode.VcF1 and <= KeyCode.VcF12;
 
     public bool TrySetPromptPaletteHotkeyFromString(string? text)
     {
@@ -1544,10 +1560,18 @@ public sealed class HotkeyService : IDisposable
             );
         }
 
-        if (!TryParseHotkey(hotkey, out var key, out var modifiers) || key is null)
+        if (!TryParseHotkeySyntax(hotkey, out var key, out var modifiers) || key is null)
         {
             return new HotkeyCandidateValidationResult(
                 HotkeyCandidateValidationStatus.Malformed,
+                null
+            );
+        }
+
+        if (IsReservedSystemChord(key.Value, modifiers))
+        {
+            return new HotkeyCandidateValidationResult(
+                HotkeyCandidateValidationStatus.ReservedBySystem,
                 null
             );
         }
@@ -1740,7 +1764,16 @@ public sealed class HotkeyService : IDisposable
         return string.Join('+', parts);
     }
 
-    private static bool TryParseHotkey(string text, out KeyCode? key, out ModifierMask modifiers)
+    // Every binding path parses through here, so a reserved chord can never be saved or bound.
+    private static bool TryParseHotkey(string text, out KeyCode? key, out ModifierMask modifiers) =>
+        TryParseHotkeySyntax(text, out key, out modifiers)
+        && (key is null || !IsReservedSystemChord(key.Value, modifiers));
+
+    private static bool TryParseHotkeySyntax(
+        string text,
+        out KeyCode? key,
+        out ModifierMask modifiers
+    )
     {
         key = null;
         modifiers = ModifierMask.None;

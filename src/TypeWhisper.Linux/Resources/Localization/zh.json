@@ -1178,6 +1178,7 @@
   "Shortcuts.HotkeyParseFailed": "无法解析“{0}”。请尝试例如Ctrl+Shift+Space、Alt+F9、Ctrl+K。",
   "Shortcuts.HotkeyParseOrCollide": "无法解析“{0}”，或它与另一个快捷键冲突。",
   "Shortcuts.HotkeyCollides": "“{0}”与另一个快捷键冲突。",
+  "Shortcuts.HotkeyReservedBySystem": "Ctrl+Alt+F1–F12 用于切换 Linux 虚拟终端，不能用作快捷键。",
   "Shortcuts.HotkeySet": "快捷键已设为{0}。",
   "Shortcuts.InstallingShortcut": "正在{0}上安装快捷键…",
   "Shortcuts.KeyboardAccessBanner": "⚠ 启用键盘访问以在Wayland上使用全局快捷键",

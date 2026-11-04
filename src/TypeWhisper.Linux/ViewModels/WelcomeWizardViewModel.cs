@@ -709,12 +709,14 @@ public partial class WelcomeWizardViewModel : ObservableObject
         {
             if (!_hotkey.TrySetHotkeyFromString(HotkeyText))
             {
-                HotkeyStatus = Loc.Instance.GetString(
-                    HotkeyService.IsParsableHotkey(HotkeyText)
-                        ? "Shortcuts.HotkeyCollides"
-                        : "Wizard.HotkeyParseFailed",
-                    HotkeyText
-                );
+                HotkeyStatus = HotkeyService.IsReservedSystemHotkey(HotkeyText)
+                    ? Loc.Instance["Shortcuts.HotkeyReservedBySystem"]
+                    : Loc.Instance.GetString(
+                        HotkeyService.IsParsableHotkey(HotkeyText)
+                            ? "Shortcuts.HotkeyCollides"
+                            : "Wizard.HotkeyParseFailed",
+                        HotkeyText
+                    );
                 return;
             }
 
