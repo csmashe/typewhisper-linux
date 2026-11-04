@@ -129,7 +129,6 @@ public sealed class GoogleCloudSttPlugin
 
         var transcripts = new List<string>();
         string? detectedLanguage = null;
-        double totalDuration = 0;
         var chunkOffset = pcmOffset;
         var pcmEnd = checked(pcmOffset + pcmByteCount);
 
@@ -154,14 +153,14 @@ public sealed class GoogleCloudSttPlugin
             if (!string.IsNullOrEmpty(chunkResult.Text))
                 transcripts.Add(chunkResult.Text);
             detectedLanguage ??= chunkResult.DetectedLanguage;
-            totalDuration += chunkResult.DurationSeconds;
             chunkOffset += chunkByteCount;
         } while (chunkOffset < pcmEnd);
 
+        // Measured from the PCM sent; Google's totalBilledTime rounds up to whole seconds.
         return new PluginTranscriptionResult(
             string.Join(' ', transcripts),
             detectedLanguage ?? langCode,
-            totalDuration
+            pcmByteCount / (double)BytesPerSecond
         );
     }
 
@@ -315,33 +314,6 @@ public sealed class GoogleCloudSttPlugin
             }
         }
 
-        // v1 has no audio_duration field; totalBilledTime ("15s" / "15.500s")
-        // is the closest proxy. Falls back to 0 when absent.
-        double duration = 0;
-        if (root.TryGetProperty("totalBilledTime", out var billedTime))
-        {
-            if (billedTime.ValueKind != JsonValueKind.String)
-                throw InvalidResponse("'totalBilledTime' must be a duration string");
-
-            var billedStr = billedTime.GetString() ?? string.Empty;
-            if (
-                billedStr.EndsWith('s')
-                && double.TryParse(
-                    billedStr[..^1],
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out var secs
-                )
-            )
-            {
-                duration = secs;
-            }
-            else
-            {
-                throw InvalidResponse("'totalBilledTime' must be a duration string");
-            }
-        }
-
         string? detectedLang = null;
         // ReSharper disable once InvertIf -- inverting would duplicate the multi-argument return below; kept nested for clarity.
         if (
@@ -360,17 +332,13 @@ public sealed class GoogleCloudSttPlugin
             }
         }
 
-        return new ChunkTranscriptionResult(sb.ToString().Trim(), detectedLang, duration);
+        return new ChunkTranscriptionResult(sb.ToString().Trim(), detectedLang);
 
         static InvalidOperationException InvalidResponse(string detail) =>
             new($"Invalid Google Cloud STT response: {detail}.");
     }
 
-    private sealed record ChunkTranscriptionResult(
-        string Text,
-        string? DetectedLanguage,
-        double DurationSeconds
-    );
+    private sealed record ChunkTranscriptionResult(string Text, string? DetectedLanguage);
 
     private static string MapToGoogleLanguageCode(string iso) =>
         iso.ToLowerInvariant() switch
