@@ -17,7 +17,12 @@ public sealed record Snippet
     public int UsageCount { get; init; }
     public DateTime? LastUsedAt { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
-    public string Tags { get; init; } = "";
+    /// <summary>
+    ///     Comma-separated tags. Null coalesces to empty: source-generated JSON assigns
+    ///     <c>default</c> to omitted init-only properties, bypassing the initializer.
+    /// </summary>
+    // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- JSON passes null despite the annotation.
+    public string Tags { get; init => field = value ?? ""; } = "";
     /// <summary>
     ///     Profiles this snippet is scoped to; null/empty means "applies to all profiles".
     ///     Nullable because JSON with an explicit <c>"profileIds": null</c> overrides the
