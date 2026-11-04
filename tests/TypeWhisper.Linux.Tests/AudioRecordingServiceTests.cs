@@ -1519,6 +1519,113 @@ public sealed class AudioRecordingServiceMigrationTests
         Assert.Equal("B|1", sut.ActiveDeviceIdForTest);
         Assert.False(sut.MigrationPendingForTest);
     }
+
+    [Fact]
+    public void CheckForDefaultDeviceChange_MigratesPreview_WhenTableIsStaleWhileStreamIsOpen()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        using var sut = table.CreateService();
+        sut.FollowSystemDefault = true;
+        Assert.True(sut.StartPreview());
+
+        table.Devices.SetDefault("B|1");
+        sut.CheckForDefaultDeviceChange();
+
+        Assert.Equal([0, 1], table.Opened);
+        Assert.Equal("B|1", sut.ActiveDeviceIdForTest);
+    }
+
+    [Fact]
+    public void CheckForDefaultDeviceChange_ReopensPreviewOnSameDevice_AndKeepsMicrophoneTest()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        using var sut = table.CreateService();
+        sut.FollowSystemDefault = true;
+        var test = sut.TryStartMicrophoneTest(out _);
+        Assert.NotNull(test);
+
+        sut.CheckForDefaultDeviceChange();
+
+        Assert.Equal([0, 0], table.Opened);
+        Assert.True(test.Snapshot().Running);
+        sut.ProcessAudioBufferForTest([0.5f]);
+        Assert.Equal(MicrophoneTestState.Signal, test.Snapshot().State);
+    }
+
+    [Fact]
+    public void CheckForDefaultDeviceChange_StopsPreview_WhenReopenFails()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        using var sut = table.CreateService();
+        sut.FollowSystemDefault = true;
+        var test = sut.TryStartMicrophoneTest(out _);
+        Assert.NotNull(test);
+
+        table.FailOpen = true;
+        sut.CheckForDefaultDeviceChange();
+
+        Assert.Equal(MicrophoneTestEnd.PreviewStopped, test.Snapshot().End);
+        Assert.False(table.StreamOpen);
+        table.FailOpen = false;
+        Assert.True(sut.StartPreview());
+    }
+
+    [Fact]
+    public void CheckForDefaultDeviceChange_KeepsPreviewStream_WhileCaptureIsReserved()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        using var sut = table.CreateService();
+        sut.FollowSystemDefault = true;
+        Assert.True(sut.StartPreview());
+        using var reservation = sut.TryReserveCapture();
+        Assert.NotNull(reservation);
+
+        table.Devices.SetDefault("B|1");
+        sut.CheckForDefaultDeviceChange();
+
+        Assert.Equal([0], table.Opened);
+        Assert.True(table.StreamOpen);
+    }
+}
+
+// Models PortAudio's table: it only picks up a new default while no stream is open.
+internal sealed class StaleWhileOpenDeviceTable
+{
+    private IReadOnlyList<AudioInputDevice> _snapshot;
+
+    public StaleWhileOpenDeviceTable()
+    {
+        _snapshot = Devices.GetDevices();
+    }
+
+    public FakeAudioDeviceEnumerator Devices { get; } = new(
+        new FakeDevice(0, "A", 1, isDefault: true),
+        new FakeDevice(1, "B", 1, isDefault: false));
+
+    public List<int> Opened { get; } = [];
+    public bool StreamOpen { get; private set; }
+    public bool FailOpen { get; set; }
+
+    public AudioRecordingService CreateService() =>
+        new(
+            Read,
+            index =>
+            {
+                if (FailOpen)
+                {
+                    throw new InvalidOperationException("device busy");
+                }
+
+                Opened.Add(index);
+                StreamOpen = true;
+            },
+            () => Read().Single(device => device.IsDefault).Index,
+            () => StreamOpen = false,
+            postToUiThread: static _ => { }
+        );
+
+    private IReadOnlyList<AudioInputDevice> Read() =>
+        StreamOpen ? _snapshot : _snapshot = Devices.GetDevices();
 }
 
 // Fake device table: reports a controllable device list + default, so selection

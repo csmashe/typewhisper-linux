@@ -1343,60 +1343,78 @@ public sealed class AudioRecordingService : IDisposable
                 return;
             }
 
-            // Refresh PortAudio's cached table so the provider reports the NEW default.
-            // Returns false while a stream is live / recording — the reading is then STALE
-            // and must not be treated as authoritative when clearing a pending migration.
-            var deviceTableFresh = RefreshPortAudioDeviceTable();
-
-            AudioInputDevice? preferred;
+            // A live preview pins PortAudio's stale table, so close it for the refresh and
+            // reopen it afterwards on whatever device is the default now.
+            var previewClosed = TryClosePreviewForDeviceTableRefresh();
             try
             {
-                preferred = ResolveSystemDefault(_inputDeviceListProvider());
+                CheckForDefaultDeviceChangeLocked();
             }
-            catch (Exception ex)
+            finally
             {
-                Trace.WriteLine(
-                    $"[AudioRecordingService] Default-device re-resolve failed, keeping current: {ex.Message}"
-                );
-                return;
-            }
-
-            if (preferred is null)
-            {
-                // No devices right now (all unplugged); keep what we have and retry on the
-                // next check rather than tearing down a possibly-live stream.
-                return;
-            }
-
-            if (string.Equals(_activeDeviceId, preferred.PersistentId, StringComparison.Ordinal))
-            {
-                // Only clear a pending defer when this reading is TRUSTWORTHY. If the refresh
-                // was skipped, the table still reports the OLD default — which of course equals
-                // the device we are recording on — so "already on default" is an artifact of the
-                // stale table, not proof the pending migration is moot. Clearing it would drop a
-                // real deferred migration that StopRecording is relying on replaying.
-                if (deviceTableFresh)
+                if (previewClosed && IsPreviewing && _openStreamDeviceIndex is null)
                 {
-                    _preferredDeviceMigrationPending = false;
+                    ReopenPreviewLocked();
                 }
-
-                return;
             }
-
-            // Never tear down an in-flight recording to migrate. Defer and let StopRecording
-            // re-invoke this once the buffer is finalized.
-            if (Volatile.Read(ref _isRecording) == 1 || _activeCaptureSession is not null)
-            {
-                _preferredDeviceMigrationPending = true;
-                Trace.WriteLine(
-                    "[AudioRecordingService] Default device changed while recording; migration deferred."
-                );
-                return;
-            }
-
-            _preferredDeviceMigrationPending = false;
-            MigrateActiveCaptureToDevice(preferred);
         }
+    }
+
+    private void CheckForDefaultDeviceChangeLocked()
+    {
+        // Refresh PortAudio's cached table so the provider reports the NEW default.
+        // Returns false while a stream is live / recording — the reading is then STALE
+        // and must not be treated as authoritative when clearing a pending migration.
+        var deviceTableFresh = RefreshPortAudioDeviceTable();
+
+        AudioInputDevice? preferred;
+        try
+        {
+            preferred = ResolveSystemDefault(_inputDeviceListProvider());
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine(
+                $"[AudioRecordingService] Default-device re-resolve failed, keeping current: {ex.Message}"
+            );
+            return;
+        }
+
+        if (preferred is null)
+        {
+            // No devices right now (all unplugged); keep what we have and retry on the
+            // next check rather than tearing down a possibly-live stream.
+            return;
+        }
+
+        if (string.Equals(_activeDeviceId, preferred.PersistentId, StringComparison.Ordinal))
+        {
+            // Only clear a pending defer when this reading is TRUSTWORTHY. If the refresh
+            // was skipped, the table still reports the OLD default — which of course equals
+            // the device we are recording on — so "already on default" is an artifact of the
+            // stale table, not proof the pending migration is moot. Clearing it would drop a
+            // real deferred migration that StopRecording is relying on replaying.
+            if (deviceTableFresh)
+            {
+                _preferredDeviceMigrationPending = false;
+            }
+
+            return;
+        }
+
+        // Never tear down an in-flight recording to migrate. Defer and let StopRecording
+        // re-invoke this once the buffer is finalized.
+        if (Volatile.Read(ref _isRecording) == 1 || _activeCaptureSession is not null)
+        {
+            _preferredDeviceMigrationPending = true;
+            Trace.WriteLine(
+                "[AudioRecordingService] Default device changed while recording; migration deferred."
+            );
+            return;
+        }
+
+        _preferredDeviceMigrationPending = false;
+        MigrateActiveCaptureToDevice(preferred);
     }
 
     // Swap the capture to the preferred device. Called with _captureLock held and with a
@@ -1409,7 +1427,8 @@ public sealed class AudioRecordingService : IDisposable
         _selectedDeviceIndex = preferred.Index;
         _activeDeviceId = preferred.PersistentId;
 
-        if (_openStreamDeviceIndex is null && _stream is null)
+        // A preview closed for the device-table refresh still needs reopening here.
+        if (!wasPreviewing && _openStreamDeviceIndex is null && _stream is null)
         {
             // Idle: the new default is applied lazily on the next capture start.
             return;
@@ -1423,36 +1442,61 @@ public sealed class AudioRecordingService : IDisposable
         );
         StopAndDisposeInputStream();
 
-        if (!wasPreviewing)
+        if (wasPreviewing)
         {
-            return;
+            ReopenPreviewLocked();
+        }
+    }
+
+    // Frees a preview-only stream so RefreshPortAudioDeviceTable can cycle PortAudio.
+    private bool TryClosePreviewForDeviceTableRefresh()
+    {
+        if (
+            !IsPreviewing
+            || IsRecording
+            || _activeCaptureSession is not null
+            || _captureReservation is not null
+            || (_openStreamDeviceIndex is null && _stream is null)
+        )
+        {
+            return false;
         }
 
+        PublishLevelGenerationLocked(
+            acceptsFrameUpdates: false,
+            captureSession: null
+        );
+        StopAndDisposeInputStream();
+        return true;
+    }
+
+    private void ReopenPreviewLocked()
+    {
         try
         {
-            // ReSharper disable once InvertIf -- compact "if reopen failed, handle it" guard.
-            if (!EnsureInputStreamStarted())
+            if (EnsureInputStreamStarted())
             {
-                Trace.WriteLine(
-                    "[AudioRecordingService] Preview stream could not reopen on the new default device."
+                PublishLevelGenerationLocked(
+                    acceptsFrameUpdates: true,
+                    captureSession: null
                 );
-                Volatile.Write(ref _isPreviewing, 0);
                 return;
             }
 
-            PublishLevelGenerationLocked(
-                acceptsFrameUpdates: true,
-                captureSession: null
+            Trace.WriteLine(
+                "[AudioRecordingService] Preview stream could not reopen on the default device."
             );
         }
         catch (Exception ex)
         {
             Trace.WriteLine(
-                $"[AudioRecordingService] Failed to reopen preview on migrated device: {ex.Message}"
+                $"[AudioRecordingService] Failed to reopen preview on the default device: {ex.Message}"
             );
-            Volatile.Write(ref _isPreviewing, 0);
             StopAndDisposeInputStream();
         }
+
+        EndMicrophoneTestLocked(MicrophoneTestEnd.PreviewStopped);
+        Volatile.Write(ref _isPreviewing, 0);
     }
 
     // Refresh PortAudio's device table (snapshotted at Pa_Initialize; it does NOT observe
