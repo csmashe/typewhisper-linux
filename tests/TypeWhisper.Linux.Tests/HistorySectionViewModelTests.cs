@@ -241,6 +241,26 @@ public sealed class HistorySectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void EmptyStateText_DistinguishesNoMatchesFromNoHistory()
+    {
+        var history = CreateHistoryService();
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        Assert.Equal(Loc.Instance["History.EmptyState"], sut.EmptyStateText);
+
+        history.AddRecord(CreateRecord("existing entry"));
+        RefreshHistory(sut);
+        sut.SearchQuery = "absent term";
+
+        Assert.True(sut.ShowEmptyState);
+        Assert.Equal(Loc.Instance["History.NoMatches"], sut.EmptyStateText);
+
+        sut.SearchQuery = "";
+
+        Assert.False(sut.ShowEmptyState);
+        Assert.Single(sut.Groups.SelectMany(group => group.Entries));
+    }
+
+    [Fact]
     public void BuildExportContent_ReportsOnlyTheRecordsTheExportWrites()
     {
         var history = CreateHistoryService();

@@ -169,7 +169,7 @@
             </StackPanel>
 
             <TextBlock Grid.Row="1"
-                       Text="{loc:Str History.EmptyState}"
+                       Text="{Binding EmptyStateText}"
                        Foreground="{DynamicResource TwTextSecondaryBrush}"
                        FontSize="14"
                        HorizontalAlignment="Center"

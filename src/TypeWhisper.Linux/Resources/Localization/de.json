@@ -717,6 +717,7 @@
   "History.DeletedSelected": "{0} Einträge gelöscht.",
   "History.DoneSelecting": "Fertig",
   "History.EmptyState": "Noch keine Aufnahmen.",
+  "History.NoMatches": "Keine passenden Aufnahmen.",
   "History.ExportSelected": "Ausgewählte exportieren",
   "History.ExportSelectionMissing": "Einige ausgewählte Einträge sind nicht mehr verfügbar. Aktualisiere die Auswahl und versuche es erneut.",
   "History.ExportedSelected": "{0} Einträge exportiert.",

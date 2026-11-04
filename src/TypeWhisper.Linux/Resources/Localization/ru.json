@@ -717,6 +717,7 @@
   "History.DeletedSelected": "Удалено записей: {0}.",
   "History.DoneSelecting": "Готово",
   "History.EmptyState": "Пока нет записей.",
+  "History.NoMatches": "Нет подходящих записей.",
   "History.ExportSelected": "Экспортировать выбранные",
   "History.ExportSelectionMissing": "Некоторые выбранные записи больше недоступны. Обновите выбор и попробуйте снова.",
   "History.ExportedSelected": "Экспортировано записей: {0}.",

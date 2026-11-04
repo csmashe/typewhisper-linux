@@ -717,6 +717,7 @@
   "History.DeletedSelected": "{0}件のエントリーを削除しました。",
   "History.DoneSelecting": "完了",
   "History.EmptyState": "まだ録音がありません。",
+  "History.NoMatches": "一致する録音がありません。",
   "History.ExportSelected": "選択項目をエクスポート",
   "History.ExportSelectionMissing": "選択したエントリーの一部が利用できなくなりました。選択を更新してから、もう一度お試しください。",
   "History.ExportedSelected": "{0}件のエントリーをエクスポートしました。",

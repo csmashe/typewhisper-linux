@@ -135,6 +135,10 @@ public partial class HistorySectionViewModel : ObservableObject
     public bool ShowTimeline => !IsLoading && HasVisibleRecords;
     public bool ShowEmptyState => !IsLoading && !HasVisibleRecords;
 
+    // The search or app filter can hide every record, which is not the same as having none.
+    public string EmptyStateText =>
+        Loc.Instance[_history.Records.Count > 0 ? "History.NoMatches" : "History.EmptyState"];
+
     // Exposed to entry rows so the Inspect panel can explain an empty prompt list as
     // "capture is off" (and point at the setting) rather than implying the LLM simply
     // wasn't used.
@@ -648,6 +652,7 @@ public partial class HistorySectionViewModel : ObservableObject
         OnPropertyChanged(nameof(HasVisibleRecords));
         OnPropertyChanged(nameof(ShowTimeline));
         OnPropertyChanged(nameof(ShowEmptyState));
+        OnPropertyChanged(nameof(EmptyStateText));
         OnPropertyChanged(nameof(HasMore));
     }
 
