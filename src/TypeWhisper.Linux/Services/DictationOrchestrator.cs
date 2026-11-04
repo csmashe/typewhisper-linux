@@ -2943,11 +2943,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 {
                     var autoPaste = _settings.Current.AutoPaste;
                     var autoEnter = commandResult.AutoEnter;
-                    // A prompt's LLM round trip gives the user time to click into another field,
-                    // so its result needs a verified field, not just the same window.
-                    var promptRan = pipelineResult.Steps.Any(step =>
-                        string.Equals(step.Name, PostProcessingStepNames.Llm, StringComparison.OrdinalIgnoreCase));
-                    if ((autoPaste || autoEnter) && !await IsDeliveryTargetStillFocusedAsync(context, promptRan))
+                    if ((autoPaste || autoEnter) && !await IsDeliveryTargetStillFocusedAsync(context))
                     {
                         enterSuppressed = autoEnter;
                         autoPaste = false;
@@ -3601,7 +3597,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     }
 
                     return await _textInsertion.FocusWindowAsync(context.WindowId).ConfigureAwait(false)
-                           && await IsDeliveryTargetStillFocusedAsync(context, false).ConfigureAwait(false);
+                           && await IsDeliveryTargetStillFocusedAsync(context).ConfigureAwait(false);
                 },
                 commandToken
             );
@@ -3968,7 +3964,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         var autoPaste = _settings.Current.AutoPaste
                         && strategy is not TextInsertionStrategy.CopyOnly
                         && (selectionStillTargeted is null
-                            ? await IsDeliveryTargetStillFocusedAsync(context, false)
+                            ? await IsDeliveryTargetStillFocusedAsync(context)
                             : await selectionStillTargeted());
         var insertion = await _textInsertion.InsertTextAsync(
             new TextInsertionRequest(
@@ -4870,9 +4866,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                && !string.Equals(context.TargetWindow.Source, "xdotool", StringComparison.Ordinal);
     }
 
-    // requireFieldIdentity: without an AT-SPI field to check, a same-window field move can't be seen,
-    // so the caller would rather copy than paste.
-    private async Task<bool> IsDeliveryTargetStillFocusedAsync(RecordingContext context, bool requireFieldIdentity)
+    private async Task<bool> IsDeliveryTargetStillFocusedAsync(RecordingContext context)
     {
         // A locked field is restored through AT-SPI by TextInsertionService, which falls back to
         // the clipboard itself (with its own reason) when it can't be or none was captured.
@@ -4882,23 +4876,19 @@ public sealed partial class DictationOrchestrator : IDisposable
         }
 
         return await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false)
-               && IsTargetFieldStillFocused(context, requireFieldIdentity);
+               && IsTargetFieldStillFocused(context);
     }
 
     // Compares the client's tracked focus rather than querying the element: an app without an
     // accessibility tree leaves the last focus event in place, which still matches while it stays focused.
-    private bool IsTargetFieldStillFocused(RecordingContext context, bool requireFieldIdentity)
+    // Without a tracked field (learning consent off, no AT-SPI) the window check alone decides.
+    private bool IsTargetFieldStillFocused(RecordingContext context)
     {
         if (context.TargetField is not { } field
             || _atSpiClient?.IsRunning != true
             || !_settings.Current.TargetAppCorrectionLearningEnabled)
         {
-            if (requireFieldIdentity)
-            {
-                Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: the dictation's field can't be verified.");
-            }
-
-            return !requireFieldIdentity;
+            return true;
         }
 
         if (_atSpiClient.CurrentFocusedElement == field)

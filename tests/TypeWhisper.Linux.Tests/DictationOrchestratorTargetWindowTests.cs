@@ -131,27 +131,23 @@ public sealed class DictationOrchestratorTargetWindowTests
         Assert.False(await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task IsDeliveryTargetStillFocused_SameField_IsTrue(bool requireFieldIdentity)
+    [Fact]
+    public async Task IsDeliveryTargetStillFocused_SameField_IsTrue()
     {
         var (sut, _) = Create(s_editor);
         SetFocusedField(sut, s_field);
 
-        Assert.True(await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }, requireFieldIdentity));
+        Assert.True(await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }));
     }
 
-    [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public async Task IsDeliveryTargetStillFocused_NoFieldIdentity_OnlyPromptResultsCopy(bool requireFieldIdentity, bool expected)
+    // Learning consent is off by default, so most users have no field to check: the window decides.
+    [Fact]
+    public async Task IsDeliveryTargetStillFocused_NoFieldIdentity_FallsBackToWindow()
     {
         var (sut, _) = Create(s_editor);
         SetFocusedField(sut, new AtSpiElementRef("app", "/field2"), learningConsent: false);
 
-        Assert.Equal(expected,
-            await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }, requireFieldIdentity));
+        Assert.True(await IsStillFocusedAsync(sut, Context(null, s_editor) with { TargetField = s_field }));
     }
 
     [Fact]
@@ -200,15 +196,11 @@ public sealed class DictationOrchestratorTargetWindowTests
         };
     }
 
-    private static Task<bool> IsStillFocusedAsync(
-        DictationOrchestrator sut,
-        RecordingContext context,
-        bool requireFieldIdentity = false
-    )
+    private static Task<bool> IsStillFocusedAsync(DictationOrchestrator sut, RecordingContext context)
     {
         return (Task<bool>)typeof(DictationOrchestrator)
             .GetMethod("IsDeliveryTargetStillFocusedAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(sut, [context, requireFieldIdentity])!;
+            .Invoke(sut, [context])!;
     }
 
     // Wayland without xdotool: no window id to activate, so focus is decided by the snapshot alone.
