@@ -1234,7 +1234,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             )
                             .ConfigureAwait(false);
 
-                    if (!string.IsNullOrWhiteSpace(deferredUrl))
+                    if (initialSnap is not null && !string.IsNullOrWhiteSpace(deferredUrl))
                     {
                         // The walk reads the live address bar: commit only if the recording-start tab is still in front.
                         ActiveWindowSnapshot? verifySnap = null;
@@ -1259,10 +1259,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             Trace.WriteLine(
                                 "[Dictation] Deferred URL discarded — focused window or tab changed mid-capture."
                             );
-                            if (initialSnap is not null)
-                            {
-                                _activeWindow.ForgetBrowserUrl(initialSnap, deferredUrl);
-                            }
+                            _activeWindow.ForgetBrowserUrl(initialSnap, deferredUrl);
                         }
                         else
                         {
