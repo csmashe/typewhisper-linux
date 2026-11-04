@@ -38,8 +38,10 @@
         <Style Selector="Grid.entry-layout">
             <Setter Property="ColumnSpacing" Value="14" />
         </Style>
+        <!-- The name's Auto column measures it without a limit, so cap it to make long names wrap. -->
         <Style Selector="Grid.entry-layout > StackPanel.entry-name">
             <Setter Property="MinWidth" Value="180" />
+            <Setter Property="MaxWidth" Value="320" />
         </Style>
         <Style Selector="Grid.entry-layout > WrapPanel.entry-badges">
             <Setter Property="Grid.Column" Value="1" />
@@ -58,6 +60,7 @@
             <Style Selector="Grid.entry-layout > StackPanel.entry-name">
                 <Setter Property="Grid.Column" Value="1" />
                 <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MaxWidth" Value="Infinity" />
             </Style>
             <Style Selector="Grid.entry-layout > WrapPanel.entry-badges">
                 <Setter Property="Grid.Row" Value="1" />

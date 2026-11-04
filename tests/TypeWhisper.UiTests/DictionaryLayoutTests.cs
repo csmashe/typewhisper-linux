@@ -118,6 +118,14 @@ public sealed class DictionaryLayoutTests(UiSession ui)
                     Id = "row-fit-correction", Original = "TWQA_teh_ä", Replacement = "TWQA_the_ü",
                     EntryType = DictionaryEntryType.Correction, CaseSensitive = true, IsRegex = true, UsageCount = 1234, Priority = 10,
                 },
+                // Long enough that an uncapped name would push the actions out of a wide row.
+                new()
+                {
+                    Id = "row-fit-long",
+                    Original = "TWQA a very long dictionary phrase that keeps going well past the width of a normal entry name",
+                    Replacement = "TWQA_an_equally_long_replacement_without_any_spaces_to_break_the_line_at_all_ü",
+                    EntryType = DictionaryEntryType.Correction, UsageCount = 1234, Priority = 10,
+                },
             ];
             var dictionary = ui.Services.GetRequiredService<IDictionaryService>();
             foreach (var entry in entries)
@@ -137,7 +145,7 @@ public sealed class DictionaryLayoutTests(UiSession ui)
                     MainWindowRenderTests.Settle();
                     var cards = window.GetVisualDescendants().OfType<Border>()
                         .Where(border => border.Classes.Contains("entry-card")
-                            && border.DataContext is DictionaryEntry { Id: "row-fit-term" or "row-fit-correction" })
+                            && border.DataContext is DictionaryEntry { Id: "row-fit-term" or "row-fit-correction" or "row-fit-long" })
                         .ToList();
                     if (cards.Count != entries.Length)
                     {
