@@ -352,10 +352,7 @@ public sealed class TextInsertionService
                 TextInsertionStrategy.ClipboardPaste => false,
                 // ydotool and xdotool can drop non-ASCII yet exit 0, so such text is pasted instead.
                 _ => (ShouldTypeDirectly(targetProcessName, targetWindowTitle)
-                      && (IsAsciiSafe(text)
-                          || (targetIsTerminal
-                              ? _platform.CanTypeNonAsciiIntoTerminal
-                              : _platform.CanTypeNonAscii)))
+                      && (IsAsciiSafe(text) || _platform.CanTypeNonAscii))
                      // On Wayland without xdotool, process/title are null; defaulting to paste
                      // hits terminals (readline quoted-insert), vim, and Claude Code's image-paste.
                      // Direct typing via ydotool is universal — BUT only for ASCII: ydotool
@@ -1287,9 +1284,6 @@ internal interface ITextInsertionPlatform
     /// <summary>True when the platform has a typing backend that can type non-ASCII text.</summary>
     bool CanTypeNonAscii => true;
 
-    /// <summary>Like <see cref="CanTypeNonAscii" />, but for terminal targets.</summary>
-    bool CanTypeNonAsciiIntoTerminal => CanTypeNonAscii;
-
     InsertionFailureReason LastFailureReason { get; }
 
     /// <summary>
@@ -1496,12 +1490,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     // Only wtype (where the compositor accepts it) types Unicode reliably. ydotool types only
     // the US keymap; xdotool's per-character keycode remap is missed by some X clients (e.g.
-    // existing Firefox windows), silently dropping the character.
+    // existing Firefox windows, gnome-terminal), silently dropping the character.
     public bool CanTypeNonAscii =>
         !_snapshot.CompositorRejectsWtype && _chain.Contains(InputBackend.Wtype);
-
-    // Terminals keep xdotool typing for non-ASCII; the dropped characters were seen in Firefox.
-    public bool CanTypeNonAsciiIntoTerminal => CanTypeNonAscii || _chain.Contains(InputBackend.Xdotool);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 

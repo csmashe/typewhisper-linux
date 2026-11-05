@@ -2216,29 +2216,30 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("previous", platform.Clipboard);
     }
 
-    [Theory]
-    [InlineData("xterm")]
-    [InlineData("gnome-terminal-server")]
-    public async Task InsertTextAsync_X11_terminal_auto_still_types_unicode(string processName)
+    [Fact]
+    public async Task InsertTextAsync_X11_terminal_auto_pastes_single_line_unicode()
     {
+        // xdotool's keycode remap also drops characters in gnome-terminal, varying run to run.
         var x11 = new LinuxTextInsertionPlatform(
             SnapshotFor("X11", true, false, "cinnamon", false, false),
             new RecordingProcessRunner().Run
         );
-        Assert.True(x11.CanTypeNonAsciiIntoTerminal);
         var platform = new FakeTextInsertionPlatform
         {
             Clipboard = "previous",
             CanTypeNonAscii = x11.CanTypeNonAscii,
-            NonAsciiIntoTerminal = x11.CanTypeNonAsciiIntoTerminal,
         };
         var sut = new TextInsertionService(platform);
 
-        var result = await sut.InsertTextAsync("café Ω", targetProcessName: processName);
+        var result = await sut.InsertTextAsync(
+            "Bonjour café Ω 東京 🎉 — “quoted”, done!",
+            targetProcessName: "gnome-terminal-server"
+        );
 
-        Assert.Equal(InsertionResult.Typed, result);
-        Assert.Equal("café Ω", platform.TypedText);
-        Assert.False(platform.PasteSent);
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Null(platform.TypedText);
+        Assert.True(platform.LastPasteUsedTerminalShortcut);
+        Assert.Equal("previous", platform.Clipboard);
     }
 
     [Fact]
@@ -4101,10 +4102,6 @@ public sealed class TextInsertionServiceTests
         public bool PrefersDirectTypingForUnknownTarget { get; init; }
 
         public bool CanTypeNonAscii { get; init; } = true;
-
-        public bool? NonAsciiIntoTerminal { get; init; }
-
-        public bool CanTypeNonAsciiIntoTerminal => NonAsciiIntoTerminal ?? CanTypeNonAscii;
 
         public InsertionFailureReason LastFailureReason { get; private set; }
 
