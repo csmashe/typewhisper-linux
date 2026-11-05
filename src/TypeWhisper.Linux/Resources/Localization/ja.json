@@ -747,6 +747,7 @@
   "History.Original": "元の語句",
   "History.Play": "再生",
   "History.ReadAloud": "読み上げ",
+  "History.ReadAloudFailed": "読み上げできませんでした。「詳細」で音声プロバイダーと声を確認してください。詳細: {0}",
   "History.Replacement": "置換後",
   "History.Retry": "再試行",
   "History.RetryAudioMissing": "録音は利用できなくなりました。",

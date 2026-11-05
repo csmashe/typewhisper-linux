@@ -41,6 +41,7 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly Dictionary<string, HistoryRecordRow> _rows = [];
     private readonly HashSet<string> _selectedIds = new(StringComparer.Ordinal);
     private readonly SessionAudioFileService _sessionAudioFiles;
+    private readonly Action<Action> _postToUi;
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService? _speech;
     private HistoryRecordRow? _readingRow;
@@ -102,11 +103,13 @@ public partial class HistorySectionViewModel : ObservableObject
         TimeZoneInfo timeZone,
         Func<DateTime> utcNow,
         Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
-        SpeechFeedbackService? speech = null
+        SpeechFeedbackService? speech = null,
+        Action<Action>? postToUi = null
     )
     {
         _history = history;
         _speech = speech;
+        _postToUi = postToUi ?? (action => Dispatcher.UIThread.Post(action));
         _retry = retry;
         _dictionary = dictionary;
         _settings = settings;
@@ -533,6 +536,7 @@ public partial class HistorySectionViewModel : ObservableObject
             return;
         }
 
+        row.ReadAloudError = "";
         var handle = _speech?.StartReadBack(row.Record.FinalText, row.Record.Language);
         if (handle is null)
         {
@@ -542,7 +546,7 @@ public partial class HistorySectionViewModel : ObservableObject
         _readingRow = row;
         _readback = handle;
         RefreshReadAloudState();
-        _ = ObserveReadbackCompletionAsync(handle);
+        _ = ObserveReadbackCompletionAsync(handle, row);
     }
 
     internal void StopReadAloud(HistoryRecordRow row)
@@ -558,15 +562,24 @@ public partial class HistorySectionViewModel : ObservableObject
         RefreshReadAloudState();
     }
 
-    private async Task ObserveReadbackCompletionAsync(IManualReadback handle)
+    private async Task ObserveReadbackCompletionAsync(IManualReadback handle, HistoryRecordRow row)
     {
         await handle.Completion.ConfigureAwait(false);
-        Dispatcher.UIThread.Post(() =>
+        _postToUi(() =>
         {
+            // A stopped readback is detached first, so only the row's own live request reports.
             if (ReferenceEquals(_readback, handle))
             {
                 _readback = null;
                 _readingRow = null;
+                if (handle.FailureMessage is { } failure)
+                {
+                    row.ReadAloudError = Loc.Instance.GetString(
+                        "History.ReadAloudFailed",
+                        FailureMessageSanitizer.Sanitize(failure, row.Record.RawText, row.Record.FinalText)
+                        ?? Loc.Instance["Common.UnknownError"]
+                    );
+                }
             }
 
             RefreshReadAloudState();
@@ -791,6 +804,11 @@ public partial class HistoryRecordRow : ObservableObject
     [ObservableProperty]
     private string _retryResult = "";
 
+    [ObservableProperty]
+    private string _readAloudError = "";
+
+    public bool ShowReadAloudError => ShowExpandedActions && !string.IsNullOrEmpty(ReadAloudError);
+
     public bool HasRetryResult => !string.IsNullOrEmpty(RetryResult);
     public bool HasFailure => Record.Status != TranscriptionRecordStatus.Succeeded;
 
@@ -819,6 +837,8 @@ public partial class HistoryRecordRow : ObservableObject
     }
 
     partial void OnIsRetryingChanged(bool value) => OnPropertyChanged(nameof(ShowRetryPanel));
+
+    partial void OnReadAloudErrorChanged(string value) => OnPropertyChanged(nameof(ShowReadAloudError));
 
     [RelayCommand]
     private async Task RetryAsync()
@@ -977,6 +997,7 @@ public partial class HistoryRecordRow : ObservableObject
         else
         {
             _owner.StopReadAloud(this);
+            ReadAloudError = "";
             IsEditing = false;
             IsInspectorVisible = false;
             CorrectionSuggestions.Clear();
@@ -1093,6 +1114,7 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowEditPanel));
         OnPropertyChanged(nameof(ShowExpandedMeta));
         OnPropertyChanged(nameof(ShowExpandedActions));
+        OnPropertyChanged(nameof(ShowReadAloudError));
         OnPropertyChanged(nameof(HasCorrectionSuggestions));
         OnPropertyChanged(nameof(ShowInspectorToggle));
         OnPropertyChanged(nameof(ShowInspector));
