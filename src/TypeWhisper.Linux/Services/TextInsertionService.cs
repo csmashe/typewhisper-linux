@@ -430,6 +430,23 @@ public sealed class TextInsertionService
             return InsertionResult.CopiedToClipboard;
         }
 
+        // xterm binds no key to paste CLIPBOARD by default: Ctrl+Shift+V arrives as ^V and
+        // Shift+Insert pastes PRIMARY, so either would lose the text behind a false Pasted.
+        if (string.Equals(
+                ProcessNameNormalizer.Normalize(request.TargetProcessName),
+                "xterm",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            LogInsertionFallback("Auto paste fell back to clipboard: xterm has no default clipboard-paste shortcut.");
+            return requiresSafeTerminalPaste
+                ? await HandleTerminalMultilinePasteFailureAsync(
+                    text,
+                    previousClipboard,
+                    previousClipboardHasNonTextFormats
+                )
+                : InsertionResult.CopiedToClipboard;
+        }
+
         if (!await FocusTargetWindowAsync(targetWindowId))
         {
             LastFailureReason = InsertionFailureReason.FocusFailed;

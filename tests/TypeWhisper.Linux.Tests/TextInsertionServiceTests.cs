@@ -2217,6 +2217,39 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_xterm_non_ascii_copies_without_sending_a_paste_shortcut()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+            CanTypeNonAscii = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("café Ω", targetProcessName: "xterm");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("café Ω", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_xterm_multiline_fails_closed_without_sending_a_paste_shortcut()
+    {
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous", PasteSucceeds = true };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "xterm");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_X11_firefox_auto_pastes_unicode_instead_of_remapping_keycodes()
     {
         var runner = new RecordingProcessRunner();
