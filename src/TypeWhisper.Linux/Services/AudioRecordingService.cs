@@ -1495,6 +1495,8 @@ public sealed class AudioRecordingService : IDisposable
             StopAndDisposeInputStream();
         }
 
+        // Callers publish the closing generation first; zero the meter through it like StopPreview.
+        UpdateLevel(Volatile.Read(ref _levelDeliveryGeneration), 0f, allowClosingGeneration: true);
         EndMicrophoneTestLocked(MicrophoneTestEnd.PreviewStopped);
         Volatile.Write(ref _isPreviewing, 0);
     }

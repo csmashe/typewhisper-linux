@@ -1571,6 +1571,23 @@ public sealed class AudioRecordingServiceMigrationTests
     }
 
     [Fact]
+    public void CheckForDefaultDeviceChange_ZeroesMeter_WhenReopenFails()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        var delivered = new List<float>();
+        using var sut = table.CreateService(static action => action());
+        sut.LevelChanged += (_, level) => delivered.Add(level);
+        sut.FollowSystemDefault = true;
+        Assert.True(sut.StartPreview());
+        sut.ProcessAudioBufferForTest([0.5f]);
+
+        table.FailOpen = true;
+        sut.CheckForDefaultDeviceChange();
+
+        Assert.Equal([0.5f, 0f], delivered);
+    }
+
+    [Fact]
     public void CheckForDefaultDeviceChange_KeepsPreviewStream_WhileCaptureIsReserved()
     {
         var table = new StaleWhileOpenDeviceTable();
@@ -1606,7 +1623,7 @@ internal sealed class StaleWhileOpenDeviceTable
     public bool StreamOpen { get; private set; }
     public bool FailOpen { get; set; }
 
-    public AudioRecordingService CreateService() =>
+    public AudioRecordingService CreateService(Action<Action>? postToUiThread = null) =>
         new(
             Read,
             index =>
@@ -1621,7 +1638,7 @@ internal sealed class StaleWhileOpenDeviceTable
             },
             () => Read().Single(device => device.IsDefault).Index,
             () => StreamOpen = false,
-            postToUiThread: static _ => { }
+            postToUiThread: postToUiThread ?? (static _ => { })
         );
 
     private IReadOnlyList<AudioInputDevice> Read() =>
