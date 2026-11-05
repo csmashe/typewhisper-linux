@@ -111,6 +111,26 @@ public sealed class SpeechFeedbackServiceTests
     }
 
     [Fact]
+    public async Task StartReadBack_reports_uncanceled_provider_timeout()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        using var sut = new SpeechFeedbackService(
+            settings.Object,
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        var handle = Assert.IsType<IManualReadback>(sut.StartReadBack("read me", "en"), exactMatch: false);
+        var call = await provider.NextRequestAsync();
+
+        // HttpClient reports its own timeout as a TaskCanceledException nobody requested.
+        call.Session.TrySetException(new TaskCanceledException("The request timed out."));
+        await handle.Completion.WaitAsync(s_testGuard);
+
+        Assert.Equal("The request timed out.", handle.FailureMessage);
+    }
+
+    [Fact]
     public void StartReadBack_rejects_blank_reserved_and_disposed_requests()
     {
         var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());

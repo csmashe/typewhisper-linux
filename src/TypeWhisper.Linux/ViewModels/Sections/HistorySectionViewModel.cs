@@ -537,7 +537,9 @@ public partial class HistorySectionViewModel : ObservableObject
         }
 
         row.ReadAloudError = "";
-        var handle = _speech?.StartReadBack(row.Record.FinalText, row.Record.Language);
+        // The row's record can be replaced mid-readback; redact the text that was actually sent.
+        var record = row.Record;
+        var handle = _speech?.StartReadBack(record.FinalText, record.Language);
         if (handle is null)
         {
             return;
@@ -546,7 +548,7 @@ public partial class HistorySectionViewModel : ObservableObject
         _readingRow = row;
         _readback = handle;
         RefreshReadAloudState();
-        _ = ObserveReadbackCompletionAsync(handle, row);
+        _ = ObserveReadbackCompletionAsync(handle, row, record.RawText, record.FinalText);
     }
 
     internal void StopReadAloud(HistoryRecordRow row)
@@ -562,7 +564,12 @@ public partial class HistorySectionViewModel : ObservableObject
         RefreshReadAloudState();
     }
 
-    private async Task ObserveReadbackCompletionAsync(IManualReadback handle, HistoryRecordRow row)
+    private async Task ObserveReadbackCompletionAsync(
+        IManualReadback handle,
+        HistoryRecordRow row,
+        string rawText,
+        string finalText
+    )
     {
         await handle.Completion.ConfigureAwait(false);
         _postToUi(() =>
@@ -576,7 +583,7 @@ public partial class HistorySectionViewModel : ObservableObject
                 {
                     row.ReadAloudError = Loc.Instance.GetString(
                         "History.ReadAloudFailed",
-                        FailureMessageSanitizer.Sanitize(failure, row.Record.RawText, row.Record.FinalText)
+                        FailureMessageSanitizer.Sanitize(failure, rawText, finalText)
                         ?? Loc.Instance["Common.UnknownError"]
                     );
                 }

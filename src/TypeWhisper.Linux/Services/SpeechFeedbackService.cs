@@ -854,7 +854,8 @@ public sealed class SpeechFeedbackService : IDisposable
                 OnPlaybackCompleted(session, playbackRequest);
             }
         }
-        catch (OperationCanceledException)
+        // An uncanceled OCE (e.g. an HttpClient timeout) is a provider failure.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ClearPending(playbackRequest);
         }
