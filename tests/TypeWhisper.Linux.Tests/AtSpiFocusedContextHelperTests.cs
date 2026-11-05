@@ -128,7 +128,10 @@ public sealed class AtSpiFocusedContextHelperTests
             true,
             false,
             0,
-            args.Contains("GetRole") ? $"u {role}" : args.Contains("Name") ? frameName : "",
+            args.Contains("GetRole") ? $"u {role}"
+            : args.Contains("Name") ? frameName
+            : args.Contains("GetChildren") ? "a(so) 1 \":1.9\" \"/org/example/qa/field\""
+            : "",
             ""
         ));
         var extractor = new AtSpiUrlExtractor(runner);
@@ -166,16 +169,41 @@ public sealed class AtSpiFocusedContextHelperTests
         Assert.False(InvokeFocusedNodeBelongsToWindow(extractor, "/qa/frame", 1));
     }
 
+    [Theory]
+    [InlineData(true, false)] // the app's window list could not be read
+    [InlineData(false, true)] // the other window's title could not be read
+    public void Harvest_WindowConfirmation_RejectsWhenOtherWindowsCannotBeRead(
+        bool failChildren,
+        bool failSiblingName
+    )
+    {
+        var runner = SameAppWindowsRunner("QA Window", "QA Window private", failChildren, failSiblingName);
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.False(InvokeFocusedNodeBelongsToWindow(extractor, "/qa/frame", 40));
+    }
+
     // App "/qa/app" has two top-level children: the focused frame "/qa/frame" and "/qa/other".
-    private static RecordingRunner SameAppWindowsRunner(string frameName, string siblingName)
+    private static RecordingRunner SameAppWindowsRunner(
+        string frameName,
+        string siblingName,
+        bool failChildren = false,
+        bool failSiblingName = false
+    )
     {
         return new RecordingRunner((_, args) =>
         {
+            var isChildren = args.Contains("GetChildren") && args.Contains("/qa/app");
+            var isSiblingName = args.Contains("Name") && args.Contains("/qa/other");
+            if ((failChildren && isChildren) || (failSiblingName && isSiblingName))
+            {
+                return new ProcessRunResult(true, false, 1, "", "");
+            }
+
             var stdout = args.Contains("GetRole") ? "u 23"
-                : args.Contains("GetChildren") && args.Contains("/qa/app")
-                    ? "a(so) 2 \":1.9\" \"/qa/frame\" \":1.9\" \"/qa/other\""
+                : isChildren ? "a(so) 2 \":1.9\" \"/qa/frame\" \":1.9\" \"/qa/other\""
                 : args.Contains("Name") && args.Contains("/qa/frame") ? $"s \"{frameName}\""
-                : args.Contains("Name") && args.Contains("/qa/other") ? $"s \"{siblingName}\""
+                : isSiblingName ? $"s \"{siblingName}\""
                 : "";
             return new ProcessRunResult(true, false, 0, stdout, "");
         });

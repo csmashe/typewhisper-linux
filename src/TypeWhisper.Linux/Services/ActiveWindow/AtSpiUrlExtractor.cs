@@ -727,7 +727,14 @@ public sealed partial class AtSpiUrlExtractor
     )
     {
         ct.ThrowIfCancellationRequested();
-        foreach (var window in GetAccessibleChildren(address, app))
+        var windows = GetAccessibleChildren(address, app);
+        // The frame is itself one of the app's windows, so an empty list means the lookup failed.
+        if (windows.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (var window in windows)
         {
             if (window == frame)
             {
@@ -740,7 +747,9 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             ct.ThrowIfCancellationRequested();
-            if (TitlesRelate(GetAccessibleName(address, window), recordedTitle))
+            // A failed read is null, while an untitled window is "": the unread one could share the title.
+            var title = GetAccessibleName(address, window);
+            if (title is null || TitlesRelate(title, recordedTitle))
             {
                 return true;
             }
