@@ -4413,7 +4413,11 @@ public sealed partial class DictationOrchestrator : IDisposable
                 or InsertionFailureReason.PasteRetriesExhausted
         )
         {
-            return Localization.Loc.Instance["TextInsertion.TerminalClipboardFallback"];
+            return Localization.Loc.Instance[
+                TextInsertionService.IsXterm(targetProcessName)
+                    ? "TextInsertion.XtermClipboardFallback"
+                    : "TextInsertion.TerminalClipboardFallback"
+            ];
         }
 
         return failureReason switch

@@ -1300,6 +1300,7 @@
   "TextInsertion.WtypeInstalledWaylandOnly": "Installiert (nur Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Installiert, aber dieser Compositor unterstützt das Virtual-Keyboard-Protokoll von wtype nicht.",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "Installiert — nur XWayland-Fenster.",
+  "TextInsertion.XtermClipboardFallback": "In die Zwischenablage kopiert. xterm hat standardmäßig kein Tastenkürzel zum Einfügen. Fügen Sie den Text mit Ihrer eigenen Belegung ein.",
   "TextInsertion.YdotoolActivationFailed": "Die ydotool-Systemdateien wurden installiert, aber ihre Aktivierung ist fehlgeschlagen.",
   "TextInsertion.YdotoolForeignConfigRefused": "TypeWhisper hat {0} nicht geändert, da die Datei bereits vorhanden und keine reguläre Datei im Besitz von TypeWhisper ist.",
   "TextInsertion.YdotoolForeignModulesLoadDetail": "Prüfen Sie die vorhandene Datei. Wenn sie das uinput-Modul nicht bereits lädt, verschieben Sie sie oder benennen Sie sie um und führen Sie die Einrichtung erneut aus.",

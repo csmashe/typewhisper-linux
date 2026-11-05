@@ -1300,6 +1300,7 @@
   "TextInsertion.WtypeInstalledWaylandOnly": "已安装（仅限Wayland）。",
   "TextInsertion.WtypeUnsupportedCompositor": "已安装，但此合成器不支持wtype的虚拟键盘协议。",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "已安装——仅限XWayland窗口。",
+  "TextInsertion.XtermClipboardFallback": "已复制到剪贴板。xterm 没有默认的粘贴快捷键，请使用你自己设置的快捷键粘贴。",
   "TextInsertion.YdotoolActivationFailed": "ydotool的root文件已发布，但激活失败。",
   "TextInsertion.YdotoolForeignConfigRefused": "TypeWhisper未更改{0}，因为它已存在且不是TypeWhisper拥有的普通文件。",
   "TextInsertion.YdotoolForeignModulesLoadDetail": "请检查现有文件。如果它尚未加载uinput模块，请将其移动或重命名，然后再次运行设置。",

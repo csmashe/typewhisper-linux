@@ -2216,6 +2216,31 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("previous", platform.Clipboard);
     }
 
+    [Theory]
+    [InlineData("xterm")]
+    [InlineData("gnome-terminal-server")]
+    public async Task InsertTextAsync_X11_terminal_auto_still_types_unicode(string processName)
+    {
+        var x11 = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", true, false, "cinnamon", false, false),
+            new RecordingProcessRunner().Run
+        );
+        Assert.True(x11.CanTypeNonAsciiIntoTerminal);
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CanTypeNonAscii = x11.CanTypeNonAscii,
+            NonAsciiIntoTerminal = x11.CanTypeNonAsciiIntoTerminal,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("café Ω", targetProcessName: processName);
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("café Ω", platform.TypedText);
+        Assert.False(platform.PasteSent);
+    }
+
     [Fact]
     public async Task InsertTextAsync_xterm_non_ascii_copies_without_sending_a_paste_shortcut()
     {
@@ -4076,6 +4101,10 @@ public sealed class TextInsertionServiceTests
         public bool PrefersDirectTypingForUnknownTarget { get; init; }
 
         public bool CanTypeNonAscii { get; init; } = true;
+
+        public bool? NonAsciiIntoTerminal { get; init; }
+
+        public bool CanTypeNonAsciiIntoTerminal => NonAsciiIntoTerminal ?? CanTypeNonAscii;
 
         public InsertionFailureReason LastFailureReason { get; private set; }
 

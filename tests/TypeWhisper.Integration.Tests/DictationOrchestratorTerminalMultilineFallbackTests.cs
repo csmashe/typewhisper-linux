@@ -84,6 +84,51 @@ public sealed class DictationOrchestratorTerminalMultilineFallbackTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public Task XtermClipboardFallback_DoesNotRecommendCtrlShiftV()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            var previousLanguage = Loc.Instance.CurrentLanguage;
+            try
+            {
+                Loc.Instance.Initialize(LocalizationDir());
+                Loc.Instance.CurrentLanguage = "en";
+
+                await using var fixture = new OrchestratorCompositionFixture(
+                    focusedApp: ("xterm", "xterm — integration")
+                );
+                fixture.Plugin.EnqueueText("first line\nsecond line");
+
+                var overlayStates = new ConcurrentQueue<DictationOverlayState>();
+                fixture.Orchestrator.OverlayStateChanged += (_, state) =>
+                    overlayStates.Enqueue(state);
+
+                var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+                fixture.FeedNonSilentAudio();
+                var resultTask = fixture.WaitForResultAsync(sessionId);
+                await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+                var result = await BoundedTest.WaitAsync(resultTask);
+
+                var expectedMessage = Loc.Instance["TextInsertion.XtermClipboardFallback"];
+                Assert.DoesNotContain("Ctrl+Shift+V", expectedMessage);
+                Assert.Equal("ready", result.Status);
+                Assert.Contains(
+                    overlayStates,
+                    state => state is { ShowFeedback: true, FeedbackIsError: false }
+                             && state.FeedbackText == expectedMessage
+                );
+                Assert.Equal(0, fixture.InsertionPlatform.PasteAttemptCount);
+                Assert.Empty(fixture.InsertionPlatform.Typed);
+            }
+            finally
+            {
+                Loc.Instance.CurrentLanguage = previousLanguage;
+            }
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public Task TerminalMultilinePasteFailure_WithActionableReason_PrefersSetupGuidance()
     {
         return BoundedTest.RunAsync(async () =>

@@ -352,7 +352,10 @@ public sealed class TextInsertionService
                 TextInsertionStrategy.ClipboardPaste => false,
                 // ydotool and xdotool can drop non-ASCII yet exit 0, so such text is pasted instead.
                 _ => (ShouldTypeDirectly(targetProcessName, targetWindowTitle)
-                      && (IsAsciiSafe(text) || _platform.CanTypeNonAscii))
+                      && (IsAsciiSafe(text)
+                          || (targetIsTerminal
+                              ? _platform.CanTypeNonAsciiIntoTerminal
+                              : _platform.CanTypeNonAscii)))
                      // On Wayland without xdotool, process/title are null; defaulting to paste
                      // hits terminals (readline quoted-insert), vim, and Claude Code's image-paste.
                      // Direct typing via ydotool is universal — BUT only for ASCII: ydotool
@@ -432,10 +435,7 @@ public sealed class TextInsertionService
 
         // xterm binds no key to paste CLIPBOARD by default: Ctrl+Shift+V arrives as ^V and
         // Shift+Insert pastes PRIMARY, so either would lose the text behind a false Pasted.
-        if (string.Equals(
-                ProcessNameNormalizer.Normalize(request.TargetProcessName),
-                "xterm",
-                StringComparison.OrdinalIgnoreCase))
+        if (IsXterm(request.TargetProcessName))
         {
             LogInsertionFallback("Auto paste fell back to clipboard: xterm has no default clipboard-paste shortcut.");
             return requiresSafeTerminalPaste
@@ -1171,6 +1171,12 @@ public sealed class TextInsertionService
     ///     contains "terminal" but doesn't end with it. The trailing `EndsWith("term")`
     ///     catches xfce4-terminal etc.
     /// </summary>
+    public static bool IsXterm(string? processName)
+    {
+        return ProcessNameNormalizer.Normalize(processName)
+            .Equals("xterm", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool IsTerminalApp(string? processName)
     {
         if (string.IsNullOrWhiteSpace(processName))
@@ -1280,6 +1286,9 @@ internal interface ITextInsertionPlatform
 
     /// <summary>True when the platform has a typing backend that can type non-ASCII text.</summary>
     bool CanTypeNonAscii => true;
+
+    /// <summary>Like <see cref="CanTypeNonAscii" />, but for terminal targets.</summary>
+    bool CanTypeNonAsciiIntoTerminal => CanTypeNonAscii;
 
     InsertionFailureReason LastFailureReason { get; }
 
@@ -1490,6 +1499,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     // existing Firefox windows), silently dropping the character.
     public bool CanTypeNonAscii =>
         !_snapshot.CompositorRejectsWtype && _chain.Contains(InputBackend.Wtype);
+
+    // Terminals keep xdotool typing for non-ASCII; the dropped characters were seen in Firefox.
+    public bool CanTypeNonAsciiIntoTerminal => CanTypeNonAscii || _chain.Contains(InputBackend.Xdotool);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
