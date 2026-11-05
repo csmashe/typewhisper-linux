@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.PluginSDK;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
@@ -176,6 +177,46 @@ public sealed class LlmStreamPumpTests
         Assert.Empty(emissions);
     }
 
+    [Theory]
+    [InlineData(PluginRequestFailureKind.InvalidRequest, 402)]
+    [InlineData(PluginRequestFailureKind.Authentication, 401)]
+    [InlineData(PluginRequestFailureKind.Permission, 403)]
+    [InlineData(PluginRequestFailureKind.Configuration, null)]
+    public async Task ThrowIfNonRetryableFault_AccountDecision_Rethrows(
+        PluginRequestFailureKind kind,
+        int? status
+    )
+    {
+        var denial = new PluginRequestException("denied", kind, status);
+        var pump = new LlmStreamPump(_ => { });
+
+        await pump.RunAsync(FaultBeforeOutput(denial), CancellationToken.None);
+
+        Assert.Same(denial, Assert.Throws<PluginRequestException>(pump.ThrowIfNonRetryableFault));
+    }
+
+    [Theory]
+    [InlineData(PluginRequestFailureKind.InvalidRequest, 400, false)]
+    [InlineData(PluginRequestFailureKind.Unknown, null, false)]
+    [InlineData(PluginRequestFailureKind.RateLimit, 429, true)]
+    [InlineData(PluginRequestFailureKind.Permission, 403, true)]
+    public async Task ThrowIfNonRetryableFault_StreamSpecificOrTransientFault_KeepsBatchFallback(
+        PluginRequestFailureKind kind,
+        int? status,
+        bool transient
+    )
+    {
+        var pump = new LlmStreamPump(_ => { });
+
+        await pump.RunAsync(
+            FaultBeforeOutput(new PluginRequestException("stream failed", kind, status, isTransient: transient)),
+            CancellationToken.None
+        );
+
+        pump.ThrowIfNonRetryableFault();
+        Assert.True(pump.Faulted);
+    }
+
     private static async IAsyncEnumerable<string> Source(params string[] deltas)
     {
         foreach (var d in deltas)
@@ -193,5 +234,13 @@ public sealed class LlmStreamPumpTests
         yield return delta;
         await Task.Yield();
         throw exception;
+    }
+
+    private static async IAsyncEnumerable<string> FaultBeforeOutput(Exception exception)
+    {
+        await Task.Yield();
+        if (exception is not null)
+            throw exception;
+        yield break;
     }
 }
