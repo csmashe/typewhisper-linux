@@ -44,6 +44,40 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ApplyPromptPaletteHotkey_CollisionReportsCollisionNotParseError()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetHotkeyFromString("F8"));
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { PromptPaletteHotkeyText = "F8" };
+
+        sut.ApplyPromptPaletteHotkeyCommand.Execute(null);
+
+        Assert.Equal("", hotkey.CurrentPromptPaletteHotkeyString);
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyCollides", "F8"),
+            sut.StatusMessage
+        );
+    }
+
+    [Fact]
+    public void ApplyPromptPaletteHotkey_MalformedTextStillReportsParseError()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { PromptPaletteHotkeyText = "Ctrl+Nope" };
+
+        sut.ApplyPromptPaletteHotkeyCommand.Execute(null);
+
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.PromptPaletteHotkeyParseFailed", "Ctrl+Nope"),
+            sut.StatusMessage
+        );
+    }
+
+    [Fact]
     public void ApplyPromptPaletteHotkey_BlankInputClearsBinding()
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));

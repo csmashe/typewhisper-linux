@@ -1261,8 +1261,12 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
         }
         else
         {
-            StatusMessage =
-                RejectedHotkeyMessage("Shortcuts.PromptPaletteHotkeyParseFailed", PromptPaletteHotkeyText);
+            StatusMessage = RejectedHotkeyMessage(
+                HotkeyService.IsParsableHotkey(PromptPaletteHotkeyText)
+                    ? "Shortcuts.HotkeyCollides"
+                    : "Shortcuts.PromptPaletteHotkeyParseFailed",
+                PromptPaletteHotkeyText
+            );
         }
     }
 
