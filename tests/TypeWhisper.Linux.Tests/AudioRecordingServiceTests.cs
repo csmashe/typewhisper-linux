@@ -1588,6 +1588,48 @@ public sealed class AudioRecordingServiceMigrationTests
     }
 
     [Fact]
+    public void StopRecording_MovesPreviewToDefaultChangedDuringRecording()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        using var sut = table.CreateService();
+        sut.FollowSystemDefault = true;
+        Assert.True(sut.StartPreview());
+        var session = sut.TryStartRecording(whisperModeEnabled: false);
+        Assert.NotNull(session);
+
+        table.Devices.SetDefault("B|1");
+        sut.CheckForDefaultDeviceChange();
+        Assert.Equal("A|1", sut.ActiveDeviceIdForTest);
+
+        sut.StopRecording(session);
+        var next = sut.TryStartRecording(whisperModeEnabled: false);
+        Assert.NotNull(next);
+
+        Assert.Equal(1, table.Opened[^1]);
+        Assert.Equal("B|1", sut.ActiveDeviceIdForTest);
+        sut.StopRecording(next);
+    }
+
+    [Fact]
+    public void StopRecording_KeepsPreviewDevice_WhenDefaultDidNotChangeDuringRecording()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        using var sut = table.CreateService();
+        sut.FollowSystemDefault = true;
+        Assert.True(sut.StartPreview());
+        var session = sut.TryStartRecording(whisperModeEnabled: false);
+        Assert.NotNull(session);
+
+        sut.CheckForDefaultDeviceChange();
+        sut.StopRecording(session);
+
+        Assert.Equal([0, 0], table.Opened);
+        Assert.True(table.StreamOpen);
+        Assert.Equal("A|1", sut.ActiveDeviceIdForTest);
+        Assert.False(sut.MigrationPendingForTest);
+    }
+
+    [Fact]
     public void CheckForDefaultDeviceChange_KeepsPreviewStream_WhileCaptureIsReserved()
     {
         var table = new StaleWhileOpenDeviceTable();

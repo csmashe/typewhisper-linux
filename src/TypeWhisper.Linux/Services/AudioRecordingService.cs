@@ -1398,6 +1398,12 @@ public sealed class AudioRecordingService : IDisposable
             {
                 _preferredDeviceMigrationPending = false;
             }
+            else if (Volatile.Read(ref _isRecording) == 1 || _activeCaptureSession is not null)
+            {
+                // The change may be hidden by the stale table; StopRecording rechecks once
+                // the stream can be released.
+                _preferredDeviceMigrationPending = true;
+            }
 
             return;
         }
