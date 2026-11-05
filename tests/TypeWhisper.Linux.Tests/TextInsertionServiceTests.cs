@@ -2168,7 +2168,7 @@ public sealed class TextInsertionServiceTests
     [Fact]
     public async Task InsertTextAsync_known_terminal_with_non_ascii_still_direct_types()
     {
-        // A typing backend that handles non-ASCII (xdotool, wtype) keeps the
+        // A typing backend that handles non-ASCII (wtype) keeps the
         // known-app direct-typing preference.
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
         var sut = new TextInsertionService(platform);
@@ -2186,6 +2186,7 @@ public sealed class TextInsertionServiceTests
 
     [Theory]
     [InlineData("firefox", "QA — Mozilla Firefox", false)]
+    [InlineData("firefox-bin", "QA — Mozilla Firefox", false)]
     [InlineData("ptyxis", "owned-file", true)]
     public async Task InsertTextAsync_known_app_pastes_non_ascii_when_backend_cannot_type_it(
         string processName,
@@ -2212,6 +2213,32 @@ public sealed class TextInsertionServiceTests
         Assert.True(platform.PasteSent);
         Assert.Equal(expectTerminalShortcut, platform.LastPasteUsedTerminalShortcut);
         Assert.Null(platform.TypedText);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_X11_firefox_auto_pastes_unicode_instead_of_remapping_keycodes()
+    {
+        var runner = new RecordingProcessRunner();
+        var x11 = new LinuxTextInsertionPlatform(
+            SnapshotFor("X11", true, false, "cinnamon", false, false),
+            runner.Run
+        );
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CanTypeNonAscii = x11.CanTypeNonAscii,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café Ω 東京 👩‍💻 e\u0301\nsecond line",
+            targetProcessName: "firefox-bin"
+        );
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Null(platform.TypedText);
+        Assert.True(platform.PasteSent);
         Assert.Equal("previous", platform.Clipboard);
     }
 
@@ -2709,7 +2736,7 @@ public sealed class TextInsertionServiceTests
     [InlineData("Wayland", false, true, "gnome", true, true, false)]
     [InlineData("Wayland", false, true, "hyprland", true, true, true)]
     [InlineData("Wayland", false, true, "hyprland", false, false, true)]
-    [InlineData("X11", true, false, "gnome", true, true, true)]
+    [InlineData("X11", true, false, "gnome", true, true, false)]
     public void LinuxTextInsertionPlatform_CanTypeNonAscii_WhenChainHasUnicodeBackend(
         string sessionType,
         bool hasXdotool,

@@ -1468,12 +1468,13 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             || _snapshot is { HasWtype: true, CompositorRejectsWtype: false }
         );
 
-    // xdotool and wtype map arbitrary keysyms; ydotool types only what the US keymap holds.
+    // XTEST keymap remapping can silently lose Unicode in existing Firefox windows.
+    // Keep Auto on clipboard paste for xdotool; explicit Direct Typing remains available.
     // wtype counts only where the compositor accepts its virtual keyboard.
     public bool CanTypeNonAscii =>
         _chain.Exists(backend => backend switch
         {
-            InputBackend.Xdotool => true,
+            InputBackend.Xdotool => false,
             InputBackend.Wtype => !_snapshot.CompositorRejectsWtype,
             _ => false,
         });
