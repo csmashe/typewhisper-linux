@@ -350,7 +350,7 @@ public sealed class TextInsertionService
             {
                 TextInsertionStrategy.DirectTyping => true,
                 TextInsertionStrategy.ClipboardPaste => false,
-                // ydotool drops non-ASCII characters yet exits 0, so such text is pasted instead.
+                // ydotool and xdotool can drop non-ASCII yet exit 0, so such text is pasted instead.
                 _ => (ShouldTypeDirectly(targetProcessName, targetWindowTitle)
                       && (IsAsciiSafe(text) || _platform.CanTypeNonAscii))
                      // On Wayland without xdotool, process/title are null; defaulting to paste
@@ -1468,16 +1468,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             || _snapshot is { HasWtype: true, CompositorRejectsWtype: false }
         );
 
-    // XTEST keymap remapping can silently lose Unicode in existing Firefox windows.
-    // Keep Auto on clipboard paste for xdotool; explicit Direct Typing remains available.
-    // wtype counts only where the compositor accepts its virtual keyboard.
+    // Only wtype (where the compositor accepts it) types Unicode reliably. ydotool types only
+    // the US keymap; xdotool's per-character keycode remap is missed by some X clients (e.g.
+    // existing Firefox windows), silently dropping the character.
     public bool CanTypeNonAscii =>
-        _chain.Exists(backend => backend switch
-        {
-            InputBackend.Xdotool => false,
-            InputBackend.Wtype => !_snapshot.CompositorRejectsWtype,
-            _ => false,
-        });
+        !_snapshot.CompositorRejectsWtype && _chain.Contains(InputBackend.Wtype);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
