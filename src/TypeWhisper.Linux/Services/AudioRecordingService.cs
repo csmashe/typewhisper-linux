@@ -75,6 +75,15 @@ public sealed class AudioRecordingService : IDisposable
     private static readonly Lock s_paInitLock = new();
     private static string? s_nativeAudioUnavailable;
 
+    /// <summary>
+    ///     Serializes every Pa_Initialize/Pa_Terminate in the process. PortAudio counts those
+    ///     calls natively and is not thread-safe across them, so AudioPlaybackService takes this
+    ///     same lock rather than its own.
+    /// </summary>
+    // ReSharper disable once ConvertToAutoPropertyWhenPossible -- s_paInitLock is the storage every
+    // static PortAudio lifetime helper here locks directly; this only exposes it to playback.
+    internal static Lock PortAudioLifetimeLock => s_paInitLock;
+
     private readonly Lock _captureLock = new();
     private readonly Func<int> _defaultInputDeviceIndexProvider;
     private readonly Action _ensurePortAudioInitialized;
@@ -393,8 +402,10 @@ public sealed class AudioRecordingService : IDisposable
                 }
 
                 owner._captureReservation = null;
-                migrationPending = owner._preferredDeviceMigrationPending
-                    && owner._activeCaptureSession is null;
+                migrationPending = owner is
+                {
+                    _preferredDeviceMigrationPending: true, _activeCaptureSession: null,
+                };
             }
 
             // A stop inside the reservation couldn't free the preview stream to recheck;
@@ -1545,7 +1556,8 @@ public sealed class AudioRecordingService : IDisposable
         return true;
     }
 
-    // Terminate()+Initialize() cycle that refreshes PortAudio's device-table snapshot.
+    // Terminate()+Initialize() cycle that refreshes PortAudio's device-table snapshot. PortAudio
+    // only rescans once its native count hits zero, so AudioPlaybackService holds none while idle.
     // CONTRACT: the caller MUST hold s_paInitLock and have verified no stream is live.
     private static void CyclePortAudioDeviceTableLocked()
     {

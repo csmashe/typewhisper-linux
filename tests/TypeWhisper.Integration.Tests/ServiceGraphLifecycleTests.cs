@@ -272,7 +272,7 @@ public sealed class ServiceGraphLifecycleTests
                 Assert.False(File.Exists(apiSocketPath));
                 Assert.False(File.Exists(discoveryPath));
                 Assert.True(deviceWatcher.Disposed);
-                Assert.True(playbackBoundary.TerminateCount > 0);
+                Assert.True(playbackBoundary.StopCount > 0);
                 Assert.Equal(0, audioBoundary.ActiveStreams);
 
                 await BoundedTest.WaitAsync(
@@ -285,7 +285,9 @@ public sealed class ServiceGraphLifecycleTests
                 // to the container on purpose — TearDownAsync does not touch it.
                 Assert.False(watch.IsRunning);
                 Assert.False(watchHandlerCalled);
-                Assert.True(playbackBoundary.InitializeCount > 0);
+                // Playback takes PortAudio only while a stream plays, never while idle.
+                Assert.Equal(0, playbackBoundary.InitializeCount);
+                Assert.Equal(0, playbackBoundary.TerminateCount);
                 Assert.Equal(0, processRunner.RequestCount);
                 Assert.Equal(0, atSpi.StartRequestCount);
                 Assert.Equal(0, audioBoundary.OpenCount);
