@@ -391,13 +391,15 @@ public sealed class ActiveWindowService : IActiveWindowService
             return true;
         }
 
-        if (value.Contains(' ') || !value.Contains('.'))
+        if (value.Contains(' '))
         {
             return false;
         }
 
         var host = value.Split('/')[0];
-        return host.Contains('.');
+        // Address bars show a local server as "localhost:8080/…", with no scheme and no dot.
+        return host.Contains('.')
+               || host.Split(':')[0].Equals("localhost", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeUrl(string value)
