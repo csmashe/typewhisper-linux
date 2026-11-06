@@ -384,12 +384,24 @@ public sealed class AudioRecordingService : IDisposable
     {
         public void Dispose()
         {
+            bool migrationPending;
             lock (owner._captureLock)
             {
-                if (ReferenceEquals(owner._captureReservation, this))
+                if (!ReferenceEquals(owner._captureReservation, this))
                 {
-                    owner._captureReservation = null;
+                    return;
                 }
+
+                owner._captureReservation = null;
+                migrationPending = owner._preferredDeviceMigrationPending
+                    && owner._activeCaptureSession is null;
+            }
+
+            // A stop inside the reservation couldn't free the preview stream to recheck;
+            // finish the deferred default-device move now that it's released.
+            if (migrationPending)
+            {
+                owner.CheckForDefaultDeviceChange();
             }
         }
     }
