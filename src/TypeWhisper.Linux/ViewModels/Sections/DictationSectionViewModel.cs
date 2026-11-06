@@ -2086,6 +2086,9 @@ public partial class DictationSectionViewModel : ObservableObject
         }
         else
         {
+            // The list can predate a device-table refresh that renumbered the inputs, so pin the
+            // device's current index, found by its stable id.
+            value = _audio.ResolveConfiguredDevice(value.Index, value.PersistentId) ?? value;
             _audio.FollowSystemDefault = false;
             _audio.SelectedDeviceIndex = value.Index;
             _settings.Update(current =>
