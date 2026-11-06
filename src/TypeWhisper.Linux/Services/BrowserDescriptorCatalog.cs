@@ -191,8 +191,10 @@ internal static class BrowserDescriptorCatalog
             "chromium",
             "chromium",
             BrowserEngineFamily.Chromium,
-            ["chromium"],
-            ["Chromium", "org.chromium.Chromium"],
+            // Fedora's package runs /usr/lib64/chromium-browser/chromium-browser, which the
+            // kernel's 15-character process name truncates to "chromium-browse".
+            ["chromium", "chromium-browser", "chromium-browse"],
+            ["Chromium", "org.chromium.Chromium", "chromium-browser"],
             [],
             [
                 "chromium.desktop",
