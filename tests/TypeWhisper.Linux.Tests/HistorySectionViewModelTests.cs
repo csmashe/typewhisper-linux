@@ -242,9 +242,11 @@ public sealed class HistorySectionViewModelTests : IDisposable
     }
 
     [Fact]
-    public void EmptyStateText_DistinguishesNoMatchesFromNoHistory()
+    public async Task EmptyStateText_DistinguishesNoMatchesFromNoHistory()
     {
         var history = CreateHistoryService();
+        // An unloaded history loads on the thread pool, and ShowEmptyState stays false until then.
+        await history.EnsureLoadedAsync();
         var sut = CreateViewModel(history, CreateDictionaryService());
         Assert.Equal(Loc.Instance["History.EmptyState"], sut.EmptyStateText);
 
