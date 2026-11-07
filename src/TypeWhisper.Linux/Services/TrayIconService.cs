@@ -32,8 +32,7 @@ public sealed class TrayIconService : IDisposable
     }
 
     /// <summary>
-    ///     Whether a usable system tray was confirmed at <see cref="Initialize" />
-    ///     time (or later by <see cref="TryConfirmLateHost" />). Hiding the window
+    ///     Whether the last probe confirmed a usable system tray. Hiding the window
     ///     without a tray strands the user (#18).
     /// </summary>
     public bool IsTrayAvailable { get; private set; }
@@ -44,14 +43,28 @@ public sealed class TrayIconService : IDisposable
     /// </summary>
     public bool TryConfirmLateHost()
     {
-        if (IsTrayAvailable || !_iconsRegistered || _disposed || !ProbeTrayAvailable())
+        return IsTrayAvailable || RecheckAvailability();
+    }
+
+    /// <summary>
+    ///     Re-probes the tray host, picking up one that appeared or went away.
+    ///     Blocks on D-Bus; call off the UI thread.
+    /// </summary>
+    public bool RecheckAvailability()
+    {
+        if (!_iconsRegistered || _disposed)
         {
             return IsTrayAvailable;
         }
 
-        IsTrayAvailable = true;
-        AvailabilityChanged?.Invoke(this, EventArgs.Empty);
-        return true;
+        var available = ProbeTrayAvailable();
+        if (available != IsTrayAvailable)
+        {
+            IsTrayAvailable = available;
+            AvailabilityChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        return available;
     }
 
     public void Dispose()
@@ -150,7 +163,7 @@ public sealed class TrayIconService : IDisposable
         return result.Succeeded && result.StandardOutput.Contains("true", StringComparison.Ordinal);
     }
 
-    /// <summary>Raised on a background thread when a late tray host is confirmed.</summary>
+    /// <summary>Raised on a background thread when a re-probe changes <see cref="IsTrayAvailable" />.</summary>
     public event EventHandler? AvailabilityChanged;
 
     public event EventHandler? ShowSettingsRequested;
