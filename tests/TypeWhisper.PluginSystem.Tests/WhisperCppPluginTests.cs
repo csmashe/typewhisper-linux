@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Moq;
+using TypeWhisper.Core.Audio;
 using TypeWhisper.Plugin.WhisperCpp;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -57,6 +58,29 @@ public partial class WhisperCppPluginTests
         Assert.Equal(0.05f, result.NoSpeechProbability);
         Assert.Equal("en", result.DetectedLanguage);
         Assert.Equal(1.5, result.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task AccumulateSegmentsAsync_MeasuredDuration_ReportsInputLengthNotLastSegmentEnd()
+    {
+        // 39273 frames at 16 kHz, whose last whisper segment ended at 2.0s.
+        var wav = WavEncoder.Encode(new float[39_273]);
+
+        var result = await WhisperCppPlugin.AccumulateSegmentsAsync(
+            AsAsyncEnumerable(Segment("The meeting starts tomorrow morning.", 0.05f, endSeconds: 2.0)),
+            TranscriptionNoSpeechThreshold,
+            WhisperCppPlugin.CalculateWavDurationSeconds(wav)
+        );
+
+        Assert.Equal(2.4545625, result.DurationSeconds, precision: 9);
+    }
+
+    [Fact]
+    public void CalculateWavDurationSeconds_ReadsTheDataChunkAndRejectsMalformedHeaders()
+    {
+        Assert.Equal(2.0, WhisperCppPlugin.CalculateWavDurationSeconds(WavEncoder.Encode(new float[32_000])), precision: 9);
+        Assert.Equal(0, WhisperCppPlugin.CalculateWavDurationSeconds([]));
+        Assert.Equal(0, WhisperCppPlugin.CalculateWavDurationSeconds("RIFF\0\0\0\0WAVX"u8.ToArray()));
     }
 
     [Fact]
