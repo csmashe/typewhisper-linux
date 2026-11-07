@@ -98,8 +98,8 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     // One-shot calls target arbitrary third-party apps, and a hung target (stopped process,
     // busy main loop) would otherwise pin the awaiting task forever — Tmds.DBus 0.92 applies
-    // no timeout of its own — stalling the serialized commit chain with it. WaitAsync leaves
-    // the pending reply entry behind until the reply or a disconnect arrives; that is
+    // no timeout of its own — stalling the serialized commit chain with it. WaitOrAbandonAsync
+    // leaves the pending reply entry behind until the reply or a disconnect arrives; that is
     // bounded and far preferable to an unbounded stall.
     private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(4);
 
@@ -751,7 +751,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             }
 
             var role = await conn.CallMethodAsync(message, s_readUInt32)
-                .WaitAsync(s_callTimeout)
+                .WaitOrAbandonAsync(s_callTimeout)
                 .ConfigureAwait(false);
             return role == RolePasswordText;
         }
@@ -815,7 +815,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             }
 
             return await conn.CallMethodAsync(message, s_readBoolean)
-                .WaitAsync(s_callTimeout)
+                .WaitOrAbandonAsync(s_callTimeout)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -893,7 +893,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readExtents)
-            .WaitAsync(s_callTimeout)
+            .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
     }
 
@@ -1342,7 +1342,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readStateSetWord0)
-            .WaitAsync(s_callTimeout, ct)
+            .WaitOrAbandonAsync(s_callTimeout, ct)
             .ConfigureAwait(false);
     }
 
@@ -1412,7 +1412,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                     message = writer.CreateMessage();
                 }
 
-                await conn.CallMethodAsync(message).WaitAsync(s_callTimeout).ConfigureAwait(false);
+                await conn.CallMethodAsync(message).WaitOrAbandonAsync(s_callTimeout).ConfigureAwait(false);
                 touched = true;
             }
             catch (Exception ex)
@@ -1446,7 +1446,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readElementRefArray)
-            .WaitAsync(s_callTimeout, ct)
+            .WaitOrAbandonAsync(s_callTimeout, ct)
             .ConfigureAwait(false);
     }
 
@@ -1762,7 +1762,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             }
 
             return await session.CallMethodAsync(message, s_readString)
-                .WaitAsync(s_callTimeout)
+                .WaitOrAbandonAsync(s_callTimeout)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -1788,7 +1788,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             message = writer.CreateMessage();
         }
 
-        await conn.CallMethodAsync(message).WaitAsync(s_callTimeout).ConfigureAwait(false);
+        await conn.CallMethodAsync(message).WaitOrAbandonAsync(s_callTimeout).ConfigureAwait(false);
     }
 
     // A single "s" arg (event only) mirrors what we registered with. NOTE: this reply is not proof
@@ -1810,7 +1810,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             message = writer.CreateMessage();
         }
 
-        await conn.CallMethodAsync(message).WaitAsync(s_callTimeout).ConfigureAwait(false);
+        await conn.CallMethodAsync(message).WaitOrAbandonAsync(s_callTimeout).ConfigureAwait(false);
     }
 
     // True when the registry still lists a text-changed registration for THIS connection. Lets the
@@ -1847,7 +1847,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readRegisteredEvents)
-            .WaitAsync(s_callTimeout)
+            .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
     }
 
@@ -1869,7 +1869,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readVariantInt32)
-            .WaitAsync(s_callTimeout)
+            .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
     }
 
@@ -1896,7 +1896,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
 
         return await conn.CallMethodAsync(message, s_readString)
-            .WaitAsync(s_callTimeout)
+            .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
     }
 

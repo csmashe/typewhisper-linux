@@ -129,7 +129,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
                 ?? throw new LogindAbsentException("No system bus address available.");
             var connection = new DBusConnection(address);
             ownedConnection = connection;
-            await connection.ConnectAsync().AsTask().WaitAsync(s_callTimeout).ConfigureAwait(false);
+            await connection.ConnectAsync().AsTask().WaitOrAbandonAsync(s_callTimeout).ConfigureAwait(false);
 
             var sessionPath = await ResolveSessionPathAsync(connection).ConfigureAwait(false);
 
@@ -248,7 +248,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
         }
 
         return await connection.CallMethodAsync(message, s_readObjectPath)
-            .WaitAsync(s_callTimeout)
+            .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
     }
 
@@ -273,7 +273,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
         }
 
         return await connection.CallMethodAsync(message, s_readObjectPath)
-            .WaitAsync(s_callTimeout)
+            .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
     }
 
@@ -304,7 +304,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
         }
 
         var sessionPath = await connection.CallMethodAsync(message, s_readDisplaySessionPath)
-            .WaitAsync(s_callTimeout)
+            .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(sessionPath))
         {
@@ -398,7 +398,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
             }
 
             var properties = await connection.CallMethodAsync(message, s_readProperties)
-                .WaitAsync(s_callTimeout)
+                .WaitOrAbandonAsync(s_callTimeout)
                 .ConfigureAwait(false);
             if (
                 !properties.TryGetValue("Active", out var activeValue)

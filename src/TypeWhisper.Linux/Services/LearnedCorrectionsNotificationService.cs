@@ -450,7 +450,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
             }
 
             return await conn.CallMethodAsync(message, s_readUInt32)
-                .WaitAsync(s_callTimeout)
+                .WaitOrAbandonAsync(s_callTimeout)
                 .ConfigureAwait(false);
         }
 
@@ -476,7 +476,7 @@ public sealed class LearnedCorrectionsNotificationService : IDisposable
                 message = writer.CreateMessage();
             }
 
-            await conn.CallMethodAsync(message).WaitAsync(s_callTimeout).ConfigureAwait(false);
+            await conn.CallMethodAsync(message).WaitOrAbandonAsync(s_callTimeout).ConfigureAwait(false);
         }
 
         public void Dispose()
