@@ -110,13 +110,15 @@ internal sealed class RecordingPlaybackBoundary
     internal int InitializeCount { get; private set; }
     internal int TerminateCount { get; private set; }
     internal int PlayCount { get; private set; }
+    internal int StopCount { get; private set; }
 
     internal AudioPlaybackService CreateService()
     {
         return new AudioPlaybackService(
             () => InitializeCount++,
             () => TerminateCount++,
-            _ => PlayCount++
+            _ => PlayCount++,
+            () => StopCount++
         );
     }
 }

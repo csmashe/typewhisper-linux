@@ -895,6 +895,30 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public void Selecting_a_device_after_the_table_reordered_uses_its_current_index()
+    {
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Mic B", 1, isDefault: true),
+            new FakeDevice(1, "Mic A", 1, isDefault: false)
+        );
+        using var context = new ViewModelTestContext(AppSettings.Default, devices);
+        context.Sut.ActivatePreview();
+        var staleMicA = context.Sut.Devices.Single(device => device.Name == "Mic A");
+
+        // A device-table refresh behind the open picker reorders the inputs.
+        devices.SetDevices(
+            new FakeDevice(0, "Mic A", 1, isDefault: true),
+            new FakeDevice(1, "Mic B", 1, isDefault: false)
+        );
+        context.Sut.SelectedDevice = staleMicA;
+
+        Assert.Equal(0, context.Audio.SelectedDeviceIndex);
+        Assert.Equal(0, context.OpenedDeviceIndices[^1]);
+        Assert.Equal(0, context.Settings.Object.Current.SelectedMicrophoneDevice);
+        Assert.Equal("Mic A|1", context.Settings.Object.Current.SelectedMicrophoneDeviceId);
+    }
+
+    [Fact]
     public void MicrophoneTest_ReselectingSameDeviceKeepsTestRunning()
     {
         var clock = new ManualClock();

@@ -55,6 +55,26 @@ public sealed class RecorderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Stop_MovesPreviewToDefaultChangedDuringRecording()
+    {
+        var table = new StaleWhileOpenDeviceTable();
+        using var audio = table.CreateService();
+        audio.FollowSystemDefault = true;
+        Assert.True(audio.StartPreview());
+        using var recorder = new RecorderService(audio, Settings(), _directory);
+        Assert.True(await recorder.StartAsync());
+
+        table.Devices.SetDefault("B|1");
+        audio.CheckForDefaultDeviceChange();
+        audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+        Assert.NotNull(await recorder.StopAsync());
+
+        Assert.Equal(1, table.Opened[^1]);
+        Assert.Equal("B|1", audio.ActiveDeviceIdForTest);
+        Assert.False(audio.MigrationPendingForTest);
+    }
+
+    [Fact]
     public async Task StopFromPaused_WritesCombinedFile()
     {
         using var audio = Audio();
