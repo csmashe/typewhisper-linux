@@ -748,6 +748,7 @@
   "History.Original": "原文",
   "History.Play": "播放",
   "History.ReadAloud": "朗读",
+  "History.ReadAloudFailed": "无法朗读。请在“高级”中检查语音提供商和声音。详细信息：{0}",
   "History.Replacement": "替换内容",
   "History.Retry": "重试",
   "History.RetryAudioMissing": "录音已不可用。",

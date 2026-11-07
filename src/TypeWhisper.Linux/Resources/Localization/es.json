@@ -748,6 +748,7 @@
   "History.Original": "Original",
   "History.Play": "Reproducir",
   "History.ReadAloud": "Leer en voz alta",
+  "History.ReadAloudFailed": "No se pudo leer en voz alta. Revisa el proveedor de voz y la voz en Avanzado. Detalles: {0}",
   "History.Replacement": "Reemplazo",
   "History.Retry": "Reintentar",
   "History.RetryAudioMissing": "La grabación ya no está disponible.",

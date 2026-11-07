@@ -748,6 +748,7 @@
   "History.Original": "Original",
   "History.Play": "Play",
   "History.ReadAloud": "Read aloud",
+  "History.ReadAloudFailed": "Could not read aloud. Check the speech provider and voice in Advanced. Details: {0}",
   "History.Replacement": "Replacement",
   "History.Retry": "Retry",
   "History.RetryAudioMissing": "The recording is no longer available.",

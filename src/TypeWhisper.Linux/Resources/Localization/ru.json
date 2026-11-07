@@ -748,6 +748,7 @@
   "History.Original": "Оригинал",
   "History.Play": "Воспроизвести",
   "History.ReadAloud": "Прочитать вслух",
+  "History.ReadAloudFailed": "Не удалось прочитать вслух. Проверьте поставщика речи и голос в разделе «Дополнительно». Подробности: {0}",
   "History.Replacement": "Замена",
   "History.Retry": "Повторить",
   "History.RetryAudioMissing": "Запись больше недоступна.",

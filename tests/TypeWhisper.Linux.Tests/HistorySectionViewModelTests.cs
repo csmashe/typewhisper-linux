@@ -4,6 +4,7 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
+using TypeWhisper.PluginSDK;
 using TypeWhisper.Tests;
 using Xunit;
 using static TypeWhisper.Linux.Tests.SpeechFeedbackServiceTests;
@@ -327,6 +328,128 @@ public sealed class HistorySectionViewModelTests : IDisposable
         await session.StopCalled.Task.WaitAsync(s_readbackGuard);
         Assert.Equal(1, session.StopCount);
         Assert.Single(provider.Requests);
+    }
+
+    [Fact]
+    public async Task ToggleReadAloud_ShowsProviderFailureOnRow_AndClearsItOnRetry()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("read this") with { Language = "en" });
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        using var speech = new SpeechFeedbackService(
+            CreateSettingsService(),
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        var posted = new SemaphoreSlim(0);
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech,
+            postToUi: action =>
+            {
+                action();
+                posted.Release();
+            });
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.IsExpanded = true;
+
+        row.ToggleReadAloudCommand.Execute(null);
+        var call = await provider.NextRequestAsync();
+        call.Session.TrySetException(new PluginRequestException(
+            "Speech API error 400: Language en is not available.",
+            PluginRequestFailureKind.InvalidRequest,
+            400));
+        Assert.True(await posted.WaitAsync(s_readbackGuard));
+
+        Assert.False(row.IsReadingAloud);
+        Assert.Equal(Loc.Instance["History.ReadAloud"], row.ReadAloudButtonText);
+        Assert.True(row.ShowReadAloudError);
+        Assert.Equal(
+            Loc.Instance.GetString("History.ReadAloudFailed", "Speech API error 400: Language en is not available."),
+            row.ReadAloudError);
+
+        row.ToggleReadAloudCommand.Execute(null);
+        Assert.False(row.ShowReadAloudError);
+        Assert.Equal("", row.ReadAloudError);
+        _ = await provider.NextRequestAsync();
+        sut.StopReadAloud(row);
+    }
+
+    [Fact]
+    public async Task ToggleReadAloud_RedactsTheTextItSent_WhenTheRecordChangesMidReadback()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("secret sent text"));
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        using var speech = new SpeechFeedbackService(
+            CreateSettingsService(),
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        var posted = new SemaphoreSlim(0);
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech,
+            postToUi: action =>
+            {
+                action();
+                posted.Release();
+            });
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.IsExpanded = true;
+
+        row.ToggleReadAloudCommand.Execute(null);
+        var call = await provider.NextRequestAsync();
+        row.Record = row.Record with { RawText = "replacement", FinalText = "replacement" };
+        call.Session.TrySetException(new HttpRequestException("rejected: secret sent text"));
+        Assert.True(await posted.WaitAsync(s_readbackGuard));
+
+        Assert.True(row.ShowReadAloudError);
+        Assert.DoesNotContain("secret sent text", row.ReadAloudError);
+    }
+
+    [Fact]
+    public async Task StopReadAloud_StaysQuietWhenTheProviderThenFails()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("read this"));
+        var provider = new ControlledTtsProvider(controlResponses: true);
+        using var speech = new SpeechFeedbackService(
+            CreateSettingsService(),
+            TestPluginManagerFactory.Create(),
+            provider
+        );
+        var posted = new SemaphoreSlim(0);
+        var sut = CreateViewModel(history, CreateDictionaryService(), speech: speech,
+            postToUi: action =>
+            {
+                action();
+                posted.Release();
+            });
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.IsExpanded = true;
+        row.ToggleReadAloudCommand.Execute(null);
+        var call = await provider.NextRequestAsync();
+
+        row.ToggleReadAloudCommand.Execute(null);
+        Assert.True(await posted.WaitAsync(s_readbackGuard));
+        call.Session.TrySetException(new HttpRequestException("The request was aborted."));
+
+        Assert.False(row.IsReadingAloud);
+        Assert.False(row.ShowReadAloudError);
+    }
+
+    [Fact]
+    public void CollapsingRow_ClearsReadAloudError()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("read this"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.IsExpanded = true;
+        row.ReadAloudError = "failed";
+        Assert.True(row.ShowReadAloudError);
+
+        row.IsExpanded = false;
+
+        Assert.Equal("", row.ReadAloudError);
+        Assert.False(row.ShowReadAloudError);
     }
 
     [Theory]
@@ -699,7 +822,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
         TimeZoneInfo? timeZone = null,
         Func<DateTime>? utcNow = null,
         Func<string, CancellationToken, Task<TranscriptionRecord>>? retry = null,
-        SpeechFeedbackService? speech = null
+        SpeechFeedbackService? speech = null,
+        Action<Action>? postToUi = null
     ) =>
         new(
             history,
@@ -715,7 +839,8 @@ public sealed class HistorySectionViewModelTests : IDisposable
             timeZone ?? TimeZoneInfo.Local,
             utcNow ?? (() => DateTime.UtcNow),
             retry,
-            speech
+            speech,
+            postToUi
         );
 #pragma warning restore SYSLIB0050
 
