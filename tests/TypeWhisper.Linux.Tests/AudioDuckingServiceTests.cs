@@ -264,8 +264,10 @@ public sealed class AudioDuckingServiceTests
         errorLog.VerifyNoOtherCalls();
     }
 
-    [Fact]
-    public void RestoreAudio_missing_input_is_completed_without_retry_or_error()
+    [Theory]
+    [InlineData("Failure: No such entity\n")]
+    [InlineData("Failed to get sink input information: No such entity\n")]
+    public void RestoreAudio_missing_input_is_completed_without_retry_or_error(string missingError)
     {
         const string listing = """
             Sink Input #56
@@ -281,7 +283,7 @@ public sealed class AudioDuckingServiceTests
         );
         runner.FailWhen(
             (fileName, args) => fileName == "pactl" && args.SequenceEqual(restore),
-            "Failure: No such entity\n"
+            missingError
         );
         var errorLog = new Mock<IErrorLogService>();
         var service = new AudioDuckingService(runner, errorLog.Object);
@@ -328,8 +330,10 @@ public sealed class AudioDuckingServiceTests
     }
 
 
-    [Fact]
-    public void RestoreAudio_other_failure_is_not_classified_as_missing()
+    [Theory]
+    [InlineData("Failure: Access denied\n")]
+    [InlineData("Failed to get sink input information: Access denied\n")]
+    public void RestoreAudio_other_failure_is_not_classified_as_missing(string otherError)
     {
         const string listing = """
             Sink Input #56
@@ -343,7 +347,7 @@ public sealed class AudioDuckingServiceTests
         );
         runner.FailWhen(
             (fileName, args) => fileName == "pactl" && args.SequenceEqual(restore),
-            "Failure: Access denied\n"
+            otherError
         );
         var errorLog = new Mock<IErrorLogService>();
         var service = new AudioDuckingService(runner, errorLog.Object);
