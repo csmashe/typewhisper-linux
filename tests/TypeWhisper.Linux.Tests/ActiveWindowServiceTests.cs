@@ -190,6 +190,45 @@ public sealed class ActiveWindowServiceTests
     }
 
     [Fact]
+    public void Packaged_firefox_bin_xdotool_snapshot_resolves_to_firefox()
+    {
+        var snapshot = new ActiveWindowSnapshot(
+            "firefox-bin",
+            "Example — Mozilla Firefox",
+            "123",
+            null,
+            "xdotool"
+        );
+
+        Assert.Equal("firefox", ActiveWindowService.ResolveBrowserDescriptor(snapshot)?.Id);
+        Assert.Equal(
+            "firefox",
+            AtSpiUrlExtractor.ResolveBrowserDescriptor("firefox-bin", null, snapshot.Title)?.Id
+        );
+    }
+
+    [Theory]
+    [InlineData("chromium-browse", "chromium-browser")]
+    [InlineData("chromium-browser", null)]
+    [InlineData(null, "chromium-browser")]
+    public void Fedora_chromium_identities_resolve_to_chromium(string? processName, string? appId)
+    {
+        var snapshot = new ActiveWindowSnapshot(
+            processName,
+            "Example - Chromium",
+            "123",
+            appId,
+            "gnome-shell"
+        );
+
+        Assert.Equal("chromium", ActiveWindowService.ResolveBrowserDescriptor(snapshot)?.Id);
+        Assert.Equal(
+            "chromium",
+            AtSpiUrlExtractor.ResolveBrowserDescriptor(processName, appId, snapshot.Title)?.Id
+        );
+    }
+
+    [Fact]
     public void LibreWolf_process_and_flatpak_app_id_authorize_X11_fallback()
     {
         Assert.True(ActiveWindowService.IsSupportedBrowserProcess("librewolf"));
@@ -341,6 +380,10 @@ public sealed class ActiveWindowServiceTests
     [InlineData("https://example.com/path", "https://example.com/path")]
     [InlineData("example.com/path", "https://example.com/path")]
     [InlineData("not a url", null)]
+    [InlineData("localhost:19797/chrome-b?qa=updated", "https://localhost:19797/chrome-b?qa=updated")]
+    [InlineData("localhost/path", "https://localhost/path")]
+    [InlineData("localhostish:8080/path", null)]
+    [InlineData("weather", null)]
     public void SanitizeCapturedBrowserUrl_NormalizesLikelyUrls(string value, string? expected)
     {
         Assert.Equal(expected, ActiveWindowService.SanitizeCapturedBrowserUrl(value));

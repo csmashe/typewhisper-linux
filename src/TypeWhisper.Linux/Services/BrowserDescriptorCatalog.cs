@@ -81,7 +81,8 @@ internal static class BrowserDescriptorCatalog
             "firefox",
             "firefox",
             BrowserEngineFamily.Firefox,
-            ["firefox"],
+            // Mozilla's packaged builds launch /usr/lib/firefox/firefox, which runs as "firefox-bin".
+            ["firefox", "firefox-bin"],
             ["Firefox", "Mozilla Firefox", "org.mozilla.firefox"],
             [],
             ["firefox.desktop", "org.mozilla.firefox.desktop", "firefox-esr.desktop"],
@@ -190,8 +191,10 @@ internal static class BrowserDescriptorCatalog
             "chromium",
             "chromium",
             BrowserEngineFamily.Chromium,
-            ["chromium"],
-            ["Chromium", "org.chromium.Chromium"],
+            // Fedora's package runs /usr/lib64/chromium-browser/chromium-browser, which the
+            // kernel's 15-character process name truncates to "chromium-browse".
+            ["chromium", "chromium-browser", "chromium-browse"],
+            ["Chromium", "org.chromium.Chromium", "chromium-browser"],
             [],
             [
                 "chromium.desktop",
