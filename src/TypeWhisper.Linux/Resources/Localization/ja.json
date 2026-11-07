@@ -1303,6 +1303,7 @@
   "TextInsertion.WtypeInstalledWaylandOnly": "インストール済みです（Waylandのみ）。",
   "TextInsertion.WtypeUnsupportedCompositor": "インストール済みですが、このコンポジターはwtypeの仮想キーボードプロトコルに対応していません。",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "インストール済みです（XWaylandウィンドウのみ）。",
+  "TextInsertion.XtermClipboardFallback": "クリップボードにコピーしました。xtermには貼り付け用の既定のショートカットがないため、ご自身で設定したキーで貼り付けてください。",
   "TextInsertion.YdotoolActivationFailed": "ydotoolのrootファイルは配置されましたが、有効化に失敗しました。",
   "TextInsertion.YdotoolForeignConfigRefused": "{0}はすでに存在し、TypeWhisperが所有する通常ファイルではないため、TypeWhisperは変更しませんでした。",
   "TextInsertion.YdotoolForeignModulesLoadDetail": "既存のファイルを確認してください。uinputモジュールをまだ読み込んでいない場合は、移動するか名前を変更してから、もう一度セットアップを実行してください。",

@@ -350,7 +350,7 @@ public sealed class TextInsertionService
             {
                 TextInsertionStrategy.DirectTyping => true,
                 TextInsertionStrategy.ClipboardPaste => false,
-                // ydotool drops non-ASCII characters yet exits 0, so such text is pasted instead.
+                // ydotool and xdotool can drop non-ASCII yet exit 0, so such text is pasted instead.
                 _ => (ShouldTypeDirectly(targetProcessName, targetWindowTitle)
                       && (IsAsciiSafe(text) || _platform.CanTypeNonAscii))
                      // On Wayland without xdotool, process/title are null; defaulting to paste
@@ -428,6 +428,20 @@ public sealed class TextInsertionService
         if (!autoPaste)
         {
             return InsertionResult.CopiedToClipboard;
+        }
+
+        // xterm binds no key to paste CLIPBOARD by default: Ctrl+Shift+V arrives as ^V and
+        // Shift+Insert pastes PRIMARY, so either would lose the text behind a false Pasted.
+        if (IsXterm(request.TargetProcessName))
+        {
+            LogInsertionFallback("Auto paste fell back to clipboard: xterm has no default clipboard-paste shortcut.");
+            return requiresSafeTerminalPaste
+                ? await HandleTerminalMultilinePasteFailureAsync(
+                    text,
+                    previousClipboard,
+                    previousClipboardHasNonTextFormats
+                )
+                : InsertionResult.CopiedToClipboard;
         }
 
         if (!await FocusTargetWindowAsync(targetWindowId))
@@ -1154,6 +1168,12 @@ public sealed class TextInsertionService
     ///     contains "terminal" but doesn't end with it. The trailing `EndsWith("term")`
     ///     catches xfce4-terminal etc.
     /// </summary>
+    public static bool IsXterm(string? processName)
+    {
+        return ProcessNameNormalizer.Normalize(processName)
+            .Equals("xterm", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool IsTerminalApp(string? processName)
     {
         if (string.IsNullOrWhiteSpace(processName))
@@ -1468,15 +1488,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             || _snapshot is { HasWtype: true, CompositorRejectsWtype: false }
         );
 
-    // xdotool and wtype map arbitrary keysyms; ydotool types only what the US keymap holds.
-    // wtype counts only where the compositor accepts its virtual keyboard.
+    // Only wtype (where the compositor accepts it) types Unicode reliably. ydotool types only
+    // the US keymap; xdotool's per-character keycode remap is missed by some X clients (e.g.
+    // existing Firefox windows, gnome-terminal), silently dropping the character.
     public bool CanTypeNonAscii =>
-        _chain.Exists(backend => backend switch
-        {
-            InputBackend.Xdotool => true,
-            InputBackend.Wtype => !_snapshot.CompositorRejectsWtype,
-            _ => false,
-        });
+        !_snapshot.CompositorRejectsWtype && _chain.Contains(InputBackend.Wtype);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 

@@ -1303,6 +1303,7 @@
   "TextInsertion.WtypeInstalledWaylandOnly": "Instalado (solo Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Instalado, pero este compositor no admite el protocolo de teclado virtual de wtype.",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "Instalado — solo ventanas XWayland.",
+  "TextInsertion.XtermClipboardFallback": "Texto copiado al portapapeles. xterm no tiene un atajo predeterminado para pegarlo; pégalo con tu propio atajo de portapapeles.",
   "TextInsertion.YdotoolActivationFailed": "Se publicaron los archivos del sistema de ydotool, pero falló su activación.",
   "TextInsertion.YdotoolForeignConfigRefused": "TypeWhisper no modificó {0} porque ya existe y no es un archivo normal propiedad de TypeWhisper.",
   "TextInsertion.YdotoolForeignModulesLoadDetail": "Revisa el archivo existente. Si aún no carga el módulo uinput, muévelo o cámbiale el nombre y vuelve a ejecutar la configuración.",

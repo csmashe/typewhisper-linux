@@ -97,8 +97,8 @@ public sealed class DictationOrchestratorStreamedCommandTests
     {
         return BoundedTest.RunAsync(async () =>
         {
-            // ydotool drops non-ASCII yet exits 0, so typing a stream through it would lose
-            // characters and still report success.
+            // ydotool and X11's xdotool can drop non-ASCII yet exit 0, so typing a stream through
+            // them would lose characters and still report success.
             await using var fixture = new OrchestratorCompositionFixture(
                 focusedApp: ("codex", "codex — integration")
             );

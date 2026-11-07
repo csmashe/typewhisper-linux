@@ -1303,6 +1303,7 @@
   "TextInsertion.WtypeInstalledWaylandOnly": "Установлено (только Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Установлено, но этот композитор не поддерживает протокол виртуальной клавиатуры wtype.",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "Установлено — только окна XWayland.",
+  "TextInsertion.XtermClipboardFallback": "Текст скопирован в буфер обмена. В xterm нет стандартного сочетания клавиш для вставки, поэтому вставьте его своим сочетанием.",
   "TextInsertion.YdotoolActivationFailed": "Системные файлы ydotool установлены, но активировать их не удалось.",
   "TextInsertion.YdotoolForeignConfigRefused": "TypeWhisper не изменил файл {0}: он уже существует и не является обычным файлом, принадлежащим TypeWhisper.",
   "TextInsertion.YdotoolForeignModulesLoadDetail": "Проверьте существующий файл. Если он ещё не загружает модуль uinput, переместите или переименуйте его, затем повторите настройку.",
