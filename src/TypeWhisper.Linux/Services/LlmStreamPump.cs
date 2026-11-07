@@ -33,15 +33,22 @@ internal sealed class LlmStreamPump
     public Exception? Failure { get; private set; }
 
     /// <summary>
-    ///     Rethrows a configuration fault — a signed-out or uninstalled selected provider — because
-    ///     the batch path resolves that same selection and fails identically. Every other fault
-    ///     keeps the caller's streaming&#8594;batch fallback, including non-transient ones that can be
-    ///     specific to the streaming request (a gateway rejecting <c>stream=true</c>, a stream-parse
-    ///     error reported as <see cref="PluginRequestFailureKind.Unknown" />).
+    ///     Rethrows a fault the batch request would hit identically: a configuration fault (a
+    ///     signed-out or uninstalled selected provider), or a non-transient account decision —
+    ///     a rejected key, a denied permission, or HTTP 402 for exhausted credits. Every other
+    ///     fault keeps the caller's streaming&#8594;batch fallback, including non-transient ones that
+    ///     can be specific to the streaming request (a gateway rejecting <c>stream=true</c>, a
+    ///     stream-parse error reported as <see cref="PluginRequestFailureKind.Unknown" />).
     /// </summary>
     public void ThrowIfNonRetryableFault()
     {
-        if (Failure is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration })
+        if (Failure is PluginRequestException { FailureKind: PluginRequestFailureKind.Configuration }
+            or PluginRequestException
+            {
+                IsTransient: false,
+                FailureKind: PluginRequestFailureKind.Authentication or PluginRequestFailureKind.Permission,
+            }
+            or PluginRequestException { IsTransient: false, HttpStatusCode: 402 })
         {
             ExceptionDispatchInfo.Capture(Failure).Throw();
         }

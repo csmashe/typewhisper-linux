@@ -465,11 +465,13 @@ public sealed class PromptPaletteService
         );
     }
 
-    private static async Task ShowWarningAsync(string title, string message)
+    internal static async Task ShowWarningAsync(string title, string message)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            var dialog = new MessageDialogWindow();
+            // A prompt action runs while another app has focus; GNOME stacks a window it denies
+            // focus below the focused one, so without Topmost the error opens hidden behind it.
+            var dialog = new MessageDialogWindow { Topmost = true };
             await dialog.ShowMessageAsync(title, message);
         });
     }

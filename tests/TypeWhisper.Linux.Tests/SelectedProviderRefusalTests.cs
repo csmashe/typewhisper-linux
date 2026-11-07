@@ -274,6 +274,35 @@ public sealed class SelectedProviderRefusalTests : IDisposable
     }
 
     [Fact]
+    public async Task StreamingCreditDenial_SurfacesInsteadOfRetryingAsBatch()
+    {
+        var batchRuns = 0;
+
+        // OpenAiApiHelper classifies an unlisted 4xx such as 402 as InvalidRequest.
+        var error = await Assert.ThrowsAsync<PluginRequestException>(() =>
+            DictationOrchestrator.RunPromptActionStreamWithFallbackAsync(
+                FaultingStream(
+                    new PluginRequestException(
+                        "API error 402: credits depleted",
+                        PluginRequestFailureKind.InvalidRequest,
+                        402
+                    )
+                ),
+                () =>
+                {
+                    batchRuns++;
+                    return Task.FromResult("batch");
+                },
+                _ => { },
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(402, error.HttpStatusCode);
+        Assert.Equal(0, batchRuns);
+    }
+
+    [Fact]
     public void TwoBrokenSelections_LogOneEntryEach_WhenTheyAlternate()
     {
         var signedOut = new FakeProvider("com.test.cli", "CLI Provider", "default")
