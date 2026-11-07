@@ -717,6 +717,7 @@
   "History.DeletedSelected": "已删除{0}个条目。",
   "History.DoneSelecting": "完成",
   "History.EmptyState": "暂无录音。",
+  "History.NoMatches": "没有匹配的录音。",
   "History.ExportSelected": "导出所选",
   "History.ExportSelectionMissing": "部分所选条目已不可用。请刷新所选内容后重试。",
   "History.ExportedSelected": "已导出{0}个条目。",
