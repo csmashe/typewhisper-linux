@@ -97,7 +97,7 @@ internal static class MutterDisplayConfig
             }
 
             using var connection = new DBusConnection(address);
-            await connection.ConnectAsync().AsTask().WaitAsync(ct).ConfigureAwait(false);
+            await connection.ConnectAsync().AsTask().WaitOrAbandonAsync(ct).ConfigureAwait(false);
 
             MessageBuffer message;
             using (var writer = connection.GetMessageWriter())
@@ -113,7 +113,7 @@ internal static class MutterDisplayConfig
 
             return await connection
                 .CallMethodAsync(message, s_readLogicalDesktop)
-                .WaitAsync(ct)
+                .WaitOrAbandonAsync(ct)
                 .ConfigureAwait(false);
         }
         catch (Exception)
