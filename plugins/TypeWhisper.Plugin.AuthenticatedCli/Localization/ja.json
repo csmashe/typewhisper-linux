@@ -24,6 +24,7 @@
   "State.UnsupportedVersion": "インストールされているバージョンは、必要な安全制御に対応していません。",
   "State.SignedOut": "インストール済みですが、サインインしていません",
   "State.AuthenticationUnknown": "ログイン状態を安全に確認できません",
+  "State.CredentialRequired": "保存されたOpenCode Zenの認証情報がありません。キーなしの無料利用では、ツールを使わないTypeWhisperのリクエストは受け付けられません",
   "State.ModelCatalogUnavailable": "サインイン済みですが、現在の無料Zenモデルのカタログを読み込めませんでした",
   "State.NoFreeModels": "現在利用できる完全無料のOpenCode Zenテキストモデルはありません",
   "State.Ready": "準備完了",

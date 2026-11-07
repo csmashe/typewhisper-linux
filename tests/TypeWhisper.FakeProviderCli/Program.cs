@@ -109,6 +109,12 @@ internal static class Program
             return 1;
         }
 
+        if (scenario.Contains("opencode-auth-empty", StringComparison.Ordinal))
+        {
+            Console.WriteLine(AuthList());
+            return 0;
+        }
+
         if (scenario.Contains("opencode-auth-missing", StringComparison.Ordinal))
         {
             Console.WriteLine(AuthList("●  GitHub Copilot oauth", "●  OpenCode Go api"));
@@ -136,8 +142,8 @@ internal static class Program
     // Mirrors `opencode auth list` 1.19, whose header path also contains "opencode".
     private static string AuthList(params string[] credentials) =>
         "┌  Credentials ~/.local/share/opencode/auth.json\n│\n"
-        + string.Join("\n│\n", credentials)
-        + $"\n│\n└  {credentials.Length} credentials";
+        + string.Concat(credentials.Select(credential => credential + "\n│\n"))
+        + $"└  {credentials.Length} credentials";
 
     private static int AuthStatus(string provider, string scenario)
     {

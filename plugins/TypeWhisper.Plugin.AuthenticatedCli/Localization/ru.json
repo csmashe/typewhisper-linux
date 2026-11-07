@@ -24,6 +24,7 @@
   "State.UnsupportedVersion": "Установленная версия не поддерживает необходимые средства безопасности.",
   "State.SignedOut": "Установлена, но вход не выполнен",
   "State.AuthenticationUnknown": "Состояние входа нельзя проверить безопасно",
+  "State.CredentialRequired": "Нет сохранённых учётных данных OpenCode Zen. Бесплатный доступ без ключа не принимает запросы TypeWhisper без инструментов",
   "State.ModelCatalogUnavailable": "Вход выполнен, но текущий каталог бесплатных моделей Zen не загрузился",
   "State.NoFreeModels": "Сейчас нет полностью бесплатных текстовых моделей OpenCode Zen",
   "State.Ready": "Готово",

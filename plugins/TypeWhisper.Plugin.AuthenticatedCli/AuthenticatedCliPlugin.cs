@@ -774,11 +774,15 @@ public sealed partial class AuthenticatedCliPlugin :
             ).ConfigureAwait(false);
             var authenticationOutput =
                 authenticationProbe.StandardOutput + "\n" + authenticationProbe.StandardError;
+            // OpenCode lists free models without a saved credential, but its keyless free tier
+            // refuses TypeWhisper's tool-free requests, so a missing credential is reported as such.
             var state = descriptor.IsAuthenticated(authenticationProbe.ExitCode, authenticationOutput)
                 ? CliAvailabilityState.Ready
-                : authenticationProbe.ExitCode == 0
-                    ? CliAvailabilityState.AuthenticationUnknown
-                    : CliAvailabilityState.SignedOut;
+                : authenticationProbe.ExitCode != 0
+                    ? CliAvailabilityState.SignedOut
+                    : descriptor.Kind == CliProviderKind.OpenCode
+                        ? CliAvailabilityState.CredentialRequired
+                        : CliAvailabilityState.AuthenticationUnknown;
             if (state != CliAvailabilityState.Ready || descriptor.Kind != CliProviderKind.OpenCode)
             {
                 _host?.Log(

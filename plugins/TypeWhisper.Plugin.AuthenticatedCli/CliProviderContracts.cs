@@ -23,6 +23,7 @@ internal enum CliAvailabilityState
     SessionDirectoryUnavailable,
     SignedOut,
     AuthenticationUnknown,
+    CredentialRequired,
     ModelCatalogUnavailable,
     NoFreeModels,
     Ready,
