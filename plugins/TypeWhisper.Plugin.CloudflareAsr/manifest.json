@@ -1,7 +1,7 @@
 {
   "id": "com.typewhisper.cloudflare-asr",
   "name": "Cloudflare ASR",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Cloudflare Workers AI Whisper transcription engine",
