@@ -22,7 +22,6 @@ docs/*
 !docs/releases/
 !docs/prompts/
 publish/
-artifacts/
 .agents/
 .claude/
 .serena/
