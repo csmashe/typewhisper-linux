@@ -28,6 +28,8 @@ public static class DictationShortcutSpecFactory
         // Hyprland release binds need the modifier in the mask. Keep these in the app backend.
         if (DesktopShortcutKey.IsSideSpecificModifier(trigger) && !NativeSupportsModifierOnly(writer))
             return null;
+        if (HotkeyService.IsReservedSystemHotkey(trigger))
+            return null;
         var gui = ResolveGuiCommand();
         var cancelTrigger = SwapKeyForCancel(trigger);
 

@@ -44,6 +44,40 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ApplyPromptPaletteHotkey_CollisionReportsCollisionNotParseError()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetHotkeyFromString("F8"));
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { PromptPaletteHotkeyText = "F8" };
+
+        sut.ApplyPromptPaletteHotkeyCommand.Execute(null);
+
+        Assert.Equal("", hotkey.CurrentPromptPaletteHotkeyString);
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.HotkeyCollides", "F8"),
+            sut.StatusMessage
+        );
+    }
+
+    [Fact]
+    public void ApplyPromptPaletteHotkey_MalformedTextStillReportsParseError()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Load();
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var sut = new ShortcutsSectionViewModel(hotkey, settings) { PromptPaletteHotkeyText = "Ctrl+Nope" };
+
+        sut.ApplyPromptPaletteHotkeyCommand.Execute(null);
+
+        Assert.Equal(
+            Loc.Instance.GetString("Shortcuts.PromptPaletteHotkeyParseFailed", "Ctrl+Nope"),
+            sut.StatusMessage
+        );
+    }
+
+    [Fact]
     public void ApplyPromptPaletteHotkey_BlankInputClearsBinding()
     {
         var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
@@ -182,7 +216,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         var sut = new ShortcutsSectionViewModel(hotkey, settings, [writer], action => action());
 
         sut.StartHotkeyCaptureCommand.Execute(null);
-        var inFlight = sut.ApplyCapturedHotkeyAsync("Ctrl+Alt+F9");
+        var inFlight = sut.ApplyCapturedHotkeyAsync("Ctrl+Shift+F9");
         var appliedStatus = sut.StatusMessage;
         sut.CancelHotkeyCaptureCommand.Execute(null);
 
@@ -407,7 +441,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
             notificationThreadId = Environment.CurrentManagedThreadId;
             settings.Save(settings.Current with { ToggleHotkey = "Alt+F8" });
         });
-        settings.Save(settings.Current with { ToggleHotkey = "Ctrl+Alt+F9" });
+        settings.Save(settings.Current with { ToggleHotkey = "Ctrl+Shift+F9" });
 
         Assert.Equal(2, queued.Count);
         Assert.NotEqual(Environment.CurrentManagedThreadId, notificationThreadId);
@@ -418,7 +452,7 @@ public sealed class ShortcutsSectionViewModelTests : IDisposable
         await sut.PendingDesktopIntegrationRefresh;
 
         Assert.Equal(1, writer.IsInstalledCallCount);
-        Assert.Equal("Ctrl+Alt+F9", writer.LastInstalledSpec?.Trigger);
+        Assert.Equal("Ctrl+Shift+F9", writer.LastInstalledSpec?.Trigger);
 
         queued[1]();
         await sut.PendingDesktopIntegrationRefresh;

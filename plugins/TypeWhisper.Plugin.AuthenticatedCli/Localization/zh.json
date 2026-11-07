@@ -24,6 +24,7 @@
   "State.UnsupportedVersion": "已安装的版本不支持所需的安全控制。",
   "State.SignedOut": "已安装，但未登录",
   "State.AuthenticationUnknown": "无法安全地检查登录状态",
+  "State.CredentialRequired": "没有已保存的OpenCode Zen凭据。无密钥的免费使用不接受TypeWhisper的无工具请求",
   "State.ModelCatalogUnavailable": "已登录，但无法加载当前的免费Zen模型目录",
   "State.NoFreeModels": "当前没有可用的完全免费OpenCode Zen文本模型",
   "State.Ready": "就绪",

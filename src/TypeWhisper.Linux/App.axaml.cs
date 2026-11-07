@@ -252,7 +252,8 @@ public class App : Application
             var prefs = services.GetRequiredService<LinuxPreferencesService>();
 
             // Close-button: CloseToTray+tray-available → hide; otherwise quit.
-            // Hiding with no tray (stock GNOME) would strand the user with no UI.
+            // Hiding with no tray (stock GNOME) would strand the user with no UI,
+            // so the host is re-probed at close time — it can vanish after startup.
             var liveTextPreview = services.GetRequiredService<LiveTextPreviewService>();
             main.Closing += (sender, e) =>
             {
@@ -273,14 +274,13 @@ public class App : Application
                     return;
                 }
 
-                if (prefs.Current.CloseToTray && tray.IsTrayAvailable)
+                e.Cancel = true;
+                if (prefs.Current.CloseToTray)
                 {
-                    e.Cancel = true;
-                    HideToTray(main);
+                    FireAndForget(HideToTrayOrQuitAsync(main, tray, services, desktop));
                 }
                 else
                 {
-                    e.Cancel = true;
                     ShuttingDown = true;
                     _ = ShutdownAndExitAsync(services, desktop);
                 }
@@ -939,6 +939,28 @@ public class App : Application
 
         window.WindowState = WindowState.Minimized;
         window.ShowInTaskbar = false;
+    }
+
+    private static async Task HideToTrayOrQuitAsync(
+        MainWindow window,
+        TrayIconService tray,
+        IServiceProvider services,
+        IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        var trayAvailable = await Task.Run(tray.RecheckAvailability);
+        if (ShuttingDown)
+        {
+            return;
+        }
+
+        if (trayAvailable)
+        {
+            HideToTray(window);
+            return;
+        }
+
+        ShuttingDown = true;
+        await ShutdownAndExitAsync(services, desktop);
     }
 
     internal static bool IsOnScreen(bool isVisible, WindowState windowState, bool minimizePending)

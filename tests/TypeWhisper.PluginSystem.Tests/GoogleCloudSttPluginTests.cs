@@ -84,7 +84,7 @@ public class GoogleCloudSttPluginTests
     }
 
     [Fact]
-    public async Task TranscribeAsync_MultipleChunks_ConcatenatesTranscriptsAndSumsDurationsInOrder()
+    public async Task TranscribeAsync_MultipleChunks_ConcatenatesTranscriptsInOrderAndReportsWholeAudioLength()
     {
         var transcripts = new[] { "first", "second", "third" };
         var billedTimes = new[] { "1.250s", "2.500s", "3.750s" };
@@ -113,7 +113,28 @@ public class GoogleCloudSttPluginTests
         Assert.Equal(3, handler.Requests.Count);
         Assert.Equal("first second third", result.Text);
         Assert.Equal("en-US", result.DetectedLanguage);
-        Assert.Equal(7.5, result.DurationSeconds);
+        Assert.Equal(121, result.DurationSeconds);
+    }
+
+    // Google rounds totalBilledTime up to whole seconds; the live API billed 3s for 2.665s of audio.
+    [Fact]
+    public async Task TranscribeAsync_ReportsMeasuredAudioLengthNotRoundedBilledTime()
+    {
+        var handler = new CapturingHandler((_, _, _) =>
+            Task.FromResult(JsonResponse(RecognitionResponse("hello", "3s", "en-US")))
+        );
+        using var sut = await CreateConfiguredPluginAsync(handler);
+        var wavAudio = BuildFfmpegStyleWav(42_640 * BytesPerSample);
+
+        var result = await sut.TranscribeAsync(
+            wavAudio,
+            "en",
+            translate: false,
+            prompt: null,
+            CancellationToken.None
+        );
+
+        Assert.Equal(2.665, result.DurationSeconds, precision: 6);
     }
 
     [Fact]
@@ -263,7 +284,7 @@ public class GoogleCloudSttPluginTests
         );
         Assert.Equal("Guten Tag", result.Text);
         Assert.Equal("de-DE", result.DetectedLanguage);
-        Assert.Equal(1.5, result.DurationSeconds);
+        Assert.Equal(1, result.DurationSeconds);
     }
 
     [Theory]

@@ -23,6 +23,10 @@ public interface IManualReadback
 {
     bool IsActive { get; }
     Task Completion { get; }
+
+    /// <summary>The provider's failure message once <see cref="Completion" /> ends in failure; null on success or stop.</summary>
+    string? FailureMessage { get; }
+
     void Stop();
 }
 
@@ -49,6 +53,7 @@ public sealed class SpeechFeedbackService : IDisposable
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         public ITtsPlaybackSession? Session;
+        public string? FailureMessage;
         public long Version { get; } = version;
 
         public void CancelAndStop()
@@ -189,6 +194,7 @@ public sealed class SpeechFeedbackService : IDisposable
         }
 
         public Task Completion => request.Completion.Task;
+        public string? FailureMessage => Volatile.Read(ref request.FailureMessage);
 
         public void Stop()
         {
@@ -848,13 +854,21 @@ public sealed class SpeechFeedbackService : IDisposable
                 OnPlaybackCompleted(session, playbackRequest);
             }
         }
-        catch (OperationCanceledException)
+        // An uncanceled OCE (e.g. an HttpClient timeout) is a provider failure.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ClearPending(playbackRequest);
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"SpeechFeedback error: {ex.Message}");
+
+            // A failure that lands after Stop is the stop's own fallout, not the provider's.
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                Volatile.Write(ref playbackRequest.FailureMessage, ex.Message);
+            }
+
             ClearPending(playbackRequest);
         }
     }

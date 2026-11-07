@@ -379,6 +379,29 @@ public sealed class SnippetServiceTests : IDisposable
         Assert.Contains(_sut.Snippets, s => s.Trigger == "neu");
     }
 
+    [Theory]
+    [InlineData("""[{"Id":"x","Trigger":"neu","Replacement":"Neu","IsEnabled":true}]""")]
+    [InlineData("""[{"Id":"x","Trigger":"neu","Replacement":"Neu","IsEnabled":true,"Tags":null}]""")]
+    public void ImportFromJson_WithoutTags_KeepsSnippetsListable(string json)
+    {
+        Assert.Equal(1, _sut.ImportFromJson(json));
+
+        Assert.Equal("", Assert.Single(_sut.Snippets).Tags);
+        Assert.Empty(_sut.AllTags);
+        Assert.Equal("", Assert.Single(new SnippetService(_filePath).Snippets).Tags);
+    }
+
+    [Fact]
+    public void Load_SavedSnippetWithoutTags_KeepsSnippetsListable()
+    {
+        File.WriteAllText(_filePath, """[{"Id":"x","Trigger":"neu","Replacement":"Neu"}]""");
+
+        var sut = new SnippetService(_filePath);
+
+        Assert.Equal("", Assert.Single(sut.Snippets).Tags);
+        Assert.Empty(sut.AllTags);
+    }
+
     [Fact]
     public void ImportFromJson_SkipsDuplicateTriggers()
     {

@@ -37,7 +37,7 @@ public sealed class ProfilesSmallWindowTests(UiSession ui)
             window.Show();
             try
             {
-                viewModel.SelectedItem = viewModel.NavItems.First(item => item.Content == profiles);
+                viewModel.SelectedItem = viewModel.NavItems.First(item => ReferenceEquals(item.Content, profiles));
                 if (!profiles.HasSelectedProfile)
                     profiles.AddProfileCommand.Execute(null);
                 for (var i = 0; i < 10; i++)

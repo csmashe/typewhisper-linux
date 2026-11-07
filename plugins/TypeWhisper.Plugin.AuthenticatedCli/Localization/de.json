@@ -24,6 +24,7 @@
   "State.UnsupportedVersion": "Die installierte Version unterstützt die erforderlichen Sicherheitskontrollen nicht.",
   "State.SignedOut": "Installiert, aber nicht angemeldet",
   "State.AuthenticationUnknown": "Der Anmeldestatus kann nicht sicher geprüft werden",
+  "State.CredentialRequired": "Keine gespeicherten OpenCode-Zen-Zugangsdaten. Die schlüssellose kostenlose Nutzung akzeptiert die werkzeugfreien Anfragen von TypeWhisper nicht",
   "State.ModelCatalogUnavailable": "Angemeldet, aber der aktuelle Katalog kostenloser Zen-Modelle konnte nicht geladen werden",
   "State.NoFreeModels": "Derzeit sind keine vollständig kostenlosen OpenCode-Zen-Textmodelle verfügbar",
   "State.Ready": "Bereit",

@@ -34,6 +34,42 @@
             <Setter Property="BorderThickness" Value="0,0,0,1" />
             <Setter Property="Padding" Value="16,13" />
         </Style>
+        <!-- Set in styles, not on the elements, so the narrow-row query below can override them. -->
+        <Style Selector="Grid.entry-layout">
+            <Setter Property="ColumnSpacing" Value="14" />
+        </Style>
+        <!-- The name's Auto column measures it without a limit, so cap it to make long names wrap. -->
+        <Style Selector="Grid.entry-layout > StackPanel.entry-name">
+            <Setter Property="MinWidth" Value="180" />
+            <Setter Property="MaxWidth" Value="320" />
+        </Style>
+        <Style Selector="Grid.entry-layout > WrapPanel.entry-badges">
+            <Setter Property="Grid.Column" Value="1" />
+        </Style>
+        <Style Selector="Grid.entry-layout > WrapPanel.entry-actions">
+            <Setter Property="Grid.Column" Value="2" />
+        </Style>
+        <!-- Narrow rows stack into the star column, the only one that measures its children
+             with the row's real width, so the badges and actions wrap instead of overflowing. -->
+        <ContainerQuery Name="DictionaryEntry"
+                        Query="max-width:860">
+            <Style Selector="Grid.entry-layout">
+                <Setter Property="ColumnSpacing" Value="0" />
+                <Setter Property="RowSpacing" Value="10" />
+            </Style>
+            <Style Selector="Grid.entry-layout > StackPanel.entry-name">
+                <Setter Property="Grid.Column" Value="1" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MaxWidth" Value="Infinity" />
+            </Style>
+            <Style Selector="Grid.entry-layout > WrapPanel.entry-badges">
+                <Setter Property="Grid.Row" Value="1" />
+            </Style>
+            <Style Selector="Grid.entry-layout > WrapPanel.entry-actions">
+                <Setter Property="Grid.Row" Value="2" />
+                <Setter Property="Grid.Column" Value="1" />
+            </Style>
+        </ContainerQuery>
         <Style Selector="Border.pack-card">
             <Setter Property="Background" Value="{DynamicResource TwSurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource TwBorderSubtleBrush}" />
@@ -328,25 +364,29 @@
                         <ItemsControl ItemsSource="{Binding FilteredEntries}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="models:DictionaryEntry">
-                                    <Border Classes="entry-card">
-                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto"
-                                              ColumnSpacing="14">
-                                            <StackPanel Grid.Column="0"
-                                                        MinWidth="180">
+                                    <Border Classes="entry-card"
+                                            Container.Name="DictionaryEntry"
+                                            Container.Sizing="Width">
+                                        <Grid Classes="entry-layout"
+                                              ColumnDefinitions="Auto,*,Auto"
+                                              RowDefinitions="Auto,Auto,Auto">
+                                            <StackPanel Classes="entry-name">
                                                 <TextBlock Text="{Binding Original}"
                                                            FontSize="13"
+                                                           TextWrapping="Wrap"
                                                            FontWeight="SemiBold" />
                                                 <TextBlock Text="{Binding Replacement}"
                                                            FontSize="12"
+                                                           TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                                                            Margin="0,4,0,0"
                                                            IsVisible="{Binding Replacement, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                             </StackPanel>
 
-                                            <StackPanel Grid.Column="1"
-                                                        Orientation="Horizontal"
-                                                        Spacing="8"
-                                                        VerticalAlignment="Center">
+                                            <WrapPanel Classes="entry-badges"
+                                                       ItemSpacing="8"
+                                                       LineSpacing="6"
+                                                       VerticalAlignment="Center">
                                                 <Border Background="{DynamicResource TwSurfaceRaisedBrush}"
                                                         BorderBrush="{DynamicResource TwBorderBrush}"
                                                         BorderThickness="1"
@@ -395,65 +435,66 @@
                                                                FontSize="10.5"
                                                                Foreground="{DynamicResource TwTextPrimaryBrush}" />
                                                 </Border>
-                                            </StackPanel>
+                                            </WrapPanel>
 
-                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                            <Button Grid.Column="2"
-                                                    Content="{Binding IsStarred, Converter={x:Static local:BoolTextConverter.Instance}, ConverterParameter='True=★|False=☆'}"
-                                                    Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleStarredCommand}"
-                                                    CommandParameter="{Binding}"
-                                                    Padding="10,6"
-                                                    MinWidth="38"
-                                                    VerticalAlignment="Center" />
+                                            <WrapPanel Classes="entry-actions"
+                                                       ItemSpacing="14"
+                                                       LineSpacing="8"
+                                                       VerticalAlignment="Center">
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Content="{Binding IsStarred, Converter={x:Static local:BoolTextConverter.Instance}, ConverterParameter='True=★|False=☆'}"
+                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleStarredCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        Padding="10,6"
+                                                        MinWidth="38"
+                                                        VerticalAlignment="Center" />
 
-                                            <StackPanel Grid.Column="3"
-                                                        Orientation="Horizontal"
-                                                        Spacing="4"
-                                                        VerticalAlignment="Center">
-                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                <Button Content="{Binding CtcMinSimilarity, Converter={StaticResource CtcSimilarityLabelConverter}}"
-                                                        IsVisible="{Binding EntryType, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static models:DictionaryEntryType.Term}}"
-                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).CycleCtcSimilarityCommand}"
-                                                        CommandParameter="{Binding}"
-                                                        ToolTip.Tip="{loc:Str Dictionary.CtcSimilarityTooltip}"
-                                                        Padding="8,6" />
-                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                <Button Content="{loc:Str Dictionary.AliasesForEntry}"
-                                                        IsVisible="{Binding Converter={StaticResource AliasSuggestionsAvailableConverter}}"
-                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).SuggestAliasesForCommand}"
-                                                        CommandParameter="{Binding}"
-                                                        Click="OnSuggestAliasesForEntry"
-                                                        ToolTip.Tip="{loc:Str Dictionary.AliasesForEntryTooltip}"
-                                                        Padding="8,6" />
-                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                <Button Content="−"
-                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DecreasePriorityCommand}"
-                                                        CommandParameter="{Binding}"
-                                                        Padding="8,6"
-                                                        MinWidth="30" />
-                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                                <Button Content="+"
-                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).IncreasePriorityCommand}"
-                                                        CommandParameter="{Binding}"
-                                                        Padding="8,6"
-                                                        MinWidth="30" />
-                                            </StackPanel>
+                                                <StackPanel Orientation="Horizontal"
+                                                            Spacing="4"
+                                                            VerticalAlignment="Center">
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Content="{Binding CtcMinSimilarity, Converter={StaticResource CtcSimilarityLabelConverter}}"
+                                                            IsVisible="{Binding EntryType, Converter={x:Static local:EnumBoolConverter.Instance}, ConverterParameter={x:Static models:DictionaryEntryType.Term}}"
+                                                            Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).CycleCtcSimilarityCommand}"
+                                                            CommandParameter="{Binding}"
+                                                            ToolTip.Tip="{loc:Str Dictionary.CtcSimilarityTooltip}"
+                                                            Padding="8,6" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Content="{loc:Str Dictionary.AliasesForEntry}"
+                                                            IsVisible="{Binding Converter={StaticResource AliasSuggestionsAvailableConverter}}"
+                                                            Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).SuggestAliasesForCommand}"
+                                                            CommandParameter="{Binding}"
+                                                            Click="OnSuggestAliasesForEntry"
+                                                            ToolTip.Tip="{loc:Str Dictionary.AliasesForEntryTooltip}"
+                                                            Padding="8,6" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Content="−"
+                                                            Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DecreasePriorityCommand}"
+                                                            CommandParameter="{Binding}"
+                                                            Padding="8,6"
+                                                            MinWidth="30" />
+                                                    <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                    <Button Content="+"
+                                                            Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).IncreasePriorityCommand}"
+                                                            CommandParameter="{Binding}"
+                                                            Padding="8,6"
+                                                            MinWidth="30" />
+                                                </StackPanel>
 
-                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                            <ToggleSwitch Grid.Column="4"
-                                                          AutomationProperties.Name="{loc:Str Common.Enabled}"
-                                                          IsChecked="{Binding IsEnabled, Mode=OneWay}"
-                                                          Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
-                                                          CommandParameter="{Binding}"
-                                                          VerticalAlignment="Center" />
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <ToggleSwitch AutomationProperties.Name="{loc:Str Common.Enabled}"
+                                                              IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                              Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).ToggleEnabledCommand}"
+                                                              CommandParameter="{Binding}"
+                                                              VerticalAlignment="Center" />
 
-                                            <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
-                                            <Button Grid.Column="5"
-                                                    Content="{loc:Str Common.Delete}"
-                                                    Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DeleteCommand}"
-                                                    CommandParameter="{Binding}"
-                                                    Padding="12,6"
-                                                    VerticalAlignment="Center" />
+                                                <!-- ReSharper disable once Xaml.PossibleNullReferenceException (compiled-binding path is null-safe at runtime; analyzer cannot prove non-null) -->
+                                                <Button Content="{loc:Str Common.Delete}"
+                                                        Command="{Binding $parent[ItemsControl].((vm:DictionarySectionViewModel)DataContext).DeleteCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        Padding="12,6"
+                                                        VerticalAlignment="Center" />
+                                            </WrapPanel>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>

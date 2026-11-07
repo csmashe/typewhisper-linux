@@ -1818,7 +1818,8 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
     [InlineData("opencode-auth-legacy", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-ansi", (int)CliAvailabilityState.Ready)]
     [InlineData("opencode-auth-stderr", (int)CliAvailabilityState.Ready)]
-    [InlineData("opencode-auth-missing", (int)CliAvailabilityState.AuthenticationUnknown)]
+    [InlineData("opencode-auth-missing", (int)CliAvailabilityState.CredentialRequired)]
+    [InlineData("opencode-auth-empty", (int)CliAvailabilityState.CredentialRequired)]
     [InlineData("opencode-auth-error", (int)CliAvailabilityState.SignedOut)]
     public async Task OpenCodeAuthentication_RequiresExplicitOpenCodeCredentialFromCombinedAnsiStrippedOutput(
         string scenario,

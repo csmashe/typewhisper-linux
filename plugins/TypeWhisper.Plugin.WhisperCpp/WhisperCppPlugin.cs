@@ -2,6 +2,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -912,7 +913,11 @@ public sealed class WhisperCppPlugin
                 // ReSharper restore AccessToDisposedClosure
             }
 
-            return await AccumulateSegmentsAsync(GetSegmentsAsync(), threshold);
+            return await AccumulateSegmentsAsync(
+                GetSegmentsAsync(),
+                threshold,
+                CalculateWavDurationSeconds(wavAudio)
+            );
         }
         finally
         {
@@ -920,9 +925,12 @@ public sealed class WhisperCppPlugin
         }
     }
 
+    // The last segment ends where speech ends, not where the audio does, so the measured input
+    // length wins; segment ends are only the fallback for audio whose length cannot be read.
     internal static async Task<PluginTranscriptionResult> AccumulateSegmentsAsync(
         IAsyncEnumerable<WhisperCppTranscriptionSegment> segments,
-        float threshold
+        float threshold,
+        double measuredDurationSeconds = 0
     )
     {
         var text = new StringBuilder();
@@ -965,9 +973,47 @@ public sealed class WhisperCppPlugin
         return new PluginTranscriptionResult(
             text.ToString().Trim(),
             detectedLanguage,
-            durationSeconds,
+            measuredDurationSeconds > 0 ? measuredDurationSeconds : durationSeconds,
             noSpeechProbability
         );
+    }
+
+    // Bounded chunk walk, so a truncated or hostile header cannot loop forever.
+    internal static double CalculateWavDurationSeconds(byte[] wavAudio)
+    {
+        if (wavAudio.Length < 12
+            || Encoding.ASCII.GetString(wavAudio, 0, 4) != "RIFF"
+            || Encoding.ASCII.GetString(wavAudio, 8, 4) != "WAVE")
+        {
+            return 0;
+        }
+
+        var byteRate = 0;
+        var dataSize = 0;
+        for (var offset = 12; offset <= wavAudio.Length - 8;)
+        {
+            var chunkId = Encoding.ASCII.GetString(wavAudio, offset, 4);
+            // Unsigned, because FFmpeg streaming to a pipe writes 0xFFFFFFFF ("unknown length")
+            // for the data chunk; it is clamped to the bytes actually present below.
+            var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(wavAudio.AsSpan(offset + 4, 4));
+            var dataStart = offset + 8;
+            switch (chunkId)
+            {
+                case "fmt " when chunkSize >= 12 && dataStart <= wavAudio.Length - 12:
+                    byteRate = BinaryPrimitives.ReadInt32LittleEndian(wavAudio.AsSpan(dataStart + 8, 4));
+                    break;
+                case "data":
+                    dataSize = (int)Math.Min(chunkSize, (uint)(wavAudio.Length - dataStart));
+                    break;
+            }
+
+            var paddedChunkSize = (long)chunkSize + (chunkSize & 1);
+            if (paddedChunkSize > wavAudio.Length - (long)dataStart)
+                break;
+            offset = dataStart + (int)paddedChunkSize;
+        }
+
+        return byteRate > 0 && dataSize > 0 ? dataSize / (double)byteRate : 0;
     }
 
     public async Task UnloadModelAsync()

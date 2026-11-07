@@ -698,8 +698,15 @@ public partial class FileTranscriptionSectionViewModel : ObservableObject
 
     private void RestartWatchFolderIfRunning()
     {
-        if (!_watchFolder.IsRunning || string.IsNullOrWhiteSpace(WatchFolderPath))
+        if (!_watchFolder.IsRunning)
         {
+            return;
+        }
+
+        // A cleared path must retire the old watcher, not leave it processing the previous folder.
+        if (string.IsNullOrWhiteSpace(WatchFolderPath))
+        {
+            StopWatchFolder();
             return;
         }
 

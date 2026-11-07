@@ -334,6 +334,31 @@ public sealed class FileTranscriptionSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ClearingWatchFolderPath_WhileRunning_StopsWatcher()
+    {
+        var watchPath = Path.Join(_tempDir, "cleared-watch-folder");
+        Directory.CreateDirectory(watchPath);
+        var settings = CreateSettingsWithWatchFolder(watchPath, autoStart: false);
+        var vm = CreateViewModel(settings);
+
+        try
+        {
+            vm.StartWatchFolderCommand.Execute(null);
+            Assert.True(vm.IsWatchFolderRunning);
+
+            vm.SetWatchFolderPath("");
+
+            Assert.Null(settings.Current.WatchFolderPath);
+            Assert.False(vm.IsWatchFolderRunning);
+            Assert.Equal(Loc.Instance["FileTranscription.Stopped"], vm.WatchFolderStatusText);
+        }
+        finally
+        {
+            vm.StopWatchFolderCommand.Execute(null);
+        }
+    }
+
+    [Fact]
     public void StopWatchFolder_AfterFailedStart_ClearsError()
     {
         var settings = CreateSettingsWithPoisonedWatchFolder(autoStart: false);

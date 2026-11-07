@@ -15,13 +15,12 @@ public sealed class AudioPlaybackService : IDisposable
     private const uint FramesPerBuffer = 512;
 
     private static int s_paInitCount;
-    private static readonly Lock s_paInitLock = new();
 
     private readonly Lock _gate = new();
+    private readonly Action _initializeNative;
     private readonly Action _terminateNative;
     private readonly Action<string>? _playNative;
     private readonly Action? _stopNative;
-    private readonly bool _portAudioReady;
     private int _position;
     private float[] _samples = [];
     private PaStream? _stream;
@@ -40,22 +39,12 @@ public sealed class AudioPlaybackService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(initializeNative);
         ArgumentNullException.ThrowIfNull(terminateNative);
+        // PortAudio is taken per stream: an idle reference would keep it initialized, so the
+        // capture's device-table refresh could never see a new default microphone.
+        _initializeNative = initializeNative;
         _terminateNative = terminateNative;
         _playNative = playNative;
         _stopNative = stopNative;
-
-        // DI resolves this during startup, so a missing native audio stack must not throw
-        // here: the exception would unwind out of the app before a window ever shows. Play
-        // already treats PortAudio failing at call time as a no-op with a trace line.
-        try
-        {
-            initializeNative();
-            _portAudioReady = true;
-        }
-        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
-        {
-            Trace.WriteLine($"[AudioPlaybackService] PortAudio unavailable: {ex.Message}");
-        }
     }
 
     public string? CurrentFile { get; private set; }
@@ -64,11 +53,6 @@ public sealed class AudioPlaybackService : IDisposable
     public void Dispose()
     {
         Stop();
-        // Only balance the reference count we actually took.
-        if (_portAudioReady)
-        {
-            _terminateNative();
-        }
     }
 
     // ReSharper disable once UnusedMember.Global — public API (pre-flight playback check); not currently called in-tree.
@@ -114,8 +98,13 @@ public sealed class AudioPlaybackService : IDisposable
         PaStream? failed = null;
         lock (_gate)
         {
+            // True while this play holds a PortAudio reference that no stream owns yet.
+            var holdsUnownedReference = false;
             try
             {
+                _initializeNative();
+                holdsUnownedReference = true;
+
                 var (samples, sampleRate) = LoadWav(path);
                 _samples = samples;
                 _position = 0;
@@ -146,6 +135,7 @@ public sealed class AudioPlaybackService : IDisposable
                         PlaybackCallback,
                         IntPtr.Zero
                     );
+                    holdsUnownedReference = false;
 
                     _stream.Start();
                     CurrentFile = audioFileName;
@@ -157,6 +147,13 @@ public sealed class AudioPlaybackService : IDisposable
             {
                 Trace.WriteLine($"[AudioPlaybackService] Play failed: {ex.Message}");
                 failed = DetachStreamLocked();
+            }
+            finally
+            {
+                if (holdsUnownedReference)
+                {
+                    _terminateNative();
+                }
             }
         }
 
@@ -253,7 +250,8 @@ public sealed class AudioPlaybackService : IDisposable
     }
 
     // Pa_StopStream blocks on the audio callback thread — never call while holding _gate.
-    private static void DisposeStream(PaStream? stream)
+    // Each stream owns one PortAudio reference, released once the stream is gone.
+    private void DisposeStream(PaStream? stream)
     {
         if (stream is null)
         {
@@ -277,6 +275,8 @@ public sealed class AudioPlaybackService : IDisposable
         {
             /* best effort */
         }
+
+        _terminateNative();
     }
 
     // Resolve relative to the audio root, rejecting ".." escapes as defence-in-depth
@@ -404,7 +404,7 @@ public sealed class AudioPlaybackService : IDisposable
     {
         // Reference-counted: both services share the process-global PortAudio library
         // and each Initialize() must be balanced by a Terminate().
-        lock (s_paInitLock)
+        lock (AudioRecordingService.PortAudioLifetimeLock)
         {
             if (s_paInitCount == 0)
             {
@@ -417,7 +417,7 @@ public sealed class AudioPlaybackService : IDisposable
 
     private static void EnsurePortAudioTerminated()
     {
-        lock (s_paInitLock)
+        lock (AudioRecordingService.PortAudioLifetimeLock)
         {
             if (s_paInitCount <= 0)
             {

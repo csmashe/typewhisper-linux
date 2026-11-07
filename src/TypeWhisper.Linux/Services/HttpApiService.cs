@@ -2522,6 +2522,11 @@ public sealed partial class HttpApiService : IDisposable
         {
             HotkeyCandidateValidationStatus.Malformed =>
                 ("hotkey-malformed", "Profile hotkey cannot be enabled because it is malformed."),
+            HotkeyCandidateValidationStatus.ReservedBySystem =>
+                (
+                    "hotkey-reserved",
+                    "Profile hotkey cannot be enabled because Ctrl+Alt+F1-F12 switch the Linux virtual terminal."
+                ),
             HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
                 (
                     "prompt-action-required",
