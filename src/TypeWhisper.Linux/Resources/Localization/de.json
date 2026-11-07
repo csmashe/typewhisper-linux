@@ -1179,6 +1179,7 @@
   "Shortcuts.HotkeyParseFailed": "'{0}' konnte nicht verarbeitet werden. Versuchen Sie z.B. Ctrl+Shift+Space, Alt+F9, Ctrl+K.",
   "Shortcuts.HotkeyParseOrCollide": "'{0}' konnte nicht verarbeitet werden oder kollidiert mit einem anderen Tastenkürzel.",
   "Shortcuts.HotkeyCollides": "'{0}' kollidiert mit einem anderen Tastenkürzel.",
+  "Shortcuts.HotkeyReservedBySystem": "Strg+Alt+F1–F12 wechseln das virtuelle Linux-Terminal und können nicht als Tastenkürzel verwendet werden.",
   "Shortcuts.HotkeySet": "Hotkey auf {0} gesetzt.",
   "Shortcuts.InstallingShortcut": "Tastenkürzel wird auf {0} installiert…",
   "Shortcuts.KeyboardAccessBanner": "⚠ Aktivieren Sie den Tastaturzugriff, um globale Hotkeys unter Wayland zu nutzen",

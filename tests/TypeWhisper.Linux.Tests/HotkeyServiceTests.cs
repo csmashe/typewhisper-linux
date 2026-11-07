@@ -146,6 +146,160 @@ public sealed class HotkeyServiceTests
         Assert.Null(result.NormalizedHotkey);
     }
 
+    [Theory]
+    [InlineData("Ctrl+Alt+F9")]
+    [InlineData("control + alt + f1")]
+    [InlineData("Alt+Ctrl+F12")]
+    [InlineData("Ctrl+Alt+Meta+F2")]
+    public void ValidatePromptActionHotkeyCandidate_RejectsVirtualTerminalSwitchChord(string chord)
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+
+        var result = hotkey.ValidatePromptActionHotkeyCandidate(chord, null, [], []);
+
+        Assert.Equal(HotkeyCandidateValidationStatus.ReservedBySystem, result.Status);
+        Assert.Null(result.NormalizedHotkey);
+    }
+
+    [Theory]
+    [InlineData("Ctrl+Alt+F13")]
+    [InlineData("Ctrl+F9")]
+    [InlineData("Alt+F9")]
+    [InlineData("Meta+Alt+F9")]
+    public void ValidatePromptActionHotkeyCandidate_AcceptsNearbyNonReservedChords(string chord)
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+
+        Assert.True(hotkey.ValidatePromptActionHotkeyCandidate(chord, null, [], []).IsValid);
+    }
+
+    [Fact]
+    public void ValidateProfileHotkeyCandidate_RejectsVirtualTerminalSwitchChord()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+
+        var result = hotkey.ValidateProfileHotkeyCandidate(
+            "Ctrl+Alt+F3",
+            ProfileHotkeyBehavior.StartDictation,
+            null,
+            null,
+            [],
+            []
+        );
+
+        Assert.Equal(HotkeyCandidateValidationStatus.ReservedBySystem, result.Status);
+    }
+
+    [Fact]
+    public void FixedHotkeySetters_RejectVirtualTerminalSwitchChordAndKeepBinding()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var original = hotkey.CurrentHotkeyString;
+
+        Assert.False(hotkey.TrySetHotkeyFromString("Ctrl+Alt+F2"));
+        Assert.Equal(original, hotkey.CurrentHotkeyString);
+        Assert.False(hotkey.TrySetPromptPaletteHotkeyFromString("Ctrl+Alt+F9"));
+        Assert.False(hotkey.TrySetPasteLastTranscriptionHotkeyFromString("control + alt + f3"));
+        Assert.True(HotkeyService.IsReservedSystemHotkey("Ctrl+Alt+F9"));
+        Assert.False(HotkeyService.IsParsableHotkey("Ctrl+Alt+F9"));
+    }
+
+    [Fact]
+    public void TypedFixedHotkeySetters_RejectVirtualTerminalSwitchChordAndKeepBinding()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        var original = hotkey.CurrentHotkeyString;
+
+        hotkey.SetHotkey(KeyCode.VcF2, ModifierMask.LeftCtrl | ModifierMask.LeftAlt);
+        hotkey.SetPromptPaletteHotkey(KeyCode.VcF9, ModifierMask.RightCtrl | ModifierMask.LeftAlt);
+
+        Assert.Equal(original, hotkey.CurrentHotkeyString);
+        Assert.Equal("", hotkey.CurrentPromptPaletteHotkeyString);
+
+        hotkey.SetPromptPaletteHotkey(KeyCode.VcF13, ModifierMask.LeftCtrl | ModifierMask.LeftAlt);
+        Assert.Equal("Ctrl+Alt+F13", hotkey.CurrentPromptPaletteHotkeyString);
+    }
+
+    [Fact]
+    public async Task SetDynamicHotkeysDetailed_RejectsTypedVirtualTerminalSwitchChords()
+    {
+        var backend = new TestShortcutBackend();
+        using var hotkey = new HotkeyService(new BackendSelector(() => backend));
+        hotkey.Initialize();
+        var ctrlAlt = ModifierMask.LeftCtrl | ModifierMask.LeftAlt;
+
+        var rejections = hotkey.SetDynamicHotkeysDetailed(
+            [
+                new PromptActionHotkeyCandidate(
+                    new PromptActionHotkey("vt-action", KeyCode.VcF9, ctrlAlt),
+                    "VT action"
+                ),
+                new PromptActionHotkeyCandidate(
+                    new PromptActionHotkey("keeper", KeyCode.VcF13, ctrlAlt),
+                    "Keeper"
+                ),
+            ],
+            [
+                new ProfileHotkeyCandidate(
+                    new ProfileHotkey(
+                        "vt-profile",
+                        KeyCode.VcF3,
+                        ctrlAlt | ModifierMask.LeftMeta,
+                        ProfileHotkeyBehavior.StartDictation
+                    ),
+                    "VT profile"
+                ),
+            ]
+        );
+
+        Assert.Equal(
+            [
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.PromptAction,
+                    DynamicHotkeyRejectionReason.ReservedBySystem,
+                    "vt-action",
+                    "VT action",
+                    "Ctrl+Alt+F9"
+                ),
+                new DynamicHotkeyRejection(
+                    DynamicHotkeyBindingKind.Profile,
+                    DynamicHotkeyRejectionReason.ReservedBySystem,
+                    "vt-profile",
+                    "VT profile",
+                    "Ctrl+Alt+Meta+F3"
+                ),
+            ],
+            rejections
+        );
+
+        await backend.WaitUntilSettledAsync();
+        var snapshot = backend.LastSet;
+        Assert.NotNull(snapshot);
+        Assert.Equal("keeper", Assert.Single(snapshot.PromptActionHotkeys).ActionId);
+        Assert.Empty(snapshot.ProfileHotkeys);
+
+        var message = Assert.Single(
+            hotkey.SetDynamicHotkeys(
+                [new PromptActionHotkey("vt-action", KeyCode.VcF9, ctrlAlt)],
+                []
+            )
+        );
+        Assert.Equal(
+            "Prompt-action hotkey 'vt-action' (Ctrl+Alt+F9) is inactive because Ctrl+Alt+F1-F12 switch the Linux virtual terminal.",
+            message
+        );
+    }
+
+    [Fact]
+    public void ParsePromptActionHotkeys_SkipsPersistedVirtualTerminalSwitchChord()
+    {
+        var parsed = HotkeyService.ParsePromptActionHotkeys(
+            [new PromptAction { Id = "qa", Name = "QA", SystemPrompt = "x", HotkeyKey = "Ctrl+Alt+F9" }]
+        );
+
+        Assert.Empty(parsed);
+    }
+
     [Fact]
     public void ValidatePromptActionHotkeyCandidate_RejectsFixedShortcutCollision()
     {
@@ -1279,9 +1433,9 @@ public sealed class HotkeyServiceTests
         using var hotkey = new HotkeyService(new BackendSelector(() => backend));
         hotkey.Initialize();
 
-        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Alt+F1"));
-        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Alt+F2"));
-        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Alt+F3"));
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F1"));
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F2"));
+        Assert.True(hotkey.TrySetHotkeyFromString("Ctrl+Shift+F3"));
 
         await backend.WaitUntilSettledAsync();
 

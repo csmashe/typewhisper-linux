@@ -1179,6 +1179,7 @@
   "Shortcuts.HotkeyParseFailed": "「{0}」を解析できませんでした。Ctrl+Shift+Space、Alt+F9、Ctrl+Kなどを試してください。",
   "Shortcuts.HotkeyParseOrCollide": "「{0}」を解析できないか、別のショートカットと競合しています。",
   "Shortcuts.HotkeyCollides": "「{0}」は別のショートカットと競合しています。",
+  "Shortcuts.HotkeyReservedBySystem": "Ctrl+Alt+F1–F12 は Linux の仮想端末を切り替えるため、ショートカットには使用できません。",
   "Shortcuts.HotkeySet": "ショートカットを{0}に設定しました。",
   "Shortcuts.InstallingShortcut": "{0}にショートカットをインストールしています…",
   "Shortcuts.KeyboardAccessBanner": "⚠ Waylandでグローバルショートカットを使用するには、キーボードアクセスを有効にしてください",

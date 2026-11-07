@@ -13,6 +13,7 @@ public enum HotkeyCandidateValidationStatus
     CollidesWithPromptAction,
     CollidesWithProfile,
     MissingEnabledPromptAction,
+    ReservedBySystem,
 }
 
 public sealed record HotkeyCandidateValidationResult(
@@ -33,6 +34,7 @@ internal enum DynamicHotkeyRejectionReason
 {
     BlankId,
     Conflict,
+    ReservedBySystem,
 }
 
 internal sealed record DynamicHotkeyRejection(
@@ -438,6 +440,12 @@ public sealed class HotkeyService : IDisposable
         // collisions), but the raw setter is reachable from tests and any
         // future direct caller. Silently no-op rather than throw so call
         // sites don't need try/catch.
+        if (IsReservedSystemChord(key, modifiers))
+        {
+            Trace.WriteLine("[HotkeyService] Refusing reserved system dictation hotkey.");
+            return;
+        }
+
         // Check and assignment share one critical section with dynamic reconciliation, so a
         // concurrent rebuild can't validate against bindings this setter is about to replace.
         lock (_lock)
@@ -458,6 +466,12 @@ public sealed class HotkeyService : IDisposable
 
     public void SetPromptPaletteHotkey(KeyCode? key, ModifierMask modifiers)
     {
+        if (key is not null && IsReservedSystemChord(key.Value, modifiers))
+        {
+            Trace.WriteLine("[HotkeyService] Refusing reserved system prompt palette hotkey.");
+            return;
+        }
+
         lock (_lock)
         {
             if (
@@ -516,6 +530,21 @@ public sealed class HotkeyService : IDisposable
     /// </summary>
     public static bool IsParsableHotkey(string? text) =>
         text is not null && TryParseHotkey(text, out var key, out _) && key is not null;
+
+    /// <summary>
+    ///     True for Ctrl+Alt+F1-F12, which switch the Linux virtual terminal. Extra modifiers are
+    ///     reserved too, since Super does not stop the switch.
+    /// </summary>
+    public static bool IsReservedSystemHotkey(string? text) =>
+        text is not null
+        && TryParseHotkeySyntax(text, out var key, out var modifiers)
+        && key is not null
+        && IsReservedSystemChord(key.Value, modifiers);
+
+    private static bool IsReservedSystemChord(KeyCode key, ModifierMask modifiers) =>
+        (modifiers & ModifierMask.Ctrl) != ModifierMask.None
+        && (modifiers & ModifierMask.Alt) != ModifierMask.None
+        && key is >= KeyCode.VcF1 and <= KeyCode.VcF12;
 
     public bool TrySetPromptPaletteHotkeyFromString(string? text)
     {
@@ -1059,6 +1088,23 @@ public sealed class HotkeyService : IDisposable
                 continue;
             }
 
+            if (IsReservedSystemChord(entry.Key, entry.Modifiers))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing reserved system prompt-action hotkey for '{entry.ActionId}'."
+                );
+                rejections.Add(
+                    DynamicReservedRejection(
+                        DynamicHotkeyBindingKind.PromptAction,
+                        entry.ActionId,
+                        displayName,
+                        entry.Key,
+                        entry.Modifiers
+                    )
+                );
+                continue;
+            }
+
             if (HotkeyMatchesAny(entry.Key, entry.Modifiers, fixedBindings))
             {
                 Trace.WriteLine(
@@ -1114,6 +1160,23 @@ public sealed class HotkeyService : IDisposable
                         entry.ProfileId,
                         displayName,
                         FormatHotkey(entry.Key, entry.Modifiers)
+                    )
+                );
+                continue;
+            }
+
+            if (IsReservedSystemChord(entry.Key, entry.Modifiers))
+            {
+                Trace.WriteLine(
+                    $"[HotkeyService] Refusing reserved system profile hotkey for '{entry.ProfileId}'."
+                );
+                rejections.Add(
+                    DynamicReservedRejection(
+                        DynamicHotkeyBindingKind.Profile,
+                        entry.ProfileId,
+                        displayName,
+                        entry.Key,
+                        entry.Modifiers
                     )
                 );
                 continue;
@@ -1193,6 +1256,23 @@ public sealed class HotkeyService : IDisposable
         );
     }
 
+    private static DynamicHotkeyRejection DynamicReservedRejection(
+        DynamicHotkeyBindingKind bindingKind,
+        string id,
+        string displayName,
+        KeyCode key,
+        ModifierMask modifiers
+    )
+    {
+        return new DynamicHotkeyRejection(
+            bindingKind,
+            DynamicHotkeyRejectionReason.ReservedBySystem,
+            id,
+            displayName,
+            FormatHotkey(key, modifiers)
+        );
+    }
+
     private static string[] ToInvariantMessages(
         IEnumerable<DynamicHotkeyRejection> rejections
     )
@@ -1216,6 +1296,11 @@ public sealed class HotkeyService : IDisposable
         var kind = rejection.Kind == DynamicHotkeyBindingKind.PromptAction
             ? "Prompt-action"
             : "Profile";
+        if (rejection.Reason == DynamicHotkeyRejectionReason.ReservedBySystem)
+        {
+            return $"{kind} hotkey '{rejection.BindingId}' ({rejection.NormalizedChord}) is inactive because Ctrl+Alt+F1-F12 switch the Linux virtual terminal.";
+        }
+
         return $"{kind} hotkey '{rejection.BindingId}' ({rejection.NormalizedChord}) is inactive because it conflicts with a higher-priority shortcut.";
     }
 
@@ -1544,10 +1629,18 @@ public sealed class HotkeyService : IDisposable
             );
         }
 
-        if (!TryParseHotkey(hotkey, out var key, out var modifiers) || key is null)
+        if (!TryParseHotkeySyntax(hotkey, out var key, out var modifiers) || key is null)
         {
             return new HotkeyCandidateValidationResult(
                 HotkeyCandidateValidationStatus.Malformed,
+                null
+            );
+        }
+
+        if (IsReservedSystemChord(key.Value, modifiers))
+        {
+            return new HotkeyCandidateValidationResult(
+                HotkeyCandidateValidationStatus.ReservedBySystem,
                 null
             );
         }
@@ -1740,7 +1833,16 @@ public sealed class HotkeyService : IDisposable
         return string.Join('+', parts);
     }
 
-    private static bool TryParseHotkey(string text, out KeyCode? key, out ModifierMask modifiers)
+    // Every binding path parses through here, so a reserved chord can never be saved or bound.
+    private static bool TryParseHotkey(string text, out KeyCode? key, out ModifierMask modifiers) =>
+        TryParseHotkeySyntax(text, out key, out modifiers)
+        && (key is null || !IsReservedSystemChord(key.Value, modifiers));
+
+    private static bool TryParseHotkeySyntax(
+        string text,
+        out KeyCode? key,
+        out ModifierMask modifiers
+    )
     {
         key = null;
         modifiers = ModifierMask.None;

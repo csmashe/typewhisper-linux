@@ -984,6 +984,8 @@ public partial class ProfilesSectionViewModel : ObservableObject
         {
             HotkeyCandidateValidationStatus.Malformed =>
                 Loc.Instance["Profiles.HotkeyMalformed"],
+            HotkeyCandidateValidationStatus.ReservedBySystem =>
+                Loc.Instance["Shortcuts.HotkeyReservedBySystem"],
             HotkeyCandidateValidationStatus.MissingEnabledPromptAction =>
                 Loc.Instance["Profiles.HotkeyPromptActionRequired"],
             _ => Loc.Instance["Profiles.HotkeyCollision"],

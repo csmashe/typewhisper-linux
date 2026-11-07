@@ -84,4 +84,14 @@ public sealed class RecordedDesktopKeyTests : IDisposable
             Assert.Equal(("CTRL", expected), HyprlandShortcutWriter.ToHyprlandBind(chord));
         }
     }
+
+    [Fact]
+    public void DictationSpecIsNotBuiltForVirtualTerminalSwitchChord()
+    {
+        var settings = new SettingsService(Path.Join(_tempDir, "settings.json"));
+        settings.Save(settings.Current with { ToggleHotkey = "Ctrl+Alt+F9", Mode = RecordingMode.Toggle });
+
+        Assert.Null(DictationShortcutSpecFactory.Build(settings, new GnomeShortcutWriter()));
+        Assert.Null(DictationShortcutSpecFactory.Build(settings, new SwayShortcutWriter()));
+    }
 }
