@@ -1,12 +1,18 @@
 {
   "Settings.Model": "Modell",
-  "Settings.ModelDescription": "Lokales Gemma-Modell für die LLM-Verarbeitung. Bei Auswahl eines Modells wird es (falls nötig) heruntergeladen und geladen; Downloads können mehrere Gigabyte groß sein und der Fortschritt wird im Plugin-Protokoll angezeigt.",
+  "Settings.ModelDescription": "Lokales Gemma-Modell für die LLM-Verarbeitung. Speichern übernimmt die Auswahl; mit „Modell herunterladen und laden“ wird es (mehrere Gigabyte) heruntergeladen und geladen.",
   "Settings.StreamResponses": "Antworten streamen",
   "Settings.StreamResponsesDescription": "Prompt-Aktions-Ausgabe Token für Token anzeigen, während das lokale Modell sie generiert, anstatt auf die vollständige Antwort zu warten.",
   "Settings.SelectModel": "Wählen Sie zuerst ein Modell.",
   "Settings.ModelReady": "Modell geladen und bereit.",
   "Settings.ModelReadyLoadsOnUse": "Modell bereit. Es ist gerade nicht im Speicher und wird bei der nächsten Verwendung geladen.",
-  "Settings.ModelSelectedNotLoaded": "Modell ausgewählt, aber noch nicht geladen.",
+  "Settings.ModelSelectedNotLoaded": "Modell ausgewählt, aber noch nicht bereit. Verwenden Sie „Modell herunterladen und laden“.",
+  "Settings.DownloadAction": "Modell herunterladen und laden",
+  "Settings.DownloadActionDescription": "Lädt das ausgewählte Modell herunter, falls es noch nicht auf diesem Computer ist, prüft es und lädt es. Ein unterbrochener Download wird fortgesetzt.",
+  "Settings.Downloading": "{0} wird heruntergeladen...",
+  "Settings.Loading": "{0} wird geladen...",
+  "Settings.DownloadCancelled": "Download abgebrochen.",
+  "Settings.Error": "Das Modell konnte nicht vorbereitet werden: {0}",
   "Manifest.Name": "Gemma 4 (Lokal)",
   "Manifest.Description": "Google Gemma 4 lokal mit llama.cpp auf der CPU ausführen"
 }
