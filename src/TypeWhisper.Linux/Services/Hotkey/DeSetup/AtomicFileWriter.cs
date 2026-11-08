@@ -6,6 +6,13 @@ using TypeWhisper.Core.Services;
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
+///     A file TypeWhisper refused to rewrite because it is not UTF-8, so callers can
+///     tell an encoding problem apart from a permission or I/O failure.
+/// </summary>
+internal sealed class NonUtf8FileException(string message, Exception? inner = null)
+    : IOException(message, inner);
+
+/// <summary>
 ///     Exact file state used by <see cref="AtomicFileWriter.WriteIfUnchangedAsync" />.
 ///     The requested path is kept separately from the resolved path so a symlink
 ///     retarget between capture and commit can be detected.
@@ -294,7 +301,7 @@ internal static partial class AtomicFileWriter
             || span.StartsWith(Encoding.Unicode.Preamble)
             || span.StartsWith(Encoding.BigEndianUnicode.Preamble))
         {
-            throw new IOException(
+            throw new NonUtf8FileException(
                 $"'{path}' is not UTF-8 (it starts with a UTF-16 or UTF-32 byte order mark). "
                 + "Refusing to rewrite it — convert it to UTF-8 and try again."
             );
@@ -309,7 +316,7 @@ internal static partial class AtomicFileWriter
         }
         catch (DecoderFallbackException ex)
         {
-            throw new IOException(
+            throw new NonUtf8FileException(
                 $"'{path}' is not valid UTF-8. Refusing to rewrite it — convert it to UTF-8 "
                 + "and try again.",
                 ex

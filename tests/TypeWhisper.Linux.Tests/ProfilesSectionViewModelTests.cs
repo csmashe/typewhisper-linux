@@ -116,6 +116,62 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void BrowserSetupResult_gives_encoding_guidance_for_non_utf8_profiles()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "Browser accessibility enabled.")
+            {
+                NonUtf8FirefoxProfiles = ["qa-utf16le.default", "qa-utf16be.default"],
+            };
+
+            var message = ProfilesSectionViewModel.FormatBrowserSetupResult(result);
+
+            Assert.Equal(
+                Loc.Instance.GetString(
+                    "Profiles.BrowserSetupPartialFirefoxEncoding",
+                    "qa-utf16le.default, qa-utf16be.default"
+                ),
+                message
+            );
+            Assert.Contains("UTF-8", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("writable", message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void BrowserSetupResult_with_both_failures_names_each_remedy()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "Browser accessibility enabled.")
+            {
+                SkippedFirefoxProfiles = ["locked.default"],
+                NonUtf8FirefoxProfiles = ["utf16.default"],
+            };
+
+            Assert.Equal(
+                Loc.Instance.GetString("Profiles.BrowserSetupPartialFirefox", "locked.default")
+                + " "
+                + Loc.Instance.GetString("Profiles.BrowserSetupFirefoxEncodingRetry", "utf16.default"),
+                ProfilesSectionViewModel.FormatBrowserSetupResult(result)
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void BrowserSetupResult_without_skipped_profiles_keeps_success_wording()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;
