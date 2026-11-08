@@ -601,6 +601,7 @@
   "Dictionary.NoActiveBoostingTerms": "ブーストに使用できる有効な用語がありません",
   "Dictionary.OriginalPlaceholder": "元の語句を入力...",
   "Dictionary.PacksHeader": "パックは専門用語を追加し、音声認識が分野固有の語彙をより正しく理解できるようにします。",
+  "Dictionary.PriorityBadge": "優先度 {0}",
   "Dictionary.PriorityPlaceholder": "優先度",
   "Dictionary.Regex": "正規表現",
   "Dictionary.ReplacementEscapesHint": "置換のエスケープ: \\s スペース、\\n 改行、\\r 復帰、\\t タブ、\\\\ バックスラッシュ。「正規表現」を有効にしない限り、照合は文字どおりに行われます。",

@@ -601,6 +601,7 @@
   "Dictionary.NoActiveBoostingTerms": "No hay términos activos disponibles para la mejora",
   "Dictionary.OriginalPlaceholder": "Introduce el original...",
   "Dictionary.PacksHeader": "Los paquetes añaden terminología especializada para que el reconocimiento de voz entienda mejor el vocabulario del ámbito.",
+  "Dictionary.PriorityBadge": "Prioridad {0}",
   "Dictionary.PriorityPlaceholder": "Prioridad",
   "Dictionary.Regex": "Expresión regular",
   "Dictionary.ReplacementEscapesHint": "Escapes de reemplazo: \\s espacio, \\n salto de línea, \\r retorno de carro, \\t tabulación, \\\\ barra invertida. La búsqueda es literal a menos que se active Expresión regular.",

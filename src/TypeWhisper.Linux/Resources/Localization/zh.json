@@ -601,6 +601,7 @@
   "Dictionary.NoActiveBoostingTerms": "没有可用于增强的活动词条",
   "Dictionary.OriginalPlaceholder": "输入原文...",
   "Dictionary.PacksHeader": "词库包会添加专业术语，帮助语音识别更好地理解领域词汇。",
+  "Dictionary.PriorityBadge": "优先级 {0}",
   "Dictionary.PriorityPlaceholder": "优先级",
   "Dictionary.Regex": "正则表达式",
   "Dictionary.ReplacementEscapesHint": "替换转义符：\\s（空格）、\\n（换行）、\\r（回车）、\\t（制表符）、\\\\（反斜杠）。除非启用“正则表达式”，否则按字面匹配。",
