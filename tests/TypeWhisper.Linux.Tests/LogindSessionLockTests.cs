@@ -56,6 +56,8 @@ public sealed class LogindSessionLockTests : IAsyncLifetime
         _logind.EmitLockedHintChanged();
 
         await WaitUntilAsync(() => _logind.GetAllCount > readsBeforeLock);
+        // The count rises before the reply is sent; give the monitor time to apply it.
+        await Task.Delay(s_confirmationDelay);
         Assert.False(_monitor.IsInputAllowed);
 
         _logind.LockedHint = false;
