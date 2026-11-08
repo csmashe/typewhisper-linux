@@ -4419,6 +4419,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 "Copied to clipboard. Compositor doesn't support direct typing — set up ydotool from Settings → Text insertion to enable auto-paste.",
             InsertionFailureReason.YdotoolSocketUnreachable =>
                 "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
+            InsertionFailureReason.WtypeXWaylandTarget =>
+                "Copied to clipboard. wtype can't type into XWayland apps — set up ydotool from Settings → Text insertion to enable auto-paste.",
             InsertionFailureReason.NoWaylandTypingTool =>
                 $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
             InsertionFailureReason.LockedFieldUnavailable =>
