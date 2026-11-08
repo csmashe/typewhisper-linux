@@ -452,6 +452,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
+            // ReSharper disable once InvertIf -- inverting would duplicate the result initializer below
             if (skippedProfiles.Count > 0)
             {
                 summary.Append(' ');
@@ -460,7 +461,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
-            return new SetupResult(true, summary.ToString());
+            return new SetupResult(true, summary.ToString())
+            {
+                LeftEnvFile = !removedEnv,
+                RemovedLaunchers = removedLaunchers,
+                CleanedFirefoxProfiles = cleanedProfiles,
+                SkippedFirefoxProfiles = skippedProfiles,
+            };
         }
         catch (Exception ex)
         {
@@ -1572,5 +1579,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
     public sealed record SetupResult(bool Success, string Message, string? Detail = null)
     {
         public IReadOnlyList<string> SkippedFirefoxProfiles { get; init; } = [];
+
+        // Removal outcome, so the UI can word its summary in the interface language.
+        public bool LeftEnvFile { get; init; }
+        public IReadOnlyList<string> RemovedLaunchers { get; init; } = [];
+        public IReadOnlyList<string> CleanedFirefoxProfiles { get; init; } = [];
     }
 }

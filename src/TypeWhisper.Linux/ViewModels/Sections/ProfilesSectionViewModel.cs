@@ -1644,7 +1644,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
                     "Profiles.BrowserSetupPartialFirefox",
                     string.Join(", ", result.SkippedFirefoxProfiles)
                 )
-                : Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message);
+                : Loc.Instance.GetString(
+                    "Profiles.BrowserSetupSuccess",
+                    Loc.Instance["Profiles.BrowserSetupEnabled"]
+                );
         }
 
         var failure = $"{result.Message} {result.Detail}";
@@ -1727,10 +1730,35 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
         // Refresh first so the state message doesn't overwrite the revert result.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = result.Success
-            ? Loc.Instance.GetString("Profiles.BrowserRevertSuccess", result.Message)
-            : $"{result.Message} {result.Detail}";
+        BrowserAccessibilityStatusMessage = FormatBrowserRevertResult(result);
         _browserStatusIsState = false;
+    }
+
+    internal static string FormatBrowserRevertResult(BrowserAccessibilitySetupHelper.SetupResult result)
+    {
+        if (!result.Success)
+        {
+            return $"{result.Message} {result.Detail}";
+        }
+
+        var parts = new List<string> { Loc.Instance["Profiles.BrowserRevertRemoved"] };
+        if (result.LeftEnvFile)
+        {
+            parts.Add(Loc.Instance["Profiles.BrowserRevertLeftEnvFile"]);
+        }
+
+        AddNamedPart("Profiles.BrowserRevertRemovedLaunchers", result.RemovedLaunchers);
+        AddNamedPart("Profiles.BrowserRevertCleanedProfiles", result.CleanedFirefoxProfiles);
+        AddNamedPart("Profiles.BrowserRevertSkippedProfiles", result.SkippedFirefoxProfiles);
+        return Loc.Instance.GetString("Profiles.BrowserRevertSuccess", string.Join(" ", parts));
+
+        void AddNamedPart(string key, IReadOnlyList<string> names)
+        {
+            if (names.Count > 0)
+            {
+                parts.Add(Loc.Instance.GetString(key, string.Join(", ", names)));
+            }
+        }
     }
 
     private void NotifyStateChanged()

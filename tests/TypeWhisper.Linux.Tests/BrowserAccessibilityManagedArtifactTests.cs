@@ -104,6 +104,7 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.True(removal.Success);
         Assert.Contains("USER_CUSTOMIZATION=1", File.ReadAllText(EnvPath));
         Assert.Contains("Left env file", removal.Message, StringComparison.Ordinal);
+        Assert.True(removal.LeftEnvFile);
         Assert.True(
             File.Exists(
                 Path.Join(StateRoot, "browser-accessibility-environment", "state.json")
@@ -147,6 +148,7 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
 
         Assert.True(removal.Success);
         Assert.False(File.Exists(UserChromePath));
+        Assert.Equal([ChromeDesktopId], removal.RemovedLaunchers);
     }
 
     [Fact]
@@ -287,6 +289,10 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.True(removal.Success);
         Assert.Equal(originals[0], File.ReadAllBytes(withBom));
         Assert.Equal(originals[1], File.ReadAllBytes(withoutBom));
+        Assert.Equal(
+            ["bom.default", "plain.default"],
+            removal.CleanedFirefoxProfiles.Order(StringComparer.Ordinal)
+        );
     }
 
     [Fact]
@@ -308,6 +314,7 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
             "Could not update user.js in Firefox profile(s): latin1.default.",
             removal.Message
         );
+        Assert.Equal(["latin1.default"], removal.SkippedFirefoxProfiles);
         Assert.Equal(latin1, File.ReadAllBytes(userJs));
     }
 
