@@ -117,7 +117,9 @@ public static partial class WhisperHallucinationFilter
         return !string.IsNullOrWhiteSpace(transcript) && NonSpeechAnnotationRegex().IsMatch(transcript);
     }
 
-    [GeneratedRegex(@"^\s*(?:(?:\[[^\[\]]*\]|\([^()]*\))[\s.,!?]*)+$")]
+    // Separators may be any run of non-word characters (":", " - ", "♪"), but never a bracket, so
+    // they can't overlap a marker and backtrack.
+    [GeneratedRegex(@"^[^\w\[\]()]*(?:(?:\[[^\[\]]*\]|\([^()]*\))[^\w\[\]()]*)+$")]
     private static partial Regex NonSpeechAnnotationRegex();
 
     private static string Normalize(string value)

@@ -212,6 +212,10 @@ public sealed class WhisperHallucinationFilterTests
     [InlineData("(wind blowing)")]
     [InlineData("[BLANK_AUDIO] [BLANK_AUDIO]")]
     [InlineData("[MUSIC].")]
+    [InlineData("[MUSIC]:")]
+    [InlineData("[MUSIC] - [APPLAUSE]")]
+    [InlineData("- [MUSIC] -")]
+    [InlineData("♪ (music) ♪")]
     public void IsNonSpeechAnnotation_TrueForMarkerOnlyTranscript(string transcript)
     {
         Assert.True(WhisperHallucinationFilter.IsNonSpeechAnnotation(transcript));
@@ -225,6 +229,9 @@ public sealed class WhisperHallucinationFilterTests
     [InlineData("make it [bold]")]
     [InlineData("[MUSIC] make it shorter")]
     [InlineData("Thank you.")]
+    [InlineData("[MUSIC]: shorter")]
+    [InlineData("[MUSIC] 2")]
+    [InlineData("- ]")]
     public void IsNonSpeechAnnotation_FalseWhenTranscriptHasWordsOrIsEmpty(string? transcript)
     {
         Assert.False(WhisperHallucinationFilter.IsNonSpeechAnnotation(transcript));
