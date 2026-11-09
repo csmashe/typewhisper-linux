@@ -3018,6 +3018,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                     InsertionResult.Failed when _textInsertion.LastTypingDeliveredPartialText =>
                         "Text insertion failed partway through typing. Some of the dictated text may "
                         + "already be in the target app — check before dictating again.",
+                    InsertionResult.Failed
+                        when _textInsertion.LastFailureReason is InsertionFailureReason.WtypeXWaylandTarget =>
+                        Localization.Loc.Instance["TextInsertion.WtypeXWaylandFailed"],
                     InsertionResult.Failed =>
                         "Text insertion failed. Dictated text could not be copied or pasted.",
                     InsertionResult.NoText when commandResult.CancelInsertion =>
@@ -4420,7 +4423,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             InsertionFailureReason.YdotoolSocketUnreachable =>
                 "Copied to clipboard. ydotool socket not reachable — open Settings → Text insertion to check daemon status.",
             InsertionFailureReason.WtypeXWaylandTarget =>
-                "Copied to clipboard. wtype can't type into XWayland apps — set up ydotool from Settings → Text insertion to enable auto-paste.",
+                Localization.Loc.Instance["TextInsertion.WtypeXWaylandClipboardFallback"],
             InsertionFailureReason.NoWaylandTypingTool =>
                 $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
             InsertionFailureReason.LockedFieldUnavailable =>

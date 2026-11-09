@@ -1302,6 +1302,8 @@
   "TextInsertion.Title": "Text insertion",
   "TextInsertion.WtypeInstalledWaylandOnly": "Installed (Wayland only).",
   "TextInsertion.WtypeUnsupportedCompositor": "Installed, but this compositor doesn't support wtype's virtual-keyboard protocol.",
+  "TextInsertion.WtypeXWaylandClipboardFallback": "Copied to clipboard. wtype can't type into XWayland apps — set up ydotool from Settings → Text insertion to enable auto-paste.",
+  "TextInsertion.WtypeXWaylandFailed": "Text insertion failed. wtype can't type into XWayland apps — set up ydotool from Settings → Text insertion.",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "Installed — XWayland windows only.",
   "TextInsertion.XtermClipboardFallback": "Copied to clipboard. xterm has no default shortcut for pasting it, so paste it with your own clipboard binding.",
   "TextInsertion.YdotoolActivationFailed": "The ydotool root files were published, but activation failed.",

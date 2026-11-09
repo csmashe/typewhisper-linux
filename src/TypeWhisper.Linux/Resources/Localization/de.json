@@ -1302,6 +1302,8 @@
   "TextInsertion.Title": "Texteinfügung",
   "TextInsertion.WtypeInstalledWaylandOnly": "Installiert (nur Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Installiert, aber dieser Compositor unterstützt das Virtual-Keyboard-Protokoll von wtype nicht.",
+  "TextInsertion.WtypeXWaylandClipboardFallback": "In die Zwischenablage kopiert. wtype kann nicht in XWayland-Apps tippen – richten Sie ydotool unter Einstellungen → Texteinfügung ein, um automatisches Einfügen zu aktivieren.",
+  "TextInsertion.WtypeXWaylandFailed": "Texteinfügung fehlgeschlagen. wtype kann nicht in XWayland-Apps tippen – richten Sie ydotool unter Einstellungen → Texteinfügung ein.",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "Installiert — nur XWayland-Fenster.",
   "TextInsertion.XtermClipboardFallback": "In die Zwischenablage kopiert. xterm hat standardmäßig kein Tastenkürzel zum Einfügen. Fügen Sie den Text mit Ihrer eigenen Belegung ein.",
   "TextInsertion.YdotoolActivationFailed": "Die ydotool-Systemdateien wurden installiert, aber ihre Aktivierung ist fehlgeschlagen.",

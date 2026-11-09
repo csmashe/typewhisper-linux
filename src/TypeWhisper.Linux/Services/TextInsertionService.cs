@@ -1934,11 +1934,18 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
         var anyAttempted = false;
         var skippedWtypeForXWayland = false;
+        var skippedBackendForThisText = false;
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- body awaits and mutates state; the explicit disabled-backend guard is clearer than a LINQ Where
         foreach (var backend in chain)
         {
-            if (disabled.Contains(backend) || backend == skip)
+            if (disabled.Contains(backend))
             {
+                continue;
+            }
+
+            if (backend == skip)
+            {
+                skippedBackendForThisText = true;
                 continue;
             }
 
@@ -1962,7 +1969,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
         }
 
-        if (!anyAttempted)
+        // A working backend left out only for this text (ydotool for non-ASCII) is no
+        // setup gap, so neither setup hint applies.
+        if (!anyAttempted && !skippedBackendForThisText)
         {
             LastFailureReason = skippedWtypeForXWayland
                 ? InsertionFailureReason.WtypeXWaylandTarget

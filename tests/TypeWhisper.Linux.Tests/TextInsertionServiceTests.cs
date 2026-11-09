@@ -3486,6 +3486,24 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTargetWithNonAsciiText_ReportsNoSetupGap()
+    {
+        // Auto keeps non-ASCII off ydotool, but ydotool is set up, so no setup hint applies.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(true)
+        );
+
+        Assert.False(await platform.TypeTextAsync("café", unicodeBackendsOnly: true));
+
+        Assert.Equal(InsertionFailureReason.None, platform.LastFailureReason);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_HyprlandNativeWaylandTarget_KeepsWtype()
     {
         var runner = new RecordingProcessRunner();
