@@ -985,6 +985,8 @@
   "ProfilesContext.UseCurrentApp": "現在のアプリを使用",
   "ProfilesContext.UseCurrentDomain": "現在のドメインを使用",
   "PromptPalette.ActionPluginUnavailable": "設定されたアクションプラグイン「{0}」は利用できません。無効化、削除、または名前が変更された可能性があります。",
+  "PromptPalette.FocusChangedCopied": "プロンプトの実行中にフォーカスが別のウィンドウに移ったため、結果は貼り付けられませんでした。結果はクリップボードにコピーされたので、目的の場所に貼り付けてください。",
+  "PromptPalette.FocusChangedNotCopied": "プロンプトの実行中にフォーカスが別のウィンドウに移ったため、結果は貼り付けられず、クリップボードにもコピーできませんでした。",
   "PromptPalette.NoActions": "アクションが見つかりません",
   "PromptPalette.SearchPlaceholder": "プロンプトアクションを検索",
   "PromptPalette.Title": "プロンプトパレット",

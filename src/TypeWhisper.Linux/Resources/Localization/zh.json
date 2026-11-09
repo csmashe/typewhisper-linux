@@ -985,6 +985,8 @@
   "ProfilesContext.UseCurrentApp": "使用当前应用",
   "ProfilesContext.UseCurrentDomain": "使用当前域名",
   "PromptPalette.ActionPluginUnavailable": "已配置的操作插件“{0}”不可用。它可能已被禁用、移除或重命名。",
+  "PromptPalette.FocusChangedCopied": "提示运行期间焦点移到了另一个窗口，因此结果未被粘贴。结果已复制到剪贴板，请粘贴到需要的位置。",
+  "PromptPalette.FocusChangedNotCopied": "提示运行期间焦点移到了另一个窗口，因此结果未被粘贴，也无法复制到剪贴板。",
   "PromptPalette.NoActions": "未找到操作",
   "PromptPalette.SearchPlaceholder": "搜索提示词操作",
   "PromptPalette.Title": "提示词面板",
