@@ -393,8 +393,12 @@ public sealed class GemmaLocalPlugin
                     ct)
                 .ConfigureAwait(false);
 
-            // A selection changed meanwhile wins: the load then discards this model.
-            return LoadedModelId == modelId
+            // A selection changed meanwhile wins, even if this model was already loaded.
+            bool ready;
+            lock (_selectionLock)
+                ready = SelectedModelId == modelId && LoadedModelId == modelId;
+
+            return ready
                 ? new PluginSettingsValidationResult(true, Loc.L("Settings.ModelReady"))
                 : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelSelectedNotLoaded"));
         }

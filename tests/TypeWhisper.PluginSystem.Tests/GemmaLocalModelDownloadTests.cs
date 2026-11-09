@@ -31,6 +31,13 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
         new GemmaModelFile(s_pinnedBytes.Length, Sha256(s_pinnedBytes)),
         [new GemmaModelFile(s_earlierBytes.Length, Sha256(s_earlierBytes))]);
 
+    private static readonly GemmaModelDefinition s_otherModel = s_model with
+    {
+        Id = "other-model",
+        DisplayName = "Other Model",
+        FileName = "other-model.gguf",
+    };
+
     private readonly string _root = Path.Join(Path.GetTempPath(), "tw-gemma-" + Guid.NewGuid().ToString("N"));
     private readonly string _modelDir;
     private readonly string _modelPath;
@@ -312,6 +319,26 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadAction_SelectionChangedWhileAnotherModelStaysLoaded_IsNotReported()
+    {
+        using var plugin = await CreateAsync(new RangeHandler(s_pinnedBytes), s_model, s_otherModel);
+        await plugin.SetSettingValueAsync("selectedModel", ModelId);
+        await plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, CancellationToken.None);
+        Assert.Equal(ModelId, plugin.LoadedModelId);
+        // ReSharper disable once AccessToDisposedClosure -- the plugin raises the event only while the awaited action runs, before disposal.
+        plugin.SettingsActivityChanged += message =>
+        {
+            if (message == "Settings.Loading")
+                plugin.SelectModel(s_otherModel.Id);
+        };
+
+        var result = await plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.ModelSelectedNotLoaded", result.Message);
+    }
+
+    [Fact]
     public async Task DownloadAction_WithoutASelection_AsksForOne()
     {
         var handler = new RangeHandler(s_pinnedBytes);
@@ -361,12 +388,12 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
         Assert.Null(plugin.LoadedModelId);
     }
 
-    private async Task<GemmaLocalPlugin> CreateAsync(HttpMessageHandler handler)
+    private async Task<GemmaLocalPlugin> CreateAsync(HttpMessageHandler handler, params GemmaModelDefinition[] models)
     {
         var plugin = new GemmaLocalPlugin(
             null,
             GemmaLocalPlugin.EnsureRequestedModelIsActive,
-            [s_model],
+            models.Length > 0 ? models : [s_model],
             handler)
         {
             SpaceProbe = _ => long.MaxValue,
