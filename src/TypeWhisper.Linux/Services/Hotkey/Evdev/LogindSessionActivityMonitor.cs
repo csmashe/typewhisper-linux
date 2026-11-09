@@ -20,6 +20,9 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
 
     private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(4);
 
+    // Lockers that report state set LockedHint within moments of the Lock request.
+    private static readonly TimeSpan s_defaultLockConfirmationDelay = TimeSpan.FromSeconds(3);
+
     private static readonly MessageValueReader<string> s_readObjectPath =
         static (message, _) => message.GetBodyReader().ReadObjectPath().ToString();
 
@@ -55,7 +58,10 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
     };
 
     private readonly Lock _lock = new();
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly TimeSpan _lockConfirmationDelay;
     private readonly List<IDisposable> _subscriptions = [];
+    private readonly Func<string?> _systemBusAddress;
 
     private bool _active = true;
     private DBusConnection? _connection;
@@ -69,6 +75,18 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
     private int _loggedUnavailable;
     private string? _sessionPath;
     private long _stateVersion;
+
+    public LogindSessionActivityMonitor()
+        : this(static () => DBusAddress.System, s_defaultLockConfirmationDelay) { }
+
+    internal LogindSessionActivityMonitor(
+        Func<string?> systemBusAddress,
+        TimeSpan lockConfirmationDelay
+    )
+    {
+        _systemBusAddress = systemBusAddress;
+        _lockConfirmationDelay = lockConfirmationDelay;
+    }
 
     public bool IsInputAllowed
     {
@@ -110,6 +128,8 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
             transport = DetachTransport_NoLock();
         }
 
+        _lifetime.Cancel();
+        _lifetime.Dispose();
         DisposeTransport(transport);
         return ValueTask.CompletedTask;
     }
@@ -125,7 +145,7 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
         var ownedSubscriptions = new List<IDisposable>();
         try
         {
-            var address = DBusAddress.System
+            var address = _systemBusAddress()
                 ?? throw new LogindAbsentException("No system bus address available.");
             var connection = new DBusConnection(address);
             ownedConnection = connection;
@@ -484,8 +504,57 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
             return;
         }
 
-        // Lock is an authoritative fail-closed hint: block immediately.
+        // Lock is only a request, like Unlock: block now, then let LockedHint decide. Lockers
+        // such as hyprlock never set it or send Unlock, so the block would otherwise never lift.
         ApplySignalState(null, true);
+        QueueLockConfirmation();
+    }
+
+    private void QueueLockConfirmation()
+    {
+        DBusConnection? connection;
+        string? sessionPath;
+        CancellationToken lifetime;
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            connection = _connection;
+            sessionPath = _sessionPath;
+            lifetime = _lifetime.Token;
+        }
+
+        if (connection is null || sessionPath is null)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(_lockConfirmationDelay, lifetime).ConfigureAwait(false);
+                var wasAllowed = IsInputAllowed;
+                await RefreshPropertiesAsync(connection, sessionPath).ConfigureAwait(false);
+                if (!wasAllowed && IsInputAllowed)
+                {
+                    Trace.WriteLine(
+                        $"[SessionActivityMonitor] LockedHint is still false {_lockConfirmationDelay.TotalSeconds:0.#}s after the Lock request, so the screen locker does not report its state; evdev input is enabled again."
+                    );
+                }
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+                // Disposed while waiting.
+            }
+            catch (Exception ex)
+            {
+                ScheduleUnavailableFallback(ex);
+            }
+        }, lifetime);
     }
 
     private void HandleUnlockSignal(
@@ -563,6 +632,9 @@ internal sealed partial class LogindSessionActivityMonitor : ISessionActivityMon
         }
 
         _isInputAllowed = allowed;
+        Trace.WriteLine(
+            $"[SessionActivityMonitor] evdev input {(allowed ? "enabled" : "blocked")} (session active: {_active}, locked: {_lockedHint})."
+        );
         return InputAllowedChanged;
     }
 
