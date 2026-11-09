@@ -1274,9 +1274,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedProfileSummary));
         OnPropertyChanged(nameof(SelectedProfileDisplayName));
         OnPropertyChanged(nameof(MatchStatusText));
-        if (_browserStatusIsState)
+        if (_browserStatusResult is null)
         {
             RefreshBrowserAccessibilityStatus();
+        }
+        else
+        {
+            BrowserAccessibilityStatusMessage = _browserStatusResult();
         }
     }
 
@@ -1631,8 +1635,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
         // Re-evaluate panel state: Enable should disappear and Revert should appear together.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = FormatBrowserSetupResult(result);
-        _browserStatusIsState = false;
+        ShowBrowserStatusResult(() => FormatBrowserSetupResult(result));
     }
 
     internal static string FormatBrowserSetupResult(BrowserAccessibilitySetupHelper.SetupResult result)
@@ -1656,8 +1659,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
             : failure;
     }
 
-    // The computed browser status follows a language switch; a setup result keeps its wording.
-    private bool _browserStatusIsState;
+    // Rewords the last setup/revert result on a language switch; null while the computed status shows.
+    private Func<string>? _browserStatusResult;
+
+    internal void ShowBrowserStatusResult(Func<string> format)
+    {
+        _browserStatusResult = format;
+        BrowserAccessibilityStatusMessage = format();
+    }
 
     private void RefreshBrowserAccessibilityStatus()
     {
@@ -1693,7 +1702,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         // Offer Revert whenever anything was installed, including partial state.
         CanRevertBrowserAccessibility = hasAnyInstall;
-        _browserStatusIsState = true;
+        _browserStatusResult = null;
 
         OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
     }
@@ -1730,8 +1739,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
         // Refresh first so the state message doesn't overwrite the revert result.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = FormatBrowserRevertResult(result);
-        _browserStatusIsState = false;
+        ShowBrowserStatusResult(() => FormatBrowserRevertResult(result));
     }
 
     internal static string FormatBrowserRevertResult(BrowserAccessibilitySetupHelper.SetupResult result)

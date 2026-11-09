@@ -190,6 +190,50 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Browser_result_follows_an_interface_language_switch()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = new ProfilesSectionViewModel(
+                service,
+                activeWindow.Object,
+                pluginManager,
+                promptActions,
+                _hotkeys,
+                Mock.Of<IDetectionFailureTracker>(),
+                new GnomeWindowCallsSetupHelper(),
+                new BrowserAccessibilitySetupHelper(),
+                _uiOperations
+            );
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "ignored")
+            {
+                RemovedLaunchers = ["firefox.desktop"],
+            };
+
+            sut.ShowBrowserStatusResult(() => ProfilesSectionViewModel.FormatBrowserRevertResult(result));
+            Assert.StartsWith("Browser accessibility integration removed.", sut.BrowserAccessibilityStatusMessage, StringComparison.Ordinal);
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.Equal(
+                ProfilesSectionViewModel.FormatBrowserRevertResult(result),
+                sut.BrowserAccessibilityStatusMessage
+            );
+            Assert.StartsWith("Browser-Barrierefreiheitsintegration entfernt.", sut.BrowserAccessibilityStatusMessage, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void Plain_browserRevertResult_names_only_the_removal()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;
