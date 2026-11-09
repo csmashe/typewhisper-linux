@@ -676,7 +676,20 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
             try
             {
-                if (LastForceDisabledIsNegOne(File.ReadAllText(path)) is { } isNegOne)
+                var bytes = File.ReadAllBytes(path);
+                // Firefox parses pref files as UTF-8 bytes, so a UTF-16 or UTF-32 file sets nothing.
+                if (AtomicFileWriter.StartsWithNonUtf8ByteOrderMark(bytes))
+                {
+                    continue;
+                }
+
+                var body = bytes.AsSpan();
+                if (body.StartsWith(Encoding.UTF8.Preamble))
+                {
+                    body = body[Encoding.UTF8.Preamble.Length..];
+                }
+
+                if (LastForceDisabledIsNegOne(Encoding.UTF8.GetString(body)) is { } isNegOne)
                 {
                     return isNegOne;
                 }

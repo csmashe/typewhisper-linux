@@ -296,10 +296,7 @@ internal static partial class AtomicFileWriter
     {
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
         var span = bytes.AsSpan();
-        if (span.StartsWith(Encoding.UTF32.Preamble)
-            || span.StartsWith(new UTF32Encoding(true, true).Preamble)
-            || span.StartsWith(Encoding.Unicode.Preamble)
-            || span.StartsWith(Encoding.BigEndianUnicode.Preamble))
+        if (StartsWithNonUtf8ByteOrderMark(span))
         {
             throw new NonUtf8FileException(
                 $"'{path}' is not UTF-8 (it starts with a UTF-16 or UTF-32 byte order mark). "
@@ -322,6 +319,14 @@ internal static partial class AtomicFileWriter
                 ex
             );
         }
+    }
+
+    internal static bool StartsWithNonUtf8ByteOrderMark(ReadOnlySpan<byte> bytes)
+    {
+        return bytes.StartsWith(Encoding.UTF32.Preamble)
+            || bytes.StartsWith(new UTF32Encoding(true, true).Preamble)
+            || bytes.StartsWith(Encoding.Unicode.Preamble)
+            || bytes.StartsWith(Encoding.BigEndianUnicode.Preamble);
     }
 
     private static readonly UTF8Encoding s_strictUtf8 = new(
