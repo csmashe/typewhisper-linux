@@ -522,6 +522,27 @@ public sealed class DefaultDeviceWatcherFallbackTests
         Assert.True(registration.Disposed);
     }
 
+    [Fact]
+    public void PactlWatcher_StillStarts_WhenSigtermRegistrationFails()
+    {
+        var reader = new BlockingSubscriptionReader();
+        var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            subscriptionFactory: () => PactlSubscription.ForTest(reader, onKill: reader.Release),
+            registerSigtermHandler: _ => throw new IOException("sigaction failed"));
+
+        try
+        {
+            sut.Start(() => { });
+
+            Assert.True(sut.IsRunningForTest);
+        }
+        finally
+        {
+            sut.Dispose();
+        }
+    }
+
     private sealed class TrackingDisposable : IDisposable
     {
         public bool Disposed { get; private set; }

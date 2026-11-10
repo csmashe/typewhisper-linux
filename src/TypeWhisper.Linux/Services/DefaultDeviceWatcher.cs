@@ -412,7 +412,7 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
             // A new session retires any retry worker still sleeping from the previous one, so
             // the one scheduled below is the only one that can exist for it.
             _session++;
-            _sigtermRegistration ??= _registerSigtermHandler(Dispose);
+            TryRegisterSigtermHandlerLocked();
             if (SpawnLocked() is null)
             {
                 // pactl was reported available but would not launch. Retry on the same bounded
@@ -805,6 +805,27 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
 
         sigtermRegistration?.Dispose();
         Stop();
+    }
+
+    private void TryRegisterSigtermHandlerLocked()
+    {
+        if (_sigtermRegistration is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            _sigtermRegistration = _registerSigtermHandler(Dispose);
+        }
+        catch (IOException ex)
+        {
+            // Start must not throw. Keep watching without the SIGTERM cleanup; the next
+            // Start retries the registration.
+            Trace.WriteLine(
+                $"[PactlDefaultDeviceWatcher] Failed to register SIGTERM handler: {ex.Message}"
+            );
+        }
     }
 
     // Left uncancelled so SIGTERM still terminates the process.
