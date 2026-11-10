@@ -346,6 +346,65 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
         );
     }
 
+    [Fact]
+    public void TryHarvestFocusedContext_CollectionMatch_FindsFieldBeyondTheWalkBudget()
+    {
+        const string title = "QA Reference Browser — Mozilla Firefox";
+        var runner = new FakeProcessRunner
+        {
+            Default = new ProcessRunResult(true, false, 0, "('unix:path=/tmp/a11y-test',)\n", ""),
+        };
+        // Browser chrome ahead of the page field uses up the 40-node walk.
+        var chrome = Enumerable.Range(0, 60).Select(i => $"/org/a11y/atspi/accessible/chrome-{i}");
+        string[] focusedRule =
+        [
+            "(aiia{ss}iaiiasib)uib",
+            "2", "4096", "0", "2",
+            "0", "1", "0", "1", "0", "1", "false",
+            "1", "1", "true",
+        ];
+        // at-spi2-atk answers only a valid rule: INVALID match types or sort order match nothing.
+        runner.RespondWith(
+            (file, args) => file == "busctl" && args.Contains(AppPath) && args.Contains("GetMatches")
+                            && args.Skip(7).SequenceEqual(focusedRule),
+            $@"a(so) 1 "":1.5"" ""{EntryPath}""" + "\n"
+        );
+        Respond(runner, "/org/a11y/atspi/accessible/root", "GetChildren", $@"a(so) 1 "":1.5"" ""{AppPath}""");
+        Respond(runner, AppPath, "Name", @"s ""Firefox""");
+        Respond(
+            runner,
+            AppPath,
+            "GetInterfaces",
+            @"as 2 ""org.a11y.atspi.Accessible"" ""org.a11y.atspi.Collection"""
+        );
+        Respond(runner, AppPath, "GetChildren", $@"a(so) 1 "":1.5"" ""{FramePath}""");
+        Respond(runner, FramePath, "GetRole", "u 23");
+        Respond(runner, FramePath, "Name", $@"s ""{title}""");
+        Respond(
+            runner,
+            FramePath,
+            "GetChildren",
+            $"a(so) 61 {string.Join(" ", chrome.Append(EntryPath).Select(path => $@""":1.5"" ""{path}"""))}"
+        );
+        Respond(runner, EntryPath, "GetRole", "u 79");
+        Respond(runner, EntryPath, "GetState", $"au 2 {(1u << 12) | (1u << 25) | (1u << 30)} 0");
+        Respond(runner, EntryPath, "Parent", $@"(so) "":1.5"" ""{FramePath}""");
+        Respond(
+            runner,
+            EntryPath,
+            "GetInterfaces",
+            @"as 2 ""org.a11y.atspi.Accessible"" ""org.a11y.atspi.Text"""
+        );
+        Respond(runner, EntryPath, "CharacterCount", "i 25");
+        Respond(runner, EntryPath, "GetText", @"s ""QA_REFERENCE_SCREEN_ASTER""");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Equal(
+            "QA_REFERENCE_SCREEN_ASTER",
+            extractor.TryHarvestFocusedContext("firefox", title, "TypeWhisper")
+        );
+    }
+
     // Registry root -> Chrome app -> active frame -> focused, editable address bar.
     private static FakeProcessRunner BuildChromeTree(
         string addressText, bool addressFocused = true, string? leadingChildPath = null,

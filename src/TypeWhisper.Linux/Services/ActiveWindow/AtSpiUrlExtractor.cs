@@ -502,9 +502,8 @@ public sealed partial class AtSpiUrlExtractor
 
     private AccessibleRef? TryGetCollectionFocusedMatch(string address, AccessibleRef app)
     {
-        // MatchRule signature (aiia{ss}iaiiasib): states=[1<<12, 0] (STATE_FOCUSED = bit 12),
-        // stateMatch=ANY(2), empty attributes/roles/interfaces, invert=false; then
-        // sortby=CANONICAL(0), count=1, traverse=true. Result is a(so) like GetChildren.
+        // Empty attribute/role/interface sets need MatchAll and sorting needs CANONICAL (1):
+        // at-spi2-atk rejects INVALID (0) for either and returns no matches.
         var output = RunBusctlCall(
             address,
             app.BusName,
@@ -512,20 +511,12 @@ public sealed partial class AtSpiUrlExtractor
             AtSpiCollectionInterface,
             "GetMatches",
             "(aiia{ss}iaiiasib)uib",
-            "2",
-            "4096",
-            "0",
-            "2",
-            "0",
-            "0",
-            "0",
-            "0",
-            "0",
-            "0",
-            "false",
-            "0",
-            "1",
-            "true"
+            // states: FOCUSED, match any
+            "2", (1 << AtSpiStateFocused).ToString(), "0", AtSpiMatchAny,
+            // attributes, roles, interfaces: none, match all; invert: false
+            "0", AtSpiMatchAll, "0", AtSpiMatchAll, "0", AtSpiMatchAll, "false",
+            // Sort canonical, first match only, traverse.
+            "1", "1", "true"
         );
         if (string.IsNullOrWhiteSpace(output))
         {
