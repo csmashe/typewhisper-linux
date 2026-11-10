@@ -2026,6 +2026,25 @@ public sealed partial class HttpApiService : IDisposable
         return await RunTranscriptionAsync(payload.Path, opts, ct);
     }
 
+    // Plugin messages are already credential-redacted, so they can be returned as-is.
+    private static HttpApiResponse MapTranscriptionProviderFailure(PluginRequestException ex)
+    {
+        var (status, reason) = ex.FailureKind switch
+        {
+            PluginRequestFailureKind.Network
+                or PluginRequestFailureKind.Timeout
+                or PluginRequestFailureKind.ServerError => (503, "provider_unavailable"),
+            PluginRequestFailureKind.RateLimit => (503, "provider_rate_limited"),
+            PluginRequestFailureKind.Configuration => (503, "provider_not_configured"),
+            PluginRequestFailureKind.Authentication
+                or PluginRequestFailureKind.Permission => (502, "provider_authentication_failed"),
+            PluginRequestFailureKind.InvalidRequest
+                or PluginRequestFailureKind.RequestTooLarge => (502, "provider_rejected_request"),
+            _ => (502, "provider_failed"),
+        };
+        return (status, Serialize(new { error = ex.Message, reason }));
+    }
+
     private async Task<HttpApiResponse> RunTranscriptionAsync(
         string audioPath,
         TranscriptionRunOptions opts,
@@ -2147,14 +2166,22 @@ public sealed partial class HttpApiService : IDisposable
                 ),
                 _dictionary.GetEnabledTerms()
             );
-            result = await plugin.TranscribeAsync(
-                wav,
-                languageSelection,
-                languageHints,
-                opts.Task == TranscriptionTask.Translate,
-                prompt,
-                ct
-            );
+            try
+            {
+                result = await plugin.TranscribeAsync(
+                    wav,
+                    languageSelection,
+                    languageHints,
+                    opts.Task == TranscriptionTask.Translate,
+                    prompt,
+                    ct
+                );
+            }
+            catch (PluginRequestException ex) when (!ct.IsCancellationRequested)
+            {
+                Trace.WriteLine($"[HttpApiService] Transcription provider failed ({ex.FailureKind}): {ex.Message}");
+                return MapTranscriptionProviderFailure(ex);
+            }
             engineProviderId = plugin.ProviderId;
             selectedModelId = plugin.SelectedModelId;
             engineSupportsTranslation = plugin.SupportsTranslation;

@@ -1058,6 +1058,62 @@ public sealed class HttpApiUnixSocketTests
         }
     }
 
+    [Theory]
+    [InlineData(PluginRequestFailureKind.Network, HttpStatusCode.ServiceUnavailable, "provider_unavailable")]
+    [InlineData(PluginRequestFailureKind.Timeout, HttpStatusCode.ServiceUnavailable, "provider_unavailable")]
+    [InlineData(PluginRequestFailureKind.ServerError, HttpStatusCode.ServiceUnavailable, "provider_unavailable")]
+    [InlineData(PluginRequestFailureKind.RateLimit, HttpStatusCode.ServiceUnavailable, "provider_rate_limited")]
+    [InlineData(PluginRequestFailureKind.Configuration, HttpStatusCode.ServiceUnavailable, "provider_not_configured")]
+    [InlineData(PluginRequestFailureKind.Authentication, HttpStatusCode.BadGateway, "provider_authentication_failed")]
+    [InlineData(PluginRequestFailureKind.Permission, HttpStatusCode.BadGateway, "provider_authentication_failed")]
+    [InlineData(PluginRequestFailureKind.InvalidRequest, HttpStatusCode.BadGateway, "provider_rejected_request")]
+    [InlineData(PluginRequestFailureKind.RequestTooLarge, HttpStatusCode.BadGateway, "provider_rejected_request")]
+    [InlineData(PluginRequestFailureKind.EmptyResponse, HttpStatusCode.BadGateway, "provider_failed")]
+    [InlineData(PluginRequestFailureKind.Unknown, HttpStatusCode.BadGateway, "provider_failed")]
+    public async Task LocalFileEndpointReportsProviderFailureInsteadOfInternalError(
+        PluginRequestFailureKind kind, HttpStatusCode expectedStatus, string expectedReason)
+    {
+        var dictionary = new Mock<IDictionaryService>();
+        dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
+        using var fixture = new ApiFixture(
+            transcriptionEngine: new FailingTranscriptionEngine(
+                new PluginRequestException("Network error: Connection refused (127.0.0.1:19991)", kind)),
+            dictionary: dictionary.Object,
+            audioProbeResult: new ProcessRunOutcome(
+                ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var content = new StringContent(
+            JsonSerializer.Serialize(new { path = fixture.CreateSupportedAudioFile() }),
+            Encoding.UTF8,
+            "application/json");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(expectedReason, json.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(
+            "Network error: Connection refused (127.0.0.1:19991)",
+            json.RootElement.GetProperty("error").GetString());
+    }
+
+    private sealed class FailingTranscriptionEngine(Exception failure) : ITranscriptionEngineRole
+    {
+        public string PluginId => "test-failing";
+        public string ProviderId => "test-failing";
+        public string ProviderDisplayName => "Test failing";
+        public bool IsConfigured => true;
+        public IReadOnlyList<PluginModelInfo> TranscriptionModels => [new(SelectedModelId, "Test")];
+        public string SelectedModelId => "test";
+        public bool SupportsTranslation => false;
+
+        public void SelectModel(string modelId) { }
+        public Task<PluginTranscriptionResult> TranscribeAsync(
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct) =>
+            Task.FromException<PluginTranscriptionResult>(failure);
+    }
+
     [Fact]
     public async Task LocalFileEndpointClipsDictionaryPromptToEngineBudget()
     {
