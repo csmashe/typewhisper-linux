@@ -1285,6 +1285,7 @@
   "TextInsertion.InstallYdotoolFirst": "Zuerst ydotool installieren",
   "TextInsertion.InstallYdotoolFirstHint": "ydotool ist noch nicht installiert. Installieren Sie es über Ihren Paketmanager und kehren Sie dann hierher zurück, um die Ein-Klick-Einrichtung abzuschließen.",
   "TextInsertion.Installed": "Installiert.",
+  "TextInsertion.NonAsciiTypingClipboardFallback": "In die Zwischenablage kopiert. Direkte Eingabe kann diese Zeichen hier nicht eingeben, da ydotool nur mit dem US-Tastaturlayout tippt. Fügen Sie den Text mit Strg+V ein oder stellen Sie diese App auf Auto oder Aus Zwischenablage einfügen um.",
   "TextInsertion.NotInstalled": "Nicht installiert.",
   "TextInsertion.RefreshStatus": "Status aktualisieren",
   "TextInsertion.RemovalFailed": "Entfernen fehlgeschlagen: {0}",

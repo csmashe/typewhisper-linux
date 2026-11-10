@@ -1991,6 +1991,23 @@ public sealed class TextInsertionServiceTests
     }
 
     [Theory]
+    [InlineData("streamed text", false)]
+    [InlineData("café au lait", true)]
+    public async Task TypeStreamChunkAsync_keeps_non_ascii_chunks_off_ydotool(
+        string chunk,
+        bool expectedUnicodeBackendsOnly
+    )
+    {
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.TypeStreamChunkAsync(chunk);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expectedUnicodeBackendsOnly, platform.LastTypeUsedUnicodeBackendsOnly);
+    }
+
+    [Theory]
     [InlineData("firefox", "Example")]
     [InlineData("zen", "Teamwork — Zen Browser")]
     [InlineData(null, "Teamwork — Zen Browser")]
@@ -2319,9 +2336,8 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task InsertTextAsync_direct_typing_strategy_still_types_non_ascii_when_backend_cannot()
+    public async Task InsertTextAsync_direct_typing_strategy_types_non_ascii_with_unicode_backends_only()
     {
-        // An explicit DirectTyping choice is the user's call; only Auto reroutes.
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous", CanTypeNonAscii = false };
         var sut = new TextInsertionService(platform);
 
@@ -2333,7 +2349,57 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("café", platform.TypedText);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_direct_typing_strategy_copies_non_ascii_when_only_ydotool_could_type_it()
+    {
+        // ydotool-only Wayland: typing "café" with ydotool would land "caf" and report Typed.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CanTypeNonAscii = false,
+            UnicodeBackendsAvailable = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "python3",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.NonAsciiTypingUnavailable, sut.LastFailureReason);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.Null(platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("café", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_direct_typing_strategy_types_ascii_with_any_backend()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CanTypeNonAscii = false,
+            UnicodeBackendsAvailable = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "cafe",
+            targetProcessName: "python3",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("cafe", platform.TypedText);
         Assert.False(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.Equal("previous", platform.Clipboard);
     }
 
     [Fact]
@@ -3690,6 +3756,24 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_UnicodeOnlyTyping_RunsNothingWhenYdotoolIsTheOnlyBackend()
+    {
+        var runner = new ScriptedProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, false, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("café", unicodeBackendsOnly: true);
+
+        Assert.False(result);
+        Assert.Empty(runner.Calls);
+        Assert.Equal(InsertionFailureReason.NoWaylandTypingTool, platform.LastFailureReason);
+        Assert.False(platform.LastTypingDeliveredPartialText);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_MultilineTyping_PartialDeliveryStopsChainInsteadOfRetyping()
     {
         // Regression (audit §3 M2): wtype types "line one" successfully, then fails
@@ -4177,9 +4261,18 @@ public sealed class TextInsertionServiceTests
 
         public bool LastTypeUsedUnicodeBackendsOnly { get; private set; }
 
+        // false models a chain whose only backend is ydotool, which unicode-only typing skips.
+        public bool UnicodeBackendsAvailable { get; init; } = true;
+
         public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
         {
             LastTypeUsedUnicodeBackendsOnly = unicodeBackendsOnly;
+            if (unicodeBackendsOnly && !UnicodeBackendsAvailable)
+            {
+                LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
+                return Task.FromResult(false);
+            }
+
             return TypeTextAsync(text);
         }
 

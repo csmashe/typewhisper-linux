@@ -1285,6 +1285,7 @@
   "TextInsertion.InstallYdotoolFirst": "Instala primero ydotool",
   "TextInsertion.InstallYdotoolFirstHint": "ydotool aún no está instalado. Instálalo con tu gestor de paquetes y vuelve aquí para completar la configuración con un clic.",
   "TextInsertion.Installed": "Instalado.",
+  "TextInsertion.NonAsciiTypingClipboardFallback": "Texto copiado al portapapeles. La escritura directa no puede introducir estos caracteres aquí porque ydotool solo escribe con la distribución de teclado de EE. UU. Pégalo con Ctrl+V o cambia esta aplicación a Automático o Pegar desde el portapapeles.",
   "TextInsertion.NotInstalled": "No instalado.",
   "TextInsertion.RefreshStatus": "Actualizar estado",
   "TextInsertion.RemovalFailed": "Error al quitar: {0}",

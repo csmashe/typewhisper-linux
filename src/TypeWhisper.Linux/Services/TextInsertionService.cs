@@ -36,6 +36,7 @@ public enum InsertionFailureReason
     PasteRetriesExhausted,
     PartialTypingFailure,
     LockedFieldUnavailable,
+    NonAsciiTypingUnavailable,
 }
 
 public sealed record TextInsertionRequest(
@@ -368,8 +369,9 @@ public sealed class TextInsertionService
 
         if (shouldTypeDirectly)
         {
-            // Auto must not let non-ASCII text fall through to ydotool; paste instead if the others fail.
-            var unicodeBackendsOnly = strategy is not TextInsertionStrategy.DirectTyping && !IsAsciiSafe(text);
+            // ydotool exits 0 after dropping non-ASCII, so such text never goes to it, even under an
+            // explicit DirectTyping preference; Auto pastes instead if the other backends fail.
+            var unicodeBackendsOnly = !IsAsciiSafe(text);
             var directResult = await TypeTextAsync(
                 text,
                 targetWindowId,
@@ -377,6 +379,30 @@ public sealed class TextInsertionService
                 request.LockedFocusTarget,
                 unicodeBackendsOnly
             );
+            if (
+                strategy is TextInsertionStrategy.DirectTyping
+                && unicodeBackendsOnly
+                && directResult is InsertionResult.Failed
+                && !LastTypingDeliveredPartialText
+                && LastFailureReason
+                    is InsertionFailureReason.NoWaylandTypingTool
+                    or InsertionFailureReason.WtypeCompositorUnsupported
+            )
+            {
+                // Only ydotool was left and nothing was typed. Copy rather than paste, since the
+                // user chose typing over a paste shortcut.
+                LastFailureReason = InsertionFailureReason.NonAsciiTypingUnavailable;
+                LogInsertionFallback("Direct typing fell back to clipboard: no available backend types non-ASCII text.");
+                if (!_platform.IsClipboardSetAvailable)
+                {
+                    return InsertionResult.MissingClipboardTool;
+                }
+
+                return await _platform.SetClipboardTextAsync(text)
+                    ? InsertionResult.CopiedToClipboard
+                    : InsertionResult.Failed;
+            }
+
             if (
                 strategy is TextInsertionStrategy.DirectTyping
                 || directResult is not InsertionResult.Failed
@@ -622,7 +648,7 @@ public sealed class TextInsertionService
             return (false, false);
         }
 
-        var ok = await _platform.TypeTextAsync(text);
+        var ok = await _platform.TypeTextAsync(text, unicodeBackendsOnly: !IsAsciiSafe(text));
         return (ok, !ok && _platform.LastTypingDeliveredPartialText);
     }
 

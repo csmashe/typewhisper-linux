@@ -4423,6 +4423,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 $"Copied to clipboard. {_commands.GetSnapshot().PasteToolInstallHint}",
             InsertionFailureReason.LockedFieldUnavailable =>
                 Localization.Loc.Instance["Dictation.LockedFieldGone"],
+            InsertionFailureReason.NonAsciiTypingUnavailable =>
+                Localization.Loc.Instance["TextInsertion.NonAsciiTypingClipboardFallback"],
             InsertionFailureReason.FocusFailed =>
                 "Copied to clipboard. Target window could not be focused for auto-paste — paste with Ctrl+V.",
             _ => "Copied to clipboard (paste with Ctrl+V).",

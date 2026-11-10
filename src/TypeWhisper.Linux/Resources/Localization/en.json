@@ -1285,6 +1285,7 @@
   "TextInsertion.InstallYdotoolFirst": "Install ydotool first",
   "TextInsertion.InstallYdotoolFirstHint": "ydotool isn't installed yet. Install it through your package manager, then come back here to finish the one-click setup.",
   "TextInsertion.Installed": "Installed.",
+  "TextInsertion.NonAsciiTypingClipboardFallback": "Copied to clipboard. Direct typing can't enter these characters here because ydotool types only the US keyboard layout. Paste with Ctrl+V, or switch this app to Auto or Clipboard paste.",
   "TextInsertion.NotInstalled": "Not installed.",
   "TextInsertion.RefreshStatus": "Refresh status",
   "TextInsertion.RemovalFailed": "Removal failed: {0}",

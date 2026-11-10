@@ -1285,6 +1285,7 @@
   "TextInsertion.InstallYdotoolFirst": "Сначала установите ydotool",
   "TextInsertion.InstallYdotoolFirstHint": "ydotool ещё не установлен. Установите его через менеджер пакетов, затем вернитесь сюда, чтобы завершить настройку в один клик.",
   "TextInsertion.Installed": "Установлено.",
+  "TextInsertion.NonAsciiTypingClipboardFallback": "Текст скопирован в буфер обмена. Прямой набор не может ввести здесь эти символы: ydotool печатает только в раскладке US. Вставьте текст с помощью Ctrl+V или переключите это приложение на «Авто» или «Вставка из буфера обмена».",
   "TextInsertion.NotInstalled": "Не установлено.",
   "TextInsertion.RefreshStatus": "Обновить статус",
   "TextInsertion.RemovalFailed": "Не удалось удалить: {0}",
