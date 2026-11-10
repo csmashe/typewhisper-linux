@@ -56,7 +56,7 @@ public sealed class DictationOrchestratorDirectTypingUnicodeTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public Task StreamedSpokenCommand_CopiesNonAsciiInsteadOfTypingIt()
+    public Task SpokenCommand_CopiesNonAsciiInsteadOfTypingIt()
     {
         return BoundedTest.RunAsync(async () =>
         {
@@ -74,6 +74,31 @@ public sealed class DictationOrchestratorDirectTypingUnicodeTests
             Assert.Empty(fixture.InsertionPlatform.Typed);
             Assert.Equal(0, fixture.InsertionPlatform.PasteAttemptCount);
             Assert.Equal(firstDelta + secondDelta, fixture.InsertionPlatform.Clipboard);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task SpokenCommand_WithNonAsciiAfterAsciiChunk_DoesNotLeaveTruncatedText()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            // Streaming would type the ASCII chunk, then fail on the later one and skip the copy.
+            await using var fixture = CreateFixture();
+            fixture.Settings.Save(fixture.Settings.Current with { CommandModeEnabled = true });
+            const string firstDelta = "Steam curls above the morning cup, ";
+            const string secondDelta = "café au lait — früh.";
+            fixture.Plugin.EnqueueText("TypeWhisper write a line about coffee");
+            fixture.Llm.EnqueueStream(firstDelta, secondDelta);
+
+            var result = await RunAsync(fixture);
+
+            Assert.Equal("ready", result.Status);
+            Assert.Equal(firstDelta + secondDelta, result.Text);
+            Assert.Empty(fixture.InsertionPlatform.Typed);
+            Assert.Equal(0, fixture.InsertionPlatform.PasteAttemptCount);
+            Assert.Equal(firstDelta + secondDelta, fixture.InsertionPlatform.Clipboard);
+            Assert.Equal(0, fixture.Llm.StreamCalls);
         });
     }
 

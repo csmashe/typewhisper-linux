@@ -3525,19 +3525,20 @@ public sealed partial class DictationOrchestrator : IDisposable
             // can introduce a newline; the one-shot insertion can then safely paste multiline text
             // with Ctrl+Shift+V while preserving direct typing for a single-line result. Everything
             // else (copy-only, or an Auto GUI/unknown target the one-shot would paste) also routes
-            // through that one-shot insert. Locked fields also need its exact-focus gate. Auto
-            // also needs a chain that types non-ASCII (not ydotool or X11's xdotool), since a later
-            // chunk may hold it; the one-shot pastes such text.
+            // through that one-shot insert. Locked fields also need its exact-focus gate. Both
+            // strategies also need a chain that types non-ASCII (not ydotool or X11's xdotool):
+            // a later chunk may hold it after earlier ASCII chunks were typed, leaving a truncated
+            // prefix. The one-shot types an ASCII result and pastes or copies a non-ASCII one.
             failureInput = input;
             failurePrompt = action.SystemPrompt;
             var strategy = ResolveInsertionStrategy(context.AppProcess);
             var canStreamDirectly = _settings.Current.AutoPaste
                 && context.LockedFocusField is null
                 && !TextInsertionService.IsTerminalApp(context.AppProcess)
+                && _textInsertion.CanTypeNonAscii
                 && (strategy is TextInsertionStrategy.DirectTyping
                     || (strategy is TextInsertionStrategy.Auto
-                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)
-                        && _textInsertion.CanTypeNonAscii));
+                        && TextInsertionService.AppPrefersDirectTyping(context.AppProcess, context.AppTitle)));
 
             if (!canStreamDirectly)
             {
