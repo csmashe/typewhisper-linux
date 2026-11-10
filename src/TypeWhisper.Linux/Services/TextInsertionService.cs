@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.ActiveWindow;
@@ -420,6 +421,9 @@ public sealed class TextInsertionService
         var previousClipboard = await _platform.TryGetClipboardTextAsync();
         var previousClipboardHasNonTextFormats =
             await _platform.ClipboardHasNonTextFormatsAsync();
+        var previousRichFormats = autoPaste && previousClipboard is not null && previousClipboardHasNonTextFormats
+            ? await _platform.TryCaptureRichClipboardAsync()
+            : null;
         if (!await _platform.SetClipboardTextAsync(text))
         {
             return InsertionResult.Failed;
@@ -558,6 +562,7 @@ public sealed class TextInsertionService
                 text,
                 previousClipboard,
                 previousClipboardHasNonTextFormats,
+                previousRichFormats,
                 pasteWatch,
                 deliveryConfirmed
             );
@@ -907,6 +912,7 @@ public sealed class TextInsertionService
         string pastedText,
         string? previousClipboard,
         bool previousClipboardHasNonTextFormats,
+        IReadOnlyList<ClipboardFormatData>? previousRichFormats,
         IPasteWatch? watch,
         bool? deliveryConfirmed
     )
@@ -976,7 +982,14 @@ public sealed class TextInsertionService
 
             if (previousClipboardHasNonTextFormats)
             {
-                LogInsertionFallback(ClipboardRichRestoreSkippedMessage);
+                if (
+                    previousRichFormats is null
+                    || !await _platform.TryRestoreRichClipboardAsync(previousClipboard, previousRichFormats)
+                )
+                {
+                    LogInsertionFallback(ClipboardRichRestoreSkippedMessage);
+                }
+
                 return;
             }
 
@@ -1313,6 +1326,17 @@ internal interface ITextInsertionPlatform
     /// </summary>
     Task<bool> ClipboardHasNonTextFormatsAsync();
 
+    /// <summary>
+    ///     Reads the clipboard's non-text formats (e.g. <c>text/html</c>) as raw bytes so they
+    ///     can be put back after an insertion. Null when the platform cannot restore them.
+    /// </summary>
+    Task<IReadOnlyList<ClipboardFormatData>?> TryCaptureRichClipboardAsync() =>
+        Task.FromResult<IReadOnlyList<ClipboardFormatData>?>(null);
+
+    /// <summary>Owns the clipboard with <paramref name="text" /> plus every captured format.</summary>
+    Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats) =>
+        Task.FromResult(false);
+
     Task DelayAsync(TimeSpan delay);
     string? GetActiveWindowId();
     Task<bool> ActivateWindowAsync(string windowId);
@@ -1349,6 +1373,7 @@ internal interface ITextInsertionPlatform
 internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
     private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
+    private const int MaxRichClipboardBytes = 16 * 1024 * 1024;
     private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
 
     // X11 TARGETS listings always include protocol/negotiation targets that carry no
@@ -1625,16 +1650,75 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
     }
 
-    internal static bool ListingHasNonTextFormats(string listing)
+    public async Task<IReadOnlyList<ClipboardFormatData>?> TryCaptureRichClipboardAsync()
     {
-        return listing.Split('\n').Any(rawLine =>
+        // wl-copy serves a single MIME type, so it cannot rebuild a multi-format clipboard.
+        if (UsesWaylandClipboard)
         {
-            var target = rawLine.Trim();
-            return target.Length != 0
-                   && !s_textSafeTargets.Contains(target)
-                   && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase);
-        });
+            return null;
+        }
+
+        try
+        {
+            var listing = await RunClipboardReadAsync(["-selection", "clipboard", "-o", "-t", "TARGETS"], MaxRichClipboardBytes)
+                .ConfigureAwait(false);
+            if (listing is null)
+            {
+                return null;
+            }
+
+            var formats = new List<ClipboardFormatData>();
+            var remaining = MaxRichClipboardBytes;
+            foreach (var target in RichTargets(Encoding.UTF8.GetString(listing)))
+            {
+                var data = await RunClipboardReadAsync(["-selection", "clipboard", "-o", "-t", target], remaining)
+                    .ConfigureAwait(false);
+                if (data is null)
+                {
+                    return null;
+                }
+
+                remaining -= data.Length;
+                formats.Add(new ClipboardFormatData(target, data));
+            }
+
+            return formats.Count == 0 ? null : formats;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[TextInsertionService] rich clipboard capture failed: {ex.Message}");
+            return null;
+        }
     }
+
+    public Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats) =>
+        UsesWaylandClipboard ? Task.FromResult(false) : RichClipboardWriter.TrySetAsync(text, formats);
+
+    private async Task<byte[]?> RunClipboardReadAsync(IReadOnlyList<string> args, int maxBytes)
+    {
+        var result = await _ioRunner.RunOneShotAsync(
+            new ProcessCommand("xclip", args),
+            new ProcessOneShotOptions(
+                Timeout: s_clipboardOperationTimeout,
+                StandardOutput: ProcessCaptureMode.Binary,
+                StandardError: ProcessCaptureMode.Discard
+            )
+            {
+                MaximumStandardOutputBytes = maxBytes,
+            }
+        ).ConfigureAwait(false);
+        return result.Succeeded ? result.StandardOutput : null;
+    }
+
+    internal static IEnumerable<string> RichTargets(string listing) =>
+        listing.Split('\n')
+            .Select(rawLine => rawLine.Trim())
+            .Where(target => target.Length != 0
+                             && !s_textSafeTargets.Contains(target)
+                             && !target.StartsWith("text/plain", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal);
+
+    internal static bool ListingHasNonTextFormats(string listing) => RichTargets(listing).Any();
 
     public async Task<bool> SetClipboardTextAsync(string text)
     {

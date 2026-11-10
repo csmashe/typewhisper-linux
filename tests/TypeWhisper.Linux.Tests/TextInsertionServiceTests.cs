@@ -1152,6 +1152,52 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_richer_previous_clipboard_restores_every_captured_format()
+    {
+        ClipboardFormatData[] html = [new("text/html", "<p><b>previous</b></p>"u8.ToArray())];
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardHasNonTextFormats = true,
+            RichFormats = html,
+            PasteSucceeds = true,
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog, confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("previous", platform.Clipboard);
+        Assert.Same(html, platform.RestoredRichFormats);
+        Assert.Empty(errorLog.AddedEntries);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_failed_rich_restore_keeps_dictated_text_and_logs()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardHasNonTextFormats = true,
+            RichFormats = [new ClipboardFormatData("text/html", "<p>previous</p>"u8.ToArray())],
+            RichRestoreSucceeds = false,
+            PasteSucceeds = true,
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog, confirmation);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("new text", platform.Clipboard);
+        var entry = Assert.Single(errorLog.AddedEntries);
+        Assert.Contains("was not restored", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_copy_only_sets_clipboard_without_restore()
     {
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous" };
@@ -2724,6 +2770,16 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public void LinuxTextInsertionPlatform_RichTargets_keeps_only_content_formats()
+    {
+        const string listing =
+            "SAVE_TARGETS\nTIMESTAMP\nTARGETS\ntext/html\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\nSTRING\n"
+            + "text/plain;charset=utf-8\nimage/png\ntext/html\n";
+
+        Assert.Equal(["text/html", "image/png"], LinuxTextInsertionPlatform.RichTargets(listing));
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_WaylandSessionWithXclipRoute_UsesXclipForAllClipboardOperations()
     {
         var runner = new FakeProcessRunner();
@@ -4131,6 +4187,27 @@ public sealed class TextInsertionServiceTests
         public Task<bool> ClipboardHasNonTextFormatsAsync()
         {
             return Task.FromResult(ClipboardHasNonTextFormats);
+        }
+
+        public IReadOnlyList<ClipboardFormatData>? RichFormats { get; init; }
+        public bool RichRestoreSucceeds { get; init; } = true;
+        public IReadOnlyList<ClipboardFormatData>? RestoredRichFormats { get; private set; }
+
+        public Task<IReadOnlyList<ClipboardFormatData>?> TryCaptureRichClipboardAsync()
+        {
+            return Task.FromResult(RichFormats);
+        }
+
+        public Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats)
+        {
+            if (!RichRestoreSucceeds)
+            {
+                return Task.FromResult(false);
+            }
+
+            Clipboard = text;
+            RestoredRichFormats = formats;
+            return Task.FromResult(true);
         }
 
         public Task DelayAsync(TimeSpan delay)
