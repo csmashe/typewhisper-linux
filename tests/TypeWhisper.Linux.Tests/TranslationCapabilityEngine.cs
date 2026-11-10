@@ -6,10 +6,14 @@ namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
 ///     Engine whose models declare translation per model: "multilingual" can, "english-only"
-///     cannot, and "legacy" declares nothing (engine-wide flag only). Records every load,
+///     cannot, and "legacy" declares nothing (engine-wide flag only, set by
+///     <paramref name="legacyEngineSupportsTranslation" />). Records every load,
 ///     selection and transcription so tests can prove a refusal happened before any of them.
 /// </summary>
-internal sealed class TranslationCapabilityEngine(string selectedModelId) : ITranscriptionEngineRole
+internal sealed class TranslationCapabilityEngine(
+    string selectedModelId,
+    bool legacyEngineSupportsTranslation = false
+) : ITranscriptionEngineRole
 {
     private const string Id = "test-translation";
 
@@ -30,7 +34,8 @@ internal sealed class TranslationCapabilityEngine(string selectedModelId) : ITra
 
     // Engine-wide flag a legacy (undeclared) model falls back to.
     public bool SupportsTranslation =>
-        TranscriptionModels.FirstOrDefault(model => model.Id == SelectedModelId)?.SupportsTranslation ?? false;
+        TranscriptionModels.FirstOrDefault(model => model.Id == SelectedModelId)?.SupportsTranslation
+        ?? legacyEngineSupportsTranslation;
 
     public int LoadCount { get; private set; }
     public int SelectCount { get; private set; }
