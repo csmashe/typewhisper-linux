@@ -4267,13 +4267,13 @@ public sealed class TextInsertionServiceTests
         public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
         {
             LastTypeUsedUnicodeBackendsOnly = unicodeBackendsOnly;
-            if (unicodeBackendsOnly && !UnicodeBackendsAvailable)
+            if (!unicodeBackendsOnly || UnicodeBackendsAvailable)
             {
-                LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
-                return Task.FromResult(false);
+                return TypeTextAsync(text);
             }
 
-            return TypeTextAsync(text);
+            LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
+            return Task.FromResult(false);
         }
 
         public Task<bool> TypeTextAsync(string text)
