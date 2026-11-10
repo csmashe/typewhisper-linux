@@ -437,6 +437,79 @@ public sealed class AdvancedSectionViewModelTests
     }
 
     [Fact]
+    public async Task UnavailableSystemVoice_StillAllowsSwitchingToAConfiguredProvider()
+    {
+        var settings = TestPluginManagerFactory.CreateSettings(
+            new AppSettings
+            {
+                SpokenFeedbackEnabled = true,
+                SpokenFeedbackProviderId = "linux-system",
+            }
+        );
+        var localPlugin = new MutableTtsPlugin(
+            "local-provider",
+            "Local provider",
+            "local-voice",
+            "Local voice"
+        );
+        var pluginDirectory = Path.GetDirectoryName(
+            typeof(AdvancedSectionViewModelTests).Assembly.Location
+        )!;
+        using var pluginManager = TestPluginManagerFactory.Create(
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(
+                    pluginDirectory,
+                    localPlugin.PluginId,
+                    localPlugin
+                ),
+            ]
+        );
+        await pluginManager.EnablePluginAsync(localPlugin.PluginId);
+        var systemProvider = new MutableTtsPlugin(
+            "linux-system",
+            "System provider",
+            "system-voice",
+            "System voice"
+        )
+        {
+            IsConfigured = false,
+        };
+        using var speechFeedback = new SpeechFeedbackService(
+            settings.Object,
+            pluginManager,
+            systemProvider
+        );
+        var postedActions = new List<Action>();
+        var viewModel = new AdvancedSectionViewModel(
+            settings.Object,
+            speechFeedback,
+            pluginManager,
+            postedActions.Add
+        );
+
+        Assert.False(viewModel.CanUseSpokenFeedback);
+        Assert.False(viewModel.SpokenFeedbackEnabled);
+        Assert.True(viewModel.CanChooseSpokenFeedbackProvider);
+
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+        viewModel.SelectedSpokenFeedbackProviderOption = Assert.Single(
+            viewModel.SpokenFeedbackProviders,
+            provider => provider.Id == "local-provider"
+        );
+        // ReSharper disable once MethodHasAsyncOverload -- SettingsChanged is a synchronous Action event; RaiseAsync is for Task-returning events.
+        settings.Raise(service => service.SettingsChanged += null, settings.Object.Current);
+        ApplyPostedActions(postedActions);
+
+        Assert.Equal("local-provider", settings.Object.Current.SpokenFeedbackProviderId);
+        Assert.True(viewModel.CanUseSpokenFeedback);
+        Assert.True(viewModel.SpokenFeedbackEnabled);
+        Assert.Contains(nameof(AdvancedSectionViewModel.CanUseSpokenFeedback), changed);
+        Assert.Contains(nameof(AdvancedSectionViewModel.SpokenFeedbackHint), changed);
+    }
+
+    [Fact]
     public async Task ProgrammaticVoiceFallback_DoesNotSelectOrSave_UserVoiceEditDoes()
     {
         using var harness = await TestHarness.CreateAsync();
