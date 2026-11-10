@@ -46,6 +46,7 @@ public sealed class RecorderService : IDisposable
     private string? _activeSessionId;
     private int _samples;
     private long _segmentStarted;
+    private TimeSpan _finalizingSegment;
     private bool _whisperMode;
     private bool _disposed;
 
@@ -333,7 +334,35 @@ public sealed class RecorderService : IDisposable
 
     private async Task FinishSegmentAsync(RecorderState nextState, string status)
     {
-        var wav = await _audio.StopRecordingAsync(_capture!, CancellationToken.None).ConfigureAwait(false);
+        // Materializing a long segment's WAV can take tens of seconds; publish the transition now,
+        // with the elapsed time frozen, so status does not keep reporting a growing recording.
+        AudioRecordingService.AudioCaptureSession capture;
+        lock (_snapshotLock)
+        {
+            capture = _capture!;
+            _finalizingSegment = _timeProvider.GetElapsedTime(_segmentStarted);
+            _state = nextState;
+            UpdateSessionLocked(status);
+        }
+
+        NotifyChanged();
+
+        byte[] wav;
+        try
+        {
+            wav = await _audio.StopRecordingAsync(capture, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            lock (_snapshotLock)
+            {
+                _capture = null;
+                _finalizingSegment = TimeSpan.Zero;
+            }
+
+            throw;
+        }
+
         lock (_snapshotLock)
         {
             if (wav.Length != 0)
@@ -344,7 +373,7 @@ public sealed class RecorderService : IDisposable
             }
 
             _capture = null;
-            _state = nextState;
+            _finalizingSegment = TimeSpan.Zero;
             UpdateSessionLocked(status);
         }
 
@@ -355,7 +384,7 @@ public sealed class RecorderService : IDisposable
         TimeSpan.FromSeconds((double)_samples / RecorderWavSegments.SampleRate)
         + (_state == RecorderState.Recording
             ? _timeProvider.GetElapsedTime(_segmentStarted)
-            : TimeSpan.Zero);
+            : _finalizingSegment);
 
     private void RequireState(RecorderState expected)
     {

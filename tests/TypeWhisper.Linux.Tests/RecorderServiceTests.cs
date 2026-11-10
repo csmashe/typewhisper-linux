@@ -75,6 +75,53 @@ public sealed class RecorderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Stop_PublishesSavingWithFrozenDurationWhileCaptureFinalizes()
+    {
+        using var audio = Audio();
+        var clock = new ManualTimeProvider();
+        using var recorder = new RecorderService(audio, Settings(), _directory, clock);
+        Assert.True(await recorder.StartAsync());
+        audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+        clock.Advance(TimeSpan.FromSeconds(2));
+
+        // StopAsync is now parked in the capture drain/materialization.
+        var stop = recorder.StopAsync();
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.False(stop.IsCompleted);
+        Assert.Equal(RecorderState.Saving, recorder.State);
+        Assert.False(recorder.IsSessionActive);
+        Assert.Equal(TimeSpan.FromSeconds(2), recorder.ActiveDuration);
+        Assert.True(recorder.TryGetSession(recorder.ActiveSessionId!, out var snapshot));
+        Assert.Equal("finalizing", snapshot.Status);
+        Assert.Equal(2, snapshot.DurationSeconds);
+
+        var result = await stop;
+        Assert.NotNull(result);
+        Assert.Equal(TimeSpan.FromSeconds(2.0 / 16000), result.Duration);
+    }
+
+    [Fact]
+    public async Task Pause_PublishesPausedWithFrozenDurationWhileCaptureFinalizes()
+    {
+        using var audio = Audio();
+        var clock = new ManualTimeProvider();
+        using var recorder = new RecorderService(audio, Settings(), _directory, clock);
+        Assert.True(await recorder.StartAsync());
+        clock.Advance(TimeSpan.FromSeconds(3));
+
+        var pause = recorder.PauseAsync();
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.False(pause.IsCompleted);
+        Assert.Equal(RecorderState.Paused, recorder.State);
+        Assert.Equal(TimeSpan.FromSeconds(3), recorder.ActiveDuration);
+
+        await pause;
+        Assert.Equal(TimeSpan.Zero, recorder.ActiveDuration);
+    }
+
+    [Fact]
     public async Task StopFromPaused_WritesCombinedFile()
     {
         using var audio = Audio();
