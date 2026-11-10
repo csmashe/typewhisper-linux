@@ -382,6 +382,48 @@ public class ModelManagerServiceTests
         Assert.Same(plugin, attempt.Plugin);
     }
 
+    // A plugin settings save can change the engine's own selection behind the active model.
+    [Fact]
+    public async Task AcquireTranscriptionAsync_ReselectsActiveModel_WhenEngineSelectionChanged()
+    {
+        var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        await using (await sut.AcquireTranscriptionAsync(fullModelId)) { }
+
+        fake.SelectModel("other-model");
+        await using var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+
+        Assert.Equal("parakeet", fake.SelectedModelId);
+        Assert.Equal(fullModelId, sut.ActiveModelId);
+    }
+
+    [Fact]
+    public async Task AcquireTranscriptionAsync_ReusesActiveModel_WhenEngineSelectionUnchanged()
+    {
+        var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        await using (await sut.AcquireTranscriptionAsync(fullModelId)) { }
+        var loads = fake.LoadCallCount;
+
+        await using var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+
+        Assert.Equal(loads, fake.LoadCallCount);
+    }
+
+    [Fact]
+    public async Task TryAcquireTranscriptionAsync_ReturnsNull_WhenEngineSelectionChanged()
+    {
+        var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        await using (await sut.AcquireTranscriptionAsync(fullModelId)) { }
+
+        fake.SelectModel("other-model");
+        var attempt = await sut.TryAcquireTranscriptionAsync(fullModelId);
+
+        Assert.Null(attempt);
+        Assert.Equal("other-model", fake.SelectedModelId);
+    }
+
     [Fact]
     public async Task TryAcquireTranscriptionAsync_LeaseDisposed_ArmsAutoUnload()
     {

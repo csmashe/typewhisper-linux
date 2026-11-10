@@ -191,6 +191,10 @@ public partial class MainWindowViewModel : ObservableObject
         if (value is { IsHeader: false, Content: not null })
         {
             CurrentSection = value.Content;
+            if (value.Content == Plugins)
+            {
+                Plugins.RefreshExpandedSettings();
+            }
         }
 
         // Going anywhere else retires a plugin page still waiting for plugins to load.

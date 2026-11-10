@@ -429,6 +429,25 @@ public partial class PluginsSectionViewModel : ObservableObject
         return PluginRevealResult.Revealed;
     }
 
+    /// <summary>
+    ///     Re-reads the open settings when the page is shown again, since other pages change values
+    ///     such as the default model. Unsaved edits are kept.
+    /// </summary>
+    internal void RefreshExpandedSettings()
+    {
+        var row = AllRows.FirstOrDefault(plugin => plugin.IsExpanded);
+        if (row is null || IsRefreshingModels(row.Id, row.LoadedPlugin))
+        {
+            return;
+        }
+
+        BeginObservedSettingsLoad(
+            row,
+            SettingsReloadKind.PreserveDraft,
+            preserveStatus: !string.IsNullOrEmpty(row.Status)
+        );
+    }
+
     /// <summary>Drops a pending reveal because the user was sent to another page.</summary>
     internal void CancelPendingReveal()
     {

@@ -29,6 +29,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
     private string? _activeModelId;
+    // The active engine's own selection right after the load. Plugin settings can change it
+    // behind the active model, so a reuse checks it is unchanged.
+    private string? _activeModelEngineSelection;
     // Guards _autoUnloadTimer, _autoUnloadGeneration and _disposed. Load/unload/acquire paths
     // already hold _modelLock, but Dispose() runs on an arbitrary thread and must not block on
     // that async lock — without its own gate it can race a lease's re-arm and leave a zombie timer.
@@ -1008,6 +1011,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 !string.IsNullOrWhiteSpace(targetModelId)
                 && ActiveModelId == targetModelId
                 && ActiveTranscriptionPlugin is { } plugin
+                && plugin.SelectedModelId == _activeModelEngineSelection
             )
             {
                 CancelAutoUnload();
@@ -1323,6 +1327,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             plugin.SelectModel(pluginModelId);
+            _activeModelEngineSelection = plugin.SelectedModelId;
             SetStatus(modelId, ModelStatus.Ready);
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
@@ -1499,6 +1504,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         if (
             ActiveModelId == targetModelId
             && _activeModelAccelerationPreference == targetPreference
+            && ActiveTranscriptionPlugin?.SelectedModelId == _activeModelEngineSelection
         )
         {
             CancelAutoUnload();
