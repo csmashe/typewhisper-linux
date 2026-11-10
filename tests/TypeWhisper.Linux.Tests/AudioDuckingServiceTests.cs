@@ -29,28 +29,29 @@ public sealed class AudioDuckingServiceTests
         service.DuckAudio(0.5f);
         service.RestoreAudio();
 
-        Assert.Equal(5, runner.Invocations.Count);
+        Assert.Equal(6, runner.Invocations.Count);
         Assert.All(runner.Invocations, invocation => Assert.Equal("pactl", invocation.FileName));
         Assert.All(
             runner.Invocations,
             invocation => Assert.Equal(TimeSpan.FromMilliseconds(1500), invocation.Timeout)
         );
         Assert.Equal(["list", "sink-inputs"], runner.Invocations[0].Args);
+        Assert.Equal(["info"], runner.Invocations[1].Args);
         Assert.Equal(
             ["set-sink-input-volume", "593", "22938", "13107"],
-            runner.Invocations[1].Args
-        );
-        Assert.Equal(
-            ["set-sink-input-volume", "42", "16385"],
             runner.Invocations[2].Args
         );
         Assert.Equal(
-            ["set-sink-input-volume", "593", "45875", "26214"],
+            ["set-sink-input-volume", "42", "16385"],
             runner.Invocations[3].Args
         );
         Assert.Equal(
-            ["set-sink-input-volume", "42", "32769"],
+            ["set-sink-input-volume", "593", "45875", "26214"],
             runner.Invocations[4].Args
+        );
+        Assert.Equal(
+            ["set-sink-input-volume", "42", "32769"],
+            runner.Invocations[5].Args
         );
 
         var stereoInvocations = runner.Invocations
@@ -100,7 +101,7 @@ public sealed class AudioDuckingServiceTests
         service.Dispose();
         service.RestoreAudio();
 
-        Assert.Equal(6, runner.Invocations.Count);
+        Assert.Equal(7, runner.Invocations.Count);
         Assert.Equal(1, CountInvocations(runner, list));
         Assert.Equal(1, CountInvocations(runner, firstDuck));
         Assert.Equal(1, CountInvocations(runner, secondDuck));
@@ -155,7 +156,7 @@ public sealed class AudioDuckingServiceTests
         service.RestoreAudio();
         service.Dispose();
 
-        Assert.Equal(4, runner.Invocations.Count);
+        Assert.Equal(5, runner.Invocations.Count);
         Assert.Equal(1, CountInvocations(runner, list));
         Assert.Equal(1, CountInvocations(runner, duck));
         Assert.Equal(2, CountInvocations(runner, restore));
@@ -326,7 +327,7 @@ public sealed class AudioDuckingServiceTests
         Assert.Equal(2, CountInvocations(runner, list));
         Assert.Equal(2, CountInvocations(runner, duck));
         Assert.Equal(2, CountInvocations(runner, restore));
-        Assert.Equal(6, runner.Invocations.Count);
+        Assert.Equal(8, runner.Invocations.Count);
     }
 
 
@@ -451,13 +452,98 @@ public sealed class AudioDuckingServiceTests
             ["list", "sink-inputs"],
             runner.Invocations[0].Args
         );
-        Assert.Equal(["set-sink-input-volume", "593", "22938"], runner.Invocations[1].Args);
-        Assert.Equal(["set-sink-input-volume", "593", "45875"], runner.Invocations[2].Args);
-        Assert.Equal(3, runner.Invocations.Count);
+        Assert.Equal(["info"], runner.Invocations[1].Args);
+        Assert.Equal(["set-sink-input-volume", "593", "22938"], runner.Invocations[2].Args);
+        Assert.Equal(["set-sink-input-volume", "593", "45875"], runner.Invocations[3].Args);
+        Assert.Equal(4, runner.Invocations.Count);
 
         // The deferred restore completed, so a later restore has nothing left to undo.
         service.RestoreAudio();
-        Assert.Equal(3, runner.Invocations.Count);
+        Assert.Equal(4, runner.Invocations.Count);
+    }
+
+    [Fact]
+    public void RestoreAudio_after_server_restart_retires_entries_instead_of_restoring_reused_ids()
+    {
+        const string listing = """
+            Sink Input #0
+                Volume: front-left: 40001 / 61% / -12.86 dB,   front-right: 59999 / 92% / -2.30 dB
+            """;
+        string[] info = ["info"];
+        string[] restore = ["set-sink-input-volume", "0", "40001", "59999"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            listing
+        );
+        var infoCalls = 0;
+        runner.RespondWith(
+            (_, args) => args.SequenceEqual(info) && infoCalls++ == 0,
+            "Server Name: pulseaudio\nCookie: 3922:700c\n"
+        );
+        runner.RespondWith(
+            (_, args) => args.SequenceEqual(info),
+            "Server Name: pulseaudio\nCookie: 296a:0996\n"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new AudioDuckingService(runner, errorLog.Object);
+
+        service.DuckAudio(0.4f);
+        service.RestoreAudio();
+        service.RestoreAudio();
+
+        Assert.Equal(0, CountInvocations(runner, restore));
+        Assert.Equal(2, CountInvocations(runner, info));
+        errorLog.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public void RestoreAudio_with_unchanged_cookie_restores_and_unreadable_cookie_is_retried()
+    {
+        const string listing = """
+            Sink Input #12
+                Volume: mono: 40000 / 61% / -12.00 dB
+            """;
+        string[] info = ["info"];
+        string[] restore = ["set-sink-input-volume", "12", "40000"];
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            listing
+        );
+        var infoCalls = 0;
+        runner.FailWhen(
+            (_, args) => args.SequenceEqual(info) && infoCalls++ == 1,
+            "Connection failure: Connection refused"
+        );
+        runner.RespondWith(
+            (_, args) => args.SequenceEqual(info),
+            "Cookie: 3922:700c\n"
+        );
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new AudioDuckingService(runner, errorLog.Object);
+
+        service.DuckAudio(0.5f);
+        service.RestoreAudio();
+        Assert.Equal(0, CountInvocations(runner, restore));
+
+        service.RestoreAudio();
+        service.RestoreAudio();
+
+        Assert.Equal(1, CountInvocations(runner, restore));
+        Assert.Equal(3, CountInvocations(runner, info));
+        errorLog.Verify(
+            log =>
+                log.AddEntry(
+                    It.Is<string>(message =>
+                        message.Contains("sink input 12", StringComparison.Ordinal)
+                        && message.Contains("could not read the audio server cookie", StringComparison.Ordinal)
+                    ),
+                    ErrorCategory.General
+                ),
+            Times.Once
+        );
+        errorLog.VerifyNoOtherCalls();
     }
 
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)
