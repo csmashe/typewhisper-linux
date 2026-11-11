@@ -180,7 +180,16 @@ public sealed class RecorderService : IDisposable
         try
         {
             RequireState(RecorderState.Recording);
-            await FinishSegmentAsync(RecorderState.Paused, "paused").ConfigureAwait(false);
+            try
+            {
+                await FinishSegmentAsync(RecorderState.Paused, "paused").ConfigureAwait(false);
+            }
+            catch
+            {
+                // The segment's audio is lost; a resumable session would later save without it.
+                CompleteSession("failed", error: "Could not save recording");
+                throw;
+            }
         }
         finally
         {

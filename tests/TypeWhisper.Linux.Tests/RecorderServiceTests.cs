@@ -233,6 +233,40 @@ public sealed class RecorderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PauseFinalizationFailure_FailsSessionAndReleasesReservation()
+    {
+        var stops = 0;
+        using var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { if (++stops == 2) { throw new IOException("stream stuck"); } }
+        );
+        using var recorder = new RecorderService(audio, Settings(), _directory);
+        await recorder.StartAsync();
+        audio.ProcessAudioBufferForTest([0.1f]);
+        await recorder.PauseAsync();
+        await recorder.ResumeAsync();
+        audio.ProcessAudioBufferForTest([0.2f]);
+        var id = recorder.ActiveSessionId!;
+
+        await Assert.ThrowsAsync<IOException>(recorder.PauseAsync);
+
+        // The second segment is lost; the first must not later be saved alone as complete.
+        Assert.Equal(RecorderState.Ready, recorder.State);
+        Assert.False(audio.IsCaptureReserved);
+        Assert.True(recorder.TryGetSession(id, out var snapshot));
+        Assert.Equal("failed", snapshot.Status);
+        Assert.Equal("Could not save recording", snapshot.Error);
+        await Assert.ThrowsAsync<RecorderBusyException>(recorder.ResumeAsync);
+        await Assert.ThrowsAsync<RecorderBusyException>(() => recorder.StopAsync());
+        Assert.Empty(Directory.GetFiles(_directory));
+
+        Assert.True(await recorder.StartAsync());
+        audio.ProcessAudioBufferForTest([0.3f]);
+        Assert.NotNull(await recorder.StopAsync());
+    }
+
+    [Fact]
     public async Task StartWhileAnotherTransitionIsInFlight_ThrowsRecorderBusy()
     {
         using var audio = Audio();

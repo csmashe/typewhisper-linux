@@ -351,11 +351,13 @@ public partial class RecorderSectionViewModel : ObservableObject
 
     private async Task RunPauseResumeAsync(TaskCompletionSource completion)
     {
+        var pausing = false;
         try
         {
             // ReSharper disable once ConvertIfStatementToSwitchStatement -- only two of the four states toggle; a switch would need empty arms.
             if (_recorder.State == RecorderState.Recording)
             {
+                pausing = true;
                 await _recorder.PauseAsync();
             }
             else if (_recorder.State == RecorderState.Paused)
@@ -366,10 +368,15 @@ public partial class RecorderSectionViewModel : ObservableObject
 
             RefreshRecorderState();
         }
-        catch
+        catch (Exception ex)
         {
             RefreshRecorderState();
-            StatusText = Loc.Instance["Recorder.StatusNoMicrophone"];
+            // A failed pause ends the session without saving it; a failed resume keeps it paused.
+            StatusText = Loc.Instance[
+                pausing && ex is not RecorderBusyException
+                    ? "Recorder.StatusSaveFailed"
+                    : "Recorder.StatusNoMicrophone"
+            ];
         }
         finally
         {
