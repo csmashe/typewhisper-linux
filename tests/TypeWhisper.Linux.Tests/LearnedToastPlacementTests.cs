@@ -182,12 +182,24 @@ public sealed class LearnedToastPlacementTests
         // GTK with GDK_SCALE=2 on X11 reports half-size extents: a field on the right monitor
         // claims to be on the left one. The window's real frame keeps the toast on the right.
         PixelRect[] screens = [new(0, 0, 640, 1024), new(640, 0, 640, 1024)];
-        var window = new CompositorWindowFrame(new AtSpiScreenRect(701, 474, 440, 300), new AtSpiScreenRect(0, 0, 1280, 1024));
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(701, 474, 440, 300), null);
 
         var anchor = LearnedToastPlacement.ChooseAnchor(new AtSpiScreenRect(350, 237, 220, 34), window, screens);
         var point = LearnedToastPlacement.Compute(anchor, screens, new PixelSize(324, 70));
 
         Assert.Equal(new AtSpiScreenRect(701, 474, 440, 300), anchor);
         Assert.Equal(new PixelPoint(759, 786), point);
+    }
+
+    [Fact]
+    public void Anchor_KeepsExtentsInsideAnX11FrameWhenTheRootIsWiderThanTheMonitors()
+    {
+        // An X11 frame is already in root coordinates. Stretching a 1920-wide root over these
+        // 1280 pixels of monitors would shrink the frame to x 467–760 and reject the field.
+        PixelRect[] screens = [new(0, 0, 640, 1024), new(640, 0, 640, 1024)];
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(701, 474, 440, 300), null);
+        var extents = new AtSpiScreenRect(721, 500, 400, 34);
+
+        Assert.Equal(extents, LearnedToastPlacement.ChooseAnchor(extents, window, screens));
     }
 }

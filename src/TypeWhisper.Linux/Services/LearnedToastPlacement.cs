@@ -85,11 +85,16 @@ public static class LearnedToastPlacement
     /// <summary>
     ///     Maps a compositor-logical window frame onto the screens' coordinate space by stretching
     ///     the logical desktop over the screens' union. Xwayland applies one scale to the whole
-    ///     desktop (2× under fractional scaling, 1× otherwise), so a linear map is exact.
+    ///     desktop (2× under fractional scaling, 1× otherwise), so a linear map is exact. A frame
+    ///     without a desktop is already in screen coordinates and is returned unchanged.
     /// </summary>
     public static AtSpiScreenRect? MapToScreens(CompositorWindowFrame window, IReadOnlyList<PixelRect> screens)
     {
-        var desktop = window.Desktop;
+        if (window.Desktop is not { } desktop)
+        {
+            return window.Frame;
+        }
+
         if (screens.Count == 0 || desktop.Width <= 0 || desktop.Height <= 0)
         {
             return null;

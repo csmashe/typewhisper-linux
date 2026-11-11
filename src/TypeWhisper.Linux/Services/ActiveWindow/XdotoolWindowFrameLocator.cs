@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 namespace TypeWhisper.Linux.Services.ActiveWindow;
@@ -10,27 +9,21 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 ///     GTK app running with <c>GDK_SCALE=2</c> whose extents are half its real position. Inert in
 ///     Wayland sessions and when xdotool isn't installed.
 /// </summary>
-public sealed partial class XdotoolWindowFrameLocator : IWindowFrameLocator
+public sealed class XdotoolWindowFrameLocator : IWindowFrameLocator
 {
     // Bounds each xdotool call so a stalled X server can't hold up correction learning.
     private static readonly TimeSpan s_callTimeout = TimeSpan.FromSeconds(1);
 
     private readonly bool _applicable;
     private readonly ProviderProcessRunner _processRunner;
-    private readonly Func<AtSpiScreenRect?> _rootWindow;
 
     public XdotoolWindowFrameLocator()
-        : this(
-            new ProcessRunner(),
-            !WaylandSessionDetector.IsWaylandSession() && DesktopDetector.BinaryExists("xdotool"),
-            TryGetRootWindow
-        ) { }
+        : this(new ProcessRunner(), !WaylandSessionDetector.IsWaylandSession() && DesktopDetector.BinaryExists("xdotool")) { }
 
-    internal XdotoolWindowFrameLocator(IProcessRunner processRunner, bool applicable, Func<AtSpiScreenRect?> rootWindow)
+    internal XdotoolWindowFrameLocator(IProcessRunner processRunner, bool applicable)
     {
         _processRunner = new ProviderProcessRunner(processRunner);
         _applicable = applicable;
-        _rootWindow = rootWindow;
     }
 
     public async Task<string?> TryGetFocusedWindowHandleAsync(CancellationToken ct)
@@ -54,12 +47,11 @@ public sealed partial class XdotoolWindowFrameLocator : IWindowFrameLocator
         }
 
         var geometry = await RunAsync(["getwindowgeometry", "--shell", handle], ct).ConfigureAwait(false);
-        if (geometry is null || ParseWindowGeometry(geometry) is not { } frame)
-        {
-            return null;
-        }
 
-        return _rootWindow() is { } desktop ? new CompositorWindowFrame(frame, desktop) : null;
+        // Root coordinates are the screens' own space, so the frame carries no desktop to map through.
+        return geometry is not null && ParseWindowGeometry(geometry) is { } frame
+            ? new CompositorWindowFrame(frame, null)
+            : null;
     }
 
     // `getwindowgeometry --shell` prints X=, Y=, WIDTH=, HEIGHT= lines in root coordinates.
@@ -86,36 +78,6 @@ public sealed partial class XdotoolWindowFrameLocator : IWindowFrameLocator
             : null;
     }
 
-    // The root window spans every monitor, so window geometry needs no rescaling against it.
-    // `xdotool getdisplaygeometry` reports only the first monitor under RandR, so ask Xlib.
-    private static AtSpiScreenRect? TryGetRootWindow()
-    {
-        try
-        {
-            var display = XOpenDisplay(null);
-            if (display == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            try
-            {
-                var screen = XDefaultScreen(display);
-                var width = XDisplayWidth(display, screen);
-                var height = XDisplayHeight(display, screen);
-                return width > 0 && height > 0 ? new AtSpiScreenRect(0, 0, width, height) : null;
-            }
-            finally
-            {
-                _ = XCloseDisplay(display);
-            }
-        }
-        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
-        {
-            return null;
-        }
-    }
-
     private async Task<string?> RunAsync(IReadOnlyList<string> args, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -123,19 +85,4 @@ public sealed partial class XdotoolWindowFrameLocator : IWindowFrameLocator
         var (exit, output) = await _processRunner.RunAsync("xdotool", args, timeout.Token).ConfigureAwait(false);
         return exit == 0 && !string.IsNullOrWhiteSpace(output) ? output.Trim() : null;
     }
-
-    [LibraryImport("libX11.so.6", StringMarshalling = StringMarshalling.Utf8)]
-    private static partial IntPtr XOpenDisplay(string? name);
-
-    [LibraryImport("libX11.so.6")]
-    private static partial int XCloseDisplay(IntPtr display);
-
-    [LibraryImport("libX11.so.6")]
-    private static partial int XDefaultScreen(IntPtr display);
-
-    [LibraryImport("libX11.so.6")]
-    private static partial int XDisplayWidth(IntPtr display, int screen);
-
-    [LibraryImport("libX11.so.6")]
-    private static partial int XDisplayHeight(IntPtr display, int screen);
 }

@@ -7,9 +7,10 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// <summary>
 ///     A window's frame in the compositor's logical coordinates, plus the bounds of the whole
 ///     logical desktop. Xwayland can scale those coordinates (fractional scaling), so consumers
-///     map the frame onto their own screen space through the two desktops' bounds.
+///     map the frame onto their own screen space through the two desktops' bounds. A null desktop
+///     marks a frame already in screen coordinates (X11 root), which needs no mapping.
 /// </summary>
-public readonly record struct CompositorWindowFrame(AtSpiScreenRect Frame, AtSpiScreenRect Desktop);
+public readonly record struct CompositorWindowFrame(AtSpiScreenRect Frame, AtSpiScreenRect? Desktop);
 
 /// <summary>
 ///     Locates a top-level window's on-screen frame, for anchoring feedback when AT-SPI can't

@@ -14,16 +14,13 @@ public sealed class XdotoolWindowFrameLocatorTests
             "getactivewindow" => "6291459\n",
             _ => "WINDOW=6291459\nX=701\nY=474\nWIDTH=440\nHEIGHT=300\nSCREEN=0\n",
         });
-        var locator = new XdotoolWindowFrameLocator(runner, applicable: true, () => new AtSpiScreenRect(0, 0, 1280, 1024));
+        var locator = new XdotoolWindowFrameLocator(runner, applicable: true);
 
         var handle = await locator.TryGetFocusedWindowHandleAsync(CancellationToken.None);
         var frame = await locator.TryGetWindowFrameAsync(handle!, CancellationToken.None);
 
         Assert.Equal("6291459", handle);
-        Assert.Equal(
-            new CompositorWindowFrame(new AtSpiScreenRect(701, 474, 440, 300), new AtSpiScreenRect(0, 0, 1280, 1024)),
-            frame
-        );
+        Assert.Equal(new CompositorWindowFrame(new AtSpiScreenRect(701, 474, 440, 300), null), frame);
         Assert.Equal(["getwindowgeometry", "--shell", "6291459"], runner.Calls[1]);
     }
 
@@ -49,20 +46,11 @@ public sealed class XdotoolWindowFrameLocatorTests
     public async Task InertOutsideX11()
     {
         var runner = new ScriptedProcessRunner(_ => throw new InvalidOperationException());
-        var locator = new XdotoolWindowFrameLocator(runner, applicable: false, () => throw new InvalidOperationException());
+        var locator = new XdotoolWindowFrameLocator(runner, applicable: false);
 
         Assert.Null(await locator.TryGetFocusedWindowHandleAsync(CancellationToken.None));
         Assert.Null(await locator.TryGetWindowFrameAsync("42", CancellationToken.None));
         Assert.Empty(runner.Calls);
-    }
-
-    [Fact]
-    public async Task NoFrameWhenTheRootWindowIsUnknown()
-    {
-        var runner = new ScriptedProcessRunner(_ => "X=701\nY=474\nWIDTH=440\nHEIGHT=300\n");
-        var locator = new XdotoolWindowFrameLocator(runner, applicable: true, () => null);
-
-        Assert.Null(await locator.TryGetWindowFrameAsync("42", CancellationToken.None));
     }
 
     private sealed class ScriptedProcessRunner(Func<string[], string> respond) : IProcessRunner
