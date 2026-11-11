@@ -385,12 +385,12 @@ public sealed class TextInsertionService
                 && directResult is InsertionResult.Failed
                 && !LastTypingDeliveredPartialText
                 && LastFailureReason
-                    is InsertionFailureReason.NoWaylandTypingTool
-                    or InsertionFailureReason.WtypeCompositorUnsupported
+                    is not (InsertionFailureReason.FocusFailed or InsertionFailureReason.LockedFieldUnavailable)
             )
             {
-                // Only ydotool was left and nothing was typed. Copy rather than paste, since the
-                // user chose typing over a paste shortcut.
+                // Nothing was typed and ydotool was skipped. The platform's reason varies (None when it
+                // only skipped ydotool for this text), so only this service's focus failures opt out.
+                // Copy rather than paste, since the user chose typing over a paste shortcut.
                 LastFailureReason = InsertionFailureReason.NonAsciiTypingUnavailable;
                 LogInsertionFallback("Direct typing fell back to clipboard: no available backend types non-ASCII text.");
                 if (!_platform.IsClipboardSetAvailable)

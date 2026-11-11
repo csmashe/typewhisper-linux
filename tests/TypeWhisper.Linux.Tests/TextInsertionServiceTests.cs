@@ -2353,8 +2353,14 @@ public sealed class TextInsertionServiceTests
         Assert.Equal("previous", platform.Clipboard);
     }
 
-    [Fact]
-    public async Task InsertTextAsync_direct_typing_strategy_copies_non_ascii_when_only_ydotool_could_type_it()
+    [Theory]
+    [InlineData(InsertionFailureReason.NoWaylandTypingTool)]
+    [InlineData(InsertionFailureReason.WtypeCompositorUnsupported)]
+    // A chain that only skipped ydotool for this text may report no reason at all.
+    [InlineData(InsertionFailureReason.None)]
+    public async Task InsertTextAsync_direct_typing_strategy_copies_non_ascii_when_only_ydotool_could_type_it(
+        InsertionFailureReason platformReason
+    )
     {
         // ydotool-only Wayland: typing "café" with ydotool would land "caf" and report Typed.
         var platform = new FakeTextInsertionPlatform
@@ -2362,6 +2368,7 @@ public sealed class TextInsertionServiceTests
             Clipboard = "previous",
             CanTypeNonAscii = false,
             UnicodeBackendsAvailable = false,
+            UnicodeOnlyFailureReason = platformReason,
         };
         var sut = new TextInsertionService(platform);
 
@@ -3769,7 +3776,6 @@ public sealed class TextInsertionServiceTests
 
         Assert.False(result);
         Assert.Empty(runner.Calls);
-        Assert.Equal(InsertionFailureReason.NoWaylandTypingTool, platform.LastFailureReason);
         Assert.False(platform.LastTypingDeliveredPartialText);
     }
 
@@ -4264,6 +4270,9 @@ public sealed class TextInsertionServiceTests
         // false models a chain whose only backend is ydotool, which unicode-only typing skips.
         public bool UnicodeBackendsAvailable { get; init; } = true;
 
+        public InsertionFailureReason UnicodeOnlyFailureReason { get; init; } =
+            InsertionFailureReason.NoWaylandTypingTool;
+
         public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
         {
             LastTypeUsedUnicodeBackendsOnly = unicodeBackendsOnly;
@@ -4272,7 +4281,7 @@ public sealed class TextInsertionServiceTests
                 return TypeTextAsync(text);
             }
 
-            LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
+            LastFailureReason = UnicodeOnlyFailureReason;
             return Task.FromResult(false);
         }
 
