@@ -32,8 +32,11 @@
                        FontWeight="SemiBold"
                        Foreground="#66E3A2" />
             <!-- Solid dark fill, no border: a light 1px stroke reads as white haze on the
-                 rounded edge under NVIDIA + XWayland. -->
+                 rounded edge under NVIDIA + XWayland. Not focusable: a click would otherwise
+                 report focus moving to this button over AT-SPI, while the target app keeps real
+                 focus and never re-reports it, so correction learning would skip the next dictation. -->
             <Button x:Name="UndoButton"
+                    Focusable="False"
                     VerticalAlignment="Center"
                     MinHeight="34"
                     Padding="16,6"
