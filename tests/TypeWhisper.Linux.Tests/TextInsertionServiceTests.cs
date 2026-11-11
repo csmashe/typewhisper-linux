@@ -2387,6 +2387,25 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_direct_typing_strategy_does_not_blame_ydotool_when_another_backend_failed()
+    {
+        // wtype-only chain: wtype ran and exited non-zero, so no ydotool was held back.
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous", TypeSucceeds = false };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "python3",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("café", platform.Clipboard);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_direct_typing_strategy_types_ascii_with_any_backend()
     {
         var platform = new FakeTextInsertionPlatform
@@ -2886,6 +2905,26 @@ public sealed class TextInsertionServiceTests
         );
 
         Assert.Equal(expected, platform.CanTypeNonAscii);
+    }
+
+    [Theory]
+    [InlineData("Wayland", false, true, true)]
+    [InlineData("Wayland", false, false, true)]
+    [InlineData("Wayland", false, true, false)]
+    [InlineData("X11", true, false, false)]
+    public void LinuxTextInsertionPlatform_HasAsciiOnlyTypingBackend_WhenChainHasYdotool(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype,
+        bool ydotoolUsable
+    )
+    {
+        ITextInsertionPlatform platform = new LinuxTextInsertionPlatform(
+            SnapshotFor(sessionType, hasXdotool, hasWtype, "hyprland", ydotoolUsable, ydotoolUsable),
+            new RecordingProcessRunner().Run
+        );
+
+        Assert.Equal(ydotoolUsable, platform.HasAsciiOnlyTypingBackend);
     }
 
     [Fact]
@@ -4269,6 +4308,8 @@ public sealed class TextInsertionServiceTests
 
         // false models a chain whose only backend is ydotool, which unicode-only typing skips.
         public bool UnicodeBackendsAvailable { get; init; } = true;
+
+        public bool HasAsciiOnlyTypingBackend => !UnicodeBackendsAvailable;
 
         public InsertionFailureReason UnicodeOnlyFailureReason { get; init; } =
             InsertionFailureReason.NoWaylandTypingTool;

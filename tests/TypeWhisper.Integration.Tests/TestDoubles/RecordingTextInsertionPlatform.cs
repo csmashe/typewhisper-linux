@@ -24,6 +24,7 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
     // Integration tests set it to model a ydotool chain; the UiTests link never does.
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public bool CanTypeNonAscii { get; set; } = true;
+    public bool HasAsciiOnlyTypingBackend => !CanTypeNonAscii;
 
     public InsertionFailureReason LastFailureReason
     {

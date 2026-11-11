@@ -388,11 +388,15 @@ public sealed class TextInsertionService
                     is not (InsertionFailureReason.FocusFailed or InsertionFailureReason.LockedFieldUnavailable)
             )
             {
-                // Nothing was typed and ydotool was skipped. The platform's reason varies (None when it
-                // only skipped ydotool for this text), so only this service's focus failures opt out.
-                // Copy rather than paste, since the user chose typing over a paste shortcut.
-                LastFailureReason = InsertionFailureReason.NonAsciiTypingUnavailable;
-                LogInsertionFallback("Direct typing fell back to clipboard: no available backend types non-ASCII text.");
+                // Nothing was typed. The platform's reason varies (None when it only skipped ydotool
+                // for this text), so only this service's focus failures opt out. Copy rather than
+                // paste, since the user chose typing over a paste shortcut.
+                if (_platform.HasAsciiOnlyTypingBackend)
+                {
+                    LastFailureReason = InsertionFailureReason.NonAsciiTypingUnavailable;
+                }
+
+                LogInsertionFallback("Direct typing fell back to clipboard: no backend typed the non-ASCII text.");
                 if (!_platform.IsClipboardSetAvailable)
                 {
                     return InsertionResult.MissingClipboardTool;
@@ -1310,6 +1314,9 @@ internal interface ITextInsertionPlatform
     /// <summary>True when the platform has a typing backend that can type non-ASCII text.</summary>
     bool CanTypeNonAscii => true;
 
+    /// <summary>True when the chain has a backend that unicode-only typing skips (ydotool).</summary>
+    bool HasAsciiOnlyTypingBackend => false;
+
     InsertionFailureReason LastFailureReason { get; }
 
     /// <summary>
@@ -1519,6 +1526,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     // existing Firefox windows, gnome-terminal), silently dropping the character.
     public bool CanTypeNonAscii =>
         !_snapshot.CompositorRejectsWtype && _chain.Contains(InputBackend.Wtype);
+
+    public bool HasAsciiOnlyTypingBackend => _chain.Contains(InputBackend.Ydotool);
 
     public InsertionFailureReason LastFailureReason { get; private set; } = InsertionFailureReason.None;
 
