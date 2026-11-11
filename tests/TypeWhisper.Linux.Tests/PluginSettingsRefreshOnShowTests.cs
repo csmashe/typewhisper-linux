@@ -61,6 +61,37 @@ public sealed class PluginSettingsRefreshOnShowTests : IDisposable
         Assert.Equal("draft-model", Field(row).Value);
     }
 
+    [Fact]
+    public async Task RefreshExpandedSettings_ClearsLoadError_WhenRetrySucceeds()
+    {
+        var (vm, plugin, row) = await CreateExpandedAsync();
+        plugin.FailReads = true;
+        vm.RefreshExpandedSettings();
+        await row.ObservedSettingsLoad.WaitAsync(s_hangGuard);
+        Assert.Equal("Unable to load plugin settings.", row.Status);
+        Assert.Empty(row.SettingFields);
+
+        plugin.FailReads = false;
+        vm.RefreshExpandedSettings();
+        await row.ObservedSettingsLoad.WaitAsync(s_hangGuard);
+
+        Assert.Equal("universal-3-5-pro", Field(row).Value);
+        Assert.Equal("Edit the values below and click Save.", row.Status);
+    }
+
+    [Fact]
+    public async Task RefreshExpandedSettings_KeepsValidationResult()
+    {
+        var (vm, _, row) = await CreateExpandedAsync();
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+        Assert.Equal("Model accepted.", row.Status);
+
+        vm.RefreshExpandedSettings();
+        await row.ObservedSettingsLoad.WaitAsync(s_hangGuard);
+
+        Assert.Equal("Model accepted.", row.Status);
+    }
+
     private async Task<(PluginsSectionViewModel Vm, ModelSettingsPlugin Plugin, PluginRow Row)> CreateExpandedAsync()
     {
         var plugin = new ModelSettingsPlugin();
@@ -98,8 +129,12 @@ public sealed class PluginSettingsRefreshOnShowTests : IDisposable
             ),
         ];
 
+        public bool FailReads { get; set; }
+
         public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult(key == "selectedModel" ? Model : null);
+            FailReads
+                ? Task.FromException<string?>(new InvalidOperationException("settings unavailable"))
+                : Task.FromResult(key == "selectedModel" ? Model : null);
 
         public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
         {
@@ -112,7 +147,9 @@ public sealed class PluginSettingsRefreshOnShowTests : IDisposable
         }
 
         public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default) =>
-            Task.FromResult<PluginSettingsValidationResult?>(null);
+            Task.FromResult<PluginSettingsValidationResult?>(
+                new PluginSettingsValidationResult(true, "Model accepted.")
+            );
 
         public Task ActivateAsync(IPluginHostServices host) => Task.CompletedTask;
 

@@ -424,6 +424,20 @@ public class ModelManagerServiceTests
         Assert.Equal("other-model", fake.SelectedModelId);
     }
 
+    // A save that lands between the load's select and its read of the selection.
+    [Fact]
+    public async Task AcquireTranscriptionAsync_KeepsRequestedModel_WhenSelectionChangesDuringLoad()
+    {
+        var sut = CreateServiceWithLoadableModel(out var fullModelId, out var plugin);
+        var fake = (FakeTranscriptionPlugin)plugin;
+        fake.SelectionSavedAfterNextSelect = "other-model";
+
+        await using (await sut.AcquireTranscriptionAsync(fullModelId)) { }
+        await using var lease = await sut.AcquireTranscriptionAsync(fullModelId);
+
+        Assert.Equal("parakeet", fake.SelectedModelId);
+    }
+
     [Fact]
     public async Task TryAcquireTranscriptionAsync_LeaseDisposed_ArmsAutoUnload()
     {
@@ -1916,10 +1930,14 @@ public class ModelManagerServiceTests
             return Task.CompletedTask;
         }
 
+        /// <summary>Replaces the selection once, right after the next <see cref="SelectModel" />.</summary>
+        public string? SelectionSavedAfterNextSelect { get; set; }
+
         public void SelectModel(string modelId)
         {
             SelectModelCallCount++;
-            SelectedModelId = modelId;
+            SelectedModelId = SelectionSavedAfterNextSelect ?? modelId;
+            SelectionSavedAfterNextSelect = null;
         }
 
         /// <summary>When set, <see cref="IsModelDownloaded" /> throws it, like unavailable storage.</summary>

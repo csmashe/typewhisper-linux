@@ -148,6 +148,13 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     public ITranscriptionEngineRole? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
 
     /// <summary>
+    ///     False once plugin settings changed the active engine's selection since the load; the
+    ///     next acquire restores it.
+    /// </summary>
+    public bool ActiveEngineSelectionIsCurrent =>
+        ActiveTranscriptionPlugin?.SelectedModelId == _activeModelEngineSelection;
+
+    /// <summary>
     ///     Resolves the transcription plugin that owns <paramref name="modelId" /> (a
     ///     <c>plugin:&lt;id&gt;:&lt;model&gt;</c> identifier), or null when the id is not a
     ///     plugin model or no matching engine is loaded. Lets callers target the engine for
@@ -1327,7 +1334,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             plugin.SelectModel(pluginModelId);
-            _activeModelEngineSelection = plugin.SelectedModelId;
+            var engineSelection = plugin.SelectedModelId;
+            // A settings save on another thread can change the selection between the two lines
+            // above. Selecting again tells that apart from an engine that renames the model itself.
+            if (engineSelection != pluginModelId)
+            {
+                plugin.SelectModel(pluginModelId);
+                engineSelection = plugin.SelectedModelId;
+            }
+
+            _activeModelEngineSelection = engineSelection;
             SetStatus(modelId, ModelStatus.Ready);
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
@@ -1504,7 +1520,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         if (
             ActiveModelId == targetModelId
             && _activeModelAccelerationPreference == targetPreference
-            && ActiveTranscriptionPlugin?.SelectedModelId == _activeModelEngineSelection
+            && ActiveEngineSelectionIsCurrent
         )
         {
             CancelAutoUnload();

@@ -1010,10 +1010,13 @@ public sealed partial class DictationOrchestrator : IDisposable
                     startupTaskName, "translate", StringComparison.OrdinalIgnoreCase
                 );
 
+                // The stop-time load replaces a changed engine selection, so a stream on it
+                // would be dropped and the audio sent again.
                 if (
                     startupMode == LiveTranscriptionMode.Streaming
                     && startupPlugin is not null
                     && !startupIsTranslate
+                    && _models.ActiveEngineSelectionIsCurrent
                 )
                 {
                     StartStreamingTranscriptionSession(
