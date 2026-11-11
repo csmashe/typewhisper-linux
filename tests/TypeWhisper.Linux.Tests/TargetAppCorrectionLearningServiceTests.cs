@@ -1235,6 +1235,31 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Arm_TrailingPadMissingInRecentSibling_EditThere_LearnsNothing()
+    {
+        // The focused field is still receiving the dictation, so the arm falls back to a recently
+        // focused sibling that already held the word. Without its pad that is no proof the
+        // dictation landed there, so an edit to the sibling must not be learned.
+        var sibling = new AtSpiElementRef("app", "/field/sibling");
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = s_field,
+            TextProvider = e => e.Equals(sibling) ? "notes on kubernets" : "kube",
+        };
+        client.RecentFocusedElements.AddRange([s_field, sibling]);
+        using var service = CreateService(client, enabled: true);
+
+        await service.ArmAsync("kubernets ");
+
+        client.TextProvider = e => e.Equals(sibling) ? "notes on Kubernetes" : "kubernets ";
+        client.RaiseText(sibling);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        Assert.Empty(_dictionary.GetCorrections());
+    }
+
+    [Fact]
     public async Task Arm_InsertedTextOccursTwiceInBaseline_LearnsNothing()
     {
         // The inserted text appears twice back-to-back in the field, so an edit between the two
