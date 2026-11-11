@@ -1725,6 +1725,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
     {
+        // ydotool goes first for the chord: GTK3 native-Wayland windows drop wtype's
+        // Ctrl+V (its uploaded keymap misses GTK3's key bindings) while wtype exits 0.
         return await WalkChainAsync(async backend =>
             backend switch
             {
@@ -1740,7 +1742,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                         : YdotoolBackend.PasteArgs()
                 ),
                 _ => false,
-            }
+            },
+            preferYdotool: true
         );
     }
 
@@ -1918,10 +1921,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private async Task<bool> WalkChainAsync(
         Func<InputBackend, Task<bool>> attempt,
-        InputBackend? skip = null
+        InputBackend? skip = null,
+        bool preferYdotool = false
     )
     {
-        var chain = _chain;
+        var chain = preferYdotool ? _chain.OrderBy(b => b != InputBackend.Ydotool).ToList() : _chain;
         var disabled = _disabled;
         LastFailureReason = InsertionFailureReason.None;
         _abortChainAfterAttempt = false;

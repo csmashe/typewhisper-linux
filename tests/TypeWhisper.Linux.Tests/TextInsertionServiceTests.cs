@@ -3450,6 +3450,41 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandWayland_PastesWithYdotoolBeforeWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            runner.Run
+        );
+
+        Assert.True(await platform.SendPasteAsync());
+
+        // GTK3 native-Wayland windows drop wtype's Ctrl+V while wtype exits 0.
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("ydotool", call.FileName);
+        Assert.Equal(["key", "--key-delay", "25", "29:1", "47:1", "47:0", "29:0"], call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandWayland_PasteFallsBackToWtypeWhenYdotoolFails()
+    {
+        var calls = new List<string>();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, _) =>
+            {
+                calls.Add(file);
+                return Task.FromResult(file == "ydotool" ? 1 : 0);
+            }
+        );
+
+        Assert.True(await platform.SendPasteAsync());
+
+        Assert.Equal(["ydotool", "wtype"], calls);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTarget_SkipsWtypeForYdotool()
     {
         var runner = new RecordingProcessRunner();
