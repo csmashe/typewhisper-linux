@@ -601,6 +601,7 @@
   "Dictionary.NoActiveBoostingTerms": "Keine aktiven Begriffe für Boosting",
   "Dictionary.OriginalPlaceholder": "Original eingeben...",
   "Dictionary.PacksHeader": "Pakete fügen spezialisierte Fachbegriffe hinzu, damit die Spracherkennung Fachvokabular besser versteht.",
+  "Dictionary.PriorityBadge": "Priorität {0}",
   "Dictionary.PriorityPlaceholder": "Priorität",
   "Dictionary.Regex": "Regulärer Ausdruck",
   "Dictionary.ReplacementEscapesHint": "Ersetzungs-Escapes: \\s Leerzeichen, \\n Zeilenumbruch, \\r Wagenrücklauf, \\t Tabulator, \\\\ Backslash. Die Suche ist wörtlich, sofern nicht Regulärer Ausdruck aktiviert ist.",

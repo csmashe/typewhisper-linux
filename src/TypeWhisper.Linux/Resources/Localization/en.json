@@ -601,6 +601,7 @@
   "Dictionary.NoActiveBoostingTerms": "No active terms available for boosting",
   "Dictionary.OriginalPlaceholder": "Enter original...",
   "Dictionary.PacksHeader": "Packs add specialized terminology so speech recognition better understands domain vocabulary.",
+  "Dictionary.PriorityBadge": "Priority {0}",
   "Dictionary.PriorityPlaceholder": "Priority",
   "Dictionary.Regex": "Regular expression",
   "Dictionary.ReplacementEscapesHint": "Replacement escapes: \\s space, \\n line break, \\r carriage return, \\t tab, \\\\ backslash. Matching is literal unless Regular expression is enabled.",

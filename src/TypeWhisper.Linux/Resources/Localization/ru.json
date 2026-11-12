@@ -601,6 +601,7 @@
   "Dictionary.NoActiveBoostingTerms": "Нет активных терминов для усиления",
   "Dictionary.OriginalPlaceholder": "Введите оригинал...",
   "Dictionary.PacksHeader": "Пакеты добавляют специализированную терминологию, чтобы распознавание речи лучше понимало отраслевую лексику.",
+  "Dictionary.PriorityBadge": "Приоритет {0}",
   "Dictionary.PriorityPlaceholder": "Приоритет",
   "Dictionary.Regex": "Регулярное выражение",
   "Dictionary.ReplacementEscapesHint": "Экранирование замены: \\s пробел, \\n новая строка, \\r возврат каретки, \\t табуляция, \\\\ обратная косая черта. Поиск буквальный, если не включено Регулярное выражение.",
