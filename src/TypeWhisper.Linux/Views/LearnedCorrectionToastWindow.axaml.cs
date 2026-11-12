@@ -140,10 +140,11 @@ public partial class LearnedCorrectionToastWindow : Window
             return;
         }
 
-        // Prefer the realized bounds; fall back to the measured desired size before the first
-        // layout pass has produced non-zero bounds. Both are Avalonia device-independent units.
-        var width = Bounds.Width > 0 ? Bounds.Width : Root.DesiredSize.Width;
-        var height = Bounds.Height > 0 ? Bounds.Height : Root.DesiredSize.Height;
+        // Prefer the fresh measure: with SizeToContent, Bounds update only once the X server acks
+        // the resize, so after a message change they still hold the previous toast's size and a
+        // larger toast would be clamped too little and overflow its monitor. Both are DIPs.
+        var width = Root.DesiredSize.Width > 0 ? Root.DesiredSize.Width : Bounds.Width;
+        var height = Root.DesiredSize.Height > 0 ? Root.DesiredSize.Height : Bounds.Height;
         if (width <= 0 || height <= 0)
         {
             return;
