@@ -154,7 +154,6 @@ public sealed class PactlDefaultDeviceRelevanceTests
     [InlineData("Event 'change' on server #0")]
     [InlineData("Event 'new' on source #42")]
     [InlineData("Event 'remove' on source #42")]
-    [InlineData("Event 'change' on source #3")]
     public void RelevantLines_AreDetected(string line)
     {
         Assert.True(PactlDefaultDeviceWatcher.IsDefaultDeviceRelevant(line));
@@ -166,6 +165,8 @@ public sealed class PactlDefaultDeviceRelevanceTests
     [InlineData("Event 'change' on source-output #9")]
     [InlineData("Event 'new' on client #12")]
     [InlineData("Event 'change' on card #0")]
+    // Our own preview opening/closing emits this; reacting to it looped the preview.
+    [InlineData("Event 'change' on source #3")]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
