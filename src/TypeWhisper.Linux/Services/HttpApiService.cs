@@ -2038,16 +2038,7 @@ public sealed partial class HttpApiService : IDisposable
         // Ahead of any download, decode or load.
         if (opts.Task == TranscriptionTask.Translate && _models.GetTranslationRejection(resolvedModelId) is not null)
         {
-            return (
-                400,
-                Serialize(
-                    new
-                    {
-                        error = "The selected model cannot translate to English",
-                        reason = "translation_unsupported",
-                    }
-                )
-            );
+            return TranslationUnsupportedResponse();
         }
 
         // Refuse to block on a model download unless the caller opted in via
@@ -2131,6 +2122,13 @@ public sealed partial class HttpApiService : IDisposable
         await using (lease)
         {
             var plugin = lease.Plugin;
+            // Not ignored like dictation's global setting: an explicit task gets refused. Checked
+            // here because the engine flag reflects the requested model only once leased.
+            if (opts.Task == TranscriptionTask.Translate && !CanTranslate(plugin))
+            {
+                return TranslationUnsupportedResponse();
+            }
+
             (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(languageSelection, languageHints);
             configuredLanguage = languageSelection.LanguageTag;
             // Engines without native hints would otherwise lose every hint the selection
@@ -3052,6 +3050,23 @@ public sealed partial class HttpApiService : IDisposable
         response.ContentLength = bytes.Length;
         await response.Body.WriteAsync(bytes, ct);
     }
+
+    private static HttpApiResponse TranslationUnsupportedResponse() =>
+        (
+            400,
+            Serialize(
+                new
+                {
+                    error = "The selected model cannot translate to English",
+                    reason = "translation_unsupported",
+                }
+            )
+        );
+
+    // The model's declaration wins, so an unconfigured engine reports that, not a refusal.
+    private static bool CanTranslate(ITranscriptionEngineRole plugin) =>
+        plugin.TranscriptionModels.FirstOrDefault(model => model.Id == plugin.SelectedModelId)?.SupportsTranslation
+        ?? plugin.SupportsTranslation;
 
     private static string Serialize<T>(T value)
     {

@@ -1691,12 +1691,37 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal((0, 0, 0), (engine.LoadCount, engine.SelectCount, engine.TranscribeCount));
     }
 
-    [Theory]
-    [InlineData("multilingual")]
-    [InlineData("legacy")]
-    public async Task LocalFileTranslateOnModelWithoutRefusal_PassesTheTaskToTheEngine(string modelId)
+    [Fact]
+    public async Task LocalFileTranslateOnUndeclaredModelOfEngineThatCannotTranslate_IsRefusedBeforeTranscribing()
     {
-        var engine = new TranslationCapabilityEngine(modelId);
+        var engine = new TranslationCapabilityEngine("legacy");
+        using var fixture = new ApiFixture(
+            transcriptionEngine: engine,
+            audioProbeResult: new ProcessRunOutcome(ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        var path = fixture.CreateSupportedAudioFile();
+        using var content = new StringContent(
+            $$"""{"path":{{JsonSerializer.Serialize(path)}},"task":"translate"}""",
+            Encoding.UTF8, "application/json");
+
+        using var response = await client.PostAsync("/v1/transcribe/local-file", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("translation_unsupported", json.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(0, engine.TranscribeCount);
+    }
+
+    [Theory]
+    [InlineData("multilingual", false)]
+    [InlineData("legacy", true)]
+    public async Task LocalFileTranslateOnModelThatCanTranslate_PassesTheTaskToTheEngine(
+        string modelId,
+        bool legacyEngineSupportsTranslation
+    )
+    {
+        var engine = new TranslationCapabilityEngine(modelId, legacyEngineSupportsTranslation);
         var pipeline = new Mock<IPostProcessingPipeline>();
         pipeline
             .Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<PipelineOptions>(), It.IsAny<CancellationToken>()))
