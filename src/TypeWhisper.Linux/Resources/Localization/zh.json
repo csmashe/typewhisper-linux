@@ -1310,6 +1310,7 @@
   "TextInsertion.InstallYdotoolFirst": "请先安装ydotool",
   "TextInsertion.InstallYdotoolFirstHint": "尚未安装ydotool。请通过包管理器安装，然后回到这里完成一键设置。",
   "TextInsertion.Installed": "已安装。",
+  "TextInsertion.NonAsciiTypingClipboardFallback": "已复制到剪贴板。ydotool 只能按美式键盘布局输入，因此此处无法直接输入这些字符。请按 Ctrl+V 粘贴，或将此应用切换为自动或剪贴板粘贴。",
   "TextInsertion.NotInstalled": "未安装。",
   "TextInsertion.RefreshStatus": "刷新状态",
   "TextInsertion.RemovalFailed": "移除失败：{0}",

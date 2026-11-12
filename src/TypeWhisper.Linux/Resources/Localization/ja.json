@@ -1310,6 +1310,7 @@
   "TextInsertion.InstallYdotoolFirst": "先にydotoolをインストール",
   "TextInsertion.InstallYdotoolFirstHint": "ydotoolはまだインストールされていません。パッケージマネージャーでインストールしてから、ここに戻ってワンクリックセットアップを完了してください。",
   "TextInsertion.Installed": "インストール済みです。",
+  "TextInsertion.NonAsciiTypingClipboardFallback": "クリップボードにコピーしました。ydotoolは米国キーボード配列でのみ入力するため、ここでは直接入力でこれらの文字を入力できません。Ctrl+Vで貼り付けるか、このアプリを自動またはクリップボードから貼り付けに切り替えてください。",
   "TextInsertion.NotInstalled": "インストールされていません。",
   "TextInsertion.RefreshStatus": "状態を更新",
   "TextInsertion.RemovalFailed": "削除に失敗しました：{0}",

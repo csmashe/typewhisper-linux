@@ -24,6 +24,7 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
     // Integration tests set it to model a ydotool chain; the UiTests link never does.
     // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Global
     public bool CanTypeNonAscii { get; set; } = true;
+    public bool HasAsciiOnlyTypingBackend => !CanTypeNonAscii;
 
     public InsertionFailureReason LastFailureReason
     {
@@ -168,6 +169,23 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
 
     // Invoked as text is typed, so tests can observe state while delivery is in progress.
     internal Action<string>? OnTyping { get; set; }
+
+    // With CanTypeNonAscii false this models a ydotool-only chain, which unicode-only typing skips.
+    public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
+    {
+        if (!unicodeBackendsOnly || CanTypeNonAscii)
+        {
+            return TypeTextAsync(text);
+        }
+
+        lock (_gate)
+        {
+            _lastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
+            _lastTypingDeliveredPartialText = false;
+        }
+
+        return Task.FromResult(false);
+    }
 
     public Task<bool> TypeTextAsync(string text)
     {
