@@ -151,5 +151,5 @@ internal static class GemmaModelVerification
         new(path, FileMode.Open, FileAccess.Read, FileShare.Read, HashBufferSize, FileOptions.SequentialScan | FileOptions.Asynchronous);
 
     private static string MismatchMessage(GemmaModelDefinition model) =>
-        $"The downloaded {model.DisplayName} model failed its integrity check. Select the model again to re-download it.";
+        $"The downloaded {model.DisplayName} model failed its integrity check. Use Download and load model to download it again.";
 }

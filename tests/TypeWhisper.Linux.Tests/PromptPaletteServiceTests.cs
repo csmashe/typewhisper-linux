@@ -19,6 +19,43 @@ public sealed class PromptPaletteServiceTests
         Assert.Equal(Loc.Instance["Prompts.NoProviderConfigure"], PromptPaletteService.NoProviderMessage);
     }
 
+    private static readonly ActiveWindowSnapshot s_windowA = new("editor", "A", "0x1", "editor", "hyprland");
+    private static readonly ActiveWindowSnapshot s_windowB = new("editor", "B", "0x2", "editor", "hyprland");
+
+    private static Func<CancellationToken, Task<ActiveWindowSnapshot?>> Focused(ActiveWindowSnapshot? window) =>
+        _ => Task.FromResult(window);
+
+    [Fact]
+    public async Task Result_is_not_pasted_after_focus_moves_to_another_wayland_window()
+    {
+        Assert.False(await PromptPaletteService.IsTargetWindowStillFocusedAsync(Focused(s_windowB), s_windowA, null, true));
+    }
+
+    [Fact]
+    public async Task Result_is_pasted_while_the_captured_wayland_window_keeps_focus()
+    {
+        Assert.True(await PromptPaletteService.IsTargetWindowStillFocusedAsync(Focused(s_windowA), s_windowA, null, true));
+    }
+
+    [Fact]
+    public async Task Result_is_not_pasted_when_focus_cannot_be_read_again()
+    {
+        Assert.False(await PromptPaletteService.IsTargetWindowStillFocusedAsync(
+            _ => throw new InvalidOperationException(), s_windowA, null, true));
+    }
+
+    [Fact]
+    public async Task Result_is_pasted_when_no_window_identity_was_captured()
+    {
+        Assert.True(await PromptPaletteService.IsTargetWindowStillFocusedAsync(Focused(s_windowB), null, null, true));
+    }
+
+    [Fact]
+    public async Task X11_result_with_an_xdotool_target_skips_the_snapshot_check()
+    {
+        Assert.True(await PromptPaletteService.IsTargetWindowStillFocusedAsync(Focused(s_windowB), s_windowA, "123", false));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

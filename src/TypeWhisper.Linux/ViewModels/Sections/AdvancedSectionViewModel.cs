@@ -131,9 +131,7 @@ public partial class AdvancedSectionViewModel : ObservableObject
                 OnPropertyChanged(nameof(CanUseMemory));
                 OnPropertyChanged(nameof(ShowMemoryUnavailableReason));
                 OnPropertyChanged(nameof(MemoryHint));
-                OnPropertyChanged(nameof(CanUseSpokenFeedback));
-                OnPropertyChanged(nameof(ShowSpokenFeedbackUnavailableReason));
-                OnPropertyChanged(nameof(SpokenFeedbackHint));
+                NotifySpokenFeedbackAvailabilityChanged();
                 RefreshSpokenFeedbackProviders();
                 MemoryEnabled = _configuredMemoryEnabled && CanUseMemory;
                 SpokenFeedbackEnabled = _configuredSpokenFeedbackEnabled && CanUseSpokenFeedback;
@@ -206,6 +204,9 @@ public partial class AdvancedSectionViewModel : ObservableObject
     public bool CanUseDiagnosticLog => _diagnosticLog is not null;
 
     public bool CanUseSpokenFeedback => _speechFeedback.IsAvailable;
+
+    // Not gated on availability, so an unavailable provider can't block switching away from it.
+    public bool CanChooseSpokenFeedbackProvider => SpokenFeedbackProviders.Count > 1;
     public bool ShowSpokenFeedbackUnavailableReason => !CanUseSpokenFeedback;
 
     private static string SpokenFeedbackUnavailableReason =>
@@ -245,6 +246,8 @@ public partial class AdvancedSectionViewModel : ObservableObject
 
         RunProgrammaticRefresh(() =>
         {
+            // A provider change alters availability.
+            NotifySpokenFeedbackAvailabilityChanged();
             MemoryEnabled = _configuredMemoryEnabled && CanUseMemory;
             ScreenContextEnabled = settings.ScreenContextEnabled;
             ClipboardContextEnabled = settings.ClipboardContextEnabled;
@@ -621,8 +624,16 @@ public partial class AdvancedSectionViewModel : ObservableObject
         RunProgrammaticRefresh(() =>
         {
             ReplaceCollection(SpokenFeedbackProviders, _speechFeedback.AvailableProviders);
+            OnPropertyChanged(nameof(CanChooseSpokenFeedbackProvider));
             ApplyEffectiveSpokenFeedbackPreference();
         });
+    }
+
+    private void NotifySpokenFeedbackAvailabilityChanged()
+    {
+        OnPropertyChanged(nameof(CanUseSpokenFeedback));
+        OnPropertyChanged(nameof(ShowSpokenFeedbackUnavailableReason));
+        OnPropertyChanged(nameof(SpokenFeedbackHint));
     }
 
     private void RefreshSpokenFeedbackVoices()

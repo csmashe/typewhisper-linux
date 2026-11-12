@@ -2037,6 +2037,23 @@ public sealed class TextInsertionServiceTests
     }
 
     [Theory]
+    [InlineData("streamed text", false)]
+    [InlineData("café au lait", true)]
+    public async Task TypeStreamChunkAsync_keeps_non_ascii_chunks_off_ydotool(
+        string chunk,
+        bool expectedUnicodeBackendsOnly
+    )
+    {
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.TypeStreamChunkAsync(chunk);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expectedUnicodeBackendsOnly, platform.LastTypeUsedUnicodeBackendsOnly);
+    }
+
+    [Theory]
     [InlineData("firefox", "Example")]
     [InlineData("zen", "Teamwork — Zen Browser")]
     [InlineData(null, "Teamwork — Zen Browser")]
@@ -2365,9 +2382,8 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
-    public async Task InsertTextAsync_direct_typing_strategy_still_types_non_ascii_when_backend_cannot()
+    public async Task InsertTextAsync_direct_typing_strategy_types_non_ascii_with_unicode_backends_only()
     {
-        // An explicit DirectTyping choice is the user's call; only Auto reroutes.
         var platform = new FakeTextInsertionPlatform { Clipboard = "previous", CanTypeNonAscii = false };
         var sut = new TextInsertionService(platform);
 
@@ -2379,7 +2395,83 @@ public sealed class TextInsertionServiceTests
 
         Assert.Equal(InsertionResult.Typed, result);
         Assert.Equal("café", platform.TypedText);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Theory]
+    [InlineData(InsertionFailureReason.NoWaylandTypingTool)]
+    [InlineData(InsertionFailureReason.WtypeCompositorUnsupported)]
+    // A chain that only skipped ydotool for this text may report no reason at all.
+    [InlineData(InsertionFailureReason.None)]
+    public async Task InsertTextAsync_direct_typing_strategy_copies_non_ascii_when_only_ydotool_could_type_it(
+        InsertionFailureReason platformReason
+    )
+    {
+        // ydotool-only Wayland: typing "café" with ydotool would land "caf" and report Typed.
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CanTypeNonAscii = false,
+            UnicodeBackendsAvailable = false,
+            UnicodeOnlyFailureReason = platformReason,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "python3",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.NonAsciiTypingUnavailable, sut.LastFailureReason);
+        Assert.True(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.Null(platform.TypedText);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("café", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_direct_typing_strategy_does_not_blame_ydotool_when_another_backend_failed()
+    {
+        // wtype-only chain: wtype ran and exited non-zero, so no ydotool was held back.
+        var platform = new FakeTextInsertionPlatform { Clipboard = "previous", TypeSucceeds = false };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "café",
+            targetProcessName: "python3",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("café", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_direct_typing_strategy_types_ascii_with_any_backend()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            CanTypeNonAscii = false,
+            UnicodeBackendsAvailable = false,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync(
+            "cafe",
+            targetProcessName: "python3",
+            strategy: TextInsertionStrategy.DirectTyping
+        );
+
+        Assert.Equal(InsertionResult.Typed, result);
+        Assert.Equal("cafe", platform.TypedText);
         Assert.False(platform.LastTypeUsedUnicodeBackendsOnly);
+        Assert.Equal("previous", platform.Clipboard);
     }
 
     [Fact]
@@ -2871,6 +2963,26 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(expected, platform.CanTypeNonAscii);
     }
 
+    [Theory]
+    [InlineData("Wayland", false, true, true)]
+    [InlineData("Wayland", false, false, true)]
+    [InlineData("Wayland", false, true, false)]
+    [InlineData("X11", true, false, false)]
+    public void LinuxTextInsertionPlatform_HasAsciiOnlyTypingBackend_WhenChainHasYdotool(
+        string sessionType,
+        bool hasXdotool,
+        bool hasWtype,
+        bool ydotoolUsable
+    )
+    {
+        ITextInsertionPlatform platform = new LinuxTextInsertionPlatform(
+            SnapshotFor(sessionType, hasXdotool, hasWtype, "hyprland", ydotoolUsable, ydotoolUsable),
+            new RecordingProcessRunner().Run
+        );
+
+        Assert.Equal(ydotoolUsable, platform.HasAsciiOnlyTypingBackend);
+    }
+
     [Fact]
     public async Task LinuxTextInsertionPlatform_ClipboardRead_UsesFiveSecondTimeout()
     {
@@ -3114,9 +3226,10 @@ public sealed class TextInsertionServiceTests
         Assert.True(await ydotoolPlatform.TypeTextAsync("hello"));
         Assert.True(await xdotoolPlatform.TypeTextAsync("hello"));
 
-        Assert.Equal(["wtype", "ydotool", "xdotool"], runner.Invocations.Select(i => i.FileName));
+        // Hyprland probes the focused window before trying wtype.
+        Assert.Equal(["hyprctl", "wtype", "ydotool", "xdotool"], runner.Invocations.Select(i => i.FileName));
         Assert.All(
-            runner.Invocations,
+            runner.Invocations.Skip(1),
             invocation => Assert.Equal(TimeSpan.FromSeconds(60), invocation.Timeout)
         );
     }
@@ -3133,9 +3246,9 @@ public sealed class TextInsertionServiceTests
         var result = await platform.TypeTextAsync("hello");
 
         Assert.False(result);
-        var call = Assert.Single(runner.Invocations);
-        Assert.Equal("wtype", call.FileName);
-        Assert.Equal(TimeSpan.FromSeconds(60), call.Timeout);
+        // The timed-out focused-window probe must not block the wtype attempt.
+        Assert.Equal(["hyprctl", "wtype"], runner.Invocations.Select(i => i.FileName));
+        Assert.Equal(TimeSpan.FromSeconds(60), runner.Invocations[1].Timeout);
     }
 
     [Fact]
@@ -3505,6 +3618,129 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandWayland_PastesWithYdotoolBeforeWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            runner.Run
+        );
+
+        Assert.True(await platform.SendPasteAsync());
+
+        // GTK3 native-Wayland windows drop wtype's Ctrl+V while wtype exits 0.
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("ydotool", call.FileName);
+        Assert.Equal(["key", "--key-delay", "25", "29:1", "47:1", "47:0", "29:0"], call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandWayland_PasteFallsBackToWtypeWhenYdotoolFails()
+    {
+        var calls = new List<string>();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, _) =>
+            {
+                calls.Add(file);
+                return Task.FromResult(file == "ydotool" ? 1 : 0);
+            }
+        );
+
+        Assert.True(await platform.SendPasteAsync());
+
+        Assert.Equal(["ydotool", "wtype"], calls);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTarget_SkipsWtypeForYdotool()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(true)
+        );
+
+        Assert.True(await platform.TypeTextAsync("QA abc 123"));
+        Assert.True(await platform.SendPasteAsync());
+
+        Assert.All(runner.Calls, call => Assert.Equal("ydotool", call.FileName));
+        Assert.Equal(2, runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTargetWithOnlyWtype_ReportsFailure()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(true)
+        );
+
+        Assert.False(await platform.TypeTextAsync("QA abc 123"));
+        Assert.Equal(InsertionFailureReason.WtypeXWaylandTarget, platform.LastFailureReason);
+        Assert.False(await platform.SendPasteAsync());
+        Assert.Equal(InsertionFailureReason.WtypeXWaylandTarget, platform.LastFailureReason);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTargetWithNonAsciiText_ReportsNoSetupGap()
+    {
+        // Auto keeps non-ASCII off ydotool, but ydotool is set up, so no setup hint applies.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(true)
+        );
+
+        Assert.False(await platform.TypeTextAsync("café", unicodeBackendsOnly: true));
+
+        Assert.Equal(InsertionFailureReason.None, platform.LastFailureReason);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandNativeWaylandTarget_KeepsWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(false)
+        );
+
+        Assert.True(await platform.TypeTextAsync("hi"));
+        Assert.Equal("wtype", Assert.Single(runner.Calls).FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandProbe_ReadsXWaylandFlagFromHyprctl()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "hyprctl" && args.SequenceEqual(["activewindow", "-j"]),
+            """{"address":"0x1","class":"python3","xwayland":true}"""
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner
+        );
+
+        Assert.False(await platform.TypeTextAsync("QA abc 123"));
+
+        Assert.Equal(InsertionFailureReason.WtypeXWaylandTarget, platform.LastFailureReason);
+        Assert.Equal("hyprctl", Assert.Single(runner.Invocations).FileName);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_GnomeWaylandWithoutYdotoolSocket_FallsThroughChain()
     {
         // ydotool binary installed but socket missing — ydotool is
@@ -3743,6 +3979,23 @@ public sealed class TextInsertionServiceTests
         Assert.False(result);
         var call = Assert.Single(runner.Calls);
         Assert.Equal("wtype", call.FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_UnicodeOnlyTyping_RunsNothingWhenYdotoolIsTheOnlyBackend()
+    {
+        var runner = new ScriptedProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, false, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            runner.RunWithStderr
+        );
+
+        var result = await platform.TypeTextAsync("café", unicodeBackendsOnly: true);
+
+        Assert.False(result);
+        Assert.Empty(runner.Calls);
+        Assert.False(platform.LastTypingDeliveredPartialText);
     }
 
     [Fact]
@@ -4254,10 +4507,24 @@ public sealed class TextInsertionServiceTests
 
         public bool LastTypeUsedUnicodeBackendsOnly { get; private set; }
 
+        // false models a chain whose only backend is ydotool, which unicode-only typing skips.
+        public bool UnicodeBackendsAvailable { get; init; } = true;
+
+        public bool HasAsciiOnlyTypingBackend => !UnicodeBackendsAvailable;
+
+        public InsertionFailureReason UnicodeOnlyFailureReason { get; init; } =
+            InsertionFailureReason.NoWaylandTypingTool;
+
         public Task<bool> TypeTextAsync(string text, bool unicodeBackendsOnly)
         {
             LastTypeUsedUnicodeBackendsOnly = unicodeBackendsOnly;
-            return TypeTextAsync(text);
+            if (!unicodeBackendsOnly || UnicodeBackendsAvailable)
+            {
+                return TypeTextAsync(text);
+            }
+
+            LastFailureReason = UnicodeOnlyFailureReason;
+            return Task.FromResult(false);
         }
 
         public Task<bool> TypeTextAsync(string text)

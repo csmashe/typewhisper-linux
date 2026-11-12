@@ -2026,6 +2026,25 @@ public sealed partial class HttpApiService : IDisposable
         return await RunTranscriptionAsync(payload.Path, opts, ct);
     }
 
+    // Plugin messages are already credential-redacted, so they can be returned as-is.
+    private static HttpApiResponse MapTranscriptionProviderFailure(PluginRequestException ex)
+    {
+        var (status, reason) = ex.FailureKind switch
+        {
+            PluginRequestFailureKind.Network
+                or PluginRequestFailureKind.Timeout
+                or PluginRequestFailureKind.ServerError => (503, "provider_unavailable"),
+            PluginRequestFailureKind.RateLimit => (503, "provider_rate_limited"),
+            PluginRequestFailureKind.Configuration => (503, "provider_not_configured"),
+            PluginRequestFailureKind.Authentication
+                or PluginRequestFailureKind.Permission => (502, "provider_authentication_failed"),
+            PluginRequestFailureKind.InvalidRequest
+                or PluginRequestFailureKind.RequestTooLarge => (502, "provider_rejected_request"),
+            _ => (502, "provider_failed"),
+        };
+        return (status, Serialize(new { error = ex.Message, reason }));
+    }
+
     private async Task<HttpApiResponse> RunTranscriptionAsync(
         string audioPath,
         TranscriptionRunOptions opts,
@@ -2038,16 +2057,7 @@ public sealed partial class HttpApiService : IDisposable
         // Ahead of any download, decode or load.
         if (opts.Task == TranscriptionTask.Translate && _models.GetTranslationRejection(resolvedModelId) is not null)
         {
-            return (
-                400,
-                Serialize(
-                    new
-                    {
-                        error = "The selected model cannot translate to English",
-                        reason = "translation_unsupported",
-                    }
-                )
-            );
+            return TranslationUnsupportedResponse();
         }
 
         // Refuse to block on a model download unless the caller opted in via
@@ -2131,6 +2141,13 @@ public sealed partial class HttpApiService : IDisposable
         await using (lease)
         {
             var plugin = lease.Plugin;
+            // Not ignored like dictation's global setting: an explicit task gets refused. Checked
+            // here because the engine flag reflects the requested model only once leased.
+            if (opts.Task == TranscriptionTask.Translate && !CanTranslate(plugin))
+            {
+                return TranslationUnsupportedResponse();
+            }
+
             (languageSelection, languageHints) = plugin.ResolveEffectiveLanguage(languageSelection, languageHints);
             configuredLanguage = languageSelection.LanguageTag;
             // Engines without native hints would otherwise lose every hint the selection
@@ -2147,14 +2164,22 @@ public sealed partial class HttpApiService : IDisposable
                 ),
                 _dictionary.GetEnabledTerms()
             );
-            result = await plugin.TranscribeAsync(
-                wav,
-                languageSelection,
-                languageHints,
-                opts.Task == TranscriptionTask.Translate,
-                prompt,
-                ct
-            );
+            try
+            {
+                result = await plugin.TranscribeAsync(
+                    wav,
+                    languageSelection,
+                    languageHints,
+                    opts.Task == TranscriptionTask.Translate,
+                    prompt,
+                    ct
+                );
+            }
+            catch (PluginRequestException ex) when (!ct.IsCancellationRequested)
+            {
+                Trace.WriteLine($"[HttpApiService] Transcription provider failed ({ex.FailureKind}): {ex.Message}");
+                return MapTranscriptionProviderFailure(ex);
+            }
             engineProviderId = plugin.ProviderId;
             selectedModelId = plugin.SelectedModelId;
             engineSupportsTranslation = plugin.SupportsTranslation;
@@ -3052,6 +3077,23 @@ public sealed partial class HttpApiService : IDisposable
         response.ContentLength = bytes.Length;
         await response.Body.WriteAsync(bytes, ct);
     }
+
+    private static HttpApiResponse TranslationUnsupportedResponse() =>
+        (
+            400,
+            Serialize(
+                new
+                {
+                    error = "The selected model cannot translate to English",
+                    reason = "translation_unsupported",
+                }
+            )
+        );
+
+    // The model's declaration wins, so an unconfigured engine reports that, not a refusal.
+    private static bool CanTranslate(ITranscriptionEngineRole plugin) =>
+        plugin.TranscriptionModels.FirstOrDefault(model => model.Id == plugin.SelectedModelId)?.SupportsTranslation
+        ?? plugin.SupportsTranslation;
 
     private static string Serialize<T>(T value)
     {

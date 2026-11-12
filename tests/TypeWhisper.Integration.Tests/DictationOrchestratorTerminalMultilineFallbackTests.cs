@@ -188,6 +188,60 @@ public sealed class DictationOrchestratorTerminalMultilineFallbackTests
         });
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task DirectTypingIntoXWaylandWithOnlyWtype_ReportsYdotoolSetupInsteadOfCopyFailure()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            var previousLanguage = Loc.Instance.CurrentLanguage;
+            try
+            {
+                Loc.Instance.Initialize(LocalizationDir());
+                Loc.Instance.CurrentLanguage = "en";
+
+                await using var fixture = new OrchestratorCompositionFixture(
+                    focusedApp: ("python3", "XWayland app — integration")
+                );
+                fixture.Settings.Save(
+                    fixture.Settings.Current with
+                    {
+                        AppInsertionStrategies = new Dictionary<string, TextInsertionStrategy>
+                        {
+                            ["python3"] = TextInsertionStrategy.DirectTyping,
+                        },
+                    }
+                );
+                fixture.Plugin.EnqueueText("QA abc 123");
+                fixture.InsertionPlatform.EnqueueTypingOutcome(succeeds: false, deliveredPartial: false);
+                fixture.InsertionPlatform.SetFailureReason(InsertionFailureReason.WtypeXWaylandTarget);
+
+                var overlayStates = new ConcurrentQueue<DictationOverlayState>();
+                fixture.Orchestrator.OverlayStateChanged += (_, state) =>
+                    overlayStates.Enqueue(state);
+
+                var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+                fixture.FeedNonSilentAudio();
+                var resultTask = fixture.WaitForResultAsync(sessionId);
+                await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+                await BoundedTest.WaitAsync(resultTask);
+
+                var expectedMessage = Loc.Instance["TextInsertion.WtypeXWaylandFailed"];
+                Assert.Contains("ydotool", expectedMessage);
+                Assert.Contains(
+                    overlayStates,
+                    state => state is { ShowFeedback: true, FeedbackIsError: true }
+                             && state.FeedbackText == expectedMessage
+                );
+                Assert.Empty(fixture.InsertionPlatform.ClipboardWrites);
+            }
+            finally
+            {
+                Loc.Instance.CurrentLanguage = previousLanguage;
+            }
+        });
+    }
+
     private static string LocalizationDir([CallerFilePath] string thisFile = "")
     {
         var testDir = Path.GetDirectoryName(thisFile)!;

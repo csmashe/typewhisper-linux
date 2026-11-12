@@ -154,7 +154,6 @@ public sealed class PactlDefaultDeviceRelevanceTests
     [InlineData("Event 'change' on server #0")]
     [InlineData("Event 'new' on source #42")]
     [InlineData("Event 'remove' on source #42")]
-    [InlineData("Event 'change' on source #3")]
     public void RelevantLines_AreDetected(string line)
     {
         Assert.True(PactlDefaultDeviceWatcher.IsDefaultDeviceRelevant(line));
@@ -166,6 +165,8 @@ public sealed class PactlDefaultDeviceRelevanceTests
     [InlineData("Event 'change' on source-output #9")]
     [InlineData("Event 'new' on client #12")]
     [InlineData("Event 'change' on card #0")]
+    // Our own preview opening/closing emits this; reacting to it looped the preview.
+    [InlineData("Event 'change' on source #3")]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
@@ -485,6 +486,68 @@ public sealed class DefaultDeviceWatcherFallbackTests
             Thread.Sleep(5);
             Assert.False(sut.IsRunningForTest, "Stop() was undone by a concurrent reconnect.");
         }
+    }
+
+    [Fact]
+    public void PactlWatcher_KillsSubscription_OnSigterm()
+    {
+        // SIGTERM skips App's teardown; the watcher must still kill pactl, because pactl
+        // ignores SIGPIPE and would otherwise outlive the app forever.
+        Action? onSigterm = null;
+        var registration = new TrackingDisposable();
+        var reader = new BlockingSubscriptionReader();
+        var killed = false;
+        var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            subscriptionFactory: () => PactlSubscription.ForTest(
+                reader,
+                onKill: () =>
+                {
+                    killed = true;
+                    reader.Release();
+                }),
+            registerSigtermHandler: callback =>
+            {
+                onSigterm = callback;
+                return registration;
+            });
+
+        sut.Start(() => { });
+        Assert.NotNull(onSigterm);
+        Assert.True(sut.IsRunningForTest);
+
+        onSigterm();
+
+        Assert.True(killed);
+        Assert.False(sut.IsRunningForTest);
+        Assert.True(registration.Disposed);
+    }
+
+    [Fact]
+    public void PactlWatcher_StillStarts_WhenSigtermRegistrationFails()
+    {
+        var reader = new BlockingSubscriptionReader();
+        var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            subscriptionFactory: () => PactlSubscription.ForTest(reader, onKill: reader.Release),
+            registerSigtermHandler: _ => throw new IOException("sigaction failed"));
+
+        try
+        {
+            sut.Start(() => { });
+
+            Assert.True(sut.IsRunningForTest);
+        }
+        finally
+        {
+            sut.Dispose();
+        }
+    }
+
+    private sealed class TrackingDisposable : IDisposable
+    {
+        public bool Disposed { get; private set; }
+        public void Dispose() => Disposed = true;
     }
 
     private static void WaitUntil(Func<bool> condition)
