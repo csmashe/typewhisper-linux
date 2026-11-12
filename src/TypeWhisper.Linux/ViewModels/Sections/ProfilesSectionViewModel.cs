@@ -1640,23 +1640,41 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     internal static string FormatBrowserSetupResult(BrowserAccessibilitySetupHelper.SetupResult result)
     {
+        var skipped = result.SkippedFirefoxProfiles;
+        var nonUtf8 = result.NonUtf8FirefoxProfiles;
+        // Names its own profiles, so it can follow the permission wording or a failure.
+        var encodingRetry = nonUtf8.Count > 0
+            ? Loc.Instance.GetString("Profiles.BrowserSetupFirefoxEncodingRetry", string.Join(", ", nonUtf8))
+            : null;
         if (result.Success)
         {
-            return result.SkippedFirefoxProfiles.Count > 0
-                ? Loc.Instance.GetString(
-                    "Profiles.BrowserSetupPartialFirefox",
-                    string.Join(", ", result.SkippedFirefoxProfiles)
-                )
-                : Loc.Instance.GetString(
-                    "Profiles.BrowserSetupSuccess",
-                    Loc.Instance["Profiles.BrowserSetupEnabled"]
-                );
+            if (skipped.Count == 0)
+            {
+                return nonUtf8.Count > 0
+                    ? Loc.Instance.GetString(
+                        "Profiles.BrowserSetupPartialFirefoxEncoding",
+                        string.Join(", ", nonUtf8)
+                    )
+                    : Loc.Instance.GetString(
+                        "Profiles.BrowserSetupSuccess",
+                        Loc.Instance["Profiles.BrowserSetupEnabled"]
+                    );
+            }
+
+            var partial = Loc.Instance.GetString(
+                "Profiles.BrowserSetupPartialFirefox",
+                string.Join(", ", skipped)
+            );
+            return encodingRetry is null ? partial : $"{partial} {encodingRetry}";
         }
 
         var failure = $"{result.Message} {result.Detail}";
-        return result.SkippedFirefoxProfiles.Count > 0
-            ? $"{failure} {Loc.Instance["Profiles.BrowserSetupFirefoxRetry"]}"
-            : failure;
+        if (skipped.Count > 0)
+        {
+            failure += $" {Loc.Instance["Profiles.BrowserSetupFirefoxRetry"]}";
+        }
+
+        return encodingRetry is null ? failure : $"{failure} {encodingRetry}";
     }
 
     // Rewords the last setup/revert result on a language switch; null while the computed status shows.

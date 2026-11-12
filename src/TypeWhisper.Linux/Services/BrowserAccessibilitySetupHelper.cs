@@ -157,10 +157,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
     ///     <c>user.js</c>, and a running Firefox won't clobber our change on
     ///     its next save. Takes effect on the next Firefox restart.
     /// </summary>
-    private static (SetupResult Result, IReadOnlyList<string> Skipped) ForceEnableFirefoxAccessibility()
+    private static (SetupResult Result, IReadOnlyList<string> Skipped, IReadOnlyList<string> NonUtf8)
+        ForceEnableFirefoxAccessibility()
     {
         var patched = new List<string>();
         var skipped = new List<string>();
+        var nonUtf8 = new List<string>();
         // Unwritable, but prefs.js already carries an un-overridden -1, so URL detection works.
         var alreadyEnabled = new List<string>();
 
@@ -174,14 +176,17 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     PatchFirefoxUserJs(userJsPath);
                     patched.Add(Path.GetFileName(profileDir));
                 }
-                catch
+                catch (Exception ex)
                 {
-                    (IsForceEnabledInProfile(profileDir) ? alreadyEnabled : skipped)
-                        .Add(Path.GetFileName(profileDir));
+                    var unpatched = IsForceEnabledInProfile(profileDir) ? alreadyEnabled
+                        : ex is NonUtf8FileException ? nonUtf8
+                        : skipped;
+                    unpatched.Add(Path.GetFileName(profileDir));
                 }
             }
 
-            if (patched.Count == 0 && skipped.Count == 0 && alreadyEnabled.Count == 0)
+            if (patched.Count == 0 && skipped.Count == 0 && nonUtf8.Count == 0
+                && alreadyEnabled.Count == 0)
             {
                 return (
                     new SetupResult(
@@ -189,7 +194,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
                         "No Firefox profiles were found to patch.",
                         "Run Firefox once to create a profile, then try again."
                     ),
-                    skipped
+                    skipped,
+                    nonUtf8
                 );
             }
 
@@ -228,6 +234,19 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     .Append('.');
             }
 
+            if (nonUtf8.Count > 0)
+            {
+                if (detail.Length > 0)
+                {
+                    detail.Append(' ');
+                }
+
+                detail
+                    .Append("user.js is not UTF-8, left unchanged: ")
+                    .Append(string.Join(", ", nonUtf8))
+                    .Append('.');
+            }
+
             if (patched.Count > 0)
             {
                 detail.Append(" Restart Firefox for the change to take effect.");
@@ -242,14 +261,16 @@ public sealed partial class BrowserAccessibilitySetupHelper
                         : "Could not enable Firefox accessibility.",
                     detail.ToString()
                 ),
-                skipped
+                skipped,
+                nonUtf8
             );
         }
         catch (Exception ex)
         {
             return (
                 new SetupResult(false, "Could not enable Firefox accessibility.", ex.Message),
-                skipped
+                skipped,
+                nonUtf8
             );
         }
     }
@@ -282,7 +303,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 GetLauncherNames(BrowserLauncherPatchMode.FirefoxEnvironment),
                 PrependEnvWrapperToExecLines
             );
-            var (firefoxPrefResult, skippedProfiles) = ForceEnableFirefoxAccessibility();
+            var (firefoxPrefResult, skippedProfiles, nonUtf8Profiles) =
+                ForceEnableFirefoxAccessibility();
 
             var detail = new StringBuilder();
             if (firefoxPatched.Count > 0)
@@ -305,7 +327,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
             }
 
             if (
-                (firefoxPrefResult.Success || skippedProfiles.Count > 0)
+                (firefoxPrefResult.Success || skippedProfiles.Count > 0 || nonUtf8Profiles.Count > 0)
                 && !string.IsNullOrWhiteSpace(firefoxPrefResult.Detail)
             )
             {
@@ -347,6 +369,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 )
                 {
                     SkippedFirefoxProfiles = skippedProfiles,
+                    NonUtf8FirefoxProfiles = nonUtf8Profiles,
                 }
             );
         }
@@ -662,7 +685,20 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
             try
             {
-                if (LastForceDisabledIsNegOne(File.ReadAllText(path)) is { } isNegOne)
+                var bytes = File.ReadAllBytes(path);
+                // Firefox parses pref files as UTF-8 bytes, so a UTF-16 or UTF-32 file sets nothing.
+                if (AtomicFileWriter.StartsWithNonUtf8ByteOrderMark(bytes))
+                {
+                    continue;
+                }
+
+                var body = bytes.AsSpan();
+                if (body.StartsWith(Encoding.UTF8.Preamble))
+                {
+                    body = body[Encoding.UTF8.Preamble.Length..];
+                }
+
+                if (LastForceDisabledIsNegOne(Encoding.UTF8.GetString(body)) is { } isNegOne)
                 {
                     return isNegOne;
                 }
@@ -1582,6 +1618,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
     {
         public IReadOnlyList<string> SkippedFirefoxProfiles { get; init; } = [];
 
+        // Profiles whose user.js was refused for its encoding, not for access.
+        public IReadOnlyList<string> NonUtf8FirefoxProfiles { get; init; } = [];
         // Removal outcome, so the UI can word its summary in the interface language.
         public bool LeftEnvFile { get; init; }
         public IReadOnlyList<string> RemovedLaunchers { get; init; } = [];

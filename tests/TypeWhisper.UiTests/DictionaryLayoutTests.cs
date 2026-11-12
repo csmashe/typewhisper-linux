@@ -172,6 +172,65 @@ public sealed class DictionaryLayoutTests(UiSession ui)
         Assert.True(problems.Count == 0, string.Join("\n", problems.Take(20)));
     }
 
+    [Theory]
+    [MemberData(nameof(MainWindowRenderTests.Languages), MemberType = typeof(MainWindowRenderTests))]
+    public async Task EntryBadgesFollowInterfaceLanguage(string language)
+    {
+        var missing = await ui.Session.Dispatch(() =>
+        {
+            DictionaryEntry[] entries =
+            [
+                new() { Id = "badge-term", Original = "TWQA_term", EntryType = DictionaryEntryType.Term, Priority = 7 },
+                new()
+                {
+                    Id = "badge-correction", Original = "TWQA_teh", Replacement = "TWQA_the",
+                    EntryType = DictionaryEntryType.Correction, Priority = 3,
+                },
+            ];
+            var dictionary = ui.Services.GetRequiredService<IDictionaryService>();
+            foreach (var entry in entries)
+                dictionary.AddEntry(entry);
+            Loc.Instance.CurrentLanguage = language;
+            var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
+            var window = new MainWindow(viewModel) { Width = 1000, Height = 800 };
+            window.Show();
+            try
+            {
+                viewModel.SelectedItem = viewModel.NavItems.First(item => item.Content is DictionarySectionViewModel);
+                MainWindowRenderTests.Settle();
+                var shown = window.GetVisualDescendants().OfType<WrapPanel>()
+                    .Where(panel => panel.Classes.Contains("entry-badges")
+                        && panel.DataContext is DictionaryEntry { Id: "badge-term" or "badge-correction" })
+                    .ToDictionary(
+                        panel => ((DictionaryEntry)panel.DataContext!).Id,
+                        panel => panel.Children.Where(badge => badge.IsVisible)
+                            .Select(badge => ((TextBlock)((Border)badge).Child!).Text)
+                            .ToList());
+                (string Id, string Badge)[] expected =
+                [
+                    ("badge-term", Loc.Instance["Dictionary.TypeTerm"]),
+                    ("badge-term", Loc.Instance.GetString("Dictionary.PriorityBadge", 7)),
+                    ("badge-correction", Loc.Instance["Dictionary.TypeCorrection"]),
+                    ("badge-correction", Loc.Instance.GetString("Dictionary.PriorityBadge", 3)),
+                ];
+                return expected
+                    .Where(item => !shown.TryGetValue(item.Id, out var badges) || !badges.Contains(item.Badge))
+                    .Select(item => $"{item.Id} lacks '{item.Badge}'; shows "
+                        + string.Join(", ", shown.GetValueOrDefault(item.Id) ?? []))
+                    .ToList();
+            }
+            finally
+            {
+                window.Close();
+                Loc.Instance.CurrentLanguage = "en";
+                foreach (var entry in entries)
+                    dictionary.DeleteEntry(entry.Id);
+            }
+        }, CancellationToken.None);
+
+        Assert.True(missing.Count == 0, string.Join("\n", missing));
+    }
+
     private static IEnumerable<string> RowProblems(Border card)
     {
         var grid = (Grid)card.Child!;
