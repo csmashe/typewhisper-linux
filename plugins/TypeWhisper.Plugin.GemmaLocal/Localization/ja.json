@@ -1,12 +1,18 @@
 {
   "Settings.Model": "モデル",
-  "Settings.ModelDescription": "LLM処理に使用するローカルGemmaモデルです。モデルを選択すると、（必要に応じて）ダウンロードして読み込みます。ダウンロードは数GBになる場合があり、進行状況はプラグインのログに記録されます。",
+  "Settings.ModelDescription": "LLM処理に使用するローカルGemmaモデルです。保存すると選択が記録されます。「モデルをダウンロードして読み込む」でダウンロード（数GB）と読み込みを行います。",
   "Settings.StreamResponses": "応答をストリーミング",
   "Settings.StreamResponsesDescription": "プロンプトアクションの出力を、完全な応答を待たずにローカルモデルが生成したトークンから順に表示します。",
   "Settings.SelectModel": "先にモデルを選択してください。",
   "Settings.ModelReady": "モデルを読み込みました。準備完了です。",
   "Settings.ModelReadyLoadsOnUse": "モデルの準備ができています。現在はメモリに読み込まれておらず、次回使用時に読み込まれます。",
-  "Settings.ModelSelectedNotLoaded": "モデルは選択済みですが、まだ読み込まれていません。",
+  "Settings.ModelSelectedNotLoaded": "モデルは選択済みですが、まだ準備ができていません。「モデルをダウンロードして読み込む」を使用してください。",
+  "Settings.DownloadAction": "モデルをダウンロードして読み込む",
+  "Settings.DownloadActionDescription": "選択したモデルがこのコンピューターにない場合はダウンロードし、検証して読み込みます。中断したダウンロードは再開されます。",
+  "Settings.Downloading": "{0} をダウンロード中...",
+  "Settings.Loading": "{0} を読み込み中...",
+  "Settings.DownloadCancelled": "ダウンロードをキャンセルしました。",
+  "Settings.Error": "モデルを準備できませんでした: {0}",
   "Manifest.Name": "Gemma 4（ローカル）",
   "Manifest.Description": "llama.cppでGoogle Gemma 4をCPU上でローカル実行します"
 }

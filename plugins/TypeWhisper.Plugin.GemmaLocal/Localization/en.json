@@ -1,12 +1,18 @@
 {
   "Settings.Model": "Model",
-  "Settings.ModelDescription": "Local Gemma model used for LLM processing. Selecting a model downloads it (if needed) and loads it; downloads can be several gigabytes and progress is reported to the plugin log.",
+  "Settings.ModelDescription": "Local Gemma model used for LLM processing. Save keeps your choice; use Download and load model to fetch it (several gigabytes) and load it.",
   "Settings.StreamResponses": "Stream responses",
   "Settings.StreamResponsesDescription": "Render prompt-action output token-by-token as the local model generates it, instead of waiting for the full reply.",
   "Settings.SelectModel": "Select a model first.",
   "Settings.ModelReady": "Model loaded and ready.",
   "Settings.ModelReadyLoadsOnUse": "Model ready. It is not in memory now and loads on its next use.",
-  "Settings.ModelSelectedNotLoaded": "Model selected but not loaded yet.",
+  "Settings.ModelSelectedNotLoaded": "Model selected but not ready yet. Use Download and load model.",
+  "Settings.DownloadAction": "Download and load model",
+  "Settings.DownloadActionDescription": "Downloads the selected model if it is not on this computer yet, verifies it and loads it. An interrupted download resumes.",
+  "Settings.Downloading": "Downloading {0}...",
+  "Settings.Loading": "Loading {0}...",
+  "Settings.DownloadCancelled": "Download cancelled.",
+  "Settings.Error": "The model could not be prepared: {0}",
   "Manifest.Name": "Gemma 4 (Local)",
   "Manifest.Description": "Run Google Gemma 4 locally on the CPU with llama.cpp"
 }
