@@ -95,6 +95,27 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task PauseResumeCommand_PauseFailureEndsSessionAndReportsSaveFailure()
+    {
+        var stops = 0;
+        using var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { if (++stops == 1) { throw new IOException("stream stuck"); } }
+        );
+        var sut = CreateViewModel(audio, _tempDir, (_, _) => Task.FromResult<string?>(null));
+        await StartRecordingWithFramesAsync(sut, audio);
+
+        await sut.PauseResumeCommand.ExecuteAsync(null);
+
+        Assert.False(sut.IsSessionActive);
+        Assert.False(sut.IsPaused);
+        Assert.Equal(Loc.Instance["Recorder.Record"], sut.RecordButtonText);
+        Assert.Equal(Loc.Instance["Recorder.StatusSaveFailed"], sut.StatusText);
+        Assert.Equal("0:00", sut.DurationText);
+    }
+
+    [Fact]
     public void DeleteRecordingCommand_StopsPlaybackBeforeDeleting()
     {
         var path = Path.Join(_tempDir, "recording-play.wav");

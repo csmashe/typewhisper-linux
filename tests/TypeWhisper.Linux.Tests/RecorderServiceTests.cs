@@ -75,6 +75,53 @@ public sealed class RecorderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Stop_PublishesSavingWithFrozenDurationWhileCaptureFinalizes()
+    {
+        using var audio = Audio();
+        var clock = new ManualTimeProvider();
+        using var recorder = new RecorderService(audio, Settings(), _directory, clock);
+        Assert.True(await recorder.StartAsync());
+        audio.ProcessAudioBufferForTest([0.1f, -0.1f]);
+        clock.Advance(TimeSpan.FromSeconds(2));
+
+        // StopAsync is now parked in the capture drain/materialization.
+        var stop = recorder.StopAsync();
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.False(stop.IsCompleted);
+        Assert.Equal(RecorderState.Saving, recorder.State);
+        Assert.False(recorder.IsSessionActive);
+        Assert.Equal(TimeSpan.FromSeconds(2), recorder.ActiveDuration);
+        Assert.True(recorder.TryGetSession(recorder.ActiveSessionId!, out var snapshot));
+        Assert.Equal("finalizing", snapshot.Status);
+        Assert.Equal(2, snapshot.DurationSeconds);
+
+        var result = await stop;
+        Assert.NotNull(result);
+        Assert.Equal(TimeSpan.FromSeconds(2.0 / 16000), result.Duration);
+    }
+
+    [Fact]
+    public async Task Pause_PublishesPausedWithFrozenDurationWhileCaptureFinalizes()
+    {
+        using var audio = Audio();
+        var clock = new ManualTimeProvider();
+        using var recorder = new RecorderService(audio, Settings(), _directory, clock);
+        Assert.True(await recorder.StartAsync());
+        clock.Advance(TimeSpan.FromSeconds(3));
+
+        var pause = recorder.PauseAsync();
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.False(pause.IsCompleted);
+        Assert.Equal(RecorderState.Paused, recorder.State);
+        Assert.Equal(TimeSpan.FromSeconds(3), recorder.ActiveDuration);
+
+        await pause;
+        Assert.Equal(TimeSpan.Zero, recorder.ActiveDuration);
+    }
+
+    [Fact]
     public async Task StopFromPaused_WritesCombinedFile()
     {
         using var audio = Audio();
@@ -182,6 +229,40 @@ public sealed class RecorderServiceTests : IDisposable
         // recorder in Recording, or dictation stays blocked for the whole session.
         Assert.True(await recorder.StartAsync());
         audio.ProcessAudioBufferForTest([0.2f]);
+        Assert.NotNull(await recorder.StopAsync());
+    }
+
+    [Fact]
+    public async Task PauseFinalizationFailure_FailsSessionAndReleasesReservation()
+    {
+        var stops = 0;
+        using var audio = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { if (++stops == 2) { throw new IOException("stream stuck"); } }
+        );
+        using var recorder = new RecorderService(audio, Settings(), _directory);
+        await recorder.StartAsync();
+        audio.ProcessAudioBufferForTest([0.1f]);
+        await recorder.PauseAsync();
+        await recorder.ResumeAsync();
+        audio.ProcessAudioBufferForTest([0.2f]);
+        var id = recorder.ActiveSessionId!;
+
+        await Assert.ThrowsAsync<IOException>(recorder.PauseAsync);
+
+        // The second segment is lost; the first must not later be saved alone as complete.
+        Assert.Equal(RecorderState.Ready, recorder.State);
+        Assert.False(audio.IsCaptureReserved);
+        Assert.True(recorder.TryGetSession(id, out var snapshot));
+        Assert.Equal("failed", snapshot.Status);
+        Assert.Equal("Could not save recording", snapshot.Error);
+        await Assert.ThrowsAsync<RecorderBusyException>(recorder.ResumeAsync);
+        await Assert.ThrowsAsync<RecorderBusyException>(() => recorder.StopAsync());
+        Assert.Empty(Directory.GetFiles(_directory));
+
+        Assert.True(await recorder.StartAsync());
+        audio.ProcessAudioBufferForTest([0.3f]);
         Assert.NotNull(await recorder.StopAsync());
     }
 
