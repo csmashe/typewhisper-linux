@@ -1,5 +1,6 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.ReadAll* is deliberate in these test assertions.
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -110,6 +111,32 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
                 Path.Join(StateRoot, "browser-accessibility-environment", "state.json")
             )
         );
+    }
+
+    [Fact]
+    public async Task German_setup_and_revert_plans_have_no_english_action_text()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "de";
+            var helper = new BrowserAccessibilitySetupHelper();
+
+            var setupPlan = Assert.Single(helper.DescribePendingActions());
+            await helper.SetUpAsync(CancellationToken.None);
+            var revertPlan = Assert.Single(BrowserAccessibilitySetupHelper.DescribeRevertActions());
+
+            Assert.Equal(
+                $"• {EnvPath} schreiben\n"
+                + "  Setzt MOZ_ENABLE_ACCESSIBILITY=1 und GTK_MODULES=gail:atk-bridge benutzerweit.",
+                setupPlan
+            );
+            Assert.Equal($"• {EnvPath} löschen", revertPlan);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
     }
 
     [Fact]
