@@ -27,6 +27,13 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     {
         _commands = commands;
         _setup = setup;
+        Loc.Instance.LanguageChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(XdotoolStatusText));
+            OnPropertyChanged(nameof(WtypeStatusText));
+            OnPropertyChanged(nameof(YdotoolStatusText));
+            OnPropertyChanged(nameof(SetupPreview));
+        };
     }
 
     private LinuxCapabilitySnapshot Snapshot => _commands.GetSnapshot();

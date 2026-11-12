@@ -71,6 +71,7 @@ public class App : Application
     {
         BootTrace.Stage("App.Initialize begin");
         AvaloniaXamlLoader.Load(this);
+        ScrollBarAccessibleNames.Register();
         BootTrace.Stage("App.Initialize end");
     }
 
@@ -460,6 +461,24 @@ public class App : Application
                 Trace.WriteLine($"[App] Failed to seed first-run profiles: {ex}");
                 errorLog.AddEntry($"Could not seed first-run profiles: {ex.Message}");
             }
+
+            // Seeded names the user never renamed follow the UI language, including a system
+            // language that changed while the app was closed.
+            void LocalizeDefaultNames()
+            {
+                try
+                {
+                    promptActions.LocalizeDefaultNames();
+                    profileService.LocalizeDefaultNames();
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine($"[App] Failed to localize seeded names: {ex}");
+                }
+            }
+
+            LocalizeDefaultNames();
+            Loc.Instance.LanguageChanged += (_, _) => LocalizeDefaultNames();
 
             // ActionsChanged fires on the UI thread while ProfilesChanged can fire off the
             // HTTP worker thread (e.g. /v1/profiles/toggle), so the two subscriptions can enter

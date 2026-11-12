@@ -4,42 +4,27 @@ using Xunit;
 namespace TypeWhisper.Linux.Tests;
 
 /// <summary>
-///     Tests for <see cref="DictationOrchestrator.MapOverlayStatusToStateLabel" />,
-///     the pure projection from overlay StatusText to the documented
+///     Tests for <see cref="DictationOrchestrator.MapOverlayPhaseToStateLabel" />,
+///     the pure projection from the overlay phase to the documented
 ///     <c>typewhisper status</c> state labels. The <c>recording</c> branch is
-///     sourced from the live audio recorder, not StatusText, so it is verified
+///     sourced from the live audio recorder, not the overlay, so it is verified
 ///     manually rather than here.
 /// </summary>
 public sealed class DictationStateLabelTests
 {
-    [Fact]
-    public void NullStatus_MapsToIdle()
-    {
-        Assert.Equal("idle", DictationOrchestrator.MapOverlayStatusToStateLabel(null));
-    }
-
     [Theory]
-    [InlineData("Processing…")]
-    [InlineData("Transcribing via Whisper…")]
-    public void TranscriptionStatuses_MapToTranscribing(string status)
+    [InlineData(DictationOverlayPhase.Idle, "idle")]
+    [InlineData(DictationOverlayPhase.Transcribing, "transcribing")]
+    [InlineData(DictationOverlayPhase.Injecting, "injecting")]
+    public void Phase_MapsToDocumentedStateLabel(DictationOverlayPhase phase, string expected)
     {
-        Assert.Equal("transcribing", DictationOrchestrator.MapOverlayStatusToStateLabel(status));
+        Assert.Equal(expected, DictationOrchestrator.MapOverlayPhaseToStateLabel(phase));
     }
 
     [Fact]
-    public void InsertingStatus_MapsToInjecting()
+    public void DefaultOverlayState_IsIdle()
     {
-        Assert.Equal("injecting", DictationOrchestrator.MapOverlayStatusToStateLabel("Inserting…"));
-    }
-
-    [Theory]
-    [InlineData("Typed 12 char(s).")]
-    [InlineData("Pasted…")]
-    [InlineData("Copied to clipboard…")]
-    [InlineData("Insertion failed: boom")]
-    [InlineData("Ready")]
-    public void CompletionAndTerminalStatuses_MapToIdle(string status)
-    {
-        Assert.Equal("idle", DictationOrchestrator.MapOverlayStatusToStateLabel(status));
+        Assert.Equal(DictationOverlayPhase.Idle, DictationOverlayState.Hidden.Phase);
+        Assert.Equal("idle", DictationOrchestrator.MapOverlayPhaseToStateLabel(new DictationOverlayState().Phase));
     }
 }

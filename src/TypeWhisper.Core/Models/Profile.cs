@@ -15,6 +15,8 @@ public sealed record Profile
 
     public required string Id { get; init; }
     public required string Name { get; init; }
+    /// <summary>An explicit user rename must not be replaced by a shipped name in another language.</summary>
+    public bool IsNameCustomized { get; init; }
     public bool IsEnabled { get; init; } = true;
     public int Priority { get; init; }
     public IReadOnlyList<string> ProcessNames { get; init; } = [];

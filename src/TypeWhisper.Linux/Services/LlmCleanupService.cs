@@ -70,7 +70,7 @@ public sealed class LlmCleanupService
 
         await NotifyStatusAsync(
             statusCallback,
-            level == CleanupLevel.Medium ? "Applying Medium cleanup..." : "Applying High cleanup..."
+            Loc.Instance[level == CleanupLevel.Medium ? "Overlay.ApplyingMediumCleanup" : "Overlay.ApplyingHighCleanup"]
         );
 
         try
@@ -120,7 +120,7 @@ public sealed class LlmCleanupService
                 _errorLog?.AddEntry(failure, ErrorCategory.Prompt);
             }
 
-            await NotifyStatusAsync(statusCallback, "Cleanup failed. Using Light cleanup.");
+            await NotifyStatusAsync(statusCallback, Loc.Instance["Overlay.CleanupFailedUsingLight"]);
             return lightText;
         }
     }

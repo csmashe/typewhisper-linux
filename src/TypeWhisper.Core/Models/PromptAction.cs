@@ -14,6 +14,10 @@ public sealed record PromptAction
     public required string SystemPrompt { get; init; }
     public string Icon { get; init; } = "\u2728";
     public bool IsPreset { get; init; }
+    /// <summary>The stable localization key of a shipped name; null for user actions and legacy data.</summary>
+    public string? DefaultNameKey { get; init; }
+    /// <summary>An explicit user rename must not be replaced by a shipped name in another language.</summary>
+    public bool IsNameCustomized { get; init; }
     public bool IsEnabled { get; init; } = true;
     public int SortOrder { get; init; }
     public string? ProviderOverride { get; init; }

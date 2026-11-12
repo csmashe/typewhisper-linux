@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.Speechmatics;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -273,6 +275,25 @@ public class SpeechmaticsPluginTests
             sut.TranscribeAsync([1, 2, 3], "en", translate: false, null, CancellationToken.None));
 
         Assert.Equal(expectedUrl, handler.SubmitUrl);
+    }
+
+    [Fact]
+    public void LiveLanguageOptions_AreNamedAndSortedInTheInterfaceLanguage()
+    {
+        using var sut = new SpeechmaticsPlugin();
+        sut.SetLocalization(new PluginLocalization(
+            Path.Join(PluginCatalogTestData.PluginsDirectory, "TypeWhisper.Plugin.Speechmatics"), "de"));
+
+        var options = sut.GetSettingDefinitions().Single(d => d.Key == "liveLanguage").Options!;
+        var languages = options.Skip(1).ToList();
+
+        Assert.Equal("", options[0].Value);
+        Assert.Equal("Deutsch", languages.Single(o => o.Value == "de").Label);
+        Assert.Equal("Mandarin + Englisch", languages.Single(o => o.Value == "cmn_en").Label);
+        Assert.DoesNotContain(languages, o => o.Label.StartsWith("Language.", StringComparison.Ordinal));
+        Assert.Equal(
+            languages.Select(o => o.Label).Order(StringComparer.Create(new CultureInfo("de"), ignoreCase: true)),
+            languages.Select(o => o.Label));
     }
 
     [Fact]

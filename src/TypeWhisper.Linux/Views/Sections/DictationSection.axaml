@@ -127,7 +127,8 @@
                                       HorizontalAlignment="Stretch">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:DictationModelOption">
-                                        <TextBlock Text="{Binding DisplayLabel}" />
+                                        <TextBlock Text="{Binding DisplayLabel}" TextTrimming="CharacterEllipsis"
+                                                   ToolTip.Tip="{Binding DisplayLabel}" />
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>

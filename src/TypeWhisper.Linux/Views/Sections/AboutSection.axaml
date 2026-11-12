@@ -30,7 +30,7 @@
                            FontSize="13.5"
                            Foreground="{DynamicResource TwTextMutedBrush}"
                            HorizontalAlignment="Center" />
-                <TextBlock Text="{Binding Version, StringFormat='Version {0}'}"
+                <TextBlock Text="{Binding VersionLabel}"
                            FontSize="12"
                            Foreground="{DynamicResource TwTextMutedBrush}"
                            HorizontalAlignment="Center" />

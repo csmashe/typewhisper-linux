@@ -145,6 +145,30 @@ public sealed class AboutSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task CompletedExportStatus_FollowsTheLanguage()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var dataDir = Path.Join(_tempDir, "data");
+            Directory.CreateDirectory(Path.Join(dataDir, "Data"));
+            await File.WriteAllTextAsync(Path.Join(dataDir, "Data", "history.json"), "[]");
+            var sut = CreateViewModel(new FakeProcessRunner(), new LocalDataExportService(dataDir));
+            await sut.ExportAllDataAsync(Path.Join(_tempDir, "export.zip"));
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.Equal(Loc.Instance.GetString("About.DataExported", 1), sut.BackupStatusText);
+            Assert.DoesNotContain("Exported", sut.BackupStatusText);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = original;
+        }
+    }
+
+    [Fact]
     public async Task ExportAllData_ReportsTheResultAndReleasesTheCard()
     {
         var dataDir = Path.Join(_tempDir, "data");

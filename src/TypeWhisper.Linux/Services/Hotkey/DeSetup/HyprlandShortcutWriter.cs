@@ -1,4 +1,5 @@
 using System.Text;
+using TypeWhisper.Linux.Services.Localization;
 
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
@@ -65,7 +66,8 @@ public sealed class HyprlandShortcutWriter : IDeShortcutWriter
     public string PreviewLines(DeShortcutSpec spec)
     {
         var sb = new StringBuilder();
-        sb.Append("~/.config/hypr/hyprland.conf — managed block:\n");
+        sb.Append(Loc.Instance.GetString("Shortcuts.PreviewManagedBlock", "~/.config/hypr/hyprland.conf"))
+            .Append('\n');
         foreach (var line in BuildManagedLines(spec))
         {
             sb.Append("  ").Append(line).Append('\n');

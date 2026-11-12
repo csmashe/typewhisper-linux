@@ -69,6 +69,7 @@ public partial class PromptsSectionViewModel : ObservableObject
     // Suppress picker setters while option lists rebuild and the ComboBoxes reselect, so a
     // transient null selection cannot clear a saved one.
     private bool _isRefreshingProviders;
+    private bool _isRelabelingSelectedAction;
     private bool _isSelectingActionPlugin;
     private bool _isSelectingProvider;
 
@@ -339,6 +340,9 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     partial void OnSelectedActionChanged(PromptAction? value)
     {
+        if (_isRelabelingSelectedAction)
+            return;
+
         HotkeyValidationMessage = null;
         if (value is null)
         {
@@ -750,20 +754,38 @@ public partial class PromptsSectionViewModel : ObservableObject
 
     private void RefreshActions()
     {
-        var selectedId = SelectedAction?.Id ?? _editingActionId;
-        Actions.Clear();
-        foreach (var action in _prompts.Actions.OrderBy(action => action.SortOrder))
-        {
-            Actions.Add(action);
-        }
+        var selected = SelectedAction;
+        var selectedId = selected?.Id ?? _editingActionId;
+        var current = _prompts.Actions.OrderBy(action => action.SortOrder).ToArray();
+        var replacement = current.FirstOrDefault(action => action.Id == selectedId);
+        var preserveDraft = selected is not null && replacement is not null
+            && selected with { Name = replacement.Name, DefaultNameKey = replacement.DefaultNameKey } == replacement;
 
-        if (selectedId is not null && ShowEditor)
+        _isRelabelingSelectedAction = preserveDraft;
+        try
         {
-            SelectById(selectedId);
-            return;
-        }
+            Actions.Clear();
+            foreach (var action in current)
+                Actions.Add(action);
 
-        NotifyStateChanged();
+            if (selectedId is not null && ShowEditor)
+            {
+                SelectById(selectedId);
+                return;
+            }
+
+            NotifyStateChanged();
+        }
+        finally
+        {
+            _isRelabelingSelectedAction = false;
+            if (preserveDraft)
+            {
+                if (EditName == selected!.Name)
+                    EditName = replacement!.Name;
+                NotifyStateChanged();
+            }
+        }
     }
 
     private bool TryMutate(Action mutation, string operation)

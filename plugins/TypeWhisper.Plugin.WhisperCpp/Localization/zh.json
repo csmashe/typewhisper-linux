@@ -5,6 +5,7 @@
   "Settings.ThresholdSet": "阈值已设为{0}。",
   "Settings.ThresholdInvalid": "无语音阈值必须是0.0到1.0之间的数字。",
   "Errors.TranslationUnsupported": "{0}无法翻译为英语。请选择Turbo以外的多语言模型，例如Small或Medium。",
+  "Provider.DisplayName": "本地（whisper.cpp）",
   "Manifest.Name": "whisper.cpp（本地）",
   "Manifest.Description": "通过whisper.cpp（使用Whisper.net）离线转录"
 }

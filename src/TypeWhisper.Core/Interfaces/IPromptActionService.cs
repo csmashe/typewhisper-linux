@@ -32,6 +32,8 @@ public interface IPromptActionService
 
     /// <summary>Seeds default actions only on a genuine first run (when no actions file exists yet).</summary>
     void SeedFirstRunDefaultsIfMissing();
+    /// <summary>Renames seeded actions the user never renamed into the current UI language.</summary>
+    void LocalizeDefaultNames();
 
     event Action? ActionsChanged;
 }

@@ -3,6 +3,7 @@
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -53,24 +54,14 @@ public sealed class SpeechmaticsPlugin
     ];
 
     // The live fallback is chosen in plugin settings, so it can also offer the bilingual packs.
-    private static readonly IReadOnlyList<(string Code, string Name)> s_liveLanguages =
+    // Each code's label is the localization key "Language.<code>".
+    private static readonly IReadOnlyList<string> s_liveLanguages =
     [
-        ("ar", "Arabic"), ("ar_en", "Arabic + English"), ("ba", "Bashkir"), ("eu", "Basque"),
-        ("be", "Belarusian"), ("bn", "Bengali"), ("bg", "Bulgarian"), ("yue", "Cantonese"),
-        ("ca", "Catalan"), ("hr", "Croatian"), ("cs", "Czech"), ("da", "Danish"), ("nl", "Dutch"),
-        ("en", "English"), ("eo", "Esperanto"), ("et", "Estonian"), ("fi", "Finnish"),
-        ("fr", "French"), ("gl", "Galician"), ("de", "German"), ("el", "Greek"), ("he", "Hebrew"),
-        ("hi", "Hindi"), ("hu", "Hungarian"), ("id", "Indonesian"), ("ia", "Interlingua"),
-        ("ga", "Irish"), ("it", "Italian"), ("ja", "Japanese"), ("ko", "Korean"),
-        ("lv", "Latvian"), ("lt", "Lithuanian"), ("ms", "Malay"), ("en_ms", "English + Malay"),
-        ("mt", "Maltese"), ("cmn", "Mandarin"), ("cmn_en", "Mandarin + English"),
-        ("cmn_en_ms_ta", "Mandarin + English + Malay + Tamil"), ("mr", "Marathi"),
-        ("mn", "Mongolian"), ("no", "Norwegian"), ("fa", "Persian"), ("pl", "Polish"),
-        ("pt", "Portuguese"), ("ro", "Romanian"), ("ru", "Russian"), ("sk", "Slovak"),
-        ("sl", "Slovenian"), ("es", "Spanish"), ("sw", "Swahili"), ("sv", "Swedish"),
-        ("tl", "Tagalog + English"), ("ta", "Tamil"), ("en_ta", "English + Tamil"), ("th", "Thai"),
-        ("tr", "Turkish"), ("uk", "Ukrainian"), ("ur", "Urdu"), ("ug", "Uyghur"),
-        ("vi", "Vietnamese"), ("cy", "Welsh"),
+        "ar", "ar_en", "ba", "eu", "be", "bn", "bg", "yue", "ca", "hr", "cs", "da", "nl", "en", "eo",
+        "et", "fi", "fr", "gl", "de", "el", "he", "hi", "hu", "id", "ia", "ga", "it", "ja", "ko",
+        "lv", "lt", "ms", "en_ms", "mt", "cmn", "cmn_en", "cmn_en_ms_ta", "mr", "mn", "no", "fa",
+        "pl", "pt", "ro", "ru", "sk", "sl", "es", "sw", "sv", "tl", "ta", "en_ta", "th", "tr", "uk",
+        "ur", "ug", "vi", "cy",
     ];
 
     public SpeechmaticsPlugin()
@@ -95,7 +86,7 @@ public sealed class SpeechmaticsPlugin
         SelectedModelId = s_models.Any(m => m.Id == savedModel) ? savedModel : s_models[0].Id;
         RegionId = ResolveRegion(host.GetSetting<string>(RegionSettingKey)).Id;
         var savedLiveLanguage = host.GetSetting<string>(LiveLanguageSettingKey);
-        LiveLanguage = s_liveLanguages.Any(l => l.Code == savedLiveLanguage) ? savedLiveLanguage : null;
+        LiveLanguage = s_liveLanguages.Any(l => l == savedLiveLanguage) ? savedLiveLanguage : null;
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured}, region={RegionId})");
     }
 
@@ -537,7 +528,7 @@ public sealed class SpeechmaticsPlugin
                 Options:
                 [
                     new PluginSettingOption("", Loc.L("Settings.LiveLanguageNone")),
-                    .. s_liveLanguages.Select(l => new PluginSettingOption(l.Code, l.Name)),
+                    .. LiveLanguageOptions(),
                 ]
             ),
         ];
@@ -578,6 +569,27 @@ public sealed class SpeechmaticsPlugin
         }
     }
 
+    // Sorted by the localized name, so the list stays alphabetical in every interface language.
+    private IEnumerable<PluginSettingOption> LiveLanguageOptions()
+    {
+        var comparer = StringComparer.Create(ResolveCulture(Loc?.CurrentLanguage), ignoreCase: true);
+        return s_liveLanguages
+            .Select(code => new PluginSettingOption(code, Loc.L("Language." + code)))
+            .OrderBy(option => option.Label, comparer);
+    }
+
+    private static CultureInfo ResolveCulture(string? language)
+    {
+        try
+        {
+            return string.IsNullOrEmpty(language) ? CultureInfo.InvariantCulture : CultureInfo.GetCultureInfo(language);
+        }
+        catch (CultureNotFoundException)
+        {
+            return CultureInfo.InvariantCulture;
+        }
+    }
+
     internal void SetRegion(string? regionId)
     {
         var region = AvailableRegions.FirstOrDefault(r => r.Id == regionId)
@@ -589,7 +601,7 @@ public sealed class SpeechmaticsPlugin
     internal void SetLiveLanguage(string? language)
     {
         var code = string.IsNullOrWhiteSpace(language) ? null : language.Trim();
-        if (code is not null && s_liveLanguages.All(l => l.Code != code))
+        if (code is not null && !s_liveLanguages.Contains(code))
             throw new ArgumentException($"Unknown live transcription language: {code}");
         LiveLanguage = code;
         _host?.SetSetting(LiveLanguageSettingKey, code ?? "");

@@ -40,8 +40,6 @@ public partial class DictationOverlayWindow : Window
         CanResize = false;
         Topmost = true;
 
-        Title = "TypeWhisper Overlay";
-
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _settings.SettingsChanged += _ => Dispatcher.UIThread.Post(PositionOverlay);
 

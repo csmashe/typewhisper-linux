@@ -141,7 +141,13 @@ public sealed partial class DictationOrchestrator
             {
                 ReportStatus(
                     context,
-                    status == "AI" ? "Processing prompt action…" : $"Processing {status}…"
+                    Loc.Instance[status switch
+                    {
+                        "AI" => "Overlay.ProcessingPromptAction",
+                        "Translation" => "Overlay.ProcessingTranslation",
+                        _ => "Overlay.Processing",
+                    }],
+                    DictationOverlayPhase.Transcribing
                 );
                 return Task.CompletedTask;
             },

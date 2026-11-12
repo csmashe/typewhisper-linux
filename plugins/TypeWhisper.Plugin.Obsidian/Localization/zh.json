@@ -20,6 +20,7 @@
   "Settings.EnterVaultPath": "请先输入仓库路径。",
   "Settings.VaultDetected": "检测到仓库：{0}",
   "Settings.NotAnObsidianVault": "文件夹存在，但不是Obsidian仓库（缺少.obsidian目录）。",
+  "Settings.DefaultNoteTitle": "转录",
   "Manifest.Name": "Obsidian",
   "Manifest.Description": "将转录保存为Obsidian中的笔记"
 }

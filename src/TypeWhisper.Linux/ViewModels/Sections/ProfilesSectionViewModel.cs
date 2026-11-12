@@ -35,6 +35,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private readonly UiOperationGuard _uiOperations;
     private readonly DispatcherTimer _windowTimer;
     private bool _isWindowUpdateInProgress;
+    private bool _isRelabelingSelectedProfile;
     private int _liveContextActivationCount;
     private CancellationTokenSource? _liveContextCts;
     private int _liveContextGeneration;
@@ -205,7 +206,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         RefreshPromptActionOptions();
         RefreshMemorySourceOptions();
         RefreshLanguageOptions();
-        foreach (var option in TranslationModelInfo.ProfileTargetOptions)
+        foreach (var option in TranslationTargetLabels.ProfileOptions())
         {
             TranslationTargetOptions.Add(option);
         }
@@ -391,7 +392,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
             );
         set
         {
-            var code = value?.Code;
+            // A null item is the ComboBox clearing while its options are replaced, not a choice.
+            if (value is null)
+            {
+                return;
+            }
+
+            var code = value.Code;
             if (string.Equals(code, EditTranslationTarget, StringComparison.Ordinal))
             {
                 return;
@@ -614,6 +621,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     partial void OnSelectedProfileChanged(Profile? value)
     {
+        if (_isRelabelingSelectedProfile)
+            return;
+
         HotkeyValidationMessage = null;
         ProcessNameChips.Clear();
         UrlPatternChips.Clear();
@@ -785,7 +795,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
                 var profile = new Profile
                 {
                     Id = Guid.NewGuid().ToString(),
-                    Name = "New profile",
+                    Name = Loc.Instance["Profiles.NewProfileName"],
                     IsEnabled = true,
                     Priority = 0,
                     ProcessNames = [],
@@ -894,7 +904,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var duplicate = SelectedProfile with
         {
             Id = Guid.NewGuid().ToString(),
-            Name = $"{SelectedProfile.Name} Copy",
+            Name = Loc.Instance.GetString("Profiles.CopyName", SelectedProfile.Name),
             // Drop the hotkey: two profiles can't share a chord (SetProfileHotkeys rejects collisions),
             // so a copied hotkey would be silently dead.
             HotkeyData = null,
@@ -1167,27 +1177,40 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     private void RefreshProfiles()
     {
-        var selectedId = SelectedProfile?.Id;
+        var selected = SelectedProfile;
+        var selectedId = selected?.Id;
+        var current = _profiles.Profiles;
+        var replacement = current.FirstOrDefault(profile => profile.Id == selectedId);
+        var preserveDraft = selected is not null && replacement is not null
+            && selected with { Name = replacement.Name } == replacement;
 
-        Profiles.Clear();
-        foreach (var profile in _profiles.Profiles)
+        _isRelabelingSelectedProfile = preserveDraft;
+        try
         {
-            Profiles.Add(profile);
-        }
+            Profiles.Clear();
+            foreach (var profile in current)
+                Profiles.Add(profile);
 
-        if (selectedId is not null)
-        {
-            SelectById(selectedId);
-            return;
-        }
+            if (selectedId is not null)
+            {
+                SelectById(selectedId);
+                return;
+            }
 
-        if (Profiles.Count > 0 && SelectedProfile is null)
-        {
-            SelectedProfile = Profiles[0];
+            if (Profiles.Count > 0 && SelectedProfile is null)
+                SelectedProfile = Profiles[0];
+            else
+                NotifyStateChanged();
         }
-        else
+        finally
         {
-            NotifyStateChanged();
+            _isRelabelingSelectedProfile = false;
+            if (preserveDraft)
+            {
+                if (EditName == selected!.Name)
+                    EditName = replacement!.Name;
+                NotifyStateChanged();
+            }
         }
     }
 
@@ -1230,6 +1253,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var clipboardContextOverride = EditClipboardContextOverride;
         var language = EditLanguage;
         var task = EditTask;
+        var translationTarget = EditTranslationTarget;
 
         RefreshModelOptions();
         RefreshPromptActionOptions();
@@ -1239,6 +1263,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         ReplaceCollection(ContextMatchModeOptions, CreateContextMatchModeOptions());
         ReplaceCollection(CleanupOverrideOptions, CreateCleanupOverrideOptions());
         ReplaceCollection(TaskOptions, CreateTaskOptions());
+        ReplaceCollection(TranslationTargetOptions, TranslationTargetLabels.ProfileOptions());
         RefreshLanguageOptions();
         WhisperModeOptions = CreateNullableBooleanOptions();
         OnPropertyChanged(nameof(WhisperModeOptions));
@@ -1255,8 +1280,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditClipboardContextOverride = clipboardContextOverride;
         EditLanguage = language;
         EditTask = task;
+        EditTranslationTarget = translationTarget;
 
         OnPropertyChanged(nameof(SelectedModelOption));
+        OnPropertyChanged(nameof(SelectedTranslationTargetOption));
         OnPropertyChanged(nameof(SelectedPromptActionOption));
         OnPropertyChanged(nameof(SelectedMemorySourceOption));
         OnPropertyChanged(nameof(SelectedStylePresetOption));

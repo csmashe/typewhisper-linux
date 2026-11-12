@@ -7,10 +7,20 @@ namespace TypeWhisper.Linux.Services.Localization;
 
 /// <summary>
 ///     A selectable interface-language option for the settings dropdown.
-///     <paramref name="Code" /> is null for "Auto (System)".
+///     <paramref name="code" /> and <paramref name="nativeName" /> are null for "Auto (System)",
+///     the one choice shown in the current UI language; the others keep the language's own name.
 /// </summary>
-public sealed record UiLanguageOption(string? Code, string DisplayName)
+public sealed class UiLanguageOption(string? code, string? nativeName) : INotifyPropertyChanged
 {
+    public string? Code { get; } = code;
+
+    public string DisplayName => nativeName ?? Loc.Instance["General.UiLanguageAuto"];
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    internal void RefreshDisplayName() =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayName)));
+
     // A collapsed ComboBox announces its selected item through ToString().
     public override string ToString() => DisplayName;
 }
@@ -107,6 +117,11 @@ public sealed class Loc : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CurrentLanguage)));
             // Empty name => "all properties changed": refreshes indexer bindings too.
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+            foreach (var option in AvailableUiLanguages)
+            {
+                option.RefreshDisplayName();
+            }
+
             LanguageChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -195,6 +210,17 @@ public sealed class Loc : INotifyPropertyChanged
         return key;
     }
 
+    /// <summary>The key's text, or <paramref name="fallback" /> when no catalog has the key.</summary>
+    public string GetStringOrDefault(string key, string fallback)
+    {
+        var value = GetString(key);
+        return ReferenceEquals(value, key) ? fallback : value;
+    }
+
+    /// <summary>True when <paramref name="text" /> is the key's translation in any loaded language.</summary>
+    public bool IsTranslationOf(string key, string text) =>
+        _strings.Values.Any(strings => strings.TryGetValue(key, out var value) && value == text);
+
     public string GetString(string key, params object?[] args)
     {
         var template = GetString(key);
@@ -226,7 +252,7 @@ public sealed class Loc : INotifyPropertyChanged
             ["ko"] = "한국어",
         };
 
-        var options = new List<UiLanguageOption> { new(null, "Auto (System)") };
+        var options = new List<UiLanguageOption> { new(null, null) };
         foreach (var code in codes.OrderBy(c => c, StringComparer.Ordinal))
         {
             var display = displayNames.TryGetValue(code, out var name) ? name : code.ToUpperInvariant();

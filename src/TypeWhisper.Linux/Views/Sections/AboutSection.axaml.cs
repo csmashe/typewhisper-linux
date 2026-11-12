@@ -113,7 +113,7 @@ public partial class AboutSection : UserControl
                         $"typewhisper-settings-backup-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
                     DefaultExtension = "zip",
                     FileTypeChoices =
-                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
+                        [new FilePickerFileType(Loc.Instance["Common.FileTypeZipArchive"]) { Patterns = ["*.zip"] }],
                 }
             );
 
@@ -157,7 +157,7 @@ public partial class AboutSection : UserControl
                     Title = Loc.Instance["Dialog.RestoreSettings"],
                     AllowMultiple = false,
                     FileTypeFilter =
-                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
+                        [new FilePickerFileType(Loc.Instance["Common.FileTypeZipArchive"]) { Patterns = ["*.zip"] }],
                 }
             );
 
@@ -202,7 +202,7 @@ public partial class AboutSection : UserControl
                     SuggestedFileName = $"typewhisper-data-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
                     DefaultExtension = "zip",
                     FileTypeChoices =
-                        [new FilePickerFileType("Zip archive") { Patterns = ["*.zip"] }],
+                        [new FilePickerFileType(Loc.Instance["Common.FileTypeZipArchive"]) { Patterns = ["*.zip"] }],
                 }
             );
 

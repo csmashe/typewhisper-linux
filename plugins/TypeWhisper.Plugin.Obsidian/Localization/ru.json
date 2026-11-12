@@ -20,6 +20,7 @@
   "Settings.EnterVaultPath": "Сначала введите путь к хранилищу.",
   "Settings.VaultDetected": "Хранилище обнаружено: {0}",
   "Settings.NotAnObsidianVault": "Папка существует, но не является хранилищем Obsidian (отсутствует каталог .obsidian).",
+  "Settings.DefaultNoteTitle": "Транскрипция",
   "Manifest.Name": "Obsidian",
   "Manifest.Description": "Сохранение транскрипций как заметок в Obsidian"
 }

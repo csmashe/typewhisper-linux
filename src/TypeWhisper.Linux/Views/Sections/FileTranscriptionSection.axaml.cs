@@ -185,7 +185,7 @@ public partial class FileTranscriptionSection : UserControl
                 Title = Loc.Instance["Dialog.ExportText"],
                 SuggestedFileName = $"{baseName}.txt",
                 DefaultExtension = "txt",
-                FileTypeChoices = [new FilePickerFileType("Text") { Patterns = ["*.txt"] }],
+                FileTypeChoices = [new FilePickerFileType(Loc.Instance["Common.FileTypeText"]) { Patterns = ["*.txt"] }],
             }
         );
 
@@ -256,7 +256,7 @@ public partial class FileTranscriptionSection : UserControl
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions
             {
-                Title = $"Export {label}",
+                Title = Loc.Instance.GetString("Dialog.ExportSubtitle", label),
                 SuggestedFileName = $"{baseName}.{extension}",
                 DefaultExtension = extension,
                 FileTypeChoices = [new FilePickerFileType(label) { Patterns = [$"*.{extension}"] }],

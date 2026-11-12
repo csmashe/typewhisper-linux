@@ -5,6 +5,7 @@
   "Settings.ThresholdSet": "しきい値を{0}に設定しました。",
   "Settings.ThresholdInvalid": "無音判定のしきい値は0.0～1.0の数値である必要があります。",
   "Errors.TranslationUnsupported": "{0}は英語に翻訳できません。SmallやMediumなど、Turbo以外の多言語モデルを選択してください。",
+  "Provider.DisplayName": "ローカル（whisper.cpp）",
   "Manifest.Name": "whisper.cpp（ローカル）",
   "Manifest.Description": "Whisper.netを使用したwhisper.cppによるオフライン文字起こし"
 }

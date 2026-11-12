@@ -191,8 +191,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 return (
                     new SetupResult(
                         false,
-                        "No Firefox profiles were found to patch.",
-                        "Run Firefox once to create a profile, then try again."
+                        Loc.Instance["Profiles.BrowserSetupNoFirefoxProfiles"],
+                        Loc.Instance["Profiles.BrowserSetupNoFirefoxProfilesDetail"]
                     ),
                     skipped,
                     nonUtf8
@@ -202,10 +202,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
             var detail = new StringBuilder();
             if (patched.Count > 0)
             {
-                detail
-                    .Append("Patched profile(s): ")
-                    .Append(string.Join(", ", patched))
-                    .Append('.');
+                detail.Append(
+                    Loc.Instance.GetString("Profiles.BrowserSetupPatchedProfiles", string.Join(", ", patched))
+                );
             }
 
             if (alreadyEnabled.Count > 0)
@@ -215,10 +214,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     detail.Append(' ');
                 }
 
-                detail
-                    .Append("Already enabled in prefs.js, but user.js could not be written: ")
-                    .Append(string.Join(", ", alreadyEnabled))
-                    .Append('.');
+                detail.Append(
+                    Loc.Instance.GetString(
+                        "Profiles.BrowserSetupAlreadyEnabledProfiles",
+                        string.Join(", ", alreadyEnabled)
+                    )
+                );
             }
 
             if (skipped.Count > 0)
@@ -228,10 +229,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     detail.Append(' ');
                 }
 
-                detail
-                    .Append("Could not write to: ")
-                    .Append(string.Join(", ", skipped))
-                    .Append('.');
+                detail.Append(
+                    Loc.Instance.GetString("Profiles.BrowserSetupUnwritableProfiles", string.Join(", ", skipped))
+                );
             }
 
             if (nonUtf8.Count > 0)
@@ -241,15 +241,14 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     detail.Append(' ');
                 }
 
-                detail
-                    .Append("user.js is not UTF-8, left unchanged: ")
-                    .Append(string.Join(", ", nonUtf8))
-                    .Append('.');
+                detail.Append(
+                    Loc.Instance.GetString("Profiles.BrowserSetupNonUtf8Profiles", string.Join(", ", nonUtf8))
+                );
             }
 
             if (patched.Count > 0)
             {
-                detail.Append(" Restart Firefox for the change to take effect.");
+                detail.Append(' ').Append(Loc.Instance["Profiles.BrowserSetupRestartFirefox"]);
             }
 
             var enabled = patched.Count > 0 || alreadyEnabled.Count > 0;
@@ -257,8 +256,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 new SetupResult(
                     enabled,
                     enabled
-                        ? "Firefox accessibility force-enabled."
-                        : "Could not enable Firefox accessibility.",
+                        ? Loc.Instance["Profiles.BrowserSetupFirefoxForceEnabled"]
+                        : Loc.Instance["Profiles.BrowserSetupFirefoxFailed"],
                     detail.ToString()
                 ),
                 skipped,
@@ -268,7 +267,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
         catch (Exception ex)
         {
             return (
-                new SetupResult(false, "Could not enable Firefox accessibility.", ex.Message),
+                new SetupResult(false, Loc.Instance["Profiles.BrowserSetupFirefoxFailed"], ex.Message),
                 skipped,
                 nonUtf8
             );
@@ -289,9 +288,14 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 return Task.FromResult(
                     new SetupResult(
                         false,
-                        "Could not enable browser accessibility.",
-                        $"{BuildEnvFileSpec().DestinationPath} was left untouched because "
-                        + (envResult.Detail ?? "it is not owned by TypeWhisper.")
+                        Loc.Instance["Profiles.BrowserSetupFailed"],
+                        // Detail is only set when the transaction refused the file outright.
+                        Loc.Instance.GetString(
+                            envResult.Detail is null
+                                ? "Profiles.BrowserSetupEnvFileNotOwned"
+                                : "Profiles.BrowserSetupEnvFileUnsupported",
+                            BuildEnvFileSpec().DestinationPath
+                        )
                     )
                 );
             }
@@ -309,9 +313,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
             var detail = new StringBuilder();
             if (firefoxPatched.Count > 0)
             {
-                detail.Append("Firefox / Zen launchers patched: ");
-                detail.Append(string.Join(", ", firefoxPatched));
-                detail.Append('.');
+                detail.Append(
+                    Loc.Instance.GetString(
+                        "Profiles.BrowserSetupFirefoxLaunchersPatched",
+                        string.Join(", ", firefoxPatched)
+                    )
+                );
             }
 
             if (chromiumPatched.Count > 0)
@@ -321,9 +328,12 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     detail.Append('\n');
                 }
 
-                detail.Append("Chromium launchers patched: ");
-                detail.Append(string.Join(", ", chromiumPatched));
-                detail.Append('.');
+                detail.Append(
+                    Loc.Instance.GetString(
+                        "Profiles.BrowserSetupChromiumLaunchersPatched",
+                        string.Join(", ", chromiumPatched)
+                    )
+                );
             }
 
             if (
@@ -336,21 +346,22 @@ public sealed partial class BrowserAccessibilitySetupHelper
                     detail.Append('\n');
                 }
 
-                detail.Append("Firefox accessibility: ").Append(firefoxPrefResult.Detail);
+                detail.Append(
+                    Loc.Instance.GetString(
+                        "Profiles.BrowserSetupFirefoxAccessibilityDetail",
+                        firefoxPrefResult.Detail
+                    )
+                );
             }
 
             if (firefoxPatched.Count == 0 && chromiumPatched.Count == 0)
             {
-                detail.Append(
-                    "No browser launchers were found on this system; only the user-wide env file was written."
-                );
+                detail.Append(Loc.Instance["Profiles.BrowserSetupNoLaunchers"]);
             }
             else
             {
                 detail.Append('\n');
-                detail.Append(
-                    "Fully quit the affected browsers and relaunch from the application menu — running instances are not retroactively patched."
-                );
+                detail.Append(Loc.Instance["Profiles.BrowserSetupRelaunchHint"]);
             }
 
             var success =
@@ -363,8 +374,8 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 new SetupResult(
                     success,
                     success
-                        ? "Browser accessibility enabled."
-                        : "Could not enable browser accessibility.",
+                        ? Loc.Instance["Profiles.BrowserSetupEnabled"]
+                        : Loc.Instance["Profiles.BrowserSetupFailed"],
                     detail.ToString()
                 )
                 {
@@ -376,7 +387,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
         catch (Exception ex)
         {
             return Task.FromResult(
-                new SetupResult(false, "Could not enable browser accessibility.", ex.Message)
+                new SetupResult(false, Loc.Instance["Profiles.BrowserSetupFailed"], ex.Message)
             );
         }
     }
@@ -452,35 +463,44 @@ public sealed partial class BrowserAccessibilitySetupHelper
             var removedLaunchers = await RemoveOwnedLaunchers(ct).ConfigureAwait(false);
             var (cleanedProfiles, skippedProfiles) = RemoveOwnedFirefoxAccessibilityEntries();
 
-            var summary = new StringBuilder("Browser accessibility integration removed.");
+            var summary = new StringBuilder(Loc.Instance["Profiles.BrowserRevertRemoved"]);
             if (!removedEnv)
             {
-                summary.Append(" Left env file in place (not owned by TypeWhisper).");
+                summary.Append(' ').Append(Loc.Instance["Profiles.BrowserRevertLeftEnvFile"]);
             }
 
             if (removedLaunchers.Count > 0)
             {
                 summary.Append(' ');
-                summary.Append("Removed launchers: ");
-                summary.Append(string.Join(", ", removedLaunchers));
-                summary.Append('.');
+                summary.Append(
+                    Loc.Instance.GetString(
+                        "Profiles.BrowserRevertRemovedLaunchers",
+                        string.Join(", ", removedLaunchers)
+                    )
+                );
             }
 
             if (cleanedProfiles.Count > 0)
             {
                 summary.Append(' ');
-                summary.Append("Cleaned Firefox profile(s): ");
-                summary.Append(string.Join(", ", cleanedProfiles));
-                summary.Append('.');
+                summary.Append(
+                    Loc.Instance.GetString(
+                        "Profiles.BrowserRevertCleanedProfiles",
+                        string.Join(", ", cleanedProfiles)
+                    )
+                );
             }
 
             // ReSharper disable once InvertIf -- inverting would duplicate the result initializer below
             if (skippedProfiles.Count > 0)
             {
                 summary.Append(' ');
-                summary.Append("Could not update user.js in Firefox profile(s): ");
-                summary.Append(string.Join(", ", skippedProfiles));
-                summary.Append('.');
+                summary.Append(
+                    Loc.Instance.GetString(
+                        "Profiles.BrowserRevertSkippedProfiles",
+                        string.Join(", ", skippedProfiles)
+                    )
+                );
             }
 
             return new SetupResult(true, summary.ToString())
@@ -495,7 +515,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
         {
             return new SetupResult(
                 false,
-                "Could not remove browser accessibility integration.",
+                Loc.Instance["Profiles.BrowserRevertFailed"],
                 ex.Message
             );
         }

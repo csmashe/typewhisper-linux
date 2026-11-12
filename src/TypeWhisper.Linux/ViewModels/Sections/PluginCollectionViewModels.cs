@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.Linux.ViewModels.Sections;
@@ -17,7 +18,7 @@ public partial class PluginCollectionRow : ObservableObject
         Key = definition.Key;
         Label = definition.Label;
         Description = definition.Description;
-        AddButtonLabel = definition.AddButtonLabel ?? "Add item";
+        AddButtonLabel = definition.AddButtonLabel ?? Loc.Instance["Plugins.AddItem"];
         ItemFields = definition.ItemFields;
         ItemLabelFieldKey = definition.ItemLabelFieldKey;
         IsSearchable = definition.IsSearchable;
@@ -33,17 +34,17 @@ public partial class PluginCollectionRow : ObservableObject
     }
 
     public string Key { get; }
-    public string Label { get; }
-    public string? Description { get; }
+    public string Label { get; private set; }
+    public string? Description { get; private set; }
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
-    public string AddButtonLabel { get; }
-    private IReadOnlyList<PluginSettingDefinition> ItemFields { get; }
+    public string AddButtonLabel { get; private set; }
+    private IReadOnlyList<PluginSettingDefinition> ItemFields { get; set; }
     private string? ItemLabelFieldKey { get; }
     public ObservableCollection<PluginCollectionItemRow> Items { get; } = [];
     public bool IsSearchable { get; }
-    public IReadOnlyList<PluginCollectionTemplate> Templates { get; }
+    public IReadOnlyList<PluginCollectionTemplate> Templates { get; private set; }
     public bool HasTemplates => Templates.Count > 0;
-    private PluginCollectionItemTest? ItemTest { get; }
+    private PluginCollectionItemTest? ItemTest { get; set; }
     public bool CanTestItems => ItemTest is not null;
     public string TestButtonLabel => ItemTest?.ButtonLabel ?? string.Empty;
 
@@ -62,6 +63,32 @@ public partial class PluginCollectionRow : ObservableObject
 
     public bool HasNoMatches => Items.Count > 0 && !Items.Any(item => item.IsMatch);
     public PluginRow OwnerRow { get; }
+
+    /// <summary>Takes the definition's text in the current language; the items and their values stay.</summary>
+    internal void Relabel(PluginCollectionDefinition definition)
+    {
+        Label = definition.Label;
+        Description = definition.Description;
+        AddButtonLabel = definition.AddButtonLabel ?? Loc.Instance["Plugins.AddItem"];
+        ItemFields = definition.ItemFields;
+        ItemTest = definition.ItemTest;
+        var selectedTemplateId = SelectedTemplate?.Id;
+        Templates = definition.Templates;
+        OnPropertyChanged(nameof(Label));
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(HasDescription));
+        OnPropertyChanged(nameof(AddButtonLabel));
+        OnPropertyChanged(nameof(TestButtonLabel));
+        OnPropertyChanged(nameof(Templates));
+        OnPropertyChanged(nameof(HasTemplates));
+        SelectedTemplate = Templates.FirstOrDefault(template => template.Id == selectedTemplateId)
+            ?? (Templates.Count > 0 ? Templates[0] : null);
+
+        foreach (var item in Items)
+        {
+            item.Relabel(ItemFields);
+        }
+    }
 
     // Applied when the query changes, not on every edit, so a row being typed into stays visible.
     partial void OnFilterTextChanged(string value)
@@ -351,11 +378,21 @@ public partial class PluginCollectionItemRow : ObservableObject
             var value = _labelField?.Value;
             if (string.IsNullOrWhiteSpace(value))
             {
-                return _labelField is null ? "(new item)" : "(unnamed)";
+                return Loc.Instance[_labelField is null ? "Plugins.NewItem" : "Plugins.UnnamedItem"];
             }
 
             return value;
         }
+    }
+
+    internal void Relabel(IReadOnlyList<PluginSettingDefinition> itemFields)
+    {
+        foreach (var definition in itemFields)
+        {
+            Fields.FirstOrDefault(field => field.Key == definition.Key)?.Relabel(definition);
+        }
+
+        OnPropertyChanged(nameof(HeaderText));
     }
 
     private void OnLabelFieldChanged(object? sender, PropertyChangedEventArgs e)

@@ -91,13 +91,15 @@ internal static class ServiceRegistrations
         services.AddSingleton<IProfileService>(sp =>
             new ProfileService(
                 Path.Join(dataPath, "profiles.json"),
-                sp.GetRequiredService<IErrorLogService>()
+                sp.GetRequiredService<IErrorLogService>(),
+                LocDefaultNameLocalizer.Instance
             )
         );
         services.AddSingleton<IPromptActionService>(sp =>
             new PromptActionService(
                 Path.Join(dataPath, "prompt-actions.json"),
-                sp.GetRequiredService<IErrorLogService>()
+                sp.GetRequiredService<IErrorLogService>(),
+                LocDefaultNameLocalizer.Instance
             )
         );
         services.AddSingleton<CleanupService>();
