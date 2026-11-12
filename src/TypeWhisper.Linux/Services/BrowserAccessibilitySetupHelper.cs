@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.ManagedArtifacts;
 
 namespace TypeWhisper.Linux.Services;
@@ -398,25 +399,24 @@ public sealed partial class BrowserAccessibilitySetupHelper
         if (!status.FirefoxEnvFilePresent)
         {
             actions.Add(
-                $"• Write {EnvFilePath()}\n"
-                + "  Sets MOZ_ENABLE_ACCESSIBILITY=1 and GTK_MODULES=gail:atk-bridge user-wide."
+                "• " + Loc.Instance.GetString("Profiles.BrowserPlanWriteEnvFile", EnvFilePath()) + "\n"
+                + "  " + Loc.Instance["Profiles.BrowserPlanWriteEnvFileDetail"]
             );
         }
 
         if (status is { FirefoxInstalled: true, FirefoxLauncherPresent: false })
         {
             actions.Add(
-                $"• Shadow Firefox / Zen .desktop launchers in {UserApplicationsDir()}\n"
-                + "  Adds env MOZ_ENABLE_ACCESSIBILITY=1 to the Exec= line so the env arrives even\n"
-                + "  if systemd-user did not reload environment.d across a logout."
+                "• " + Loc.Instance.GetString("Profiles.BrowserPlanFirefoxLaunchers", UserApplicationsDir()) + "\n"
+                + "  " + Loc.Instance["Profiles.BrowserPlanFirefoxLaunchersDetail"]
             );
         }
 
         if (status is { ChromiumInstalled: true, ChromiumLauncherPresent: false })
         {
             actions.Add(
-                $"• Shadow Chromium-family .desktop launchers in {UserApplicationsDir()}\n"
-                + "  Adds the --force-renderer-accessibility flag to Exec=."
+                "• " + Loc.Instance.GetString("Profiles.BrowserPlanChromiumLaunchers", UserApplicationsDir()) + "\n"
+                + "  " + Loc.Instance["Profiles.BrowserPlanChromiumLaunchersDetail"]
             );
         }
 
@@ -429,11 +429,10 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
         var profiles = EnumerateFirefoxProfileDirs().Select(d => Path.Join(d, "user.js"));
         actions.Add(
-            "• Write user.js in your Firefox profile(s) to force-enable accessibility:\n"
+            "• " + Loc.Instance["Profiles.BrowserPlanFirefoxUserJs"] + "\n"
             + string.Join("\n", profiles.Select(p => "    " + p))
             + "\n"
-            + "  Appends user_pref(\"accessibility.force_disabled\", -1); if that preference already\n"
-            + "  exists, its line is commented out and preserved, then restored on removal."
+            + "  " + Loc.Instance["Profiles.BrowserPlanFirefoxUserJsDetail"]
         );
 
         return actions;
@@ -475,6 +474,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
+            // ReSharper disable once InvertIf -- inverting would duplicate the result initializer below
             if (skippedProfiles.Count > 0)
             {
                 summary.Append(' ');
@@ -483,7 +483,13 @@ public sealed partial class BrowserAccessibilitySetupHelper
                 summary.Append('.');
             }
 
-            return new SetupResult(true, summary.ToString());
+            return new SetupResult(true, summary.ToString())
+            {
+                LeftEnvFile = !removedEnv,
+                RemovedLaunchers = removedLaunchers,
+                CleanedFirefoxProfiles = cleanedProfiles,
+                SkippedFirefoxProfiles = skippedProfiles,
+            };
         }
         catch (Exception ex)
         {
@@ -555,7 +561,7 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
         if (File.Exists(EnvFilePath()) && FileStartsWithOwnershipMarker(EnvFilePath()))
         {
-            actions.Add($"• Delete {EnvFilePath()}");
+            actions.Add("• " + Loc.Instance.GetString("Profiles.BrowserRevertPlanDelete", EnvFilePath()));
         }
 
         if (
@@ -564,19 +570,23 @@ public sealed partial class BrowserAccessibilitySetupHelper
             && FileStartsWithOwnershipMarker(legacyEnv)
         )
         {
-            actions.Add($"• Delete {legacyEnv}");
+            actions.Add("• " + Loc.Instance.GetString("Profiles.BrowserRevertPlanDelete", legacyEnv));
         }
 
         var ownedLaunchers = EnumerateOwnedLauncherPaths().ToList();
         if (ownedLaunchers.Count > 0)
         {
-            var sb = new StringBuilder("• Restore or delete patched .desktop launchers:\n");
+            var sb = new StringBuilder("• " + Loc.Instance["Profiles.BrowserRevertPlanLaunchers"] + "\n");
             foreach (var path in ownedLaunchers)
             {
                 var name = Path.GetFileName(path);
                 var backupExists = File.Exists(Path.Join(LauncherBackupDir(), name));
                 sb.Append("    ").Append(path);
-                sb.Append(backupExists ? "  (restore from backup)" : "  (delete)");
+                sb.Append("  ").Append(
+                    backupExists
+                        ? Loc.Instance["Profiles.BrowserRevertPlanLauncherRestore"]
+                        : Loc.Instance["Profiles.BrowserRevertPlanLauncherDelete"]
+                );
                 sb.Append('\n');
             }
 
@@ -590,10 +600,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
         if (profilesWithOwnership.Count > 0)
         {
             actions.Add(
-                "• Remove the TypeWhisper accessibility override line from user.js in:\n"
+                "• " + Loc.Instance["Profiles.BrowserRevertPlanUserJs"] + "\n"
                 + string.Join("\n", profilesWithOwnership.Select(p => "    " + p))
-                + "\n  (restore any preserved original accessibility.force_disabled line, "
-                + "and delete the file if it becomes empty)"
+                + "\n  " + Loc.Instance["Profiles.BrowserRevertPlanUserJsDetail"]
             );
         }
 
@@ -1611,5 +1620,9 @@ public sealed partial class BrowserAccessibilitySetupHelper
 
         // Profiles whose user.js was refused for its encoding, not for access.
         public IReadOnlyList<string> NonUtf8FirefoxProfiles { get; init; } = [];
+        // Removal outcome, so the UI can word its summary in the interface language.
+        public bool LeftEnvFile { get; init; }
+        public IReadOnlyList<string> RemovedLaunchers { get; init; } = [];
+        public IReadOnlyList<string> CleanedFirefoxProfiles { get; init; } = [];
     }
 }

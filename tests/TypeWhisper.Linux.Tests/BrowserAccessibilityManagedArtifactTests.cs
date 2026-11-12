@@ -1,5 +1,6 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.ReadAll* is deliberate in these test assertions.
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -104,11 +105,38 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.True(removal.Success);
         Assert.Contains("USER_CUSTOMIZATION=1", File.ReadAllText(EnvPath));
         Assert.Contains("Left env file", removal.Message, StringComparison.Ordinal);
+        Assert.True(removal.LeftEnvFile);
         Assert.True(
             File.Exists(
                 Path.Join(StateRoot, "browser-accessibility-environment", "state.json")
             )
         );
+    }
+
+    [Fact]
+    public async Task German_setup_and_revert_plans_have_no_english_action_text()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "de";
+            var helper = new BrowserAccessibilitySetupHelper();
+
+            var setupPlan = Assert.Single(helper.DescribePendingActions());
+            await helper.SetUpAsync(CancellationToken.None);
+            var revertPlan = Assert.Single(BrowserAccessibilitySetupHelper.DescribeRevertActions());
+
+            Assert.Equal(
+                $"• {EnvPath} schreiben\n"
+                + "  Setzt MOZ_ENABLE_ACCESSIBILITY=1 und GTK_MODULES=gail:atk-bridge benutzerweit.",
+                setupPlan
+            );
+            Assert.Equal($"• {EnvPath} löschen", revertPlan);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
     }
 
     [Fact]
@@ -147,6 +175,7 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
 
         Assert.True(removal.Success);
         Assert.False(File.Exists(UserChromePath));
+        Assert.Equal([ChromeDesktopId], removal.RemovedLaunchers);
     }
 
     [Fact]
@@ -287,6 +316,10 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.True(removal.Success);
         Assert.Equal(originals[0], File.ReadAllBytes(withBom));
         Assert.Equal(originals[1], File.ReadAllBytes(withoutBom));
+        Assert.Equal(
+            ["bom.default", "plain.default"],
+            removal.CleanedFirefoxProfiles.Order(StringComparer.Ordinal)
+        );
     }
 
     [Fact]
@@ -308,6 +341,7 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
             "Could not update user.js in Firefox profile(s): latin1.default.",
             removal.Message
         );
+        Assert.Equal(["latin1.default"], removal.SkippedFirefoxProfiles);
         Assert.Equal(latin1, File.ReadAllBytes(userJs));
     }
 

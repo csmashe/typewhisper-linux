@@ -1274,9 +1274,13 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedProfileSummary));
         OnPropertyChanged(nameof(SelectedProfileDisplayName));
         OnPropertyChanged(nameof(MatchStatusText));
-        if (_browserStatusIsState)
+        if (_browserStatusResult is null)
         {
             RefreshBrowserAccessibilityStatus();
+        }
+        else
+        {
+            BrowserAccessibilityStatusMessage = _browserStatusResult();
         }
     }
 
@@ -1631,8 +1635,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await _browserSetup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
         // Re-evaluate panel state: Enable should disappear and Revert should appear together.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = FormatBrowserSetupResult(result);
-        _browserStatusIsState = false;
+        ShowBrowserStatusResult(() => FormatBrowserSetupResult(result));
     }
 
     internal static string FormatBrowserSetupResult(BrowserAccessibilitySetupHelper.SetupResult result)
@@ -1652,7 +1655,10 @@ public partial class ProfilesSectionViewModel : ObservableObject
                         "Profiles.BrowserSetupPartialFirefoxEncoding",
                         string.Join(", ", nonUtf8)
                     )
-                    : Loc.Instance.GetString("Profiles.BrowserSetupSuccess", result.Message);
+                    : Loc.Instance.GetString(
+                        "Profiles.BrowserSetupSuccess",
+                        Loc.Instance["Profiles.BrowserSetupEnabled"]
+                    );
             }
 
             var partial = Loc.Instance.GetString(
@@ -1671,8 +1677,14 @@ public partial class ProfilesSectionViewModel : ObservableObject
         return encodingRetry is null ? failure : $"{failure} {encodingRetry}";
     }
 
-    // The computed browser status follows a language switch; a setup result keeps its wording.
-    private bool _browserStatusIsState;
+    // Rewords the last setup/revert result on a language switch; null while the computed status shows.
+    private Func<string>? _browserStatusResult;
+
+    internal void ShowBrowserStatusResult(Func<string> format)
+    {
+        _browserStatusResult = format;
+        BrowserAccessibilityStatusMessage = format();
+    }
 
     private void RefreshBrowserAccessibilityStatus()
     {
@@ -1708,7 +1720,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
         // Offer Revert whenever anything was installed, including partial state.
         CanRevertBrowserAccessibility = hasAnyInstall;
-        _browserStatusIsState = true;
+        _browserStatusResult = null;
 
         OnPropertyChanged(nameof(IsUrlPatternsSectionVisible));
     }
@@ -1745,10 +1757,34 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var result = await BrowserAccessibilitySetupHelper.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
         // Refresh first so the state message doesn't overwrite the revert result.
         RefreshBrowserAccessibilityStatus();
-        BrowserAccessibilityStatusMessage = result.Success
-            ? Loc.Instance.GetString("Profiles.BrowserRevertSuccess", result.Message)
-            : $"{result.Message} {result.Detail}";
-        _browserStatusIsState = false;
+        ShowBrowserStatusResult(() => FormatBrowserRevertResult(result));
+    }
+
+    internal static string FormatBrowserRevertResult(BrowserAccessibilitySetupHelper.SetupResult result)
+    {
+        if (!result.Success)
+        {
+            return $"{result.Message} {result.Detail}";
+        }
+
+        var parts = new List<string> { Loc.Instance["Profiles.BrowserRevertRemoved"] };
+        if (result.LeftEnvFile)
+        {
+            parts.Add(Loc.Instance["Profiles.BrowserRevertLeftEnvFile"]);
+        }
+
+        AddNamedPart("Profiles.BrowserRevertRemovedLaunchers", result.RemovedLaunchers);
+        AddNamedPart("Profiles.BrowserRevertCleanedProfiles", result.CleanedFirefoxProfiles);
+        AddNamedPart("Profiles.BrowserRevertSkippedProfiles", result.SkippedFirefoxProfiles);
+        return Loc.Instance.GetString("Profiles.BrowserRevertSuccess", string.Join(" ", parts));
+
+        void AddNamedPart(string key, IReadOnlyList<string> names)
+        {
+            if (names.Count > 0)
+            {
+                parts.Add(Loc.Instance.GetString(key, string.Join(", ", names)));
+            }
+        }
     }
 
     private void NotifyStateChanged()
