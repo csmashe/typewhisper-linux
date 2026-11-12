@@ -1008,6 +1008,8 @@
   "ProfilesContext.UseCurrentApp": "Use current app",
   "ProfilesContext.UseCurrentDomain": "Use current domain",
   "PromptPalette.ActionPluginUnavailable": "The configured action plugin '{0}' is unavailable. It may have been disabled, removed, or renamed.",
+  "PromptPalette.FocusChangedCopied": "Focus moved to another window while the prompt ran, so the result was not pasted. It was copied to the clipboard; paste it where you want it.",
+  "PromptPalette.FocusChangedNotCopied": "Focus moved to another window while the prompt ran, so the result was not pasted, and it could not be copied to the clipboard.",
   "PromptPalette.NoActions": "No actions found",
   "PromptPalette.SearchPlaceholder": "Search prompt actions",
   "PromptPalette.Title": "Prompt Palette",

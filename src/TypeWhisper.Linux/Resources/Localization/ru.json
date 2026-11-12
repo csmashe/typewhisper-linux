@@ -1008,6 +1008,8 @@
   "ProfilesContext.UseCurrentApp": "Использовать текущее приложение",
   "ProfilesContext.UseCurrentDomain": "Использовать текущий домен",
   "PromptPalette.ActionPluginUnavailable": "Настроенный плагин действия «{0}» недоступен. Возможно, он был отключён, удалён или переименован.",
+  "PromptPalette.FocusChangedCopied": "Во время выполнения промпта фокус перешёл в другое окно, поэтому результат не был вставлен. Он скопирован в буфер обмена — вставьте его в нужное место.",
+  "PromptPalette.FocusChangedNotCopied": "Во время выполнения промпта фокус перешёл в другое окно, поэтому результат не был вставлен и не удалось скопировать его в буфер обмена.",
   "PromptPalette.NoActions": "Действия не найдены",
   "PromptPalette.SearchPlaceholder": "Поиск действий промптов",
   "PromptPalette.Title": "Палитра промптов",

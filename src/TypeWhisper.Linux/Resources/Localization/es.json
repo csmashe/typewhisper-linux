@@ -1008,6 +1008,8 @@
   "ProfilesContext.UseCurrentApp": "Usar app actual",
   "ProfilesContext.UseCurrentDomain": "Usar dominio actual",
   "PromptPalette.ActionPluginUnavailable": "El plugin de acción configurado «{0}» no está disponible. Es posible que se haya deshabilitado, eliminado o cambiado de nombre.",
+  "PromptPalette.FocusChangedCopied": "El foco pasó a otra ventana mientras se ejecutaba el prompt, así que el resultado no se pegó. Se copió al portapapeles; pégalo donde lo necesites.",
+  "PromptPalette.FocusChangedNotCopied": "El foco pasó a otra ventana mientras se ejecutaba el prompt, así que el resultado no se pegó y no se pudo copiar al portapapeles.",
   "PromptPalette.NoActions": "No se encontraron acciones",
   "PromptPalette.SearchPlaceholder": "Buscar acciones de prompt",
   "PromptPalette.Title": "Paleta de prompts",
