@@ -36,6 +36,7 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
         [new(ModelId, "Scripted model")];
     public string? SelectedModelId { get; private set; } = ModelId;
     public bool SupportsTranslation { get; set; }
+    public bool SupportsStreaming { get; set; }
     public bool SupportsStructuredDictionaryTerms { get; set; }
     public DictionaryTermsBudget? DictionaryTermsBudget { get; set; }
     internal bool? ReceivedTranslate { get; private set; }

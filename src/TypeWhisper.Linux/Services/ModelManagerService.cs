@@ -29,6 +29,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     private readonly ISettingsService _settings;
     private TranscriptionAccelerationPreference? _activeModelAccelerationPreference;
     private string? _activeModelId;
+    // The active engine's own selection right after the load. Plugin settings can change it
+    // behind the active model, so a reuse checks it is unchanged.
+    private string? _activeModelEngineSelection;
     // Guards _autoUnloadTimer, _autoUnloadGeneration and _disposed. Load/unload/acquire paths
     // already hold _modelLock, but Dispose() runs on an arbitrary thread and must not block on
     // that async lock — without its own gate it can race a lease's re-arm and leave a zombie timer.
@@ -143,6 +146,13 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     }
 
     public ITranscriptionEngineRole? ActiveTranscriptionPlugin => GetTranscriptionPlugin(_activeModelId);
+
+    /// <summary>
+    ///     False once plugin settings changed the active engine's selection since the load; the
+    ///     next acquire restores it.
+    /// </summary>
+    public bool ActiveEngineSelectionIsCurrent =>
+        ActiveTranscriptionPlugin?.SelectedModelId == _activeModelEngineSelection;
 
     /// <summary>
     ///     Resolves the transcription plugin that owns <paramref name="modelId" /> (a
@@ -1008,6 +1018,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 !string.IsNullOrWhiteSpace(targetModelId)
                 && ActiveModelId == targetModelId
                 && ActiveTranscriptionPlugin is { } plugin
+                && plugin.SelectedModelId == _activeModelEngineSelection
             )
             {
                 CancelAutoUnload();
@@ -1323,6 +1334,16 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
             }
 
             plugin.SelectModel(pluginModelId);
+            var engineSelection = plugin.SelectedModelId;
+            // A settings save on another thread can change the selection between the two lines
+            // above. Selecting again tells that apart from an engine that renames the model itself.
+            if (engineSelection != pluginModelId)
+            {
+                plugin.SelectModel(pluginModelId);
+                engineSelection = plugin.SelectedModelId;
+            }
+
+            _activeModelEngineSelection = engineSelection;
             SetStatus(modelId, ModelStatus.Ready);
             ActiveModelId = modelId;
             _activeModelAccelerationPreference = requestedPreference;
@@ -1499,6 +1520,7 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         if (
             ActiveModelId == targetModelId
             && _activeModelAccelerationPreference == targetPreference
+            && ActiveEngineSelectionIsCurrent
         )
         {
             CancelAutoUnload();

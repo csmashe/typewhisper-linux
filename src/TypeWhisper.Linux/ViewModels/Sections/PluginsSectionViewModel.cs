@@ -240,9 +240,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                     && existingRows.TryGetValue(plugin.Manifest.Id, out var previousRow)
                     && ReferenceEquals(previousRow.LoadedPlugin, plugin)
                     && !string.IsNullOrEmpty(previousRow.Status)
-                    // A failed load clears the fields and is retried; a failed validation is kept.
-                    && (previousRow.CanValidateSettings
-                        || previousRow.Status != Loc.Instance["Plugins.UnableToLoadSettings"])
+                    && !ShowsSettingsLoadFailure(previousRow)
                 )
                 {
                     row.Status = previousRow.Status;
@@ -428,6 +426,29 @@ public partial class PluginsSectionViewModel : ObservableObject
         await expand;
         return PluginRevealResult.Revealed;
     }
+
+    /// <summary>
+    ///     Re-reads the open settings when the page is shown again, since other pages change values
+    ///     such as the default model. Unsaved edits are kept.
+    /// </summary>
+    internal void RefreshExpandedSettings()
+    {
+        var row = AllRows.FirstOrDefault(plugin => plugin.IsExpanded);
+        if (row is null || IsRefreshingModels(row.Id, row.LoadedPlugin))
+        {
+            return;
+        }
+
+        BeginObservedSettingsLoad(
+            row,
+            SettingsReloadKind.PreserveDraft,
+            preserveStatus: !string.IsNullOrEmpty(row.Status) && !ShowsSettingsLoadFailure(row)
+        );
+    }
+
+    // A failed load clears the fields and is retried; a failed validation is kept.
+    private static bool ShowsSettingsLoadFailure(PluginRow row) =>
+        !row.CanValidateSettings && row.Status == Loc.Instance["Plugins.UnableToLoadSettings"];
 
     /// <summary>Drops a pending reveal because the user was sent to another page.</summary>
     internal void CancelPendingReveal()
