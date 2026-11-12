@@ -87,8 +87,8 @@ internal static class HttpApiDocumentation
         <tr><td>429</td><td>Request queue is full.</td></tr>
         <tr><td>500</td><td>Unexpected server error.</td></tr>
         <tr><td>501</td><td>Requested translation is unavailable or unsupported.</td></tr>
-        <tr><td>502</td><td>Translation did not preserve segment count.</td></tr>
-        <tr><td>503</td><td>Service, model, download, or audio conversion is unavailable.</td></tr>
+        <tr><td>502</td><td>Translation did not preserve segment count, or the transcription provider rejected the request or its credentials.</td></tr>
+        <tr><td>503</td><td>Service, model, download, audio conversion, or the transcription provider is unavailable.</td></tr>
         </tbody></table>
         </body></html>
         """;
