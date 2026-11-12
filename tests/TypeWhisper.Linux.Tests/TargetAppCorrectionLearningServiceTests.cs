@@ -1175,6 +1175,91 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Arm_BaselineReadBeforeTrailingPadLanded_StillLearns()
+    {
+        // The insertion's trailing pad space is the last key typed, and the baseline read can beat
+        // it into the field (seen live in Firefox on Wayland). The whitespace-collapsed anchor still
+        // matches, so the session arms on a baseline without the pad; the commit must still learn.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "I deployed to kubernets today";
+        await service.ArmAsync("I deployed to kubernets today ");
+
+        client.TextToReturn = "I deployed to Kubernetes today ";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        var correction = Assert.Single(_dictionary.GetCorrections());
+        Assert.Equal("kubernets", correction.Original);
+        Assert.Equal("Kubernetes", correction.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_TrailingPadMissingBeforeExistingText_StillLearnsInsideSpan()
+    {
+        // Dictated into the middle of a field: the baseline caught the dictation but not its pad, so
+        // the following text sits right against it. The span is still framed by that text.
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "PREFIX kubernetsSUFFIX";
+        await service.ArmAsync("kubernets ");
+
+        client.TextToReturn = "PREFIX Kubernetes SUFFIX";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        var correction = Assert.Single(_dictionary.GetCorrections());
+        Assert.Equal("kubernets", correction.Original);
+        Assert.Equal("Kubernetes", correction.Replacement);
+    }
+
+    [Fact]
+    public async Task Arm_TrailingPadMissing_EditOutsideDictatedSpan_LearnsNothing()
+    {
+        var client = new FakeAtSpiEventClient { CurrentFocusedElement = s_field };
+        using var service = CreateService(client, enabled: true);
+
+        client.TextToReturn = "PREFIX kubernets";
+        await service.ArmAsync("kubernets ");
+
+        client.TextToReturn = "CHANGED kubernets ";
+        client.RaiseText(s_field);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        Assert.Empty(_dictionary.GetCorrections());
+    }
+
+    [Fact]
+    public async Task Arm_TrailingPadMissingInRecentSibling_EditThere_LearnsNothing()
+    {
+        // The focused field is still receiving the dictation, so the arm falls back to a recently
+        // focused sibling that already held the word. Without its pad that is no proof the
+        // dictation landed there, so an edit to the sibling must not be learned.
+        var sibling = new AtSpiElementRef("app", "/field/sibling");
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = s_field,
+            TextProvider = e => e.Equals(sibling) ? "notes on kubernets" : "kube",
+        };
+        client.RecentFocusedElements.AddRange([s_field, sibling]);
+        using var service = CreateService(client, enabled: true);
+
+        await service.ArmAsync("kubernets ");
+
+        client.TextProvider = e => e.Equals(sibling) ? "notes on Kubernetes" : "kubernets ";
+        client.RaiseText(sibling);
+        client.RaiseFocus(s_otherAppField);
+        await AwaitCommit(service);
+
+        Assert.Empty(_dictionary.GetCorrections());
+    }
+
+    [Fact]
     public async Task Arm_InsertedTextOccursTwiceInBaseline_LearnsNothing()
     {
         // The inserted text appears twice back-to-back in the field, so an edit between the two

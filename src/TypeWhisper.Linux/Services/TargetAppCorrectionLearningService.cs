@@ -440,6 +440,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             )
             {
                 TargetWindowHandle = targetWindowTask,
+                AnchoredOnFocusedElement = anchoredElement.Equals(element),
             };
             _timeoutTimer = new Timer(
                 static state =>
@@ -928,8 +929,14 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             // a "correction" of the dictation. The extraction is EXACT (Ordinal), while ArmAsync
             // anchors with a whitespace/case-tolerant match — so if the app transformed the
             // inserted text (e.g. autocapitalize) the span won't be found and nothing is learned.
-            // That is the safe direction; do not weaken the matching to close that gap.
-            var editedSpan = ExtractEditedInsertedText(state.InsertedText, state.Baseline, finalText);
+            // That is the safe direction; do not weaken the matching to close that gap. The one
+            // exception is our own trailing pad space, which may not have landed by the baseline read.
+            var editedSpan = ExtractEditedInsertedText(
+                state.InsertedText,
+                state.Baseline,
+                finalText,
+                allowMissingPad: state.AnchoredOnFocusedElement
+            );
             if (editedSpan is null
                 || string.Equals(state.InsertedText, editedSpan, StringComparison.Ordinal))
             {
@@ -1071,7 +1078,8 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
     private static string? ExtractEditedInsertedText(
         string insertedText,
         string baseline,
-        string finalText
+        string finalText,
+        bool allowMissingPad
     )
     {
         if (insertedText.Length == 0)
@@ -1088,7 +1096,18 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
             return null;
         }
 
-        var start = baseline.IndexOf(insertedText, StringComparison.Ordinal);
+        var anchor = insertedText;
+        var start = baseline.IndexOf(anchor, StringComparison.Ordinal);
+        if (start < 0 && allowMissingPad && char.IsWhiteSpace(insertedText[^1]))
+        {
+            // The trailing pad space (DictationInsertionTextFormatter) is typed last, so the baseline
+            // can be read before it lands and ArmAsync's whitespace-collapsed anchor still accepts it.
+            // The pad isn't dictated content: frame the span without it. Only for the focused
+            // element: a recent sibling holding the unpadded text isn't proven to be the target.
+            anchor = insertedText.TrimEnd();
+            start = baseline.IndexOf(anchor, StringComparison.Ordinal);
+        }
+
         if (start < 0)
         {
             // The sole normalized occurrence was transformed (e.g. autocapitalized), so there is no
@@ -1097,7 +1116,7 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         }
 
         var prefix = baseline[..start];
-        var suffix = baseline[(start + insertedText.Length)..];
+        var suffix = baseline[(start + anchor.Length)..];
         if (finalText.StartsWith(prefix, StringComparison.Ordinal)
             && finalText.EndsWith(suffix, StringComparison.Ordinal)
             && finalText.Length >= prefix.Length + suffix.Length)
@@ -1235,6 +1254,9 @@ public sealed class TargetAppCorrectionLearningService : IDisposable
         // Frame-locator handle of the window the dictation landed in, for anchoring feedback when
         // the element has no global extents. Awaited only at commit so the lookup never delays arming.
         public Task<string?>? TargetWindowHandle { get; init; }
+
+        // False when ArmAsync fell back to a recently focused sibling of the focused element.
+        public bool AnchoredOnFocusedElement { get; init; }
 
         // What we persisted for each original during this armed session: the last replacement
         // (to ignore identical repeats and widenings) plus the dictionary entry id we created
