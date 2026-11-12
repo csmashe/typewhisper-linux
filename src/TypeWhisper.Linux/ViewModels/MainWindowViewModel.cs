@@ -191,7 +191,7 @@ public partial class MainWindowViewModel : ObservableObject
         if (value is { IsHeader: false, Content: not null })
         {
             CurrentSection = value.Content;
-            if (value.Content == Plugins)
+            if (ReferenceEquals(value.Content, Plugins))
             {
                 Plugins.RefreshExpandedSettings();
             }
