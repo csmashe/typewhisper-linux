@@ -62,8 +62,10 @@ public static class LearnedToastPlacement
     }
 
     /// <summary>
-    ///     Picks the box to anchor the toast to: the element's extents when plausible, else its
-    ///     window's frame mapped onto the screens so the toast still lands on that monitor.
+    ///     Picks the box to anchor the toast to: the element's extents when plausible and centered
+    ///     inside its window's frame, else that frame mapped onto the screens so the toast still
+    ///     lands on that monitor. Extents outside the frame are in another coordinate space (a GTK
+    ///     app with <c>GDK_SCALE=2</c> reports half-size ones) and can point at the wrong monitor.
     /// </summary>
     public static AtSpiScreenRect? ChooseAnchor(
         AtSpiScreenRect? extents,
@@ -71,22 +73,28 @@ public static class LearnedToastPlacement
         IReadOnlyList<PixelRect> screens
     )
     {
-        if (extents is { } rect && IsPlausible(rect, screens))
+        var frame = windowFrame is { } window ? MapToScreens(window, screens) : null;
+        if (extents is { } rect && IsPlausible(rect, screens) && (frame is not { } bounds || CenterIsInside(rect, bounds)))
         {
             return rect;
         }
 
-        return windowFrame is { } window ? MapToScreens(window, screens) : extents;
+        return windowFrame is null ? extents : frame;
     }
 
     /// <summary>
     ///     Maps a compositor-logical window frame onto the screens' coordinate space by stretching
     ///     the logical desktop over the screens' union. Xwayland applies one scale to the whole
-    ///     desktop (2× under fractional scaling, 1× otherwise), so a linear map is exact.
+    ///     desktop (2× under fractional scaling, 1× otherwise), so a linear map is exact. A frame
+    ///     without a desktop is already in screen coordinates and is returned unchanged.
     /// </summary>
     public static AtSpiScreenRect? MapToScreens(CompositorWindowFrame window, IReadOnlyList<PixelRect> screens)
     {
-        var desktop = window.Desktop;
+        if (window.Desktop is not { } desktop)
+        {
+            return window.Frame;
+        }
+
         if (screens.Count == 0 || desktop.Width <= 0 || desktop.Height <= 0)
         {
             return null;
@@ -116,6 +124,12 @@ public static class LearnedToastPlacement
 
         var box = new PixelRect(rect.X, rect.Y, rect.Width, rect.Height);
         return screens.Any(screen => screen.Intersects(box));
+    }
+
+    private static bool CenterIsInside(AtSpiScreenRect rect, AtSpiScreenRect bounds)
+    {
+        var center = new PixelRect(rect.X, rect.Y, rect.Width, rect.Height).Center;
+        return new PixelRect(bounds.X, bounds.Y, bounds.Width, bounds.Height).Contains(center);
     }
 
     private static PixelRect? ScreenContaining(PixelPoint point, IReadOnlyList<PixelRect> screens)

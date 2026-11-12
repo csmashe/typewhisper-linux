@@ -157,7 +157,7 @@ public sealed class LearnedToastPlacementTests
     [Fact]
     public void Anchor_PrefersPlausibleExtentsOverTheWindowFrame()
     {
-        var extents = new AtSpiScreenRect(100, 200, 300, 40);
+        var extents = new AtSpiScreenRect(2100, 300, 300, 40);
         var window = new CompositorWindowFrame(new AtSpiScreenRect(2000, 150, 720, 360), new AtSpiScreenRect(0, 0, 3840, 1080));
 
         Assert.Equal(extents, LearnedToastPlacement.ChooseAnchor(extents, window, [s_primary, new PixelRect(1920, 0, 1920, 1080)]));
@@ -174,5 +174,32 @@ public sealed class LearnedToastPlacementTests
             new AtSpiScreenRect(2000, 150, 720, 360),
             LearnedToastPlacement.ChooseAnchor(new AtSpiScreenRect(x, y, width, height), window, [s_primary, new PixelRect(1920, 0, 1920, 1080)])
         );
+    }
+
+    [Fact]
+    public void Anchor_RejectsExtentsOutsideTheWindowFrame()
+    {
+        // GTK with GDK_SCALE=2 on X11 reports half-size extents: a field on the right monitor
+        // claims to be on the left one. The window's real frame keeps the toast on the right.
+        PixelRect[] screens = [new(0, 0, 640, 1024), new(640, 0, 640, 1024)];
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(701, 474, 440, 300), null);
+
+        var anchor = LearnedToastPlacement.ChooseAnchor(new AtSpiScreenRect(350, 237, 220, 34), window, screens);
+        var point = LearnedToastPlacement.Compute(anchor, screens, new PixelSize(324, 70));
+
+        Assert.Equal(new AtSpiScreenRect(701, 474, 440, 300), anchor);
+        Assert.Equal(new PixelPoint(759, 786), point);
+    }
+
+    [Fact]
+    public void Anchor_KeepsExtentsInsideAnX11FrameWhenTheRootIsWiderThanTheMonitors()
+    {
+        // An X11 frame is already in root coordinates. Stretching a 1920-wide root over these
+        // 1280 pixels of monitors would shrink the frame to x 467–760 and reject the field.
+        PixelRect[] screens = [new(0, 0, 640, 1024), new(640, 0, 640, 1024)];
+        var window = new CompositorWindowFrame(new AtSpiScreenRect(701, 474, 440, 300), null);
+        var extents = new AtSpiScreenRect(721, 500, 400, 34);
+
+        Assert.Equal(extents, LearnedToastPlacement.ChooseAnchor(extents, window, screens));
     }
 }
