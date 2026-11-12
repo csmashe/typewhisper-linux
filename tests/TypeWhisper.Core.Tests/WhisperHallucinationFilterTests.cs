@@ -203,4 +203,37 @@ public sealed class WhisperHallucinationFilterTests
             realText + terminalText, terminalText, 0.95f, out var strippedText));
         Assert.Equal(realText, strippedText);
     }
+
+    [Theory]
+    [InlineData("[BLANK_AUDIO]")]
+    [InlineData("  [BLANK_AUDIO]  ")]
+    [InlineData("[MUSIC]")]
+    [InlineData("[ Silence ]")]
+    [InlineData("(wind blowing)")]
+    [InlineData("[BLANK_AUDIO] [BLANK_AUDIO]")]
+    [InlineData("[MUSIC].")]
+    [InlineData("[MUSIC]:")]
+    [InlineData("[MUSIC] - [APPLAUSE]")]
+    [InlineData("- [MUSIC] -")]
+    [InlineData("♪ (music) ♪")]
+    public void IsNonSpeechAnnotation_TrueForMarkerOnlyTranscript(string transcript)
+    {
+        Assert.True(WhisperHallucinationFilter.IsNonSpeechAnnotation(transcript));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("Front, center.")]
+    [InlineData("make it [bold]")]
+    [InlineData("[MUSIC] make it shorter")]
+    [InlineData("Thank you.")]
+    [InlineData("[MUSIC]: shorter")]
+    [InlineData("[MUSIC] 2")]
+    [InlineData("- ]")]
+    public void IsNonSpeechAnnotation_FalseWhenTranscriptHasWordsOrIsEmpty(string? transcript)
+    {
+        Assert.False(WhisperHallucinationFilter.IsNonSpeechAnnotation(transcript));
+    }
 }
