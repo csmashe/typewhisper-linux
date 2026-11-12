@@ -1,4 +1,6 @@
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Insertion;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
@@ -115,6 +117,20 @@ public sealed class LocalizationGapTests : IDisposable
 
         Assert.False(File.Exists(actionsPath));
         Assert.False(File.Exists(profilesPath));
+    }
+
+    [Fact]
+    public void TextInsertionRefreshStatus_FollowsTheLanguage()
+    {
+        var runner = new FakeProcessRunner();
+        var commands = new SystemCommandAvailabilityService(runner);
+        var sut = new TextInsertionSectionViewModel(commands, new YdotoolSetupHelper(commands, runner));
+        sut.RefreshStatusCommand.Execute(null);
+        Assert.Equal("Status refreshed.", sut.StatusMessage);
+
+        Loc.Instance.CurrentLanguage = "de";
+
+        Assert.Equal("Status aktualisiert.", sut.StatusMessage);
     }
 
     [Fact]

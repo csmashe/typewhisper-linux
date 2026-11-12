@@ -20,6 +20,11 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     [ObservableProperty]
     private string _statusMessage = "";
 
+    // Redraw the last status lines on a language switch. Setup results arrive already
+    // worded by YdotoolSetupHelper, so those keep the language they were produced in.
+    private Func<string>? _integrationStatus;
+    private Func<string>? _status;
+
     public TextInsertionSectionViewModel(
         SystemCommandAvailabilityService commands,
         YdotoolSetupHelper setup
@@ -33,8 +38,32 @@ public partial class TextInsertionSectionViewModel : ObservableObject
             OnPropertyChanged(nameof(WtypeStatusText));
             OnPropertyChanged(nameof(YdotoolStatusText));
             OnPropertyChanged(nameof(SetupPreview));
+            if (_integrationStatus is { } integrationStatus)
+            {
+                IntegrationStatusMessage = integrationStatus();
+            }
+
+            if (_status is { } status)
+            {
+                StatusMessage = status();
+            }
         };
     }
+
+    private void ShowIntegrationStatus(Func<string> render)
+    {
+        _integrationStatus = render;
+        IntegrationStatusMessage = render();
+    }
+
+    private void ShowStatus(Func<string> render)
+    {
+        _status = render;
+        StatusMessage = render();
+    }
+
+    private static string FormatSetupResult(YdotoolSetupHelper.SetupResult result) =>
+        string.IsNullOrWhiteSpace(result.Detail) ? result.Message : $"{result.Message}\n{result.Detail}";
 
     private LinuxCapabilitySnapshot Snapshot => _commands.GetSnapshot();
     private YdotoolSetupHelper.Status YdotoolStatus => _setup.IsCurrentlyConfigured();
@@ -156,17 +185,17 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task SetUpYdotoolAsync()
     {
-        IntegrationStatusMessage = Loc.Instance["TextInsertion.SettingUpYdotool"];
+        ShowIntegrationStatus(() => Loc.Instance["TextInsertion.SettingUpYdotool"]);
         try
         {
             var result = await _setup.SetUpAsync(CancellationToken.None).ConfigureAwait(true);
-            IntegrationStatusMessage = string.IsNullOrWhiteSpace(result.Detail)
-                ? result.Message
-                : $"{result.Message}\n{result.Detail}";
+            var text = FormatSetupResult(result);
+            ShowIntegrationStatus(() => text);
         }
         catch (Exception ex)
         {
-            IntegrationStatusMessage = Loc.Instance.GetString("TextInsertion.SetupFailed", ex.Message);
+            var reason = ex.Message;
+            ShowIntegrationStatus(() => Loc.Instance.GetString("TextInsertion.SetupFailed", reason));
         }
         finally
         {
@@ -177,17 +206,17 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     [RelayCommand]
     private async Task RemoveYdotoolAsync()
     {
-        IntegrationStatusMessage = Loc.Instance["TextInsertion.RemovingYdotool"];
+        ShowIntegrationStatus(() => Loc.Instance["TextInsertion.RemovingYdotool"]);
         try
         {
             var result = await _setup.RemoveAsync(CancellationToken.None).ConfigureAwait(true);
-            IntegrationStatusMessage = string.IsNullOrWhiteSpace(result.Detail)
-                ? result.Message
-                : $"{result.Message}\n{result.Detail}";
+            var text = FormatSetupResult(result);
+            ShowIntegrationStatus(() => text);
         }
         catch (Exception ex)
         {
-            IntegrationStatusMessage = Loc.Instance.GetString("TextInsertion.RemovalFailed", ex.Message);
+            var reason = ex.Message;
+            ShowIntegrationStatus(() => Loc.Instance.GetString("TextInsertion.RemovalFailed", reason));
         }
         finally
         {
@@ -200,7 +229,7 @@ public partial class TextInsertionSectionViewModel : ObservableObject
     {
         _commands.RefreshSnapshot();
         RefreshDerivedProperties();
-        StatusMessage = Loc.Instance["TextInsertion.StatusRefreshed"];
+        ShowStatus(() => Loc.Instance["TextInsertion.StatusRefreshed"]);
     }
 
     // LinuxCapabilitySnapshot is a value type rebuilt out-of-band and can't

@@ -47,7 +47,7 @@ public partial class AboutSection : UserControl
         }
         catch (Exception ex)
         {
-            await ShowMessage("Export diagnostics failed", ex.Message);
+            await ShowMessage(Loc.Instance["About.ExportDiagnosticsFailed"], ex.Message);
         }
     }
 
@@ -85,7 +85,7 @@ public partial class AboutSection : UserControl
         }
         catch (Exception ex)
         {
-            await ShowMessage("Export support report failed", ex.Message);
+            await ShowMessage(Loc.Instance["About.SupportReportExportFailed"], ex.Message);
         }
     }
 
@@ -125,13 +125,13 @@ public partial class AboutSection : UserControl
 
             var result = await viewModel.CreateSettingsBackupAsync(path);
             await ShowMessage(
-                "Settings backup",
-                $"Backup created with {result.FileCount} file(s)."
+                Loc.Instance["About.SettingsBackup"],
+                Loc.Instance.GetString("About.BackupCreated", result.FileCount)
             );
         }
         catch (Exception ex)
         {
-            await ShowMessage("Settings backup failed", ex.Message);
+            await ShowMessage(Loc.Instance["About.BackupFailed"], ex.Message);
         }
     }
 
@@ -169,13 +169,13 @@ public partial class AboutSection : UserControl
 
             var result = await viewModel.RestoreSettingsBackupAsync(path);
             await ShowMessage(
-                "Settings restore staged",
-                $"Validated and staged {result.FileCount} file(s). Quit and reopen TypeWhisper to apply the restore."
+                Loc.Instance["About.RestoreStagedTitle"],
+                Loc.Instance.GetString("About.BackupStaged", result.FileCount)
             );
         }
         catch (Exception ex)
         {
-            await ShowMessage("Settings restore failed", ex.Message);
+            await ShowMessage(Loc.Instance["About.RestoreFailed"], ex.Message);
         }
     }
 

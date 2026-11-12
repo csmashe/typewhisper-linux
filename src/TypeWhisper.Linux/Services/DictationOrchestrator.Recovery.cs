@@ -116,7 +116,7 @@ public sealed partial class DictationOrchestrator
                         _cleanup, _promptProcessing, context.LiveCleanup, text, cleanupLevel,
                         context.Capture, message =>
                         {
-                            ReportStatus(context, message);
+                            ReportStatus(context, message, DictationOverlayPhase.Transcribing);
                             return Task.CompletedTask;
                         }, token, referenceContext),
             SnippetExpander = text =>
@@ -274,7 +274,9 @@ public sealed partial class DictationOrchestrator
             if (record is null || path is null)
                 throw new FileNotFoundException(Loc.Instance["History.RetryAudioMissing"]);
 
-            var profile = _profiles.Profiles.FirstOrDefault(candidate => candidate.Name == record.ProfileName);
+            var profile = record.ProfileId is { } profileId
+                ? _profiles.Profiles.FirstOrDefault(candidate => candidate.Id == profileId)
+                : _profiles.Profiles.FirstOrDefault(candidate => candidate.Name == record.ProfileName);
             var context = new RecordingContext(-1, record.Timestamp, record.AppProcessName,
                 record.AppName, record.AppUrl, null, profile, "", null, false, null, null,
                 LanguageSelection.Automatic, [], ct)

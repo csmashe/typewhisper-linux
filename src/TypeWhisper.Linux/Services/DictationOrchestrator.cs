@@ -3243,7 +3243,11 @@ public sealed partial class DictationOrchestrator : IDisposable
         try
         {
             Trace.WriteLine($"[Dictation] Running prompt action '{promptAction.Name}'...");
-            ReportStatus(context, Localization.Loc.Instance.GetString("Overlay.RunningPromptAction", promptAction.Name));
+            ReportStatus(
+                context,
+                Localization.Loc.Instance.GetString("Overlay.RunningPromptAction", promptAction.Name),
+                DictationOverlayPhase.Transcribing
+            );
 
             var retryBudget = new LlmRequestRetryBudget();
             var (result, streamFaulted) = await RunPromptActionStreamWithFallbackAsync(
@@ -4611,6 +4615,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             DurationSeconds = duration,
             Language = language,
             ProfileName = context.Profile?.Name,
+            ProfileId = context.Profile?.Id,
             EngineUsed = engine,
             ModelUsed = modelUsed,
             AudioFileName = Path.GetFileName(wavPath),

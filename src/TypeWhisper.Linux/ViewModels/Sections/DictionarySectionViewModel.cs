@@ -106,6 +106,11 @@ public partial class DictionarySectionViewModel : ObservableObject
                 {
                     pack.RefreshLocalizedText();
                 }
+
+                OnPropertyChanged(nameof(VocabularyBoostingStatusText));
+                RefreshAcousticStatus();
+                OnPropertyChanged(nameof(EmptyStateTitle));
+                OnPropertyChanged(nameof(EmptyStateSubtitle));
             });
         InitializePacks();
         Refresh();

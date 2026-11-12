@@ -654,7 +654,13 @@ public partial class PromptsSectionViewModel : ObservableObject
 
         if (
             !TryMutate(
-                () => _prompts.UpdateAction(action with { IsEnabled = !action.IsEnabled }),
+                () =>
+                {
+                    // The row can still hold the previous language's default name until the
+                    // posted refresh runs; saving it would mark the name as customized.
+                    var current = _prompts.Actions.FirstOrDefault(a => a.Id == action.Id) ?? action;
+                    _prompts.UpdateAction(current with { IsEnabled = !action.IsEnabled });
+                },
                 "toggle a prompt action"
             )
         )

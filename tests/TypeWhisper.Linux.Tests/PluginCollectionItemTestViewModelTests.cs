@@ -221,6 +221,32 @@ public sealed class PluginCollectionItemTestViewModelTests : IDisposable
         Assert.False(Assert.Single(collection.Items).CanTest);
     }
 
+    [Fact]
+    public void Relabel_SwapsAnUntouchedSampleAndKeepsEditedTestInput()
+    {
+        var ownerRow = new PluginRow(
+            null,
+            "p",
+            "P",
+            "1",
+            "",
+            new PluginMetadataDescriptor(PluginNetworkAccess.Local, [PluginCategory.Utility]),
+            true,
+            true
+        );
+        var collection = new PluginCollectionRow(
+            Definition() with { ItemTest = new PluginCollectionItemTest("Test", "sample input") },
+            ownerRow,
+            [Item("Untouched", "c"), Item("Edited", "c")]
+        );
+        collection.Items[1].TestInput = "my input";
+
+        collection.Relabel(Definition() with { ItemTest = new PluginCollectionItemTest("Testen", "Beispieleingabe") });
+
+        Assert.Equal("Beispieleingabe", collection.Items[0].TestInput);
+        Assert.Equal("my input", collection.Items[1].TestInput);
+    }
+
     private (PluginsSectionViewModel Vm, PluginRow Row, FakeTestablePlugin Plugin) CreateSection(
         bool activated
     )

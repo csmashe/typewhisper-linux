@@ -71,7 +71,9 @@ public partial class PluginCollectionRow : ObservableObject
         Description = definition.Description;
         AddButtonLabel = definition.AddButtonLabel ?? Loc.Instance["Plugins.AddItem"];
         ItemFields = definition.ItemFields;
+        var oldSample = ItemTest?.SampleInput ?? string.Empty;
         ItemTest = definition.ItemTest;
+        var newSample = ItemTest?.SampleInput ?? string.Empty;
         var selectedTemplateId = SelectedTemplate?.Id;
         Templates = definition.Templates;
         OnPropertyChanged(nameof(Label));
@@ -87,6 +89,10 @@ public partial class PluginCollectionRow : ObservableObject
         foreach (var item in Items)
         {
             item.Relabel(ItemFields);
+            if (item.TestInput == oldSample)
+            {
+                item.TestInput = newSample;
+            }
         }
     }
 

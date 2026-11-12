@@ -190,6 +190,38 @@ public sealed class ComputedLocalizationTests(UiSession ui)
         }, CancellationToken.None);
     }
 
+    private static readonly string[] s_dictionaryProperties =
+        ["VocabularyBoostingStatusText", "AcousticBoostingStatusText", "EmptyStateTitle", "EmptyStateSubtitle"];
+
+    [Fact]
+    public async Task LanguageChange_RefreshesDictionaryStatusAndEmptyStateText()
+    {
+        await ui.Session.Dispatch(() =>
+        {
+            var dictionary = ui.Services.GetRequiredService<DictionarySectionViewModel>();
+            var changed = new HashSet<string?>();
+            dictionary.PropertyChanged += OnChanged;
+            var language = Loc.Instance.CurrentLanguage;
+            try
+            {
+                Loc.Instance.CurrentLanguage = language == "de" ? "en" : "de";
+                Dispatcher.UIThread.RunJobs();
+                foreach (var property in s_dictionaryProperties)
+                    Assert.Contains(property, changed);
+            }
+            finally
+            {
+                dictionary.PropertyChanged -= OnChanged;
+                Loc.Instance.CurrentLanguage = language;
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            return;
+
+            void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => changed.Add(e.PropertyName);
+        }, CancellationToken.None);
+    }
+
     [Fact]
     public async Task LanguageChange_RecomputesGeneralStateTextAndPluginSummary()
     {

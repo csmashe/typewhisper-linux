@@ -286,7 +286,7 @@ public partial class FileTranscriptionSection : UserControl
             UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
             async () =>
             {
-                var path = await PickFolderAsync("Select watch folder");
+                var path = await PickFolderAsync(Loc.Instance["Dialog.SelectWatchFolder"]);
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     viewModel.SetWatchFolderPath(path);
@@ -314,7 +314,7 @@ public partial class FileTranscriptionSection : UserControl
             UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
             async () =>
             {
-                var path = await PickFolderAsync("Select output folder");
+                var path = await PickFolderAsync(Loc.Instance["Dialog.SelectOutputFolder"]);
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     viewModel.SetWatchFolderOutputPath(path);

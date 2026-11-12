@@ -123,6 +123,52 @@ public sealed class OverlayCoordinationInterleavingTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public Task PromptAction_ReportsTranscribingStateWhileTheRequestRuns()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture();
+            var llm = new GatedLlmProvider();
+            var promptResult = llm.Enqueue("processed dictation");
+            InjectLlmProvider(fixture.PluginManager, llm);
+            const string promptActionId = "state-label-prompt";
+            const string profileId = "state-label-profile";
+            fixture.Provider.GetRequiredService<IPromptActionService>().AddAction(
+                new PromptAction
+                {
+                    Id = promptActionId,
+                    Name = "State label prompt",
+                    SystemPrompt = "Return the text.",
+                    ProviderOverride = $"plugin:{GatedLlmProvider.Id}:{GatedLlmProvider.ModelId}",
+                }
+            );
+            fixture.Provider.GetRequiredService<IProfileService>().AddProfile(
+                new Profile { Id = profileId, Name = "State label profile", PromptActionId = promptActionId }
+            );
+            fixture.Plugin.EnqueueText("raw dictation");
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync(profileId));
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            var dictationStop = fixture.Orchestrator.StopAsync();
+            try
+            {
+                await BoundedTest.WaitAsync(promptResult.Entered);
+                Assert.Equal("transcribing", fixture.Orchestrator.CurrentStateLabel);
+            }
+            finally
+            {
+                promptResult.Release();
+            }
+
+            await BoundedTest.WaitAsync(dictationStop);
+            Assert.Equal("ready", (await BoundedTest.WaitAsync(resultTask)).Status);
+            Assert.Equal("idle", fixture.Orchestrator.CurrentStateLabel);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public Task TransformRecording_SuppressesDictationProcessingAndTerminalFeedback()
     {
         return BoundedTest.RunAsync(async () =>
