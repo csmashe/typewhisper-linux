@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.ActiveWindow;
@@ -36,6 +37,7 @@ public enum InsertionFailureReason
     PasteRetriesExhausted,
     PartialTypingFailure,
     LockedFieldUnavailable,
+    WtypeXWaylandTarget,
     NonAsciiTypingUnavailable,
 }
 
@@ -1057,6 +1059,7 @@ public sealed class TextInsertionService
                 is InsertionFailureReason.WtypeCompositorUnsupported
                 or InsertionFailureReason.YdotoolSocketUnreachable
                 or InsertionFailureReason.NoWaylandTypingTool
+                or InsertionFailureReason.WtypeXWaylandTarget
             )
             {
                 // First-failing structural reason within this request wins — a later,
@@ -1383,6 +1386,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 {
     private static readonly TimeSpan s_clipboardOperationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan s_injectorProcessTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan s_focusedWindowProbeTimeout = TimeSpan.FromSeconds(1);
 
     // X11 TARGETS listings always include protocol/negotiation targets that carry no
     // content of their own alongside the plain-text encodings. None count as non-text content.
@@ -1412,6 +1416,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     // ReSharper disable once NotAccessedField.Local
     private readonly SystemCommandAvailabilityService? _commands;
     private readonly IProcessRunner _ioRunner;
+    private readonly Func<Task<bool>> _focusedWindowIsXWayland;
     private readonly bool _isWayland;
     private readonly ProcessRunnerWithEnv _processRunner;
 
@@ -1479,13 +1484,15 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             string,
             IReadOnlyList<string>,
             Task<(int exitCode, string stderr)>
-        >? processRunnerWithStderr = null
+        >? processRunnerWithStderr = null,
+        Func<Task<bool>>? focusedWindowIsXWayland = null
     )
     {
         _ioRunner = new ProcessRunner();
         _snapshot = snapshot;
         _processRunner = processRunner;
         _processRunnerWithStderr = processRunnerWithStderr;
+        _focusedWindowIsXWayland = focusedWindowIsXWayland ?? (() => Task.FromResult(false));
         _isWayland = snapshot.SessionType == "Wayland";
         _chain = BuildChain(snapshot);
     }
@@ -1499,6 +1506,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         _snapshot = snapshot;
         _processRunner = DefaultProcessRunnerWithEnv;
         _processRunnerWithStderr = DefaultProcessRunnerWithStderr;
+        _focusedWindowIsXWayland = IsHyprlandFocusedWindowXWaylandAsync;
         _isWayland = snapshot.SessionType == "Wayland";
         _chain = BuildChain(snapshot);
     }
@@ -1752,6 +1760,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     public async Task<bool> SendPasteAsync(bool useTerminalShortcut = false)
     {
+        // ydotool goes first for the chord: GTK3 native-Wayland windows drop wtype's
+        // Ctrl+V (its uploaded keymap misses GTK3's key bindings) while wtype exits 0.
         return await WalkChainAsync(async backend =>
             backend switch
             {
@@ -1767,7 +1777,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                         : YdotoolBackend.PasteArgs()
                 ),
                 _ => false,
-            }
+            },
+            preferYdotool: true
         );
     }
 
@@ -1945,10 +1956,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
     private async Task<bool> WalkChainAsync(
         Func<InputBackend, Task<bool>> attempt,
-        InputBackend? skip = null
+        InputBackend? skip = null,
+        bool preferYdotool = false
     )
     {
-        var chain = _chain;
+        var chain = preferYdotool ? _chain.OrderBy(b => b != InputBackend.Ydotool).ToList() : _chain;
         var disabled = _disabled;
         LastFailureReason = InsertionFailureReason.None;
         _abortChainAfterAttempt = false;
@@ -1960,11 +1972,27 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         }
 
         var anyAttempted = false;
+        var skippedWtypeForXWayland = false;
+        var skippedBackendForThisText = false;
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- body awaits and mutates state; the explicit disabled-backend guard is clearer than a LINQ Where
         foreach (var backend in chain)
         {
-            if (disabled.Contains(backend) || backend == skip)
+            if (disabled.Contains(backend))
             {
+                continue;
+            }
+
+            if (backend == skip)
+            {
+                skippedBackendForThisText = true;
+                continue;
+            }
+
+            // XWayland ignores wtype's uploaded keymap: typed text arrives as unrelated
+            // keys and chords are dropped, yet wtype still exits 0.
+            if (backend == InputBackend.Wtype && await _focusedWindowIsXWayland())
+            {
+                skippedWtypeForXWayland = true;
                 continue;
             }
 
@@ -1980,12 +2008,47 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
         }
 
-        if (!anyAttempted)
+        // A working backend left out only for this text (ydotool for non-ASCII) is no
+        // setup gap, so neither setup hint applies.
+        if (!anyAttempted && !skippedBackendForThisText)
         {
-            LastFailureReason = InsertionFailureReason.NoWaylandTypingTool;
+            LastFailureReason = skippedWtypeForXWayland
+                ? InsertionFailureReason.WtypeXWaylandTarget
+                : InsertionFailureReason.NoWaylandTypingTool;
         }
 
         return false;
+    }
+
+    private async Task<bool> IsHyprlandFocusedWindowXWaylandAsync()
+    {
+        if (!_isWayland || _snapshot.Compositor != "hyprland")
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = await _ioRunner.RunAsync(
+                "hyprctl",
+                ["activewindow", "-j"],
+                timeout: s_focusedWindowProbeTimeout
+            ).ConfigureAwait(false);
+            if (!result.Succeeded || string.IsNullOrWhiteSpace(result.StandardOutput))
+            {
+                return false;
+            }
+
+            using var doc = JsonDocument.Parse(result.StandardOutput);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("xwayland", out var xwayland)
+                   && xwayland.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException)
+        {
+            Trace.WriteLine($"[TextInsertionService] hyprctl focused-window probe failed: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -2029,8 +2092,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
             // xdotool is never added on Wayland: XTEST reaches only XWayland
             // surfaces and can exit 0 even when the native-Wayland target received
-            // nothing — and nothing here can tell whether the focused surface
-            // is XWayland.
+            // nothing — and only Hyprland (see IsHyprlandFocusedWindowXWaylandAsync)
+            // tells us whether the focused surface is XWayland.
         }
         else if (snapshot.HasXdotool)
         {

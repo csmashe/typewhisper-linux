@@ -89,6 +89,9 @@ public sealed class PromptPaletteService
         }
 
         var targetWindowId = _activeWindow.GetActiveWindowId();
+        // xdotool can't see native Wayland windows, so only the compositor snapshot can tell
+        // that focus moved to another window during the LLM call.
+        var targetWindow = await CaptureWindowSnapshotAsync(_activeWindow.GetActiveWindowSnapshotAsync);
 
         Interlocked.Increment(ref _activeRuns);
         try
@@ -101,7 +104,7 @@ public sealed class PromptPaletteService
 
             // No palette window: streaming has no UI sink (null → no-op renders),
             // but the result still streams + falls back to batch before configured delivery.
-            await ExecuteActionAsync(action, captured, null, targetWindowId, memorySourceId);
+            await ExecuteActionAsync(action, captured, null, targetWindowId, targetWindow, memorySourceId);
         }
         finally
         {
@@ -146,7 +149,7 @@ public sealed class PromptPaletteService
             return;
         }
 
-        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId, null);
+        await ExecuteActionAsync(selectedAction, capturedText, window, targetWindowId, null, null);
     }
 
     private async Task ExecuteActionAsync(
@@ -154,6 +157,7 @@ public sealed class PromptPaletteService
         string capturedText,
         PromptPaletteWindow? window,
         string? targetWindowId,
+        ActiveWindowSnapshot? targetWindow,
         string? memorySourceId
     )
     {
@@ -220,7 +224,7 @@ public sealed class PromptPaletteService
             await RouteActionDeliveryAsync(
                 action.TargetActionPluginId,
                 actionPlugin,
-                () => _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId),
+                () => InsertResultAsync(result, targetWindowId, targetWindow),
                 async resolvedActionPlugin =>
                 {
                     // Unlinked: userCts is dead once the palette closed; the plugin's
@@ -265,6 +269,70 @@ public sealed class PromptPaletteService
             Debug.WriteLine($"[PromptPalette] Prompt processing failed: {ex}");
             await ShowWarningAsync("TypeWhisper", $"Prompt processing failed: {ex.Message}");
         }
+    }
+
+    private async Task InsertResultAsync(string result, string? targetWindowId, ActiveWindowSnapshot? targetWindow)
+    {
+        if (await IsTargetWindowStillFocusedAsync(
+                _activeWindow.GetActiveWindowSnapshotAsync,
+                targetWindow,
+                targetWindowId,
+                WaylandSessionDetector.IsWaylandSession()
+            ))
+        {
+            await _textInsertion.InsertTextAsync(result, targetWindowId: targetWindowId);
+            return;
+        }
+
+        Trace.WriteLine("[PromptPalette] Auto paste fell back to clipboard: focus moved off the prompt's window.");
+        var insertion = await _textInsertion.InsertTextAsync(result, autoPaste: false);
+        await ShowWarningAsync(
+            "TypeWhisper",
+            Loc.Instance[
+                insertion == InsertionResult.CopiedToClipboard
+                    ? "PromptPalette.FocusChangedCopied"
+                    : "PromptPalette.FocusChangedNotCopied"
+            ]
+        );
+    }
+
+    private static async Task<ActiveWindowSnapshot?> CaptureWindowSnapshotAsync(
+        Func<CancellationToken, Task<ActiveWindowSnapshot?>> snapshotProvider
+    )
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+            return await snapshotProvider(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[PromptPalette] Target window snapshot failed: {ex.GetType().Name}");
+            return null;
+        }
+    }
+
+    // Extracted for tests. Without a captured window id there's nothing to compare, so paste as before.
+    internal static async Task<bool> IsTargetWindowStillFocusedAsync(
+        Func<CancellationToken, Task<ActiveWindowSnapshot?>> snapshotProvider,
+        ActiveWindowSnapshot? captured,
+        string? targetWindowId,
+        bool isWaylandSession
+    )
+    {
+        // On X11 TextInsertionService re-activates the xdotool window before pasting.
+        if (!isWaylandSession && !string.IsNullOrEmpty(targetWindowId))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(captured?.WindowId))
+        {
+            return true;
+        }
+
+        var current = await CaptureWindowSnapshotAsync(snapshotProvider);
+        return !DictationOrchestrator.HasTargetWindowChanged(captured, current);
     }
 
     /// <summary>

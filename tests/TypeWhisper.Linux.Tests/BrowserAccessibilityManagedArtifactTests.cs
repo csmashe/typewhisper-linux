@@ -1,5 +1,6 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.ReadAll* is deliberate in these test assertions.
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Tests;
 using Xunit;
 
@@ -104,11 +105,38 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.True(removal.Success);
         Assert.Contains("USER_CUSTOMIZATION=1", File.ReadAllText(EnvPath));
         Assert.Contains("Left env file", removal.Message, StringComparison.Ordinal);
+        Assert.True(removal.LeftEnvFile);
         Assert.True(
             File.Exists(
                 Path.Join(StateRoot, "browser-accessibility-environment", "state.json")
             )
         );
+    }
+
+    [Fact]
+    public async Task German_setup_and_revert_plans_have_no_english_action_text()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "de";
+            var helper = new BrowserAccessibilitySetupHelper();
+
+            var setupPlan = Assert.Single(helper.DescribePendingActions());
+            await helper.SetUpAsync(CancellationToken.None);
+            var revertPlan = Assert.Single(BrowserAccessibilitySetupHelper.DescribeRevertActions());
+
+            Assert.Equal(
+                $"• {EnvPath} schreiben\n"
+                + "  Setzt MOZ_ENABLE_ACCESSIBILITY=1 und GTK_MODULES=gail:atk-bridge benutzerweit.",
+                setupPlan
+            );
+            Assert.Equal($"• {EnvPath} löschen", revertPlan);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
     }
 
     [Fact]
@@ -147,6 +175,7 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
 
         Assert.True(removal.Success);
         Assert.False(File.Exists(UserChromePath));
+        Assert.Equal([ChromeDesktopId], removal.RemovedLaunchers);
     }
 
     [Fact]
@@ -287,6 +316,10 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.True(removal.Success);
         Assert.Equal(originals[0], File.ReadAllBytes(withBom));
         Assert.Equal(originals[1], File.ReadAllBytes(withoutBom));
+        Assert.Equal(
+            ["bom.default", "plain.default"],
+            removal.CleanedFirefoxProfiles.Order(StringComparer.Ordinal)
+        );
     }
 
     [Fact]
@@ -308,7 +341,58 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
             "Could not update user.js in Firefox profile(s): latin1.default.",
             removal.Message
         );
+        Assert.Equal(["latin1.default"], removal.SkippedFirefoxProfiles);
         Assert.Equal(latin1, File.ReadAllBytes(userJs));
+    }
+
+    [Fact]
+    public async Task Setup_reports_utf16_user_js_as_an_encoding_problem_not_a_write_failure()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        const string text = "user_pref(\"accessibility.force_disabled\", 1);\r\n";
+        byte[] utf16 = [.. System.Text.Encoding.Unicode.Preamble, .. System.Text.Encoding.Unicode.GetBytes(text)];
+        var utf16Path = WriteFirefoxProfile(firefoxRoot, "utf16.default", utf16);
+        var utf8Path = WriteFirefoxProfile(
+            firefoxRoot,
+            "utf8.default",
+            System.Text.Encoding.UTF8.GetBytes(text)
+        );
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.SkippedFirefoxProfiles);
+        Assert.Equal(["utf16.default"], result.NonUtf8FirefoxProfiles);
+        Assert.Contains(
+            "user.js is not UTF-8, left unchanged: utf16.default.",
+            result.Detail!,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain("Could not write to", result.Detail!, StringComparison.Ordinal);
+        Assert.Equal(utf16, File.ReadAllBytes(utf16Path));
+        Assert.Contains("-1", File.ReadAllText(utf8Path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Utf16_user_js_that_sets_minus_one_is_not_counted_as_enabled()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        const string text = "user_pref(\"accessibility.force_disabled\", -1);\r\n";
+        byte[] utf16 = [.. System.Text.Encoding.Unicode.Preamble, .. System.Text.Encoding.Unicode.GetBytes(text)];
+        WriteFirefoxProfile(firefoxRoot, "utf16.default", utf16);
+
+        Assert.False(
+            BrowserAccessibilitySetupHelper.IsCurrentlyConfigured().FirefoxAccessibilityForceEnabled
+        );
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.Equal(["utf16.default"], result.NonUtf8FirefoxProfiles);
+        Assert.DoesNotContain("already", result.Detail!, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string WriteFirefoxProfile(string root, string name, byte[] userJs)

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace TypeWhisper.Core.Services;
 
@@ -8,7 +9,7 @@ namespace TypeWhisper.Core.Services;
 ///     no-speech gate misses them. Fires only when such a phrase is the entire transcript of a
 ///     short clip, leaving ordinary dictation that merely contains the words untouched.
 /// </summary>
-public static class WhisperHallucinationFilter
+public static partial class WhisperHallucinationFilter
 {
     // Longer than this is likely real speech even if it's a stock phrase.
     private const double MaxHallucinationClipSeconds = 2.5;
@@ -105,6 +106,21 @@ public static class WhisperHallucinationFilter
         strippedText = remainder;
         return true;
     }
+
+    /// <summary>
+    ///     True when <paramref name="transcript" /> holds nothing but bracketed non-speech annotations
+    ///     such as whisper.cpp's "[BLANK_AUDIO]" or "[MUSIC]", which it emits for near-silent or
+    ///     non-verbal audio. Spoken words are never transcribed as only these.
+    /// </summary>
+    public static bool IsNonSpeechAnnotation(string? transcript)
+    {
+        return !string.IsNullOrWhiteSpace(transcript) && NonSpeechAnnotationRegex().IsMatch(transcript);
+    }
+
+    // Separators may be any run of non-word characters (":", " - ", "♪"), but never a bracket, so
+    // they can't overlap a marker and backtrack.
+    [GeneratedRegex(@"^[^\w\[\]()]*(?:(?:\[[^\[\]]*\]|\([^()]*\))[^\w\[\]()]*)+$")]
+    private static partial Regex NonSpeechAnnotationRegex();
 
     private static string Normalize(string value)
     {

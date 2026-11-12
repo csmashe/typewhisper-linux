@@ -20,8 +20,11 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.GemmaLocal;
 
-public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvider, IPluginLocalizationAware
+public sealed class GemmaLocalPlugin
+    : ILlmProviderPlugin, IPluginSettingsProvider, IPluginSettingsActions, IPluginSettingsActivity, IPluginLocalizationAware
 {
+    internal const string DownloadActionId = "download-model";
+
     // Downloads are pinned to one repository revision and verified against its size and SHA-256.
     // Earlier builds of the same files are accepted when already cached (see GemmaModelVerification).
     private static readonly IReadOnlyList<GemmaModelDefinition> s_models =
@@ -306,9 +309,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         {
             // Hold _inferenceLock while disposing so an in-flight ProcessAsync
             // can't be using _context/_weights when we tear them down. The
-            // load path below skips the lock here because EnsureModelReadyAsync
-            // may run a multi-gigabyte download — we acquire the lock inside
-            // LoadModelAsync instead, only around the actual state swap.
+            // load path in the Download action skips it because EnsureModelReadyAsync
+            // may run a multi-gigabyte download — LoadModelAsync acquires the lock
+            // only around the actual state swap.
             await _inferenceLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
@@ -330,8 +333,9 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             return;
         }
 
+        // Only the choice is saved here: the host bounds a settings call to seconds, and the
+        // download can take minutes. The Download action does that work without a time limit.
         SelectModel(value);
-        await EnsureModelReadyAsync(value, ct);
     }
 
     public Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
@@ -350,17 +354,91 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
         );
     }
 
+    public double? SettingsProgress { get; private set; }
+
+    public event Action<string?>? SettingsActivityChanged;
+
+    public IReadOnlyList<PluginSettingsAction> GetSettingsActions() =>
+        [
+            new(
+                DownloadActionId,
+                Loc.L("Settings.DownloadAction"),
+                Loc.L("Settings.DownloadActionDescription")
+            ),
+        ];
+
+    public Task<PluginSettingsValidationResult> ExecuteSettingsActionAsync(string actionId, CancellationToken ct) =>
+        actionId == DownloadActionId
+            ? RunDownloadActionAsync(ct)
+            : throw new ArgumentException($"Unknown Gemma settings action '{actionId}'.", nameof(actionId));
+
+    private async Task<PluginSettingsValidationResult> RunDownloadActionAsync(CancellationToken ct)
+    {
+        string? modelId;
+        lock (_selectionLock)
+            modelId = SelectedModelId;
+
+        if (string.IsNullOrWhiteSpace(modelId))
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.SelectModel"));
+
+        var model = GetModelDefinition(modelId);
+        try
+        {
+            // The download reports its progress inline, so nothing arrives after the reset below.
+            ReportActivity(Loc.L("Settings.Downloading", model.DisplayName), 0.0);
+            await EnsureModelReadyAsync(
+                    modelId,
+                    p => ReportActivity(Loc.L("Settings.Downloading", model.DisplayName), p),
+                    () => ReportActivity(Loc.L("Settings.Loading", model.DisplayName), null),
+                    ct)
+                .ConfigureAwait(false);
+
+            // A selection changed meanwhile wins, even if this model was already loaded.
+            bool ready;
+            lock (_selectionLock)
+                ready = SelectedModelId == modelId && LoadedModelId == modelId;
+
+            return ready
+                ? new PluginSettingsValidationResult(true, Loc.L("Settings.ModelReady"))
+                : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelSelectedNotLoaded"));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.DownloadCancelled"));
+        }
+        catch (Exception ex)
+        {
+            Log(PluginLogLevel.Warning, $"Model '{modelId}' could not be prepared: {ex.Message}");
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.Error", ex.Message));
+        }
+        finally
+        {
+            ReportActivity(null, null);
+        }
+    }
+
+    private void ReportActivity(string? message, double? progress)
+    {
+        SettingsProgress = progress;
+        SettingsActivityChanged?.Invoke(message);
+    }
+
     /// <summary>
-    /// Verifies the cached model or downloads it, then loads it. Progress is
-    /// reported to the plugin log since there is no progress-bar UI on Linux.
+    ///     Verifies the cached model or downloads it, then loads it. Download progress also goes
+    ///     to the plugin log every 5%.
     /// </summary>
-    internal async Task EnsureModelReadyAsync(string modelId, CancellationToken ct)
+    internal async Task EnsureModelReadyAsync(
+        string modelId,
+        Action<double>? onDownloadProgress,
+        Action? onLoading,
+        CancellationToken ct)
     {
         if (!IsModelVerified(modelId))
         {
             var lastPct = -1;
-            var progress = new Progress<double>(p =>
+            var progress = new InlineProgress(p =>
             {
+                onDownloadProgress?.Invoke(p);
                 var pct = (int)(p * 100);
                 // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
                 if (pct != lastPct && pct % 5 == 0)
@@ -373,7 +451,14 @@ public sealed class GemmaLocalPlugin : ILlmProviderPlugin, IPluginSettingsProvid
             await DownloadModelAsync(modelId, progress, ct);
         }
 
+        onLoading?.Invoke();
         await LoadModelAsync(modelId, ct);
+    }
+
+    // Progress<T> posts each report to the thread pool, so one could land after the action ended.
+    private sealed class InlineProgress(Action<double> report) : IProgress<double>
+    {
+        public void Report(double value) => report(value);
     }
 
     public string ProviderName => "Gemma 4 (Local)";

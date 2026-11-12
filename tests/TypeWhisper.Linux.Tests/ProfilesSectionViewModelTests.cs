@@ -116,6 +116,62 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void BrowserSetupResult_gives_encoding_guidance_for_non_utf8_profiles()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "Browser accessibility enabled.")
+            {
+                NonUtf8FirefoxProfiles = ["qa-utf16le.default", "qa-utf16be.default"],
+            };
+
+            var message = ProfilesSectionViewModel.FormatBrowserSetupResult(result);
+
+            Assert.Equal(
+                Loc.Instance.GetString(
+                    "Profiles.BrowserSetupPartialFirefoxEncoding",
+                    "qa-utf16le.default, qa-utf16be.default"
+                ),
+                message
+            );
+            Assert.Contains("UTF-8", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("writable", message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void BrowserSetupResult_with_both_failures_names_each_remedy()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "Browser accessibility enabled.")
+            {
+                SkippedFirefoxProfiles = ["locked.default"],
+                NonUtf8FirefoxProfiles = ["utf16.default"],
+            };
+
+            Assert.Equal(
+                Loc.Instance.GetString("Profiles.BrowserSetupPartialFirefox", "locked.default")
+                + " "
+                + Loc.Instance.GetString("Profiles.BrowserSetupFirefoxEncodingRetry", "utf16.default"),
+                ProfilesSectionViewModel.FormatBrowserSetupResult(result)
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
     public void BrowserSetupResult_without_skipped_profiles_keeps_success_wording()
     {
         var originalLanguage = Loc.Instance.CurrentLanguage;
@@ -127,6 +183,124 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
             Assert.Equal(
                 Loc.Instance.GetString("Profiles.BrowserSetupSuccess", "Browser accessibility enabled."),
                 ProfilesSectionViewModel.FormatBrowserSetupResult(result)
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void German_browserSetupResult_has_no_english_summary()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "de";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "Browser accessibility enabled.");
+
+            var message = ProfilesSectionViewModel.FormatBrowserSetupResult(result);
+
+            Assert.StartsWith("Browser-Barrierefreiheit aktiviert. Starten Sie", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("enabled", message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void German_browserRevertResult_words_every_part_in_german()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "de";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(
+                true,
+                "Browser accessibility integration removed. Removed launchers: firefox.desktop."
+            )
+            {
+                LeftEnvFile = true,
+                RemovedLaunchers = ["firefox.desktop", "chromium.desktop"],
+                CleanedFirefoxProfiles = ["qa.default"],
+                SkippedFirefoxProfiles = ["work"],
+            };
+
+            Assert.Equal(
+                "Browser-Barrierefreiheitsintegration entfernt. "
+                + "Die Umgebungsdatei wurde beibehalten, da sie nicht von TypeWhisper stammt. "
+                + "Entfernte Starter: firefox.desktop, chromium.desktop. "
+                + "Bereinigte Firefox-Profile: qa.default. "
+                + "user.js konnte in diesen Firefox-Profilen nicht aktualisiert werden: work. "
+                + "Starten Sie Ihre Browser neu, damit die Änderung wirksam wird.",
+                ProfilesSectionViewModel.FormatBrowserRevertResult(result)
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void Browser_result_follows_an_interface_language_switch()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        var service = CreateProfileService();
+        var activeWindow = CreateActiveWindowService();
+        using var pluginManager = CreatePluginManager();
+        var promptActions = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var sut = new ProfilesSectionViewModel(
+                service,
+                activeWindow.Object,
+                pluginManager,
+                promptActions,
+                _hotkeys,
+                Mock.Of<IDetectionFailureTracker>(),
+                new GnomeWindowCallsSetupHelper(),
+                new BrowserAccessibilitySetupHelper(),
+                _uiOperations
+            );
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "ignored")
+            {
+                RemovedLaunchers = ["firefox.desktop"],
+            };
+
+            sut.ShowBrowserStatusResult(() => ProfilesSectionViewModel.FormatBrowserRevertResult(result));
+            Assert.StartsWith("Browser accessibility integration removed.", sut.BrowserAccessibilityStatusMessage, StringComparison.Ordinal);
+
+            Loc.Instance.CurrentLanguage = "de";
+
+            Assert.Equal(
+                ProfilesSectionViewModel.FormatBrowserRevertResult(result),
+                sut.BrowserAccessibilityStatusMessage
+            );
+            Assert.StartsWith("Browser-Barrierefreiheitsintegration entfernt.", sut.BrowserAccessibilityStatusMessage, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = originalLanguage;
+        }
+    }
+
+    [Fact]
+    public void Plain_browserRevertResult_names_only_the_removal()
+    {
+        var originalLanguage = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var result = new BrowserAccessibilitySetupHelper.SetupResult(true, "ignored");
+
+            Assert.Equal(
+                "Browser accessibility integration removed. Restart your browsers for the change to take effect.",
+                ProfilesSectionViewModel.FormatBrowserRevertResult(result)
             );
         }
         finally

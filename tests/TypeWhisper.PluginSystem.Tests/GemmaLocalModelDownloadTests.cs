@@ -31,6 +31,13 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
         new GemmaModelFile(s_pinnedBytes.Length, Sha256(s_pinnedBytes)),
         [new GemmaModelFile(s_earlierBytes.Length, Sha256(s_earlierBytes))]);
 
+    private static readonly GemmaModelDefinition s_otherModel = s_model with
+    {
+        Id = "other-model",
+        DisplayName = "Other Model",
+        FileName = "other-model.gguf",
+    };
+
     private readonly string _root = Path.Join(Path.GetTempPath(), "tw-gemma-" + Guid.NewGuid().ToString("N"));
     private readonly string _modelDir;
     private readonly string _modelPath;
@@ -260,7 +267,7 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
         var ex = await Assert.ThrowsAsync<InvalidDataException>(
             () => plugin.LoadModelAsync(ModelId, CancellationToken.None));
 
-        Assert.Contains("Select the model again to re-download it", ex.Message);
+        Assert.Contains("Use Download and load model to download it again", ex.Message);
         Assert.Null(plugin.LoadedModelId);
         Assert.False(File.Exists(GemmaModelVerification.StampPath(_modelPath)));
     }
@@ -274,15 +281,123 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
         Assert.False(plugin.IsModelDownloaded(ModelId));
     }
 
-    private async Task<GemmaLocalPlugin> CreateAsync(HttpMessageHandler handler)
+    [Fact]
+    public async Task SaveSelectedModel_DoesNotDownload()
+    {
+        // The host gives a settings save seconds; a multi-gigabyte download cannot fit in that.
+        var handler = new RangeHandler(s_pinnedBytes);
+        using var plugin = await CreateAsync(handler);
+
+        await plugin.SetSettingValueAsync("selectedModel", ModelId);
+
+        Assert.Equal(ModelId, plugin.SelectedModelId);
+        Assert.Empty(handler.RequestedUrls);
+        Assert.False(File.Exists(_modelPath + ".partial"));
+        Assert.False(plugin.IsAvailable);
+    }
+
+    [Fact]
+    public async Task DownloadAction_DownloadsVerifiesAndLoadsTheSelectedModel()
+    {
+        var handler = new RangeHandler(s_pinnedBytes);
+        using var plugin = await CreateAsync(handler);
+        await plugin.SetSettingValueAsync("selectedModel", ModelId);
+        var activity = new List<(string? Message, double? Progress)>();
+        // ReSharper disable once AccessToDisposedClosure -- the plugin raises the event only while the awaited action runs, before disposal.
+        plugin.SettingsActivityChanged += message => activity.Add((message, plugin.SettingsProgress));
+
+        var result = await plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Settings.ModelReady", result.Message);
+        Assert.Equal(ModelId, plugin.LoadedModelId);
+        Assert.True(plugin.IsModelVerified(ModelId));
+        Assert.Equal([Url], handler.RequestedUrls);
+        Assert.Contains(activity, entry => entry is { Message: "Settings.Downloading", Progress: 1.0 });
+        Assert.Contains(activity, entry => entry is { Message: "Settings.Loading", Progress: null });
+        Assert.Equal((null, null), activity[^1]);
+    }
+
+    [Fact]
+    public async Task DownloadAction_SelectionChangedWhileAnotherModelStaysLoaded_IsNotReported()
+    {
+        using var plugin = await CreateAsync(new RangeHandler(s_pinnedBytes), s_model, s_otherModel);
+        await plugin.SetSettingValueAsync("selectedModel", ModelId);
+        await plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, CancellationToken.None);
+        Assert.Equal(ModelId, plugin.LoadedModelId);
+        // ReSharper disable once AccessToDisposedClosure -- the plugin raises the event only while the awaited action runs, before disposal.
+        plugin.SettingsActivityChanged += message =>
+        {
+            if (message == "Settings.Loading")
+                plugin.SelectModel(s_otherModel.Id);
+        };
+
+        var result = await plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.ModelSelectedNotLoaded", result.Message);
+    }
+
+    [Fact]
+    public async Task DownloadAction_WithoutASelection_AsksForOne()
+    {
+        var handler = new RangeHandler(s_pinnedBytes);
+        using var plugin = await CreateAsync(handler);
+
+        var result = await plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.SelectModel", result.Message);
+        Assert.Empty(handler.RequestedUrls);
+    }
+
+    [Fact]
+    public async Task DownloadAction_Cancelled_KeepsThePartialForTheNextAttempt()
+    {
+        var handler = new RangeHandler(s_pinnedBytes) { StallAfterBytes = 1500 };
+        using var plugin = await CreateAsync(handler);
+        await plugin.SetSettingValueAsync("selectedModel", ModelId);
+        using var cts = new CancellationTokenSource();
+
+        var action = plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, cts.Token);
+        // ReSharper disable once MethodSupportsCancellation -- the timeout is the hang guard.
+        await handler.Stalled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await cts.CancelAsync();
+        // ReSharper disable once MethodSupportsCancellation -- cts is already cancelled; the timeout is the hang guard.
+        var result = await action.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.DownloadCancelled", result.Message);
+        Assert.Null(plugin.LoadedModelId);
+        Assert.Null(plugin.SettingsProgress);
+        Assert.Equal(1500, new FileInfo(_modelPath + ".partial").Length);
+    }
+
+    [Fact]
+    public async Task DownloadAction_Failure_ReportsTheReason()
+    {
+        var tampered = (byte[])s_pinnedBytes.Clone();
+        tampered[^1] ^= 0xFF;
+        using var plugin = await CreateAsync(new RangeHandler(tampered));
+        await plugin.SetSettingValueAsync("selectedModel", ModelId);
+
+        var result = await plugin.ExecuteSettingsActionAsync(GemmaLocalPlugin.DownloadActionId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.Error", result.Message);
+        Assert.Null(plugin.LoadedModelId);
+    }
+
+    private async Task<GemmaLocalPlugin> CreateAsync(HttpMessageHandler handler, params GemmaModelDefinition[] models)
     {
         var plugin = new GemmaLocalPlugin(
             null,
             GemmaLocalPlugin.EnsureRequestedModelIsActive,
-            [s_model],
+            models.Length > 0 ? models : [s_model],
             handler)
         {
             SpaceProbe = _ => long.MaxValue,
+            NativeLoadOverride = _ => { },
         };
         var host = new Mock<IPluginHostServices>();
         host.Setup(h => h.PluginDataDirectory).Returns(_root);
@@ -305,6 +420,8 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
     {
         public bool HonorRange { get; init; } = true;
         public long? DropAfterBytes { get; set; }
+        public long? StallAfterBytes { get; init; }
+        public TaskCompletionSource Stalled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public List<string> RequestedUrls { get; } = [];
         public List<string?> ReceivedRanges { get; } = [];
 
@@ -323,7 +440,9 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
             var slice = body[(int)from..];
             Stream stream = DropAfterBytes is { } drop
                 ? new DroppingStream(slice, (int)Math.Max(0, drop - from))
-                : new MemoryStream(slice, writable: false);
+                : StallAfterBytes is { } stall
+                    ? new StallingStream(slice, (int)Math.Max(0, stall - from), Stalled)
+                    : new MemoryStream(slice, writable: false);
             var content = new StreamContent(stream);
             content.Headers.ContentLength = slice.Length;
             var response = new HttpResponseMessage(from > 0 ? HttpStatusCode.PartialContent : HttpStatusCode.OK)
@@ -350,6 +469,39 @@ public sealed class GemmaLocalModelDownloadTests : IDisposable
             _position += read;
             return read;
         }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>Serves a prefix, then waits like a silent connection until the read is cancelled.</summary>
+    private sealed class StallingStream(byte[] data, int serveBytes, TaskCompletionSource stalled) : Stream
+    {
+        private int _position;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_position >= serveBytes)
+            {
+                stalled.TrySetResult();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            var read = Math.Min(buffer.Length, serveBytes - _position);
+            data.AsMemory(_position, read).CopyTo(buffer);
+            _position += read;
+            return read;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
         public override bool CanRead => true;
         public override bool CanSeek => false;

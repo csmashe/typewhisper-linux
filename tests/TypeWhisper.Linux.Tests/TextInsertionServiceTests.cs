@@ -3170,9 +3170,10 @@ public sealed class TextInsertionServiceTests
         Assert.True(await ydotoolPlatform.TypeTextAsync("hello"));
         Assert.True(await xdotoolPlatform.TypeTextAsync("hello"));
 
-        Assert.Equal(["wtype", "ydotool", "xdotool"], runner.Invocations.Select(i => i.FileName));
+        // Hyprland probes the focused window before trying wtype.
+        Assert.Equal(["hyprctl", "wtype", "ydotool", "xdotool"], runner.Invocations.Select(i => i.FileName));
         Assert.All(
-            runner.Invocations,
+            runner.Invocations.Skip(1),
             invocation => Assert.Equal(TimeSpan.FromSeconds(60), invocation.Timeout)
         );
     }
@@ -3189,9 +3190,9 @@ public sealed class TextInsertionServiceTests
         var result = await platform.TypeTextAsync("hello");
 
         Assert.False(result);
-        var call = Assert.Single(runner.Invocations);
-        Assert.Equal("wtype", call.FileName);
-        Assert.Equal(TimeSpan.FromSeconds(60), call.Timeout);
+        // The timed-out focused-window probe must not block the wtype attempt.
+        Assert.Equal(["hyprctl", "wtype"], runner.Invocations.Select(i => i.FileName));
+        Assert.Equal(TimeSpan.FromSeconds(60), runner.Invocations[1].Timeout);
     }
 
     [Fact]
@@ -3558,6 +3559,129 @@ public sealed class TextInsertionServiceTests
         var call = Assert.Single(runner.Calls);
         // wlroots compositors keep wtype as the canonical fast path.
         Assert.Equal("wtype", call.FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandWayland_PastesWithYdotoolBeforeWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            runner.Run
+        );
+
+        Assert.True(await platform.SendPasteAsync());
+
+        // GTK3 native-Wayland windows drop wtype's Ctrl+V while wtype exits 0.
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal("ydotool", call.FileName);
+        Assert.Equal(["key", "--key-delay", "25", "29:1", "47:1", "47:0", "29:0"], call.Arguments);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandWayland_PasteFallsBackToWtypeWhenYdotoolFails()
+    {
+        var calls = new List<string>();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, _) =>
+            {
+                calls.Add(file);
+                return Task.FromResult(file == "ydotool" ? 1 : 0);
+            }
+        );
+
+        Assert.True(await platform.SendPasteAsync());
+
+        Assert.Equal(["ydotool", "wtype"], calls);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTarget_SkipsWtypeForYdotool()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(true)
+        );
+
+        Assert.True(await platform.TypeTextAsync("QA abc 123"));
+        Assert.True(await platform.SendPasteAsync());
+
+        Assert.All(runner.Calls, call => Assert.Equal("ydotool", call.FileName));
+        Assert.Equal(2, runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTargetWithOnlyWtype_ReportsFailure()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(true)
+        );
+
+        Assert.False(await platform.TypeTextAsync("QA abc 123"));
+        Assert.Equal(InsertionFailureReason.WtypeXWaylandTarget, platform.LastFailureReason);
+        Assert.False(await platform.SendPasteAsync());
+        Assert.Equal(InsertionFailureReason.WtypeXWaylandTarget, platform.LastFailureReason);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandXWaylandTargetWithNonAsciiText_ReportsNoSetupGap()
+    {
+        // Auto keeps non-ASCII off ydotool, but ydotool is set up, so no setup hint applies.
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(true)
+        );
+
+        Assert.False(await platform.TypeTextAsync("café", unicodeBackendsOnly: true));
+
+        Assert.Equal(InsertionFailureReason.None, platform.LastFailureReason);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandNativeWaylandTarget_KeepsWtype()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            () => Task.FromResult(false)
+        );
+
+        Assert.True(await platform.TypeTextAsync("hi"));
+        Assert.Equal("wtype", Assert.Single(runner.Calls).FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_HyprlandProbe_ReadsXWaylandFlagFromHyprctl()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "hyprctl" && args.SequenceEqual(["activewindow", "-j"]),
+            """{"address":"0x1","class":"python3","xwayland":true}"""
+        );
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "hyprland", false, false),
+            runner
+        );
+
+        Assert.False(await platform.TypeTextAsync("QA abc 123"));
+
+        Assert.Equal(InsertionFailureReason.WtypeXWaylandTarget, platform.LastFailureReason);
+        Assert.Equal("hyprctl", Assert.Single(runner.Invocations).FileName);
     }
 
     [Fact]

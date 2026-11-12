@@ -159,7 +159,7 @@
                                       HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding SpokenFeedbackProviders}"
                                       SelectedItem="{Binding SelectedSpokenFeedbackProviderOption}"
-                                      IsEnabled="{Binding CanUseSpokenFeedback}">
+                                      IsEnabled="{Binding CanChooseSpokenFeedbackProvider}">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="svc:TtsProviderOption">
                                         <TextBlock Text="{Binding DisplayName}" />

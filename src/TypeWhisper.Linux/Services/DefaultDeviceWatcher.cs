@@ -204,8 +204,8 @@ public sealed class DefaultDeviceChangeDispatcher : IDisposable
 ///     <see cref="DefaultDeviceChangeDispatcher" />. Under both native PulseAudio and
 ///     PipeWire's <c>pipewire-pulse</c> compatibility layer (modern Fedora/GNOME), a
 ///     default-source change surfaces as an <c>Event 'change' on server</c> line;
-///     source add/remove surface as <c>… on source</c>. The <c>server</c>/<c>source</c>
-///     lines are the ones we react to.
+///     source add/remove surface as <c>'new'</c>/<c>'remove'</c> on source. Those are
+///     the lines we react to.
 ///     <para>
 ///         GRACEFUL FALLBACK: if <c>pactl</c> is unavailable the watcher never starts
 ///         and the app degrades to the existing lazy re-resolve at the next recording
@@ -316,24 +316,36 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     /// <summary>
     ///     Returns true if a raw <c>pactl subscribe</c> line describes a change that
     ///     could move the default capture device: an event on the <c>server</c>
-    ///     facility (the default source/sink changed) or on the <c>source</c> facility
-    ///     (a capture device was added/removed, which can shift the default). Static +
-    ///     internal so the line classifier is unit-testable without spawning pactl.
+    ///     facility (the default source/sink changed) or a <c>new</c>/<c>remove</c> on
+    ///     the <c>source</c> facility (a capture device was added/removed, which can
+    ///     shift the default). Static + internal so the line classifier is
+    ///     unit-testable without spawning pactl.
     ///     <para>
     ///         The facility is matched EXACTLY so distinct entity types like
     ///         <c>source-output</c> and <c>sink-input</c> — which are not default-capture
     ///         changes — are correctly ignored.
     ///     </para>
+    ///     <para>
+    ///         A <c>change</c> on a source is ignored: it is a state/volume update, and
+    ///         opening or closing our own preview stream emits one. Reacting to it made
+    ///         the preview reopen itself forever.
+    ///     </para>
     /// </summary>
     internal static bool IsDefaultDeviceRelevant(string? line)
     {
-        var facility = ExtractFacility(line);
-        return facility is "server" or "source";
+        return ExtractFacility(line) switch
+        {
+            "server" => true,
+            "source" => line!.StartsWith("Event 'new' ", StringComparison.Ordinal)
+                        || line.StartsWith("Event 'remove' ", StringComparison.Ordinal),
+            _ => false,
+        };
     }
 
     // pactl subscribe lines look like:
     //   Event 'change' on server #0
     //   Event 'new' on source #42
+    //   Event 'change' on source #42         (state/volume only, NOT a capture-default change)
     //   Event 'change' on source-output #9   (NOT a capture-default change)
     // Extract the facility token that follows " on " up to the next space or '#'.
     private static string? ExtractFacility(string? line)

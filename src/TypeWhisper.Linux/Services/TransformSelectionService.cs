@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Views;
 
 namespace TypeWhisper.Linux.Services;
@@ -386,7 +387,9 @@ public sealed class TransformSelectionService
                 await leaseScope.DisposeAsync();
             }
 
-            if (string.IsNullOrWhiteSpace(command))
+            // A non-speech marker like "[BLANK_AUDIO]" is not an edit instruction; sending it to the
+            // LLM would rewrite the selection anyway.
+            if (string.IsNullOrWhiteSpace(command) || WhisperHallucinationFilter.IsNonSpeechAnnotation(command))
             {
                 await ShowWarningAsync("The transform command returned no text.");
                 return;
