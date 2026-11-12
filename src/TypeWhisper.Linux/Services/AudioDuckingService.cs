@@ -34,6 +34,11 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     [GeneratedRegex(@"(?<![-0-9.])([0-9]+)\s*/\s*[0-9]+%")]
     private static partial Regex RawVolumeRegex();
 
+    // "Cookie: 3922:700c" in `pactl info`. PulseAudio and pipewire-pulse pick a new
+    // cookie on every server start, which makes it the server-instance token.
+    [GeneratedRegex(@"^Cookie:\s*(\S+)\s*$", RegexOptions.Multiline)]
+    private static partial Regex ServerCookieRegex();
+
     private readonly IProcessRunner _processRunner;
     private readonly IErrorLogService _errorLog;
     // Guarded by _volumesGate, mirroring MediaPauseService's _playersGate:
@@ -75,6 +80,14 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
         try
         {
+            // The cookie must read the same on both sides of the listing: a restart in
+            // between would pair one server's volumes with another server's ids.
+            var serverCookie = ReadServerCookie();
+            if (serverCookie is null)
+            {
+                return;
+            }
+
             // pactl has no "get-sink-input-volume" subcommand, so read current
             // volumes by parsing the long `list sink-inputs` output instead.
             var listingResult = RunPactl(["list", "sink-inputs"]);
@@ -86,11 +99,18 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                 return;
             }
 
-            foreach (
-                var (inputId, currentVolumes) in ParseSinkInputVolumes(
-                    listingResult.StandardOutput
-                )
-            )
+            var sinkInputs = ParseSinkInputVolumes(listingResult.StandardOutput).ToArray();
+            if (sinkInputs.Length == 0)
+            {
+                return;
+            }
+
+            if (!string.Equals(ReadServerCookie(), serverCookie, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            foreach (var (inputId, currentVolumes) in sinkInputs)
             {
                 var savedVolumes = currentVolumes.ToArray();
                 lock (_volumesGate)
@@ -99,7 +119,10 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                     // restore still holds the ORIGINAL volume — replacing it
                     // here would capture the already-ducked value and lower
                     // that stream permanently.
-                    _savedVolumes.TryAdd(inputId, new SavedVolumeState(savedVolumes, 0));
+                    _savedVolumes.TryAdd(
+                        inputId,
+                        new SavedVolumeState(savedVolumes, serverCookie, 0)
+                    );
                 }
 
                 var duckedVolumes = savedVolumes
@@ -152,10 +175,31 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             entries = [.. _savedVolumes];
         }
 
+        // Ids are only unique within one server run; after a restart an unrelated stream
+        // can reuse a saved id, so entries from an earlier server are retired, not applied.
+        // pactl has no atomic check-and-set: a restart between this read and the set-volume
+        // below is not covered.
+        var currentCookie = ReadServerCookie();
+
         foreach (var (inputId, state) in entries)
         {
             try
             {
+                if (currentCookie is null)
+                {
+                    RecordRestoreFailure(inputId, "could not read the audio server cookie");
+                    continue;
+                }
+
+                if (!string.Equals(currentCookie, state.ServerCookie, StringComparison.Ordinal))
+                {
+                    WriteDiagnostic(
+                        $"[AudioDuckingService] Audio server restarted since sink input {inputId} was ducked; not restoring onto a possibly reused id."
+                    );
+                    RemoveSavedVolume(inputId);
+                    continue;
+                }
+
                 var result = SetSinkInputVolume(inputId, state.Volumes);
                 if (result.Succeeded)
                 {
@@ -220,8 +264,6 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             retired = attempts >= MaxRestoreAttempts;
             if (retired)
             {
-                // A generation token would be needed to eliminate recycled pactl-ID restores;
-                // bounded eviction only limits that stale-identity exposure.
                 _savedVolumes.Remove(inputId);
             }
             else
@@ -272,6 +314,26 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
             // Only the first Volume line per block is relevant.
             currentId = null;
+        }
+    }
+
+    private string? ReadServerCookie()
+    {
+        try
+        {
+            var result = RunPactl(["info"]);
+            if (!result.Succeeded)
+            {
+                return null;
+            }
+
+            var match = ServerCookieRegex().Match(result.StandardOutput);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic($"[AudioDuckingService] Reading the server cookie failed: {ex.Message}");
+            return null;
         }
     }
 
@@ -354,5 +416,9 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         return rounded.ToString("0", CultureInfo.InvariantCulture);
     }
 
-    private sealed record SavedVolumeState(string[] Volumes, int FailedRestoreAttempts);
+    private sealed record SavedVolumeState(
+        string[] Volumes,
+        string ServerCookie,
+        int FailedRestoreAttempts
+    );
 }
