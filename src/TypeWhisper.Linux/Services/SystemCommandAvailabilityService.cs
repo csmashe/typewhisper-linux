@@ -781,22 +781,24 @@ public sealed record LinuxCapabilitySnapshot(
     public string PasteStatus =>
         SessionType == "Wayland"
             ? HasYdotoolAvailable
-                ? "ydotool available"
+                ? Localization.Loc.Instance.GetString("TextInsertion.PasteToolAvailable", "ydotool")
                 : HasWtype && !CompositorRejectsWtype
-                    ? "wtype available"
+                    ? Localization.Loc.Instance.GetString("TextInsertion.PasteToolAvailable", "wtype")
                     : HasXdotool
-                        ? "xdotool available (XWayland only)"
+                        ? Localization.Loc.Instance["TextInsertion.XdotoolAvailableXWaylandOnly"]
                         : PasteToolInstallHint
             : HasXdotool
-                ? "xdotool available"
+                ? Localization.Loc.Instance.GetString("TextInsertion.PasteToolAvailable", "xdotool")
                 : PasteToolInstallHint;
 
     public string PasteToolInstallHint =>
-        SessionType == "Wayland"
-            ? CompositorRejectsWtype
-                ? "Set up ydotool to enable automatic paste on GNOME / KDE Wayland."
-                : "Install wtype or ydotool to enable automatic paste."
-            : "Install xdotool to enable automatic paste.";
+        Localization.Loc.Instance[
+            SessionType == "Wayland"
+                ? CompositorRejectsWtype
+                    ? "RecentTranscriptions.PasteToolInstallHintWaylandYdotool"
+                    : "RecentTranscriptions.PasteToolInstallHintWayland"
+                : "RecentTranscriptions.PasteToolInstallHintX11"
+        ];
 
     public string CudaStatus =>
         CanUseCuda ? Localization.Loc.Instance["Dictation.CudaStatusAvailable"]

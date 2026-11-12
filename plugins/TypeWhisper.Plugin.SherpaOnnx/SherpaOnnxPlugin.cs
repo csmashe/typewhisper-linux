@@ -15,7 +15,8 @@ namespace TypeWhisper.Plugin.SherpaOnnx;
 
 public sealed partial class SherpaOnnxPlugin
     : ITranscriptionEnginePlugin,
-        ITranscriptionLanguageSelectionCapabilities
+        ITranscriptionLanguageSelectionCapabilities,
+        IPluginLocalizationAware
 {
     // csukuangfj's sherpa-onnx exports, pinned to a commit (main on 2026-10-10) and each file to its
     // size and SHA-256 (the LFS oids; tokens.txt, not in LFS, hashed from a download).
@@ -286,6 +287,7 @@ public sealed partial class SherpaOnnxPlugin
         };
     private IReadOnlyList<ModelDefinition> _models = s_models;
     private IPluginHostServices? _host;
+    private IPluginLocalization? _injectedLocalization;
     private OfflineRecognizer? _recognizer;
     private Func<string, string, OfflineRecognizer> _parakeetRecognizerFactory =
         CreateParakeetRecognizer;
@@ -317,8 +319,16 @@ public sealed partial class SherpaOnnxPlugin
     public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "sherpa-onnx";
-    public string ProviderDisplayName => "Local (sherpa-onnx)";
+    // English when no catalog is available (Loc.L would return the bare key).
+    public string ProviderDisplayName => Loc is null ? "Local (sherpa-onnx)" : Loc.L("Provider.DisplayName");
     public bool IsConfigured => true;
+
+    public void SetLocalization(IPluginLocalization localization) =>
+        _injectedLocalization = localization;
+
+    // The host's catalog once activated, else the one injected at load.
+    private IPluginLocalization? Loc => _host?.Localization ?? _injectedLocalization;
+
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => SelectedModelId == "canary-180m-flash";

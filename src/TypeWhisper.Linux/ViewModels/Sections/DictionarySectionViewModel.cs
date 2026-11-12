@@ -99,6 +99,19 @@ public partial class DictionarySectionViewModel : ObservableObject
                     AliasSuggestions.RefreshModels();
                 }
             });
+        Loc.Instance.LanguageChanged += (_, _) =>
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (var pack in Packs)
+                {
+                    pack.RefreshLocalizedText();
+                }
+
+                OnPropertyChanged(nameof(VocabularyBoostingStatusText));
+                RefreshAcousticStatus();
+                OnPropertyChanged(nameof(EmptyStateTitle));
+                OnPropertyChanged(nameof(EmptyStateSubtitle));
+            });
         InitializePacks();
         Refresh();
     }
@@ -562,10 +575,18 @@ public partial class TermPackItemViewModel : ObservableObject
 
     public TermPack Pack { get; }
 
+    public string Name => Loc.Instance.GetStringOrDefault($"Dictionary.PackName.{Pack.Id}", Pack.Name);
+
     private int TermCount => Pack.Terms.Length;
     public string TermCountLabel => Loc.Instance.GetString("Dictionary.TermCountLabel", TermCount);
 
     public string TermsPreview =>
         string.Join(", ", Pack.Terms.Take(8))
         + (Pack.Terms.Length > 8 ? $" +{Pack.Terms.Length - 8}" : "");
+
+    internal void RefreshLocalizedText()
+    {
+        OnPropertyChanged(nameof(Name));
+        OnPropertyChanged(nameof(TermCountLabel));
+    }
 }

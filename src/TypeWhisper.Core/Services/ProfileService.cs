@@ -16,20 +16,27 @@ public sealed class ProfileService : IProfileService
     private static readonly IdnMapping s_idn = new();
 
     private readonly IErrorLogService? _errorLog;
+    private readonly IDefaultNameLocalizer _names;
     private readonly string _filePath;
     private readonly AtomicJsonStore<ImmutableArray<Profile>> _store;
 
-    public ProfileService(string filePath, IErrorLogService? errorLog = null)
-        : this(filePath, AtomicFileWrite.WriteAllText, errorLog) { }
+    public ProfileService(
+        string filePath,
+        IErrorLogService? errorLog = null,
+        IDefaultNameLocalizer? names = null
+    )
+        : this(filePath, AtomicFileWrite.WriteAllText, errorLog, names) { }
 
     internal ProfileService(
         string filePath,
         Action<string, string>? atomicWrite,
-        IErrorLogService? errorLog = null
+        IErrorLogService? errorLog = null,
+        IDefaultNameLocalizer? names = null
     )
     {
         _filePath = Path.GetFullPath(filePath);
         _errorLog = errorLog;
+        _names = names ?? DefaultItemNames.English;
         var options = new AtomicJsonStoreOptions<ImmutableArray<Profile>>
         {
             JsonOptions = s_jsonOptions,
@@ -76,8 +83,39 @@ public sealed class ProfileService : IProfileService
             current =>
                 current.Any(p => p.Id == FirstRunDefaults.AutoFormatProfileId)
                     ? current
-                    : current.Add(FirstRunDefaults.CreateAutoFormatProfile())
+                    : current.Add(FirstRunDefaults.CreateAutoFormatProfile(_names))
         );
+    }
+
+    public void LocalizeDefaultNames()
+    {
+        // A no-op commit would still write a missing or unreadable file, which would stop
+        // first-run seeding or overwrite what the user could recover, so commit only a real rename.
+        if (!File.Exists(_filePath))
+        {
+            return;
+        }
+
+        var current = _store.GetCurrent(out var reset);
+        if (reset || LocalizeDefaultNames(current).Equals(current))
+        {
+            return;
+        }
+
+        Commit(LocalizeDefaultNames);
+    }
+
+    private ImmutableArray<Profile> LocalizeDefaultNames(ImmutableArray<Profile> current)
+    {
+        var idx = FindIndex(current, p => p.Id == FirstRunDefaults.AutoFormatProfileId);
+        if (idx < 0 || current[idx].IsNameCustomized
+            || !_names.IsShippedName(DefaultItemNames.AutoFormatProfile, current[idx].Name))
+        {
+            return current;
+        }
+
+        var name = _names.GetName(DefaultItemNames.AutoFormatProfile);
+        return name == current[idx].Name ? current : current.SetItem(idx, current[idx] with { Name = name });
     }
 
     public void AddProfile(Profile profile)
@@ -90,9 +128,20 @@ public sealed class ProfileService : IProfileService
         Commit(
             current =>
             {
-                var updated = profile with { UpdatedAt = DateTime.UtcNow };
                 var idx = FindIndex(current, p => p.Id == profile.Id);
-                return idx < 0 ? current : current.SetItem(idx, updated);
+                if (idx < 0)
+                {
+                    return current;
+                }
+
+                var existing = current[idx];
+                var updated = profile with
+                {
+                    UpdatedAt = DateTime.UtcNow,
+                    IsNameCustomized = existing.IsNameCustomized || profile.IsNameCustomized
+                        || !string.Equals(existing.Name, profile.Name, StringComparison.Ordinal),
+                };
+                return current.SetItem(idx, updated);
             }
         );
     }

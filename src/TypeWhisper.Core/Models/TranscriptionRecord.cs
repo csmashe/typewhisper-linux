@@ -22,6 +22,9 @@ public sealed record TranscriptionRecord
     public double DurationSeconds { get; init; }
     public string? Language { get; init; }
     public string? ProfileName { get; init; }
+
+    /// <summary>Resolves the profile on retry; the name follows the interface language. Null on older records.</summary>
+    public string? ProfileId { get; init; }
     public string EngineUsed { get; init; } = "whisper";
     public string? ModelUsed { get; init; }
     public string? AudioFileName { get; init; }

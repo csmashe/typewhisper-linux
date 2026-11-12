@@ -78,7 +78,7 @@
                               DropDownOpened="OnProviderDropDownOpened">
                         <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:ProviderOption">
-                                <TextBlock Text="{Binding Label}" />
+                                <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
@@ -134,7 +134,8 @@
                                   DropDownOpened="OnProviderDropDownOpened">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ProviderOption">
-                                    <TextBlock Text="{Binding Label}" />
+                                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding Label}" />
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
@@ -302,7 +303,7 @@
                                   DropDownOpened="OnProviderDropDownOpened">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ProviderOption">
-                                    <TextBlock Text="{Binding Label}" />
+                                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
@@ -318,7 +319,8 @@
                                   SelectedItem="{Binding SelectedActionPlugin}">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ActionPluginOption">
-                                    <TextBlock Text="{Binding Label}" />
+                                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"
+                                               ToolTip.Tip="{Binding Label}" />
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
@@ -346,9 +348,11 @@
                         <TextBlock Text="{loc:Str Prompts.ManualOnly}"
                                    Margin="0,0,0,6" />
                         <ToggleSwitch IsChecked="{Binding EditIsManualOnly}"
-                                      AutomationProperties.Name="{loc:Str Prompts.ManualOnly}"
-                                      OnContent="{loc:Str Prompts.ManualOnlyOn}"
-                                      OffContent="{loc:Str Prompts.ManualOnlyOff}" />
+                                      AutomationProperties.Name="{loc:Str Prompts.ManualOnly}" />
+                        <TextBlock Text="{loc:Str Prompts.ManualOnlyOn}" TextWrapping="Wrap"
+                                   IsVisible="{Binding EditIsManualOnly}" />
+                        <TextBlock Text="{loc:Str Prompts.ManualOnlyOff}" TextWrapping="Wrap"
+                                   IsVisible="{Binding !EditIsManualOnly}" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="5"

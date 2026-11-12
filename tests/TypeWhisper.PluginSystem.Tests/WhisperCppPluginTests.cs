@@ -23,6 +23,18 @@ public partial class WhisperCppPluginTests
     private static readonly TimeSpan s_coordinationTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
+    public void ProviderDisplayName_IsEnglishWithoutACatalogAndFollowsTheInterfaceLanguage()
+    {
+        using var plugin = new WhisperCppPlugin();
+        Assert.Equal("Local (whisper.cpp)", plugin.ProviderDisplayName);
+
+        plugin.SetLocalization(new TypeWhisper.Linux.Services.Plugins.PluginLocalization(
+            Path.Join(PluginCatalogTestData.PluginsDirectory, "TypeWhisper.Plugin.WhisperCpp"), "de"));
+
+        Assert.Equal("Lokal (whisper.cpp)", plugin.ProviderDisplayName);
+    }
+
+    [Fact]
     public void InitializeCudaDependencies_CustomPluginAssetDirectory_UsesSharedConfiguredRoot()
     {
         using var temp = new TempAssetDir();

@@ -109,7 +109,7 @@ public partial class HistorySection : UserControl
                     DefaultExtension = "txt",
                     FileTypeChoices =
                     [
-                        new FilePickerFileType("Text") { Patterns = ["*.txt"] },
+                        new FilePickerFileType(Loc.Instance["Common.FileTypeText"]) { Patterns = ["*.txt"] },
                         new FilePickerFileType("CSV") { Patterns = ["*.csv"] },
                         new FilePickerFileType("Markdown") { Patterns = ["*.md"] },
                         new FilePickerFileType("JSON") { Patterns = ["*.json"] },

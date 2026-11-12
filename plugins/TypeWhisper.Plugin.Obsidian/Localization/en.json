@@ -20,6 +20,7 @@
   "Settings.EnterVaultPath": "Enter a vault path first.",
   "Settings.VaultDetected": "Vault detected: {0}",
   "Settings.NotAnObsidianVault": "Folder exists but is not an Obsidian vault (missing .obsidian directory).",
+  "Settings.DefaultNoteTitle": "Transcription",
   "Manifest.Name": "Obsidian",
   "Manifest.Description": "Save transcriptions as notes in Obsidian"
 }

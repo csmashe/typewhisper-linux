@@ -523,7 +523,7 @@
                                                            MaxLines="2">
                                                     <Run Text="{Binding Pack.Icon}" />
                                                     <Run Text=" " />
-                                                    <Run Text="{Binding Pack.Name}" />
+                                                    <Run Text="{Binding Name}" />
                                                 </TextBlock>
                                                 <TextBlock Text="{Binding TermCountLabel}"
                                                            FontSize="11"

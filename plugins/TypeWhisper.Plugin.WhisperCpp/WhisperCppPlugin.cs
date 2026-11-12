@@ -260,7 +260,8 @@ public sealed class WhisperCppPlugin
     public string PluginVersion => PluginBuildInfo.Version;
 
     public string ProviderId => "whisper-cpp";
-    public string ProviderDisplayName => "Local (whisper.cpp)";
+    // English when no catalog is available (Loc.L would return the bare key).
+    public string ProviderDisplayName => Loc is null ? "Local (whisper.cpp)" : Loc.L("Provider.DisplayName");
     public bool IsConfigured => true;
 
     private IPluginLocalization? _injectedLocalization;

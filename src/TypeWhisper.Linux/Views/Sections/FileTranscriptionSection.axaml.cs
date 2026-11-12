@@ -185,7 +185,7 @@ public partial class FileTranscriptionSection : UserControl
                 Title = Loc.Instance["Dialog.ExportText"],
                 SuggestedFileName = $"{baseName}.txt",
                 DefaultExtension = "txt",
-                FileTypeChoices = [new FilePickerFileType("Text") { Patterns = ["*.txt"] }],
+                FileTypeChoices = [new FilePickerFileType(Loc.Instance["Common.FileTypeText"]) { Patterns = ["*.txt"] }],
             }
         );
 
@@ -256,7 +256,7 @@ public partial class FileTranscriptionSection : UserControl
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(
             new FilePickerSaveOptions
             {
-                Title = $"Export {label}",
+                Title = Loc.Instance.GetString("Dialog.ExportSubtitle", label),
                 SuggestedFileName = $"{baseName}.{extension}",
                 DefaultExtension = extension,
                 FileTypeChoices = [new FilePickerFileType(label) { Patterns = [$"*.{extension}"] }],
@@ -286,7 +286,7 @@ public partial class FileTranscriptionSection : UserControl
             UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
             async () =>
             {
-                var path = await PickFolderAsync("Select watch folder");
+                var path = await PickFolderAsync(Loc.Instance["Dialog.SelectWatchFolder"]);
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     viewModel.SetWatchFolderPath(path);
@@ -314,7 +314,7 @@ public partial class FileTranscriptionSection : UserControl
             UiFailureKind.StorageProvider | UiFailureKind.FileSystem,
             async () =>
             {
-                var path = await PickFolderAsync("Select output folder");
+                var path = await PickFolderAsync(Loc.Instance["Dialog.SelectOutputFolder"]);
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     viewModel.SetWatchFolderOutputPath(path);

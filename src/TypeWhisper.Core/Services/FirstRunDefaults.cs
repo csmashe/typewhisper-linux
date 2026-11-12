@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 
 namespace TypeWhisper.Core.Services;
@@ -55,12 +56,13 @@ public static class FirstRunDefaults
     ///     The "Auto Clean Up Text" prompt action, seeded disabled. Provider left unset so it
     ///     resolves to whatever LLM the install has configured.
     /// </summary>
-    public static PromptAction CreateAutoCleanupAction()
+    public static PromptAction CreateAutoCleanupAction(IDefaultNameLocalizer? names = null)
     {
         return new PromptAction
         {
             Id = AutoCleanupActionId,
-            Name = "Auto Clean Up Text",
+            Name = (names ?? DefaultItemNames.English).GetName(DefaultItemNames.AutoCleanupAction),
+            DefaultNameKey = DefaultItemNames.AutoCleanupAction,
             SystemPrompt = AutoCleanupSystemPrompt,
             Icon = "✨",
             IsPreset = false,
@@ -74,12 +76,12 @@ public static class FirstRunDefaults
     ///     The "Auto Format" profile, seeded disabled, wired to the auto-cleanup action and
     ///     pre-bound to Ctrl+Alt+E (inert until the profile is enabled).
     /// </summary>
-    public static Profile CreateAutoFormatProfile()
+    public static Profile CreateAutoFormatProfile(IDefaultNameLocalizer? names = null)
     {
         return new Profile
         {
             Id = AutoFormatProfileId,
-            Name = "Auto Format",
+            Name = (names ?? DefaultItemNames.English).GetName(DefaultItemNames.AutoFormatProfile),
             IsEnabled = false,
             Priority = 0,
             PromptActionId = AutoCleanupActionId,

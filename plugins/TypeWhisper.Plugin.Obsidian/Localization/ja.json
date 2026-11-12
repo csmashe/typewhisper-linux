@@ -20,6 +20,7 @@
   "Settings.EnterVaultPath": "先にVaultのパスを入力してください。",
   "Settings.VaultDetected": "Vaultを検出しました: {0}",
   "Settings.NotAnObsidianVault": "フォルダーは存在しますが、Obsidian Vaultではありません（.obsidianディレクトリがありません）。",
+  "Settings.DefaultNoteTitle": "文字起こし",
   "Manifest.Name": "Obsidian",
   "Manifest.Description": "文字起こしをObsidianのノートとして保存します"
 }

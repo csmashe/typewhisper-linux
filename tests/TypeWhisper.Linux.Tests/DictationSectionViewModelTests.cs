@@ -859,6 +859,36 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public void MicrophoneTest_StoppedResultFollowsTheLanguage()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var clock = new ManualClock();
+            using var context = CreateMicrophoneTestContext(clock);
+            context.Sut.SelectedDevice = context.Sut.Devices.Single(device => device.Index < 0);
+            context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+            context.Sut.ToggleMicrophoneTestCommand.Execute(null);
+            Assert.Equal(Loc.Instance["Dictation.MicTestStopped"], context.Sut.MicrophoneTestStatus);
+
+            Loc.Instance.CurrentLanguage = "ja";
+
+            Assert.Equal(Loc.Instance["Dictation.MicTestStopped"], context.Sut.MicrophoneTestStatus);
+            Assert.NotEqual("Test stopped.", context.Sut.MicrophoneTestStatus);
+            // The Automatic entry the result names is relabeled too.
+            Assert.Equal(
+                Loc.Instance.GetString("Dictation.MicTestDevice", Loc.Instance["Dictation.FollowSystemDefaultMic"]),
+                context.Sut.MicrophoneTestDevice
+            );
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = original;
+        }
+    }
+
+    [Fact]
     public void MicrophoneTest_PageCloseStopsTestAndPreview()
     {
         var clock = new ManualClock();

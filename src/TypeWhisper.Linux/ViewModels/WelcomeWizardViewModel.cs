@@ -367,7 +367,16 @@ public partial class WelcomeWizardViewModel : ObservableObject
         IndustryPresets.Clear();
         foreach (var preset in IndustryPreset.All)
         {
-            IndustryPresets.Add(preset);
+            IndustryPresets.Add(
+                preset with
+                {
+                    Name = Loc.Instance.GetStringOrDefault($"Wizard.Industry.{preset.Id}.Name", preset.Name),
+                    Description = Loc.Instance.GetStringOrDefault(
+                        $"Wizard.Industry.{preset.Id}.Description",
+                        preset.Description
+                    ),
+                }
+            );
         }
 
         var saved = _settings.Current.SelectedIndustryPresetId;

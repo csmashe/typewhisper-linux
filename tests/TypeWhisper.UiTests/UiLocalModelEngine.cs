@@ -4,11 +4,11 @@ using TypeWhisper.PluginSDK.Models;
 namespace TypeWhisper.UiTests;
 
 /// <summary>A downloadable engine so the Dictation section renders its local model cards.</summary>
-internal sealed class UiLocalModelEngine : ITranscriptionEngineRole
+internal sealed class UiLocalModelEngine(Func<string>? displayName = null) : ITranscriptionEngineRole
 {
     public string PluginId => "com.typewhisper.ui-local";
     public string ProviderId => "ui-local";
-    public string ProviderDisplayName => "Local engine";
+    public string ProviderDisplayName => displayName?.Invoke() ?? "Local engine";
     public bool IsConfigured => true;
     public bool SupportsModelDownload => true;
     public bool SupportsTranslation => false;

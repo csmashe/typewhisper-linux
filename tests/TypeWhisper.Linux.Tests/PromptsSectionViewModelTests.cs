@@ -362,6 +362,38 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ToggleEnabled_StaleRowAfterLanguageChange_KeepsTheNameFollowingTheLanguage()
+    {
+        var original = Loc.Instance.CurrentLanguage;
+        try
+        {
+            Loc.Instance.CurrentLanguage = "en";
+            var prompts = new PromptActionService(
+                Path.Join(_tempDir, "prompt-actions.json"),
+                names: LocDefaultNameLocalizer.Instance
+            );
+            prompts.SeedFirstRunDefaultsIfMissing();
+            using var pluginManager = TestPluginManagerFactory.Create();
+            var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+            var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+            var staleRow = sut.Actions.Single(a => a.Id == FirstRunDefaults.AutoCleanupActionId);
+
+            Loc.Instance.CurrentLanguage = "de";
+            prompts.LocalizeDefaultNames();
+            sut.ToggleEnabledCommand.Execute(staleRow);
+
+            var stored = prompts.Actions.Single(a => a.Id == FirstRunDefaults.AutoCleanupActionId);
+            Assert.Equal(!staleRow.IsEnabled, stored.IsEnabled);
+            Assert.False(stored.IsNameCustomized);
+            Assert.Equal(Loc.Instance[DefaultItemNames.AutoCleanupAction], stored.Name);
+        }
+        finally
+        {
+            Loc.Instance.CurrentLanguage = original;
+        }
+    }
+
+    [Fact]
     public void ToggleEnabled_DisabledActionWithValidHotkey_Enables()
     {
         var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));

@@ -104,7 +104,11 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.True(setup.Success);
         Assert.True(removal.Success);
         Assert.Contains("USER_CUSTOMIZATION=1", File.ReadAllText(EnvPath));
-        Assert.Contains("Left env file", removal.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            Loc.Instance["Profiles.BrowserRevertLeftEnvFile"],
+            removal.Message,
+            StringComparison.Ordinal
+        );
         Assert.True(removal.LeftEnvFile);
         Assert.True(
             File.Exists(

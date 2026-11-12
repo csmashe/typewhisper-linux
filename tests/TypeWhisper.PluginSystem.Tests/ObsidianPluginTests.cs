@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using TypeWhisper.Linux.Services.Plugins;
 using TypeWhisper.Plugin.Obsidian;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -501,6 +502,49 @@ public sealed class ObsidianPluginTests : IDisposable
         Assert.Contains(input, await File.ReadAllTextAsync(linkedNote, Encoding.UTF8));
     }
 
+    [Fact]
+    public async Task DefaultFilenameTemplate_FollowsTheInterfaceLanguage()
+    {
+        var host = CreateGermanHost();
+        var sut = new ObsidianPlugin(() => []);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ExecuteAsync("input", EmptyContext(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.EndsWith(" Transkription.md", Path.GetFileName(Assert.Single(Directory.GetFiles(NotesDirectory, "*.md"))));
+        Assert.Equal("{{date}} {{time}} Transkription", await sut.GetSettingValueAsync("filename-template"));
+        Assert.Equal(
+            "{{date}} {{time}} Transkription",
+            sut.GetSettingDefinitions().Single(d => d.Key == "filename-template").Placeholder);
+    }
+
+    [Fact]
+    public async Task SavedFilenameTemplate_IsKeptInATranslatedInterface()
+    {
+        var host = CreateGermanHost();
+        host.SetSetting("filename-template", "My Transcription");
+        var sut = new ObsidianPlugin(() => []);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ExecuteAsync("input", EmptyContext(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("My Transcription.md", Path.GetFileName(Assert.Single(Directory.GetFiles(NotesDirectory, "*.md"))));
+        Assert.Equal("My Transcription", await sut.GetSettingValueAsync("filename-template"));
+    }
+
+    private TestPluginHostServices CreateGermanHost()
+    {
+        var host = new TestPluginHostServices(
+            PluginDataDirectory,
+            new PluginLocalization(Path.Join(PluginCatalogTestData.PluginsDirectory, "TypeWhisper.Plugin.Obsidian"), "de"));
+        host.SetSetting("vault-path", VaultDirectory);
+        host.SetSetting("subfolder", NotesSubfolder);
+        host.SetSetting("daily-note-mode", false);
+        return host;
+    }
+
     private async Task<(ObsidianPlugin Plugin, TestPluginHostServices Host)> CreatePluginAsync(
         bool dailyNoteMode,
         string? subfolder = NotesSubfolder
@@ -570,7 +614,7 @@ public sealed class ObsidianPluginTests : IDisposable
         return lines.ToList();
     }
 
-    private sealed class TestPluginHostServices(string pluginDataDirectory)
+    private sealed class TestPluginHostServices(string pluginDataDirectory, IPluginLocalization? localization = null)
         : IPluginHostServices
     {
         private readonly Dictionary<string, object?> _settings = [];
@@ -580,7 +624,7 @@ public sealed class ObsidianPluginTests : IDisposable
         public string? ActiveAppName => null;
         public IPluginEventBus EventBus { get; } = new TestPluginEventBus();
         public IReadOnlyList<string> AvailableProfileNames => [];
-        public IPluginLocalization Localization { get; } = new TestPluginLocalization();
+        public IPluginLocalization Localization { get; } = localization ?? new TestPluginLocalization();
 
         public Task StoreSecretAsync(string key, string value) => Task.CompletedTask;
         public Task<string?> LoadSecretAsync(string key) => Task.FromResult<string?>(null);

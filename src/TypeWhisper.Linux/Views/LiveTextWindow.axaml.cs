@@ -47,8 +47,6 @@ public partial class LiveTextWindow : Window
     {
         DataContext = _viewModel = viewModel;
         _settings = settings;
-        Title = "TypeWhisper Live Text";
-
         AddResizeHandles();
         Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(UpdateResizeTips);
 

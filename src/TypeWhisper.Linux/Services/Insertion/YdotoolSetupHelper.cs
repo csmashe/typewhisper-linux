@@ -151,12 +151,11 @@ public sealed partial class YdotoolSetupHelper
     /// </summary>
     public static string PreviewLines()
     {
-        return $"If /dev/uinput isn't already accessible: install {UdevRulePath} via\n"
-               + "  pkexec (one-time admin prompt).\n"
-               + $"If no ydotoold user service exists: write {UserUnitFilePath()}\n"
-               + "  and run `systemctl --user daemon-reload`.\n"
-               + "systemctl --user enable --now ydotoold.service\n"
-               + "Verify the ydotool socket appears";
+        return Loc.Instance.GetString(
+            "TextInsertion.YdotoolSetupPreview",
+            UdevRulePath,
+            UserUnitFilePath()
+        );
     }
 
     public async Task<SetupResult> SetUpAsync(CancellationToken ct)
@@ -165,8 +164,12 @@ public sealed partial class YdotoolSetupHelper
         {
             return new SetupResult(
                 false,
-                "ydotool is not installed. Use your package manager to install ydotool (and ydotoold).",
-                "On Fedora: sudo dnf install ydotool. On Debian/Ubuntu: sudo apt install ydotool."
+                Loc.Instance["TextInsertion.YdotoolSetupNotInstalled"],
+                Loc.Instance.GetString(
+                    "TextInsertion.YdotoolSetupNotInstalledDetail",
+                    "sudo dnf install ydotool",
+                    "sudo apt install ydotool"
+                )
             );
         }
 
@@ -186,8 +189,8 @@ public sealed partial class YdotoolSetupHelper
         {
             return new SetupResult(
                 false,
-                "systemctl is not available on this system.",
-                "Start ydotoold manually (it will not survive logout): nohup ydotoold &"
+                Loc.Instance["TextInsertion.YdotoolSystemctlUnavailable"],
+                Loc.Instance.GetString("TextInsertion.YdotoolStartDaemonManually", "nohup ydotoold &")
             );
         }
 
@@ -209,9 +212,9 @@ public sealed partial class YdotoolSetupHelper
             {
                 return new SetupResult(
                     false,
-                    "Could not reload the systemd user manager.",
+                    Loc.Instance["TextInsertion.YdotoolDaemonReloadFailed"],
                     string.IsNullOrWhiteSpace(reload.StandardError)
-                        ? "Check `systemctl --user status`."
+                        ? Loc.Instance.GetString("TextInsertion.YdotoolCheckCommand", "`systemctl --user status`")
                         : reload.StandardError.Trim()
                 );
             }
@@ -238,8 +241,11 @@ public sealed partial class YdotoolSetupHelper
         {
             return new SetupResult(
                 false,
-                "ydotoold is running but the socket never appeared.",
-                "Check `journalctl --user -u ydotoold` for daemon errors."
+                Loc.Instance["TextInsertion.YdotoolSocketNeverAppeared"],
+                Loc.Instance.GetString(
+                    "TextInsertion.YdotoolCheckDaemonErrors",
+                    "`journalctl --user -u ydotoold`"
+                )
             );
         }
 
@@ -260,7 +266,7 @@ public sealed partial class YdotoolSetupHelper
 
         return new SetupResult(
             true,
-            $"ydotool is ready. Socket: {socket}. It starts automatically on login."
+            Loc.Instance.GetString("TextInsertion.YdotoolSetupReady", socket)
         );
     }
 
@@ -279,7 +285,10 @@ public sealed partial class YdotoolSetupHelper
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new SetupResult(false, $"Could not delete {unitPath}: {ex.Message}");
+            return new SetupResult(
+                false,
+                Loc.Instance.GetString("TextInsertion.YdotoolDeleteFailed", unitPath, ex.Message)
+            );
         }
 
         var weOwnUnit = unitClassification is ManagedFileClassification.CurrentOwned
@@ -297,9 +306,12 @@ public sealed partial class YdotoolSetupHelper
             {
                 return new SetupResult(
                     false,
-                    $"Could not disable {UserUnitName} — left {unitPath} in place so you can retry.",
+                    Loc.Instance.GetString("TextInsertion.YdotoolDisableFailed", UserUnitName, unitPath),
                     string.IsNullOrWhiteSpace(disable.StandardError)
-                        ? "Check `systemctl --user status ydotoold.service`."
+                        ? Loc.Instance.GetString(
+                            "TextInsertion.YdotoolCheckCommand",
+                            "`systemctl --user status ydotoold.service`"
+                        )
                         : disable.StandardError.Trim()
                 );
             }
@@ -316,7 +328,7 @@ public sealed partial class YdotoolSetupHelper
             if (!weOwnUnit)
             {
                 unitLeftMessage =
-                    $"Left {unitPath} in place and untouched — it has no TypeWhisper ownership marker, so its ydotoold service stays enabled.";
+                    Loc.Instance.GetString("TextInsertion.YdotoolUnitLeftForeign", unitPath);
             }
             else if (!DesktopDetector.BinaryExists("systemctl"))
             {
@@ -324,7 +336,7 @@ public sealed partial class YdotoolSetupHelper
                 // systemctl we never disabled the unit, so deleting the file
                 // would orphan any enablement symlink. Leave it for the user.
                 unitLeftMessage =
-                    $"Left {unitPath} in place — systemctl is not available to disable the unit or reload the user manager. Delete it manually once systemctl is back.";
+                    Loc.Instance.GetString("TextInsertion.YdotoolUnitLeftNoSystemctl", unitPath);
             }
             else
             {
@@ -336,7 +348,7 @@ public sealed partial class YdotoolSetupHelper
                     if (!removedUnit)
                     {
                         unitLeftMessage =
-                            $"Left {unitPath} in place and untouched — it has no TypeWhisper ownership marker, so its ydotoold service stays enabled.";
+                            Loc.Instance.GetString("TextInsertion.YdotoolUnitLeftForeign", unitPath);
                     }
                 }
                 catch (Exception ex)
@@ -344,7 +356,10 @@ public sealed partial class YdotoolSetupHelper
                     // Fail closed, mirroring the disable-failure path above:
                     // a TypeWhisper-owned unit still on disk means removal
                     // did not complete, so don't report success.
-                    return new SetupResult(false, $"Could not delete {unitPath}: {ex.Message}");
+                    return new SetupResult(
+                        false,
+                        Loc.Instance.GetString("TextInsertion.YdotoolDeleteFailed", unitPath, ex.Message)
+                    );
                 }
             }
         }
@@ -372,14 +387,18 @@ public sealed partial class YdotoolSetupHelper
                     .Where(EntryExistsIncludingSymlink)
                     .Select(path =>
                         IsRemovableTypeWhisperFile(path)
-                            ? $"Remove it manually: sudo rm -f {path}"
-                            : $"{path} exists but does not carry TypeWhisper's ownership marker, so it may belong to your distribution. Inspect it before deleting anything: sudo cat {path}"
+                            ? Loc.Instance.GetString("TextInsertion.YdotoolRemoveManually", $"sudo rm -f {path}")
+                            : Loc.Instance.GetString(
+                                "TextInsertion.YdotoolRootConfigNotOwned",
+                                path,
+                                $"sudo cat {path}"
+                            )
                     )
                     .ToList();
 
                 return new SetupResult(
                     false,
-                    "Could not remove ydotool's root-owned config — pkexec is not available.",
+                    Loc.Instance["TextInsertion.YdotoolRemoveNoPkexec"],
                     string.Join("\n", guidance)
                 );
             }
@@ -399,7 +418,7 @@ public sealed partial class YdotoolSetupHelper
             {
                 return new SetupResult(
                     false,
-                    "Removing ydotool's root-owned config timed out waiting for admin authorization."
+                    Loc.Instance["TextInsertion.YdotoolRemoveTimedOut"]
                 );
             }
 
@@ -409,7 +428,10 @@ public sealed partial class YdotoolSetupHelper
                 // reports the same way.
                 return new SetupResult(
                     false,
-                    $"Could not remove root-owned config: {rm.StandardError.Trim()}"
+                    Loc.Instance.GetString(
+                        "TextInsertion.YdotoolRemoveRootConfigFailed",
+                        rm.StandardError.Trim()
+                    )
                 );
             }
         }
@@ -423,7 +445,7 @@ public sealed partial class YdotoolSetupHelper
         );
         return new SetupResult(
             true,
-            "ydotool integration removed.",
+            Loc.Instance["TextInsertion.YdotoolRemoved"],
             string.IsNullOrEmpty(detail) ? null : detail
         );
     }
@@ -628,25 +650,29 @@ public sealed partial class YdotoolSetupHelper
 
         if (probe.Succeeded)
         {
-            return new SetupResult(true, "ydotool probe succeeded.");
+            return new SetupResult(true, Loc.Instance["TextInsertion.YdotoolProbeSucceeded"]);
         }
 
         if (LooksLikePermissionError(probe.StandardError))
         {
             return new SetupResult(
                 false,
-                "ydotoold can't write to /dev/uinput (permission denied).",
-                "On older systems where TAG+=\"uaccess\" doesn't apply, add yourself to the input group and log out / back in:\n"
-                + "  sudo usermod -aG input $USER\n"
-                + "Then re-open Settings → Text insertion to verify."
+                Loc.Instance["TextInsertion.YdotoolProbePermissionDenied"],
+                Loc.Instance.GetString(
+                    "TextInsertion.YdotoolProbePermissionDeniedDetail",
+                    "sudo usermod -aG input $USER"
+                )
             );
         }
 
         return new SetupResult(
             false,
-            "ydotool probe failed.",
+            Loc.Instance["TextInsertion.YdotoolSetupProbeFailed"],
             string.IsNullOrWhiteSpace(probe.StandardError)
-                ? "Check `journalctl --user -u ydotoold`."
+                ? Loc.Instance.GetString(
+                    "TextInsertion.YdotoolCheckCommand",
+                    "`journalctl --user -u ydotoold`"
+                )
                 : probe.StandardError.Trim()
         );
     }
@@ -671,8 +697,8 @@ public sealed partial class YdotoolSetupHelper
         {
             return new SetupResult(
                 false,
-                "pkexec is not available, so the udev rule can't be installed automatically.",
-                "Run this manually:\n"
+                Loc.Instance["TextInsertion.YdotoolUdevRuleNoPkexec"],
+                Loc.Instance["TextInsertion.YdotoolRunManually"] + "\n"
                 + $"  sudo tee {ModulesLoadPath} > /dev/null <<'EOF'\n"
                 + ModulesLoadContent
                 + "EOF\n"
@@ -691,8 +717,7 @@ public sealed partial class YdotoolSetupHelper
                 // with "Unit ydotoold.service not found". Once the steps above make
                 // /dev/uinput accessible, rerunning setup skips the pkexec path
                 // entirely and creates + enables + restarts the unit for you.
-                + "Then reopen Settings → Text insertion and run setup again — "
-                + "TypeWhisper will create and start the ydotoold user service."
+                + Loc.Instance["TextInsertion.YdotoolRunSetupAgain"]
             );
         }
 
@@ -712,13 +737,13 @@ public sealed partial class YdotoolSetupHelper
         {
             return new SetupResult(
                 false,
-                "Installing the udev rule timed out waiting for admin authorization."
+                Loc.Instance["TextInsertion.YdotoolUdevRuleTimedOut"]
             );
         }
 
         if (run.Succeeded)
         {
-            return new SetupResult(true, "Installed udev rule.");
+            return new SetupResult(true, Loc.Instance["TextInsertion.YdotoolUdevRuleInstalled"]);
         }
 
         if (
@@ -762,7 +787,7 @@ public sealed partial class YdotoolSetupHelper
 
         return new SetupResult(
             false,
-            "Could not install udev rule (pkexec failed or was canceled).",
+            Loc.Instance["TextInsertion.YdotoolUdevRuleInstallFailed"],
             string.IsNullOrWhiteSpace(run.StandardError)
                 ? run.StandardOutput
                 : run.StandardError
@@ -890,7 +915,7 @@ public sealed partial class YdotoolSetupHelper
             .ConfigureAwait(false);
         if (cat.Succeeded)
         {
-            return (new SetupResult(true, "A ydotoold user service already exists."), false);
+            return (new SetupResult(true, Loc.Instance["TextInsertion.YdotoolUserServiceExists"]), false);
         }
 
         // No user unit resolves — we must write our own, which needs the
@@ -905,8 +930,12 @@ public sealed partial class YdotoolSetupHelper
             return (
                 new SetupResult(
                     false,
-                    "ydotoold (the ydotool daemon) is not installed.",
-                    "On Fedora the `ydotool` package includes it: sudo dnf install ydotool"
+                    Loc.Instance["TextInsertion.YdotooldNotInstalled"],
+                    Loc.Instance.GetString(
+                        "TextInsertion.YdotooldNotInstalledDetail",
+                        "`ydotool`",
+                        "sudo dnf install ydotool"
+                    )
                 ),
                 false
             );
@@ -922,8 +951,8 @@ public sealed partial class YdotoolSetupHelper
                 return (
                     new SetupResult(
                         false,
-                        $"A ydotoold user unit already exists at {unitPath} but doesn't carry TypeWhisper's ownership marker.",
-                        "Remove or fix that file manually, then run setup again."
+                        Loc.Instance.GetString("TextInsertion.YdotoolForeignUserUnit", unitPath),
+                        Loc.Instance["TextInsertion.YdotoolForeignUserUnitDetail"]
                     ),
                     false
                 );
@@ -937,7 +966,7 @@ public sealed partial class YdotoolSetupHelper
             return (
                 new SetupResult(
                     true,
-                    $"Wrote {unitPath}."
+                    Loc.Instance.GetString("TextInsertion.YdotoolWroteFile", unitPath)
                 ),
                 true
             );
@@ -947,7 +976,7 @@ public sealed partial class YdotoolSetupHelper
             return (
                 new SetupResult(
                     false,
-                    "Could not write the ydotoold user unit.",
+                    Loc.Instance["TextInsertion.YdotoolUserUnitWriteFailed"],
                     ex.Message
                 ),
                 false
@@ -1020,14 +1049,16 @@ public sealed partial class YdotoolSetupHelper
         {
             return new SetupResult(
                 false,
-                $"Could not enable {unit}: {enable.StandardError.Trim()}",
-                "If your distro doesn't run user-instance systemd, start the daemon manually:\n"
-                + "  nohup ydotoold &\n"
-                + "(Note: this will not survive logout.)"
+                Loc.Instance.GetString(
+                    "TextInsertion.YdotoolEnableFailed",
+                    unit,
+                    enable.StandardError.Trim()
+                ),
+                Loc.Instance.GetString("TextInsertion.YdotoolEnableFailedDetail", "nohup ydotoold &")
             );
         }
 
-        return new SetupResult(true, $"Started {unit}.");
+        return new SetupResult(true, Loc.Instance.GetString("TextInsertion.YdotoolUnitStarted", unit));
     }
 
     private static async Task<string?> WaitForSocketAsync(CancellationToken ct)

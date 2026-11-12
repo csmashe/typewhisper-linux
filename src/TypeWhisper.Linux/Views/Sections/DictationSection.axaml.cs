@@ -106,7 +106,7 @@ public partial class DictationSection : UserControl
                 var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(
                     new FolderPickerOpenOptions
                     {
-                        Title = "Choose model storage folder",
+                        Title = Loc.Instance["Dialog.ChooseModelStorageFolder"],
                         AllowMultiple = false,
                     }
                 );

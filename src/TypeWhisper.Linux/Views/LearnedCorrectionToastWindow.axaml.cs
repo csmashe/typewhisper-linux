@@ -39,8 +39,6 @@ public partial class LearnedCorrectionToastWindow : Window
         Topmost = true;
         CanResize = false;
 
-        Title = "TypeWhisper Learned Correction";
-
         UndoButton.Click += (_, _) => _onUndo?.Invoke();
     }
 

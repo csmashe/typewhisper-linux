@@ -160,7 +160,8 @@ public partial class PluginsSectionViewModel : ObservableObject
                 existingRow.IsEnabled = _pluginManager.IsEnabled(plugin.Manifest.Id);
                 if (!keepStatus)
                 {
-                    // The draft stays, so only the status line is re-localized.
+                    // The draft keeps its values; only the text around them follows the new language.
+                    RelabelDraftRow(existingRow, plugin);
                     existingRow.Status = IsRefreshingModels(plugin.Manifest.Id, plugin)
                         ? Loc.Instance["Plugins.RefreshingModels"]
                         : DefaultSettingsStatus(existingRow);
@@ -1527,6 +1528,63 @@ public partial class PluginsSectionViewModel : ObservableObject
         ResetBaseline,
     }
 
+    private void RelabelDraftRow(PluginRow row, LoadedPlugin plugin)
+    {
+        var loc = new PluginLocalization(plugin.PluginDirectory);
+        row.Name = LocalizeManifest(loc, "Manifest.Name", plugin.Manifest.Name);
+        row.Description = LocalizeManifest(loc, "Manifest.Description", plugin.Manifest.Description ?? "");
+
+        if (plugin.Instance is IPluginSettingsProvider flatProvider)
+        {
+            var definitions = TryInvokePluginBoundary(
+                plugin,
+                "read setting definitions",
+                () => flatProvider.GetSettingDefinitions().ToList()
+            );
+            if (definitions.IsSuccess)
+            {
+                foreach (var definition in definitions.Value!)
+                {
+                    row.SettingFields.FirstOrDefault(field => field.Key == definition.Key)?.Relabel(definition);
+                }
+            }
+        }
+
+        if (plugin.Instance is IPluginCollectionSettingsProvider collectionProvider)
+        {
+            var definitions = TryInvokePluginBoundary(
+                plugin,
+                "read collection definitions",
+                () => collectionProvider.GetCollectionDefinitions().ToList()
+            );
+            if (definitions.IsSuccess)
+            {
+                foreach (var definition in definitions.Value!)
+                {
+                    row.Collections.FirstOrDefault(collection => collection.Key == definition.Key)?.Relabel(definition);
+                }
+            }
+        }
+
+        if (plugin.Instance is IPluginSettingsActions actionsProvider)
+        {
+            var actions = TryInvokePluginBoundary(
+                plugin,
+                "read settings actions",
+                () => actionsProvider.GetSettingsActions().ToList()
+            );
+            if (actions.IsSuccess)
+            {
+                foreach (var action in actions.Value!)
+                {
+                    row.Actions.FirstOrDefault(candidate => candidate.Id == action.Id)?.Relabel(action);
+                }
+            }
+        }
+
+        row.RelabelSettingsBaseline();
+    }
+
     // Plugin card name/description come from manifest.json (single-language).
     // Resolve them through the plugin's own catalog so they follow the UI
     // language, falling back to the manifest literal when the catalog has no
@@ -1616,9 +1674,34 @@ public partial class PluginRow : ObservableObject
     }
 
     public string Id { get; }
-    public string Name { get; }
+
+    public string Name
+    {
+        get;
+        internal set
+        {
+            if (SetProperty(ref field, value))
+            {
+                OnPropertyChanged(nameof(Monogram));
+                OnPropertyChanged(nameof(ExpanderAccessibleName));
+            }
+        }
+    }
+
     public string Version { get; }
-    public string Description { get; }
+
+    public string Description
+    {
+        get;
+        internal set
+        {
+            if (SetProperty(ref field, value))
+            {
+                OnPropertyChanged(nameof(HasDescription));
+            }
+        }
+    }
+
     public string CategoryKey { get; }
     public int CategorySortOrder { get; }
     public IReadOnlySet<PluginCategory> Categories { get; }
@@ -1715,6 +1798,32 @@ public partial class PluginRow : ObservableObject
                 .. draft.Where(entry => entry.Kind == PluginSettingsDraftEntryKind.FlatField),
                 .. _settingsBaseline.Where(entry => entry.Kind != PluginSettingsDraftEntryKind.FlatField),
             ];
+    }
+
+    /// <summary>
+    ///     Swaps the baseline's dropdown options for the relabeled ones, so a draft edited back to
+    ///     its saved values still compares equal after a language change.
+    /// </summary>
+    internal void RelabelSettingsBaseline()
+    {
+        _settingsBaseline = _settingsBaseline?
+            .Select(entry => entry.SelectedOption is { } option && FindDraftField(entry)?.FindOption(option.Value) is { } relabeled
+                ? entry with { SelectedOption = relabeled }
+                : entry)
+            .ToArray();
+    }
+
+    private PluginSettingFieldRow? FindDraftField(PluginSettingsDraftEntry entry)
+    {
+        var field = entry.Kind switch
+        {
+            PluginSettingsDraftEntryKind.FlatField => SettingFields.ElementAtOrDefault(entry.FieldIndex),
+            PluginSettingsDraftEntryKind.CollectionField => Collections.ElementAtOrDefault(entry.CollectionIndex)
+                ?.Items.ElementAtOrDefault(entry.ItemIndex)
+                ?.Fields.ElementAtOrDefault(entry.FieldIndex),
+            _ => null,
+        };
+        return field?.Key == entry.Key ? field : null;
     }
 
     internal PluginSettingsDraftEntry[] CaptureSettingsDraft()
@@ -1855,11 +1964,22 @@ public sealed class PluginSettingsActionRow : ObservableObject
 
     public PluginRow Owner { get; }
     public string Id { get; }
-    public string Label { get; }
-    public string Description { get; }
+    public string Label { get; private set; }
+    public string Description { get; private set; }
     public bool HasDescription => Description.Length > 0;
     private bool IsEnabled { get; }
-    public string? ConfirmationMessage { get; }
+    public string? ConfirmationMessage { get; private set; }
+
+    internal void Relabel(PluginSettingsAction action)
+    {
+        Label = action.Label;
+        Description = action.Description ?? string.Empty;
+        ConfirmationMessage = action.ConfirmationMessage;
+        OnPropertyChanged(nameof(Label));
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(HasDescription));
+        OnPropertyChanged(nameof(ConfirmationMessage));
+    }
     // A disabled plugin's running action is cancelled on the next refresh, so none may start.
     public bool CanRun => IsEnabled && Owner is { IsEnabled: true, IsActionRunning: false };
 
@@ -1933,11 +2053,63 @@ public sealed partial class PluginSettingFieldRow : ObservableObject
     }
 
     public string Key { get; }
-    public string Label { get; }
-    public string Description { get; }
+    public string Label { get; private set; }
+    public string Description { get; private set; }
     public bool HasDescription => !string.IsNullOrWhiteSpace(Description);
-    public string Placeholder { get; }
+    public string Placeholder { get; private set; }
     public ReadOnlyObservableCollection<PluginSettingOption> Options { get; }
+
+    internal PluginSettingOption? FindOption(string value) =>
+        Options.FirstOrDefault(option => option.Value == value);
+
+    /// <summary>
+    ///     Takes the definition's text in the current language and keeps the value and the option
+    ///     set as they are; only options whose value is still advertised get the new label.
+    /// </summary>
+    internal void Relabel(PluginSettingDefinition definition)
+    {
+        Label = definition.Label;
+        Description = definition.Description ?? string.Empty;
+        Placeholder = definition.Placeholder ?? string.Empty;
+        OnPropertyChanged(nameof(Label));
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(HasDescription));
+        OnPropertyChanged(nameof(Placeholder));
+
+        var selected = SelectedOption;
+        // Replacing the selected item makes the ComboBox push null; the guard keeps that from clearing Value.
+        _syncingOptionValue = true;
+        try
+        {
+            for (var i = 0; i < _advertisedOptions.Length; i++)
+            {
+                var current = _advertisedOptions[i];
+                var replacement = definition.Options?.FirstOrDefault(option => option.Value == current.Value);
+                if (replacement is null || replacement == current)
+                {
+                    continue;
+                }
+
+                _advertisedOptions[i] = replacement;
+                var index = _options.IndexOf(current);
+                if (index >= 0)
+                {
+                    _options[index] = replacement;
+                }
+
+                if (selected == current)
+                {
+                    selected = replacement;
+                }
+            }
+
+            SelectedOption = selected;
+        }
+        finally
+        {
+            _syncingOptionValue = false;
+        }
+    }
     public PluginSettingKind Kind { get; }
     public char MultilinePasswordChar { get; }
     public bool IsSecretMultiline { get; }

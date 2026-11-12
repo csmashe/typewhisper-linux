@@ -222,6 +222,37 @@ public sealed class DictationRecoveryTests
     });
 
     [Fact]
+    public Task Retry_FindsTheRecordedProfileAfterItWasRenamed() => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Provider.GetRequiredService<IPromptActionService>().AddAction(new PromptAction
+        {
+            Id = "renamed-prompt", Name = "Renamed prompt", SystemPrompt = "Rewrite the input.",
+            ProviderOverride = "plugin:integration.scripted-llm:scripted-llm-model",
+        });
+        var profiles = fixture.Provider.GetRequiredService<IProfileService>();
+        profiles.AddProfile(new Profile
+        {
+            Id = "renamed-profile", Name = "Auto Format", PromptActionId = "renamed-prompt",
+        });
+        fixture.Llm.Failure = new InvalidOperationException("processing failed");
+        fixture.Plugin.EnqueueText("raw text");
+        await DictateAsync(fixture, "renamed-profile");
+        var failed = Assert.Single(fixture.History.Records);
+        Assert.Equal("renamed-profile", failed.ProfileId);
+        // A seeded profile's name follows the interface language.
+        profiles.UpdateProfile(profiles.Profiles.Single(p => p.Id == "renamed-profile") with { Name = "Autoformat" });
+        fixture.Llm.Failure = null;
+        fixture.Plugin.EnqueueText("new raw text");
+        fixture.Llm.EnqueueStream("rewritten text");
+
+        var recovered = await fixture.Orchestrator.RetryFromHistoryAsync(failed.Id);
+
+        Assert.Equal("rewritten text", recovered.FinalText);
+        Assert.True(recovered.PromptActionApplied);
+    });
+
+    [Fact]
     public Task RetryFailure_ReplacesFailure_AndMissingAudioIsLocalized() => BoundedTest.RunAsync(async () =>
     {
         await using var fixture = new OrchestratorCompositionFixture();

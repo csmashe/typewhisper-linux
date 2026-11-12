@@ -31,6 +31,8 @@ public interface IProfileService
 
     /// <summary>Seeds the built-in default profiles only on a genuine first run (when no profile file exists yet).</summary>
     void SeedFirstRunDefaultsIfMissing();
+    /// <summary>Renames the seeded profile into the current UI language unless the user renamed it.</summary>
+    void LocalizeDefaultNames();
 
     /// <summary>
     ///     Selects the best-matching enabled profile for the given process and/or URL.

@@ -56,6 +56,11 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
     // plugin is disabled (never activated, so _host is null).
     internal IPluginLocalization? Loc => Host?.Localization ?? _injectedLocalization;
 
+    // Only the unsaved default follows the interface language; a saved template is used as is.
+    private string DefaultNoteTitle => Loc is null ? "Transcription" : Loc.L("Settings.DefaultNoteTitle");
+
+    private string DefaultFilenameTemplate => "{{date}} {{time}} " + DefaultNoteTitle;
+
     public Task ActivateAsync(IPluginHostServices host)
     {
         Host = host;
@@ -88,7 +93,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         var dailyNoteMode = Host.GetSetting<bool>("daily-note-mode");
         var filenameTemplate = Host.GetSetting<string>("filename-template");
         if (string.IsNullOrWhiteSpace(filenameTemplate))
-            filenameTemplate = "{{date}} {{time}} Transcription";
+            filenameTemplate = DefaultFilenameTemplate;
 
         if (!TryGetContainedTargetDirectory(vaultPath, subfolder, out var vaultRoot, out var targetDir))
             return new ActionResult(false, Loc.L("Settings.SubfolderOutsideVault"));
@@ -128,7 +133,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         {
             // CreateNew stages the note; publication never replaces an existing name,
             // so an existing link at the final name is never followed.
-            filename = BuildFilename(filenameTemplate, context, now) + ".md";
+            filename = BuildFilename(filenameTemplate, context, now, DefaultNoteTitle) + ".md";
             filePath = Path.Join(targetDir, filename);
 
             var content = BuildNoteContent(input, context, now);
@@ -328,17 +333,17 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         return sb.ToString();
     }
 
-    private static string BuildFilename(string template, ActionContext context, DateTime now)
+    private static string BuildFilename(string template, ActionContext context, DateTime now, string fallbackName)
     {
         var filename = template
             .Replace("{{date}}", now.ToString("yyyy-MM-dd"))
             .Replace("{{time}}", now.ToString("HH-mm-ss"))
             .Replace("{{app}}", context.AppName ?? "Unknown");
 
-        return SanitizeFilename(filename);
+        return SanitizeFilename(filename, fallbackName);
     }
 
-    private static string SanitizeFilename(string filename)
+    private static string SanitizeFilename(string filename, string fallbackName)
     {
         var invalid = Path.GetInvalidFileNameChars();
         var sanitized = new StringBuilder(filename.Length);
@@ -355,7 +360,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
         // Trailing dots/spaces are illegal on Windows; trim them so vaults
         // synced via Dropbox/OneDrive to a Windows host don't break.
         var result = sanitized.ToString().TrimEnd('.', ' ');
-        return string.IsNullOrWhiteSpace(result) ? "Transcription" : result;
+        return string.IsNullOrWhiteSpace(result) ? fallbackName : result;
     }
 
     private static Task<string> WriteIndividualNoteAsync(
@@ -774,7 +779,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
                 "filename-template",
                 Loc.L("Settings.FilenameTemplate"),
                 false,
-                "{{date}} {{time}} Transcription",
+                DefaultFilenameTemplate,
                 Loc.L("Settings.FilenameTemplateDescription")
             ),
         ];
@@ -791,7 +796,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
                 "subfolder" => Host.GetSetting<string>("subfolder") ?? "TypeWhisper",
                 "daily-note-mode" => Host.GetSetting<bool>("daily-note-mode") ? "true" : "false",
                 "filename-template" => Host.GetSetting<string>("filename-template")
-                    ?? "{{date}} {{time}} Transcription",
+                    ?? DefaultFilenameTemplate,
                 _ => null,
             }
         );
@@ -823,7 +828,7 @@ public sealed class ObsidianPlugin : IActionPlugin, IPluginSettingsProvider, IPl
                 Host.SetSetting(
                     "filename-template",
                     string.IsNullOrWhiteSpace(value)
-                        ? "{{date}} {{time}} Transcription"
+                        ? DefaultFilenameTemplate
                         : value.Trim()
                 );
                 break;
