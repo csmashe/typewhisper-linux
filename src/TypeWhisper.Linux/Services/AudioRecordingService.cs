@@ -1301,7 +1301,9 @@ public sealed class AudioRecordingService : IDisposable
     {
         try
         {
-            _stream?.Stop();
+            // Abort, not Stop: Pa_StopStream can block forever under _captureLock once the
+            // device is gone. StopRecordingAsync already drained the tail.
+            _stream?.Abort();
         }
         catch
         {
