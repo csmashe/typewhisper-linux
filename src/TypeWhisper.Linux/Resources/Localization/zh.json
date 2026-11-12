@@ -1325,6 +1325,8 @@
   "TextInsertion.Title": "文本插入",
   "TextInsertion.WtypeInstalledWaylandOnly": "已安装（仅限Wayland）。",
   "TextInsertion.WtypeUnsupportedCompositor": "已安装，但此合成器不支持wtype的虚拟键盘协议。",
+  "TextInsertion.WtypeXWaylandClipboardFallback": "已复制到剪贴板。wtype 无法向 XWayland 应用输入文字，请在 设置 → 文本插入 中设置 ydotool 以启用自动粘贴。",
+  "TextInsertion.WtypeXWaylandFailed": "文本插入失败。wtype 无法向 XWayland 应用输入文字，请在 设置 → 文本插入 中设置 ydotool。",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "已安装——仅限XWayland窗口。",
   "TextInsertion.XtermClipboardFallback": "已复制到剪贴板。xterm 没有默认的粘贴快捷键，请使用你自己设置的快捷键粘贴。",
   "TextInsertion.YdotoolActivationFailed": "ydotool的root文件已发布，但激活失败。",

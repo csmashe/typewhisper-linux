@@ -1325,6 +1325,8 @@
   "TextInsertion.Title": "テキスト挿入",
   "TextInsertion.WtypeInstalledWaylandOnly": "インストール済みです（Waylandのみ）。",
   "TextInsertion.WtypeUnsupportedCompositor": "インストール済みですが、このコンポジターはwtypeの仮想キーボードプロトコルに対応していません。",
+  "TextInsertion.WtypeXWaylandClipboardFallback": "クリップボードにコピーしました。wtypeはXWaylandアプリに入力できません。自動貼り付けを有効にするには、設定 → テキスト挿入でydotoolをセットアップしてください。",
+  "TextInsertion.WtypeXWaylandFailed": "テキストを挿入できませんでした。wtypeはXWaylandアプリに入力できません。設定 → テキスト挿入でydotoolをセットアップしてください。",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "インストール済みです（XWaylandウィンドウのみ）。",
   "TextInsertion.XtermClipboardFallback": "クリップボードにコピーしました。xtermには貼り付け用の既定のショートカットがないため、ご自身で設定したキーで貼り付けてください。",
   "TextInsertion.YdotoolActivationFailed": "ydotoolのrootファイルは配置されましたが、有効化に失敗しました。",

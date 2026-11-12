@@ -1325,6 +1325,8 @@
   "TextInsertion.Title": "Inserción de texto",
   "TextInsertion.WtypeInstalledWaylandOnly": "Instalado (solo Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Instalado, pero este compositor no admite el protocolo de teclado virtual de wtype.",
+  "TextInsertion.WtypeXWaylandClipboardFallback": "Texto copiado al portapapeles. wtype no puede escribir en aplicaciones XWayland: configura ydotool en Ajustes → Inserción de texto para activar el pegado automático.",
+  "TextInsertion.WtypeXWaylandFailed": "Error al insertar el texto. wtype no puede escribir en aplicaciones XWayland: configura ydotool en Ajustes → Inserción de texto.",
   "TextInsertion.XdotoolInstalledXWaylandOnly": "Instalado — solo ventanas XWayland.",
   "TextInsertion.XtermClipboardFallback": "Texto copiado al portapapeles. xterm no tiene un atajo predeterminado para pegarlo; pégalo con tu propio atajo de portapapeles.",
   "TextInsertion.YdotoolActivationFailed": "Se publicaron los archivos del sistema de ydotool, pero falló su activación.",
