@@ -311,6 +311,56 @@ public sealed class BrowserAccessibilityManagedArtifactTests : IDisposable
         Assert.Equal(latin1, File.ReadAllBytes(userJs));
     }
 
+    [Fact]
+    public async Task Setup_reports_utf16_user_js_as_an_encoding_problem_not_a_write_failure()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        const string text = "user_pref(\"accessibility.force_disabled\", 1);\r\n";
+        byte[] utf16 = [.. System.Text.Encoding.Unicode.Preamble, .. System.Text.Encoding.Unicode.GetBytes(text)];
+        var utf16Path = WriteFirefoxProfile(firefoxRoot, "utf16.default", utf16);
+        var utf8Path = WriteFirefoxProfile(
+            firefoxRoot,
+            "utf8.default",
+            System.Text.Encoding.UTF8.GetBytes(text)
+        );
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.SkippedFirefoxProfiles);
+        Assert.Equal(["utf16.default"], result.NonUtf8FirefoxProfiles);
+        Assert.Contains(
+            "user.js is not UTF-8, left unchanged: utf16.default.",
+            result.Detail!,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain("Could not write to", result.Detail!, StringComparison.Ordinal);
+        Assert.Equal(utf16, File.ReadAllBytes(utf16Path));
+        Assert.Contains("-1", File.ReadAllText(utf8Path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Utf16_user_js_that_sets_minus_one_is_not_counted_as_enabled()
+    {
+        var firefoxRoot = Path.Join(_root, "firefox-roots");
+        BrowserAccessibilitySetupHelper.FirefoxProfileRootsOverride = [firefoxRoot];
+        const string text = "user_pref(\"accessibility.force_disabled\", -1);\r\n";
+        byte[] utf16 = [.. System.Text.Encoding.Unicode.Preamble, .. System.Text.Encoding.Unicode.GetBytes(text)];
+        WriteFirefoxProfile(firefoxRoot, "utf16.default", utf16);
+
+        Assert.False(
+            BrowserAccessibilitySetupHelper.IsCurrentlyConfigured().FirefoxAccessibilityForceEnabled
+        );
+
+        var result = await new BrowserAccessibilitySetupHelper()
+            .SetUpAsync(CancellationToken.None);
+
+        Assert.Equal(["utf16.default"], result.NonUtf8FirefoxProfiles);
+        Assert.DoesNotContain("already", result.Detail!, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string WriteFirefoxProfile(string root, string name, byte[] userJs)
     {
         var profile = Path.Join(root, name);

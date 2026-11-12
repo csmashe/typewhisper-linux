@@ -888,6 +888,8 @@
   "Profiles.BrowserSetupSuccess": "{0}変更を反映するにはブラウザーを再起動してください（またはログアウトして再度ログインしてください）。",
   "Profiles.BrowserSetupPartialFirefox": "ブラウザーのアクセシビリティは一部のみ設定されました。TypeWhisper は Firefox プロファイル {0} に書き込めなかったため、そこではまだ URL 検出が機能しません。プロファイルフォルダーに書き込み権限があることを確認してから、もう一度［ブラウザーのURL検出を有効にする］をクリックしてください。残りの変更を反映するにはブラウザーを再起動してください。",
   "Profiles.BrowserSetupFirefoxRetry": "Firefox のプロファイルフォルダーに書き込み権限があることを確認してから、もう一度［ブラウザーのURL検出を有効にする］をクリックしてください。",
+  "Profiles.BrowserSetupPartialFirefoxEncoding": "ブラウザーのアクセシビリティは一部のみ設定されました。Firefox プロファイル {0} の user.js が UTF-8 ではないため、TypeWhisper は変更せずに残しました。そこではまだ URL 検出が機能しません。その user.js を UTF-8 で保存してから、もう一度［ブラウザーのURL検出を有効にする］をクリックしてください。残りの変更を反映するにはブラウザーを再起動してください。",
+  "Profiles.BrowserSetupFirefoxEncodingRetry": "Firefox プロファイル {0} の user.js が UTF-8 ではないため、TypeWhisper は変更せずに残しました。UTF-8 で保存してから、もう一度［ブラウザーのURL検出を有効にする］をクリックしてください。",
   "Profiles.BrowserStatusConfigured": "ブラウザーのアクセシビリティは設定済みです。それでもURLを検出できない場合は、ブラウザーを再起動してください。",
   "Profiles.BrowserStatusDisabled": "URLに基づくプロファイルのルールには、ブラウザーのアクセシビリティを有効にする必要があります。下をクリックすると、TypeWhisperが変更する内容を正確に確認できます。",
   "Profiles.BrowserStatusPartial": "ブラウザーのアクセシビリティは一部のみ設定されています。少なくとも1つのブラウザー、プロファイル、またはランチャーでセットアップが必要です。「有効にする」をクリックして完了するか（確認ダイアログには不足している項目のみが表示されます）、「元に戻す」をクリックしてTypeWhisperがインストールしたものをすべて取り消してください。",

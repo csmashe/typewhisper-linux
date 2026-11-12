@@ -128,7 +128,7 @@ public sealed class AtomicFileWriterTests
             byte[] original = [.. encoding.Preamble, .. encoding.GetBytes("// café\n")];
             await File.WriteAllBytesAsync(path, original);
 
-            await Assert.ThrowsAsync<IOException>(() =>
+            await Assert.ThrowsAsync<NonUtf8FileException>(() =>
                 AtomicFileWriter.CaptureAsync(path, CancellationToken.None)
             );
 

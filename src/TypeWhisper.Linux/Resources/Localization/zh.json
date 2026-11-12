@@ -888,6 +888,8 @@
   "Profiles.BrowserSetupSuccess": "{0}请重新启动浏览器（或注销后重新登录）以使更改生效。",
   "Profiles.BrowserSetupPartialFirefox": "浏览器辅助功能仅部分设置完成：TypeWhisper 无法写入 Firefox 配置文件 {0}，因此其中的 URL 检测暂时无法使用。请确认配置文件夹可写，然后再次点击“启用浏览器URL检测”。请重新启动浏览器以使其余更改生效。",
   "Profiles.BrowserSetupFirefoxRetry": "请确认 Firefox 配置文件夹可写，然后再次点击“启用浏览器URL检测”。",
+  "Profiles.BrowserSetupPartialFirefoxEncoding": "浏览器辅助功能仅部分设置完成：Firefox 配置文件 {0} 中的 user.js 不是 UTF-8 编码，因此 TypeWhisper 未作改动，其中的 URL 检测暂时无法使用。请将该 user.js 另存为 UTF-8，然后再次点击“启用浏览器URL检测”。请重新启动浏览器以使其余更改生效。",
+  "Profiles.BrowserSetupFirefoxEncodingRetry": "Firefox 配置文件 {0} 中的 user.js 不是 UTF-8 编码，因此 TypeWhisper 未作改动。请将其另存为 UTF-8，然后再次点击“启用浏览器URL检测”。",
   "Profiles.BrowserStatusConfigured": "浏览器无障碍已配置。如果URL检测仍然失败，请重新启动浏览器。",
   "Profiles.BrowserStatusDisabled": "基于URL的配置方案规则需要启用浏览器无障碍。点击下方查看TypeWhisper将具体更改哪些内容。",
   "Profiles.BrowserStatusPartial": "浏览器无障碍仅部分配置，至少还有一个浏览器、配置文件或启动器需要设置。点击“启用”完成设置（确认对话框只会列出缺少的项），或点击“撤销”还原TypeWhisper安装的所有内容。",

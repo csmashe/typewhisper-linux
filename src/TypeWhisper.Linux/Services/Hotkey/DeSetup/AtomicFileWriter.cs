@@ -6,6 +6,13 @@ using TypeWhisper.Core.Services;
 namespace TypeWhisper.Linux.Services.Hotkey.DeSetup;
 
 /// <summary>
+///     A file TypeWhisper refused to rewrite because it is not UTF-8, so callers can
+///     tell an encoding problem apart from a permission or I/O failure.
+/// </summary>
+internal sealed class NonUtf8FileException(string message, Exception? inner = null)
+    : IOException(message, inner);
+
+/// <summary>
 ///     Exact file state used by <see cref="AtomicFileWriter.WriteIfUnchangedAsync" />.
 ///     The requested path is kept separately from the resolved path so a symlink
 ///     retarget between capture and commit can be detected.
@@ -289,12 +296,9 @@ internal static partial class AtomicFileWriter
     {
         var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
         var span = bytes.AsSpan();
-        if (span.StartsWith(Encoding.UTF32.Preamble)
-            || span.StartsWith(new UTF32Encoding(true, true).Preamble)
-            || span.StartsWith(Encoding.Unicode.Preamble)
-            || span.StartsWith(Encoding.BigEndianUnicode.Preamble))
+        if (StartsWithNonUtf8ByteOrderMark(span))
         {
-            throw new IOException(
+            throw new NonUtf8FileException(
                 $"'{path}' is not UTF-8 (it starts with a UTF-16 or UTF-32 byte order mark). "
                 + "Refusing to rewrite it — convert it to UTF-8 and try again."
             );
@@ -309,12 +313,20 @@ internal static partial class AtomicFileWriter
         }
         catch (DecoderFallbackException ex)
         {
-            throw new IOException(
+            throw new NonUtf8FileException(
                 $"'{path}' is not valid UTF-8. Refusing to rewrite it — convert it to UTF-8 "
                 + "and try again.",
                 ex
             );
         }
+    }
+
+    internal static bool StartsWithNonUtf8ByteOrderMark(ReadOnlySpan<byte> bytes)
+    {
+        return bytes.StartsWith(Encoding.UTF32.Preamble)
+            || bytes.StartsWith(new UTF32Encoding(true, true).Preamble)
+            || bytes.StartsWith(Encoding.Unicode.Preamble)
+            || bytes.StartsWith(Encoding.BigEndianUnicode.Preamble);
     }
 
     private static readonly UTF8Encoding s_strictUtf8 = new(
