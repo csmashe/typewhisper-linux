@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using TypeWhisper.PluginSDK.Processes;
 
 namespace TypeWhisper.Linux.Services;
@@ -258,6 +259,11 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     private readonly TimeSpan _minRunBeforeRestart;
     private readonly TimeSpan _retryBackoff;
 
+    // SIGTERM (logout, `kill`) ends the process without App's teardown or even ProcessExit on
+    // .NET 10, and pactl ignores SIGPIPE, so a child not killed here outlives the app forever.
+    private readonly Func<Action, IDisposable> _registerSigtermHandler;
+    private IDisposable? _sigtermRegistration;
+
     public PactlDefaultDeviceWatcher(
         SystemCommandAvailabilityService commands,
         IProcessRunner processRunner
@@ -290,9 +296,11 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
         Func<bool> isPactlAvailable,
         Func<PactlSubscription> subscriptionFactory,
         TimeSpan? minRunBeforeRestart = null,
-        TimeSpan? retryBackoff = null
+        TimeSpan? retryBackoff = null,
+        Func<Action, IDisposable>? registerSigtermHandler = null
     )
     {
+        _registerSigtermHandler = registerSigtermHandler ?? RegisterSigtermHandler;
         _isPactlAvailable = isPactlAvailable;
         _subscriptionFactory = subscriptionFactory;
         _debounce = TimeSpan.FromMilliseconds(350);
@@ -416,6 +424,7 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
             // A new session retires any retry worker still sleeping from the previous one, so
             // the one scheduled below is the only one that can exist for it.
             _session++;
+            TryRegisterSigtermHandlerLocked();
             if (SpawnLocked() is null)
             {
                 // pactl was reported available but would not launch. Retry on the same bounded
@@ -799,8 +808,41 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
             return;
         }
 
+        IDisposable? sigtermRegistration;
+        lock (_gate)
+        {
+            sigtermRegistration = _sigtermRegistration;
+            _sigtermRegistration = null;
+        }
+
+        sigtermRegistration?.Dispose();
         Stop();
     }
+
+    private void TryRegisterSigtermHandlerLocked()
+    {
+        if (_sigtermRegistration is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            _sigtermRegistration = _registerSigtermHandler(Dispose);
+        }
+        catch (IOException ex)
+        {
+            // Start must not throw. Keep watching without the SIGTERM cleanup; the next
+            // Start retries the registration.
+            Trace.WriteLine(
+                $"[PactlDefaultDeviceWatcher] Failed to register SIGTERM handler: {ex.Message}"
+            );
+        }
+    }
+
+    // Left uncancelled so SIGTERM still terminates the process.
+    private static PosixSignalRegistration RegisterSigtermHandler(Action onSigterm) =>
+        PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => onSigterm());
 }
 
 /// <summary>
