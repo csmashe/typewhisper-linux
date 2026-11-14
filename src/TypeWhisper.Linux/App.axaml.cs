@@ -30,6 +30,9 @@ public class App : Application
     private static readonly TimeSpan s_shutdownQuiesceBudget = TimeSpan.FromSeconds(5);
     private static int s_skipProviderDisposal;
 
+    // Held so the signal registration is not finalized away.
+    private static SigtermShutdown? s_sigtermShutdown;
+
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
     ///     whether to actually quit or hide to the tray. Access is UI-thread-only.
@@ -304,6 +307,7 @@ public class App : Application
                 ShuttingDown = true;
                 _ = ShutdownAndExitAsync(services, desktop);
             };
+            RegisterSigtermShutdown(services, desktop);
 
             var dictation = services.GetRequiredService<DictationOrchestrator>();
             dictation.Initialize();
@@ -1110,6 +1114,57 @@ public class App : Application
         task.ContinueWith(
             static t => Debug.WriteLine($"[App] Background hotkey action failed: {t.Exception}"),
             TaskContinuationOptions.OnlyOnFaulted);
+
+    private static void RegisterSigtermShutdown(
+        IServiceProvider services,
+        IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
+        {
+            s_sigtermShutdown ??= SigtermShutdown.Register(
+                () => Dispatcher.UIThread.Post(() =>
+                {
+                    if (ShuttingDown)
+                    {
+                        return;
+                    }
+
+                    ShuttingDown = true;
+                    _ = ShutdownAndExitAsync(services, desktop);
+                }),
+                () => ForceExitAfterSigterm(services));
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[App] Failed to register SIGTERM handler: {ex.Message}");
+        }
+    }
+
+    // The normal quit hung before restoring what dictation changed, so restore it directly.
+    private static void ForceExitAfterSigterm(IServiceProvider services)
+    {
+        Trace.WriteLine("[App] Quit after SIGTERM did not finish in time; forcing exit.");
+        try
+        {
+            services.GetService<IAudioDuckingService>()?.RestoreAudio();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[App] RestoreAudio before forced exit failed: {ex.Message}");
+        }
+
+        try
+        {
+            services.GetService<IMediaPauseService>()?.ResumeMedia();
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[App] ResumeMedia before forced exit failed: {ex.Message}");
+        }
+
+        // 128 + SIGTERM, the status of a process the signal ended.
+        Environment.Exit(143);
+    }
 
     private static async Task ShutdownAndExitAsync(
         IServiceProvider services,
