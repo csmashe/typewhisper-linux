@@ -32,6 +32,29 @@ public sealed class CompoundTextDecoderTests
         Assert.Equal("東京\nŵ🙂ok", CompoundTextDecoder.TryDecode(data));
     }
 
+    [Fact]
+    public void Decodes_jis_roman_yen_and_overline_and_keeps_letters_ascii()
+    {
+        byte[] data = [0x1B, (byte)'(', (byte)'J', 0x5C, 0x7E, .. "Az"u8, 0x1B, (byte)'(', (byte)'B', 0x5C, 0x7E];
+
+        Assert.Equal("¥‾Az\\~", CompoundTextDecoder.TryDecode(data));
+    }
+
+    [Theory]
+    [InlineData(0x21, 0x41, '〜')]
+    [InlineData(0x21, 0x42, '‖')]
+    [InlineData(0x21, 0x5D, '−')]
+    [InlineData(0x21, 0x71, '¢')]
+    [InlineData(0x21, 0x72, '£')]
+    [InlineData(0x22, 0x4C, '¬')]
+    [InlineData(0x21, 0x3D, '―')]
+    public void Decodes_jis_x0208_symbols_to_jis_code_points(byte row, byte cell, char expected)
+    {
+        byte[] data = [0x1B, (byte)'$', (byte)'(', (byte)'B', row, cell];
+
+        Assert.Equal(expected.ToString(), CompoundTextDecoder.TryDecode(data));
+    }
+
     [Theory]
     [InlineData(new byte[] { 0x1B, (byte)'$', (byte)'(', (byte)'B', (byte)'E' })]
     [InlineData(new byte[] { 0x1B, (byte)'%', (byte)'/', (byte)'1' })]

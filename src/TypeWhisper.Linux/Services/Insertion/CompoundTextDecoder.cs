@@ -12,6 +12,23 @@ internal static class CompoundTextDecoder
     private static readonly Charset s_ascii = new(Encoding.Latin1, 1, false);
     private static readonly Charset s_latin1Upper = new(Encoding.Latin1, 1, true) { Is96 = true };
 
+    // JIS X0201 Roman is ASCII except for these two positions.
+    private static readonly Charset s_jisRoman = new(Encoding.Latin1, 1, false)
+    {
+        Fixups = new Dictionary<char, char> { ['\\'] = '\u00A5', ['~'] = '\u203E' },
+    };
+
+    // Code page 51932 follows CP932 for these JIS X0208 cells; libX11 uses the JIS X0208 code points.
+    private static readonly Dictionary<char, char> s_jisX0208Fixups = new()
+    {
+        ['\uFF5E'] = '\u301C',
+        ['\u2225'] = '\u2016',
+        ['\uFF0D'] = '\u2212',
+        ['\uFFE0'] = '\u00A2',
+        ['\uFFE1'] = '\u00A3',
+        ['\uFFE2'] = '\u00AC',
+    };
+
     /// <summary>Null when the bytes are malformed or use a charset this decoder does not know.</summary>
     public static string? TryDecode(ReadOnlySpan<byte> data)
     {
@@ -31,7 +48,7 @@ internal static class CompoundTextDecoder
         var gr = s_latin1Upper;
         var output = new StringBuilder(data.Length);
         var run = new List<byte>();
-        Encoding? runEncoding = null;
+        Charset? runCharset = null;
 
         var i = 0;
         while (i < data.Length)
@@ -72,7 +89,7 @@ internal static class CompoundTextDecoder
                     i++;
                     continue;
                 case 0x09 or 0x0A or 0x20:
-                    Append(Encoding.Latin1, [b]);
+                    Append(s_ascii, [b]);
                     i++;
                     continue;
                 case < 0x20 or 0x7F or >= 0x80 and < 0xA0:
@@ -92,7 +109,7 @@ internal static class CompoundTextDecoder
                     return null;
                 }
 
-                Append(charset.Encoding, [(byte)(b | 0x80), (byte)(data[i + 1] | 0x80)]);
+                Append(charset, [(byte)(b | 0x80), (byte)(data[i + 1] | 0x80)]);
                 i += 2;
                 continue;
             }
@@ -100,11 +117,11 @@ internal static class CompoundTextDecoder
             var mapped = charset.HighHalf ? (byte)(b | 0x80) : (byte)(b & 0x7F);
             if (charset.SingleShift is { } prefix)
             {
-                Append(charset.Encoding, [prefix, mapped]);
+                Append(charset, [prefix, mapped]);
             }
             else
             {
-                Append(charset.Encoding, [mapped]);
+                Append(charset, [mapped]);
             }
 
             i++;
@@ -113,12 +130,12 @@ internal static class CompoundTextDecoder
         Flush();
         return output.ToString();
 
-        void Append(Encoding encoding, ReadOnlySpan<byte> bytes)
+        void Append(Charset charset, ReadOnlySpan<byte> bytes)
         {
-            if (!ReferenceEquals(encoding, runEncoding))
+            if (!ReferenceEquals(charset, runCharset))
             {
                 Flush();
-                runEncoding = encoding;
+                runCharset = charset;
             }
 
             foreach (var b in bytes)
@@ -129,9 +146,20 @@ internal static class CompoundTextDecoder
 
         void Flush()
         {
-            if (runEncoding is not null && run.Count > 0)
+            if (runCharset is not null && run.Count > 0)
             {
-                output.Append(runEncoding.GetString(run.ToArray()));
+                var text = runCharset.Encoding.GetString(run.ToArray());
+                if (runCharset.Fixups is { } fixups)
+                {
+                    foreach (var c in text)
+                    {
+                        output.Append(fixups.GetValueOrDefault(c, c));
+                    }
+                }
+                else
+                {
+                    output.Append(text);
+                }
             }
 
             run.Clear();
@@ -200,7 +228,8 @@ internal static class CompoundTextDecoder
 
     private static Charset? Single94(char final) => final switch
     {
-        'B' or 'J' => s_ascii,
+        'B' => s_ascii,
+        'J' => s_jisRoman,
         'I' when CodePage(51932) is { } eucJp => new Charset(eucJp, 1, true, EucSingleShift2),
         _ => null,
     };
@@ -239,7 +268,9 @@ internal static class CompoundTextDecoder
             'C' => 51949,
             _ => -1,
         };
-        return CodePage(codePage) is { } encoding ? new Charset(encoding, 2, true) : null;
+        return CodePage(codePage) is { } encoding
+            ? new Charset(encoding, 2, true) { Fixups = final == 'B' ? s_jisX0208Fixups : null }
+            : null;
     }
 
     private static Encoding? CodePage(int codePage) =>
@@ -254,5 +285,7 @@ internal static class CompoundTextDecoder
     private sealed record Charset(Encoding Encoding, int Width, bool HighHalf, byte? SingleShift = null)
     {
         public bool Is96 { get; init; }
+
+        public IReadOnlyDictionary<char, char>? Fixups { get; init; }
     }
 }
