@@ -8,11 +8,13 @@ namespace TypeWhisper.Core.Models;
 ///     callers must treat the whole snapshot as "best effort". The
 ///     <see cref="Source" /> string is the provider name (e.g. "xdotool",
 ///     "hyprland", "kwin") so downstream UI / logs can attribute matches.
+///     <see cref="ProcessId" /> is the window owner's PID when the provider reports one.
 /// </summary>
 public sealed record ActiveWindowSnapshot(
     string? ProcessName,
     string? Title,
     string? WindowId,
     string? AppId,
-    string Source
+    string Source,
+    int? ProcessId = null
 );

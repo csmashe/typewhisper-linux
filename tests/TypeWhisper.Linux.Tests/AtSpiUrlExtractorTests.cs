@@ -95,7 +95,7 @@ public sealed class AtSpiUrlExtractorTests
 
         // The dictation walk ran after a switch to tab B but is keyed on tab A's title.
         Assert.Equal(current, sut.TryGetBrowserUrl(Browser, "Tab A"));
-        sut.ForgetCachedUrl(Browser, null, "Tab A", current);
+        sut.ForgetCachedUrl(Browser, null, "Tab A", null, current);
 
         current = "http://127.0.0.1:19794/tab-a";
         Assert.Equal(current, sut.TryGetBrowserUrl(Browser, "Tab A", isPolling: true));
@@ -113,7 +113,7 @@ public sealed class AtSpiUrlExtractorTests
         });
 
         Assert.Equal("https://example.com/", sut.TryGetBrowserUrl(Browser, "Example", isPolling: true));
-        sut.ForgetCachedUrl(Browser, null, "Example", "https://other.example/");
+        sut.ForgetCachedUrl(Browser, null, "Example", null, "https://other.example/");
 
         Assert.Equal("https://example.com/", sut.TryGetBrowserUrl(Browser, "Example", isPolling: true));
         Assert.Equal(1, walks);
@@ -199,6 +199,59 @@ public sealed class AtSpiUrlExtractorTests
             sut.TryGetBrowserUrl(Browser, "Example", isPolling: true)
         );
         Assert.Equal(3, walks);
+    }
+
+    [Fact]
+    public void TryGetBrowserUrl_Polling_DoesNotServeAnotherInstancesCachedUrl()
+    {
+        var current = "http://127.0.0.1:19794/a.html";
+        var walks = 0;
+        // ReSharper disable once AccessToModifiedClosure -- the stub deliberately returns whichever instance is focused when it walks.
+        var sut = Build(_ =>
+        {
+            walks++;
+            return current;
+        });
+
+        Assert.Equal(current, sut.TryGetBrowserUrl(Browser, null, "Same title", isPolling: true, focusedProcessId: 100));
+
+        // A second instance with the same title must walk, not reuse the first instance's URL.
+        current = "http://localhost:19794/b.html";
+        Assert.Equal(current, sut.TryGetBrowserUrl(Browser, null, "Same title", isPolling: true, focusedProcessId: 200));
+        Assert.Equal(2, walks);
+    }
+
+    [Theory]
+    // Same process, or the focused PID as seen inside the app's PID namespace (Flatpak).
+    [InlineData(100, "firefox-bin", 100, null, "firefox-bin", false)]
+    [InlineData(2, "firefox-bin", 4242, 2, "firefox-bin", false)]
+    // Another instance of the same browser, under the same or an aliased process name.
+    [InlineData(200, "firefox-bin", 100, 100, "firefox-bin", true)]
+    [InlineData(200, "firefox", 100, 100, "firefox-bin", true)]
+    [InlineData(200, "code", 100, 100, "code", true)]
+    // A process that can't be attributed to the focused program (e.g. Flatpak's a11y bus proxy).
+    [InlineData(200, "firefox-bin", 100, 100, "xdg-dbus-proxy", false)]
+    [InlineData(200, "firefox-bin", 100, 100, null, false)]
+    [InlineData(200, null, 100, 100, "firefox-bin", false)]
+    public void IsAnotherInstance_RejectsOnlyADifferentInstanceOfTheFocusedProgram(
+        int focusedProcessId,
+        string? focusedProcessName,
+        int appProcessId,
+        int? appInnermostProcessId,
+        string? appProcessName,
+        bool expected
+    )
+    {
+        Assert.Equal(
+            expected,
+            AtSpiUrlExtractor.IsAnotherInstance(
+                focusedProcessId,
+                focusedProcessName,
+                appProcessId,
+                appInnermostProcessId,
+                appProcessName
+            )
+        );
     }
 
     private static AtSpiUrlExtractor Build(Func<string, string?> walk)

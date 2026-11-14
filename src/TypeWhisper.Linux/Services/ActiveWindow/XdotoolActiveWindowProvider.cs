@@ -54,10 +54,12 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
                 .ConfigureAwait(false);
 
             string? processName = null;
+            int? processId = null;
             // ReSharper disable once InvertIf — no early-exit tail; the block conditionally
             // resolves processName and uses the `out var pid` binding, so a guard wouldn't simplify.
             if (!string.IsNullOrWhiteSpace(pidText) && int.TryParse(pidText, out var pid))
             {
+                processId = pid;
                 try
                 {
                     using var proc = Process.GetProcessById(pid);
@@ -74,7 +76,8 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 null,
-                Name
+                Name,
+                processId
             );
         }
         catch

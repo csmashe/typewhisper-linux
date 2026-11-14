@@ -11,7 +11,8 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 ///     Focused AT-SPI walker that pulls the active URL from a browser's address bar.
 ///     1. Resolve the focused browser descriptor (AT-SPI walks cost 50–200 ms each).
 ///     2. Polling caches by <c>(descriptor ID, title)</c>; dictation always walks, because two tabs can share a title.
-///     3. Narrow to the matching AT-SPI app and walk only its tree.
+///     3. Narrow to the matching AT-SPI app and walk only its tree, skipping other instances of the
+///        focused program when its PID is known.
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
 ///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
 /// </summary>
@@ -91,12 +92,14 @@ public sealed partial class AtSpiUrlExtractor
     private readonly IProcessRunner _processRunner;
     private readonly AsyncLocal<CancellationToken> _harvestCallCancellation = new();
     private string? _cachedDescriptorId;
+    private int? _cachedProcessId;
     private string? _cachedTitle;
     private string? _cachedUrl;
     private DateTime _cachedUrlAt;
     private string? _lastDiagnosticKey;
     private DateTime _missAt;
     private string? _missDescriptorId;
+    private int? _missProcessId;
     private string? _missTitle;
 
     // Test seam standing in for the AT-SPI tree walk, so the cache/miss-backoff state machine
@@ -158,6 +161,7 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedProcessName,
         string? focusedAppId,
         string? focusedTitle,
+        int? focusedProcessId,
         string url
     )
     {
@@ -171,6 +175,7 @@ public sealed partial class AtSpiUrlExtractor
         {
             if (
                 !string.Equals(_cachedDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                || _cachedProcessId != focusedProcessId
                 || !string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
                 || !string.Equals(_cachedUrl, url, StringComparison.Ordinal)
             )
@@ -179,6 +184,7 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             _cachedDescriptorId = null;
+            _cachedProcessId = null;
             _cachedTitle = null;
             _cachedUrl = null;
             _cachedUrlAt = default;
@@ -189,7 +195,8 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedProcessName,
         string? focusedAppId,
         string? focusedTitle,
-        bool isPolling = false
+        bool isPolling = false,
+        int? focusedProcessId = null
     )
     {
         var browser = ResolveBrowserDescriptor(
@@ -218,6 +225,7 @@ public sealed partial class AtSpiUrlExtractor
                         browser.Id,
                         StringComparison.OrdinalIgnoreCase
                     )
+                    && _cachedProcessId == focusedProcessId
                     && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
                     && now - _cachedUrlAt < s_cacheTtl
                 )
@@ -227,6 +235,7 @@ public sealed partial class AtSpiUrlExtractor
 
                 if (
                     string.Equals(_missDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                    && _missProcessId == focusedProcessId
                     && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
                     && now - _missAt < s_missBackoff
                 )
@@ -260,7 +269,15 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             using var cts = new CancellationTokenSource(s_walkBudget);
-            url = WalkForUrl(address, browser, focusedTitle, stats, cts.Token);
+            url = WalkForUrl(
+                address,
+                browser,
+                focusedProcessName,
+                focusedProcessId,
+                focusedTitle,
+                stats,
+                cts.Token
+            );
             budgetExhausted = cts.IsCancellationRequested;
         }
 
@@ -271,10 +288,12 @@ public sealed partial class AtSpiUrlExtractor
             if (!string.IsNullOrWhiteSpace(url))
             {
                 _cachedDescriptorId = browser.Id;
+                _cachedProcessId = focusedProcessId;
                 _cachedTitle = focusedTitle;
                 _cachedUrl = url;
                 _cachedUrlAt = DateTime.UtcNow;
                 _missDescriptorId = null;
+                _missProcessId = null;
                 _missTitle = null;
                 _missAt = default;
             }
@@ -282,6 +301,7 @@ public sealed partial class AtSpiUrlExtractor
             {
                 // Dictation misses must not throttle the next poll on this (descriptor, title).
                 _missDescriptorId = browser.Id;
+                _missProcessId = focusedProcessId;
                 _missTitle = focusedTitle;
                 _missAt = DateTime.UtcNow;
             }
@@ -316,7 +336,8 @@ public sealed partial class AtSpiUrlExtractor
     public string? TryHarvestFocusedContext(
         string? processName,
         string? title,
-        string? selfAppName
+        string? selfAppName,
+        int? processId = null
     )
     {
         if (!_isBusctlAvailable || !_isGdbusAvailable
@@ -336,7 +357,7 @@ public sealed partial class AtSpiUrlExtractor
             cts.Token.ThrowIfCancellationRequested();
             return string.IsNullOrWhiteSpace(address)
                 ? null
-                : HarvestFocusedContext(address, processName, title, selfAppName, cts.Token);
+                : HarvestFocusedContext(address, processName, processId, title, selfAppName, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -356,6 +377,7 @@ public sealed partial class AtSpiUrlExtractor
     private string? HarvestFocusedContext(
         string address,
         string? processName,
+        int? processId,
         string? title,
         string? selfAppName,
         CancellationToken ct
@@ -388,7 +410,10 @@ public sealed partial class AtSpiUrlExtractor
                 continue;
             }
 
-            if (!IsFocusTargetApp(appName, processName, title))
+            if (
+                !IsFocusTargetApp(appName, processName, title)
+                || IsAppOwnedByAnotherInstance(address, app, processName, processId)
+            )
             {
                 continue;
             }
@@ -589,7 +614,7 @@ public sealed partial class AtSpiUrlExtractor
         var raw = new List<string?>
         {
             TryGetAccessibleText(address, focused, interfaces, HarvestMaxOutputChars)
-            ?? GetAccessibleName(address, focused)
+            ?? GetAccessibleName(address, focused),
         };
 
         // Nearby labels: the focused node's parent's showing+visible, text-bearing children.
@@ -725,6 +750,7 @@ public sealed partial class AtSpiUrlExtractor
             return true;
         }
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the body spends the shared visit budget per window; LINQ would hide that.
         foreach (var window in windows)
         {
             if (window == frame)
@@ -970,6 +996,8 @@ public sealed partial class AtSpiUrlExtractor
     private string? WalkForUrl(
         string address,
         BrowserDescriptor focusedBrowser,
+        string? focusedProcessName,
+        int? focusedProcessId,
         string? focusedTitle,
         WalkStats stats,
         CancellationToken ct
@@ -993,7 +1021,10 @@ public sealed partial class AtSpiUrlExtractor
                 stats.AppsSeen.Add(appName);
             }
 
-            if (!IsMatchingApp(appName, focusedBrowser))
+            if (
+                !IsMatchingApp(appName, focusedBrowser)
+                || IsAppOwnedByAnotherInstance(address, app, focusedProcessName, focusedProcessId)
+            )
             {
                 continue;
             }
@@ -1017,6 +1048,113 @@ public sealed partial class AtSpiUrlExtractor
         }
 
         return null;
+    }
+
+    // Two instances of a browser can share a name and window title while only one is on the a11y
+    // bus; without this, focusing the other would read that one's URL and context.
+    private bool IsAppOwnedByAnotherInstance(
+        string address,
+        AccessibleRef app,
+        string? focusedProcessName,
+        int? focusedProcessId
+    )
+    {
+        if (focusedProcessId is not > 0)
+        {
+            return false;
+        }
+
+        var appProcessId = ParseLastInt(
+            RunBusctlCall(
+                address,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "GetConnectionUnixProcessID",
+                "s",
+                app.BusName
+            )
+        );
+        if (appProcessId <= 0)
+        {
+            return false;
+        }
+
+        return IsAnotherInstance(
+            focusedProcessId.Value,
+            focusedProcessName,
+            appProcessId,
+            TryReadInnermostNamespacePid(appProcessId),
+            TryReadProcComm(appProcessId)
+        );
+    }
+
+    /// <summary>
+    ///     True when the a11y app's process is a different instance of the focused program. The
+    ///     focused PID inside the app's PID namespace (Flatpak) counts as the same instance; an
+    ///     unattributable process (e.g. Flatpak's xdg-dbus-proxy) isn't rejected.
+    /// </summary>
+    internal static bool IsAnotherInstance(
+        int focusedProcessId,
+        string? focusedProcessName,
+        int appProcessId,
+        int? appInnermostProcessId,
+        string? appProcessName
+    )
+    {
+        if (
+            appProcessId == focusedProcessId
+            || appInnermostProcessId == focusedProcessId
+            || string.IsNullOrWhiteSpace(appProcessName)
+            || string.IsNullOrWhiteSpace(focusedProcessName)
+        )
+        {
+            return false;
+        }
+
+        if (string.Equals(appProcessName, focusedProcessName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var appBrowser = BrowserDescriptorCatalog.ResolveProcessAlias(
+            appProcessName,
+            BrowserCapabilities.AtSpiExtraction
+        );
+        return appBrowser is not null
+               && appBrowser.Id
+               == BrowserDescriptorCatalog.ResolveProcessAlias(
+                   focusedProcessName,
+                   BrowserCapabilities.AtSpiExtraction
+               )?.Id;
+    }
+
+    private static string? TryReadProcComm(int pid)
+    {
+        try
+        {
+            return File.ReadAllText($"/proc/{pid}/comm").Trim();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // /proc/<pid>/status "NSpid:" lists the PID in each nested namespace, innermost last.
+    private static int? TryReadInnermostNamespacePid(int pid)
+    {
+        try
+        {
+            var line = File.ReadLines($"/proc/{pid}/status")
+                .FirstOrDefault(l => l.StartsWith("NSpid:", StringComparison.Ordinal));
+            var last = line?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+            return int.TryParse(last, out var value) ? value : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     internal static BrowserDescriptor? ResolveBrowserDescriptor(
