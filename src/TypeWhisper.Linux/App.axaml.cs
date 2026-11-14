@@ -1144,13 +1144,23 @@ public class App : Application
     private static void ForceExitAfterSigterm(IServiceProvider services)
     {
         Trace.WriteLine("[App] Quit after SIGTERM did not finish in time; forcing exit.");
+        RestoreAudioAndMedia(services);
+
+        // 128 + SIGTERM, the status of a process the signal ended.
+        Environment.Exit(143);
+    }
+
+    // Normally DictationOrchestrator.Dispose does this; teardown paths that skip it call this instead.
+    // Both services are idempotent and run pactl/playerctl outside their locks.
+    private static void RestoreAudioAndMedia(IServiceProvider services)
+    {
         try
         {
             services.GetService<IAudioDuckingService>()?.RestoreAudio();
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[App] RestoreAudio before forced exit failed: {ex.Message}");
+            Trace.WriteLine($"[App] RestoreAudio during shutdown failed: {ex.Message}");
         }
 
         try
@@ -1159,11 +1169,8 @@ public class App : Application
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[App] ResumeMedia before forced exit failed: {ex.Message}");
+            Trace.WriteLine($"[App] ResumeMedia during shutdown failed: {ex.Message}");
         }
-
-        // 128 + SIGTERM, the status of a process the signal ended.
-        Environment.Exit(143);
     }
 
     private static async Task ShutdownAndExitAsync(
@@ -1366,9 +1373,11 @@ public class App : Application
             // audio, and model cleanup; Program observes SkipProviderDisposal and skips the
             // provider too, so those DI-owned dependencies are not disposed underneath the
             // recorder workflow or admitted HTTP handler that outlived its drain budget.
+            // Audio and media are still restored: nothing else will.
             Debug.WriteLine(
                 "[App] Recorder or HTTP API drain failed; skipping dependent and provider disposal before process exit."
             );
+            RestoreAudioAndMedia(services);
             return;
         }
 
@@ -1392,6 +1401,7 @@ public class App : Application
         if (!ApplyRecoveryDrainResult(recoveryDrained))
         {
             Debug.WriteLine("[App] Recovery is still running; skipping dictation, audio, model and provider disposal.");
+            RestoreAudioAndMedia(services);
             return;
         }
 
