@@ -4430,6 +4430,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Localization.Loc.Instance["TextInsertion.YdotoolSocketClipboardFallback"],
             InsertionFailureReason.WtypeXWaylandTarget =>
                 Localization.Loc.Instance["TextInsertion.WtypeXWaylandClipboardFallback"],
+            InsertionFailureReason.WtypeGtk3PasteTarget =>
+                Localization.Loc.Instance["TextInsertion.WtypeGtk3ClipboardFallback"],
             InsertionFailureReason.NoWaylandTypingTool =>
                 Localization.Loc.Instance.GetString(
                     "TextInsertion.ClipboardFallbackWithHint", _commands.GetSnapshot().PasteToolInstallHint),
