@@ -2872,6 +2872,26 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_X11ClipboardRead_FallsBackToCompoundText()
+    {
+        var runner = new FakeProcessRunner();
+        runner.FailWhen(
+            (file, args) => file == "xclip" && args.SequenceEqual(["-selection", "clipboard", "-o"]),
+            "Error: target STRING not available"
+        );
+        runner.RespondWith(
+            (file, args) =>
+                file == "xclip"
+                && args.SequenceEqual(["-selection", "clipboard", "-o", "-t", "COMPOUND_TEXT"]),
+            "PRIOR \e$(BEl5~"
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", true, false, "xclip"), runner);
+
+        Assert.Equal("PRIOR 東京", await platform.TryGetClipboardTextAsync());
+        Assert.Equal("PRIOR 東", await platform.TryGetClipboardTextAsync(7));
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_WaylandSessionWithXclipRoute_UsesXclipForAllClipboardOperations()
     {
         var runner = new FakeProcessRunner();
