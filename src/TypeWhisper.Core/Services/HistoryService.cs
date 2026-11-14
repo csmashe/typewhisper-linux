@@ -287,32 +287,7 @@ public sealed partial class HistoryService : IHistoryService
             return;
         }
 
-        List<string?> removedAudioFiles = [];
-        var changed = false;
-        _store.Update(
-            current =>
-            {
-                removedAudioFiles = current
-                    .Where(r => r.CreatedAt < cutoff)
-                    .Select(r => r.AudioFileName)
-                    .ToList();
-                if (removedAudioFiles.Count == 0)
-                {
-                    return current;
-                }
-
-                changed = true;
-                return [.. current.Where(r => r.CreatedAt >= cutoff)];
-            }
-        );
-
-        if (!changed)
-        {
-            return;
-        }
-
-        DeleteAudioFiles(removedAudioFiles);
-        RaiseRecordsChanged();
+        RemoveMatching(r => r.CreatedAt < cutoff);
     }
 
     private void RaiseRecordsChanged()
