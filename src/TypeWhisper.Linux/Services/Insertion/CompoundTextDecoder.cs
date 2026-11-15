@@ -29,6 +29,16 @@ internal static class CompoundTextDecoder
         ['\uFFE2'] = '\u00AC',
     };
 
+    // Code page 936 follows GBK for these GB2312 cells; libX11 uses the GB2312 code points.
+    private static readonly Dictionary<char, char> s_gb2312Fixups = new()
+    {
+        ['\u00B7'] = '\u30FB',
+        ['\u2014'] = '\u2015',
+    };
+
+    // Code page 51949 decodes KS C 5601 cell 0x3453 to U+B2D6; libX11 uses U+B2D2.
+    private static readonly Dictionary<char, char> s_ksc5601Fixups = new() { ['\uB2D6'] = '\uB2D2' };
+
     /// <summary>Null when the bytes are malformed or use a charset this decoder does not know.</summary>
     public static string? TryDecode(ReadOnlySpan<byte> data)
     {
@@ -268,9 +278,14 @@ internal static class CompoundTextDecoder
             'C' => 51949,
             _ => -1,
         };
-        return CodePage(codePage) is { } encoding
-            ? new Charset(encoding, 2, true) { Fixups = final == 'B' ? s_jisX0208Fixups : null }
-            : null;
+        var fixups = final switch
+        {
+            'A' => s_gb2312Fixups,
+            'B' => s_jisX0208Fixups,
+            'C' => s_ksc5601Fixups,
+            _ => null,
+        };
+        return CodePage(codePage) is { } encoding ? new Charset(encoding, 2, true) { Fixups = fixups } : null;
     }
 
     private static Encoding? CodePage(int codePage) =>

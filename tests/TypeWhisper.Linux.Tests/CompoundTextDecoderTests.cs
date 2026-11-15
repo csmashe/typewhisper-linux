@@ -55,6 +55,22 @@ public sealed class CompoundTextDecoderTests
         Assert.Equal(expected.ToString(), CompoundTextDecoder.TryDecode(data));
     }
 
+    [Fact]
+    public void Decodes_gb2312_katakana_middle_dot_and_horizontal_bar()
+    {
+        byte[] data = [0x1B, (byte)'$', (byte)'(', (byte)'A', 0x21, 0x24, 0x21, 0x2A];
+
+        Assert.Equal("\u30FB\u2015", CompoundTextDecoder.TryDecode(data));
+    }
+
+    [Fact]
+    public void Decodes_ksc5601_cell_3453_to_the_libx11_code_point()
+    {
+        byte[] data = [0x1B, (byte)'$', (byte)'(', (byte)'C', 0x34, 0x53];
+
+        Assert.Equal("\uB2D2", CompoundTextDecoder.TryDecode(data));
+    }
+
     [Theory]
     [InlineData(new byte[] { 0x1B, (byte)'$', (byte)'(', (byte)'B', (byte)'E' })]
     [InlineData(new byte[] { 0x1B, (byte)'%', (byte)'/', (byte)'1' })]
