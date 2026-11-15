@@ -259,7 +259,6 @@ public sealed class AtSpiUrlExtractorTests
     // A process that can't be attributed to the focused program (e.g. Flatpak's a11y bus proxy).
     [InlineData(200, "firefox-bin", 100, null, "xdg-dbus-proxy", false)]
     [InlineData(200, "firefox-bin", 100, null, null, false)]
-    [InlineData(200, null, 100, null, "firefox-bin", false)]
     public void IsAnotherInstance_RejectsOnlyADifferentInstanceOfTheFocusedProgram(
         int focusedProcessId,
         string? focusedProcessName,
@@ -362,8 +361,8 @@ public sealed class AtSpiUrlExtractorTests
     [Theory]
     [InlineData("xdg-dbus-proxy")]
     [InlineData(null)]
-    // The host name isn't trusted while a sandboxed process has the focused PID.
-    [InlineData("kthreadd")]
+    // Not the program of any process that could own the focused window.
+    [InlineData("spotify")]
     public void IsAnotherInstance_SandboxedFocus_KeepsAppsItCantAttributeToTheFocusedProgram(string? appProcessName)
     {
         var app = new AtSpiUrlExtractor.ProcessIdentity(100, null, appProcessName);
@@ -374,6 +373,70 @@ public sealed class AtSpiUrlExtractorTests
         );
 
         Assert.False(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => scan));
+    }
+
+    [Fact]
+    public void IsAnotherInstance_SandboxedFocusWithAnIncompleteScan_RejectsAnotherInstance()
+    {
+        // The scan missed the focused sandbox, so the host's kthreadd is the only process it saw
+        // with PID 2. The unsandboxed Firefox could be another instance of the focused program.
+        var unsandboxed = new AtSpiUrlExtractor.ProcessIdentity(4300, null, "firefox-bin");
+        var scan = new AtSpiUrlExtractor.ProcessScan(
+            [new AtSpiUrlExtractor.ProcessIdentity(2, null, "kthreadd"), unsandboxed],
+            false
+        );
+
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", unsandboxed, () => scan));
+    }
+
+    [Theory]
+    [InlineData("xdg-dbus-proxy")]
+    [InlineData(null)]
+    public void IsAnotherInstance_IncompleteScan_StillKeepsUnattributableApps(string? appProcessName)
+    {
+        var app = new AtSpiUrlExtractor.ProcessIdentity(100, null, appProcessName);
+
+        Assert.False(
+            AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => new AtSpiUrlExtractor.ProcessScan([app], false))
+        );
+    }
+
+    [Fact]
+    public void IsAnotherInstance_HostFocusSharingItsPidWithAnUnrelatedSandbox_RejectsAnotherInstance()
+    {
+        // PID 200 is the focused host Firefox and, unrelated, a sandboxed Spotify's namespace PID.
+        // The scan can't tell which owns the window, so both programs count as possible owners.
+        var focused = new AtSpiUrlExtractor.ProcessIdentity(200, null, "firefox-bin");
+        var other = new AtSpiUrlExtractor.ProcessIdentity(300, null, "firefox-bin");
+        var scan = Complete(focused, other, new AtSpiUrlExtractor.ProcessIdentity(5000, 200, "spotify"));
+
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(200, "firefox-bin", other, () => scan));
+        Assert.False(AtSpiUrlExtractor.IsAnotherInstance(200, "firefox-bin", focused, () => scan));
+    }
+
+    [Fact]
+    public void IsAnotherInstance_FocusedPidWithNoKnownOwner_RejectsANamedApp()
+    {
+        var app = new AtSpiUrlExtractor.ProcessIdentity(100, null, "firefox-bin");
+
+        // No process has the focused PID, so the focused program is unknown.
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(200, null, app, () => Complete(app)));
+        // A process has it, but its name couldn't be read.
+        Assert.True(
+            AtSpiUrlExtractor.IsAnotherInstance(
+                200,
+                null,
+                app,
+                () => Complete(app, new AtSpiUrlExtractor.ProcessIdentity(200, null, null))
+            )
+        );
+    }
+
+    [Fact]
+    public void IsAnotherInstance_UnknownConnectionOwner_IsRejected()
+    {
+        // GetConnectionUnixProcessID failed, so nothing ties the app to the focused window.
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(100, "firefox-bin", null, () => Complete()));
     }
 
     private static AtSpiUrlExtractor.ProcessScan Complete(params AtSpiUrlExtractor.ProcessIdentity[] processes)

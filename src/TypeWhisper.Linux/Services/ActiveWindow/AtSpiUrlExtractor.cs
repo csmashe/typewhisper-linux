@@ -21,6 +21,7 @@ public sealed partial class AtSpiUrlExtractor
 {
     private const string AtSpiRegistryBusName = "org.a11y.atspi.Registry";
     private const string AtSpiRootPath = "/org/a11y/atspi/accessible/root";
+    private const string DbusProxyProcessName = "xdg-dbus-proxy";
     private const int AtSpiStateActive = 1;
     private const int AtSpiStateShowing = 25;
     private const int AtSpiStateVisible = 30;
@@ -1071,6 +1072,7 @@ public sealed partial class AtSpiUrlExtractor
         int? focusedProcessId
     )
     {
+        // Wayland providers report no PID; the name-and-title match stands alone there.
         if (focusedProcessId is not > 0)
         {
             return false;
@@ -1087,15 +1089,12 @@ public sealed partial class AtSpiUrlExtractor
                 app.BusName
             )
         );
-        if (appProcessId <= 0)
-        {
-            return false;
-        }
-
         return IsAnotherInstance(
             focusedProcessId.Value,
             focusedProcessName,
-            TryReadProcessIdentity(appProcessId) ?? new ProcessIdentity(appProcessId, null, null),
+            appProcessId > 0
+                ? TryReadProcessIdentity(appProcessId) ?? new ProcessIdentity(appProcessId, null, null)
+                : null,
             ScanProcesses
         );
     }
@@ -1113,52 +1112,73 @@ public sealed partial class AtSpiUrlExtractor
     internal sealed record ProcessScan(IReadOnlyList<ProcessIdentity> Processes, bool IsComplete);
 
     /// <summary>
-    ///     True when the a11y app's process is a different instance of the focused program. The
-    ///     focused PID inside the app's PID namespace (Flatpak) counts as the same instance; an
-    ///     unattributable process (e.g. Flatpak's xdg-dbus-proxy) isn't rejected.
-    ///     A sandboxed app sets <c>_NET_WM_PID</c> in its own namespace, so two sandboxes can report
-    ///     the same PID: a PID match counts only when the scan saw the app and no other process of
-    ///     the same program has that PID. Otherwise it's ambiguous and rejected, leaving the URL and
-    ///     context unavailable rather than borrowed.
-    ///     The name fallback trusts <paramref name="focusedProcessName" />, the host process with
-    ///     the focused PID, only when the scan finds no sandboxed process with that PID. Otherwise
-    ///     the PID may be namespace-local and the host process unrelated (e.g. kthreadd), so the app
-    ///     is compared with the sandboxed processes that could own the window instead.
+    ///     True unless the a11y app's process can be tied to the focused window, so a URL or
+    ///     context is never borrowed from another instance of the focused program.
+    ///     <para>
+    ///         <c>_NET_WM_PID</c> may be a host PID or, for a sandboxed app, a namespace-local one,
+    ///         and the scan can't say which. Every process with that number at host or innermost
+    ///         namespace level is a possible owner of the focused window.
+    ///     </para>
+    ///     <para>
+    ///         An app whose process has the focused PID matches only when a complete scan saw it
+    ///         and it's the only possible owner of its program. Any other app is rejected when it's
+    ///         the same program as a possible owner, when an owner's name is unknown, or when the
+    ///         scan is incomplete or found no owner. So is an app whose bus connection has no known
+    ///         process (<paramref name="app" /> is null). A process that can't be attributed to any program, Flatpak's
+    ///         <c>xdg-dbus-proxy</c> or one with no readable name, is kept as before.
+    ///     </para>
     /// </summary>
     internal static bool IsAnotherInstance(
         int focusedProcessId,
         string? focusedProcessName,
-        ProcessIdentity app,
+        ProcessIdentity? app,
         Func<ProcessScan> scanProcesses
     )
     {
-        if (HasProcessId(app, focusedProcessId))
+        if (app is not { } appProcess)
         {
-            if (string.IsNullOrWhiteSpace(app.Name))
+            return true;
+        }
+
+        if (HasProcessId(appProcess, focusedProcessId))
+        {
+            if (string.IsNullOrWhiteSpace(appProcess.Name))
             {
                 return true;
             }
 
             var scan = scanProcesses();
             return !scan.IsComplete
-                   || scan.Processes.All(p => p.ProcessId != app.ProcessId)
+                   || scan.Processes.All(p => p.ProcessId != appProcess.ProcessId)
                    || scan.Processes.Count(p =>
-                       HasProcessId(p, focusedProcessId) && IsSameProgram(p.Name, app.Name)
+                       HasProcessId(p, focusedProcessId) && IsSameProgram(p.Name, appProcess.Name)
                    )
                    > 1;
         }
 
-        if (string.IsNullOrWhiteSpace(app.Name))
+        if (string.IsNullOrWhiteSpace(appProcess.Name)
+            || string.Equals(appProcess.Name, DbusProxyProcessName, StringComparison.Ordinal))
         {
             return false;
         }
 
-        var sandboxedOwners = scanProcesses()
-            .Processes.Where(p => p.NamespacePid == focusedProcessId)
+        var processes = scanProcesses();
+        if (!processes.IsComplete)
+        {
+            return true;
+        }
+
+        var ownerNames = processes.Processes
+            .Where(p => HasProcessId(p, focusedProcessId))
+            .Select(p => p.Name)
             .ToList();
-        return sandboxedOwners.Count == 0
-            ? IsSameProgram(app.Name, focusedProcessName)
-            : sandboxedOwners.Any(p => IsSameProgram(app.Name, p.Name));
+        if (!string.IsNullOrWhiteSpace(focusedProcessName))
+        {
+            ownerNames.Add(focusedProcessName);
+        }
+
+        return ownerNames.Count == 0
+               || ownerNames.Any(name => string.IsNullOrWhiteSpace(name) || IsSameProgram(appProcess.Name, name));
     }
 
     private static bool HasProcessId(ProcessIdentity process, int processId)
