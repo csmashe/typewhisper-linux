@@ -76,6 +76,9 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     // Test seam: runs under the gate, after the shutdown check and before the set-volume launches.
     internal Action? DuckCommandLaunching { get; init; }
 
+    // Test seam: runs after a set-volume exits, before the duck settles it.
+    internal Action? DuckCommandExited { get; init; }
+
     public void DuckAudio(float factor)
     {
         lock (_volumesGate)
@@ -149,6 +152,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                     duck = _inFlightDuck = new InFlightDuck(
                         inputId,
                         savedState.Volumes,
+                        savedState.ServerCookie,
                         StartSetSinkInputVolume(inputId, duckedVolumes)
                     );
                 }
@@ -159,6 +163,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                 }
                 finally
                 {
+                    DuckCommandExited?.Invoke();
                     bool landedAfterShutdownRestore;
                     lock (_volumesGate)
                     {
@@ -222,21 +227,34 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         ShutdownWaitStarting?.Invoke();
         WaitForExit(inFlightDuck.Command, settleTimeout);
 
+        bool stillRunning;
+        var landedAfterShutdownRestore = false;
         lock (_volumesGate)
         {
-            if (inFlightDuck.Settled || inFlightDuck.Command.IsCompleted)
+            stillRunning = inFlightDuck is { Settled: false, Command.IsCompleted: false };
+            if (stillRunning)
             {
-                SettleDuck(inFlightDuck);
-                return;
+                // Restored without it; the duck undoes this set itself once it exits.
+                inFlightDuck.LandsAfterShutdownRestore = true;
             }
-
-            // Restored without it; the duck undoes this set itself once it exits.
-            inFlightDuck.LandsAfterShutdownRestore = true;
+            else
+            {
+                // An earlier shutdown call may have restored without it; whoever settles it owes the undo.
+                landedAfterShutdownRestore = SettleDuck(inFlightDuck);
+            }
         }
 
-        WriteDiagnostic(
-            $"[AudioDuckingService] Set-volume still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; restoring without it."
-        );
+        if (landedAfterShutdownRestore)
+        {
+            UndoLateDuck(inFlightDuck);
+        }
+
+        if (stillRunning)
+        {
+            WriteDiagnostic(
+                $"[AudioDuckingService] Set-volume still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; restoring without it."
+            );
+        }
     }
 
     public void RestoreAudio()
@@ -266,7 +284,8 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         }
     }
 
-    // Caller holds _volumesGate. Returns true when the set exited after shutdown's restore started.
+    // Caller holds _volumesGate and the set has finished. Returns true when it lowered the
+    // stream after shutdown's restore started, so the caller must undo it.
     private bool SettleDuck(InFlightDuck duck)
     {
         if (duck.Settled)
@@ -280,7 +299,11 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             _inFlightDuck = null;
         }
 
-        return duck.LandsAfterShutdownRestore;
+        return duck is
+        {
+            LandsAfterShutdownRestore: true,
+            Command: { IsCompletedSuccessfully: true, Result.Succeeded: true },
+        };
     }
 
     // Shutdown already restored and dropped this stream's entry, so the late set is undone
@@ -289,6 +312,24 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     {
         try
         {
+            // The same cookie check as RestoreSavedVolumes: after a restart the id may be reused.
+            var currentCookie = ReadServerCookie();
+            if (currentCookie is null)
+            {
+                ReportRestoreFailure(
+                    $"Failed to restore sink input {duck.InputId} after a late duck: could not read the audio server cookie"
+                );
+                return;
+            }
+
+            if (!string.Equals(currentCookie, duck.ServerCookie, StringComparison.Ordinal))
+            {
+                WriteDiagnostic(
+                    $"[AudioDuckingService] Audio server restarted since sink input {duck.InputId} was ducked; not restoring onto a possibly reused id."
+                );
+                return;
+            }
+
             var result = SetSinkInputVolume(duck.InputId, duck.OriginalVolumes);
             if (!result.Succeeded)
             {
@@ -588,11 +629,13 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     private sealed class InFlightDuck(
         string inputId,
         string[] originalVolumes,
+        string serverCookie,
         Task<ProcessRunResult> command
     )
     {
         public string InputId { get; } = inputId;
         public string[] OriginalVolumes { get; } = originalVolumes;
+        public string ServerCookie { get; } = serverCookie;
         public Task<ProcessRunResult> Command { get; } = command;
         public bool Settled { get; set; }
         public bool LandsAfterShutdownRestore { get; set; }

@@ -608,6 +608,82 @@ public sealed class MediaPauseServiceTests
         Assert.Equal(1, CountInvocations(runner, s_status));
     }
 
+    [Fact]
+    public async Task A_second_shutdown_that_settles_a_late_pause_still_resumes_the_player()
+    {
+        using var pauseAtSettle = new ManualResetEventSlim();
+        using var releaseSettle = new ManualResetEventSlim();
+        var runner = CreateThreePlayerRunner();
+        var vlcPause = runner.Hold(s_vlcPause);
+        var service = new MediaPauseService(runner, Mock.Of<IErrorLogService>())
+        {
+            PauseCommandExited = () =>
+            {
+                if (!vlcPause.Launched.IsSet)
+                {
+                    return;
+                }
+
+                // ReSharper disable once AccessToDisposedClosure -- the hook runs on the pause task, which is awaited before the events are disposed.
+                pauseAtSettle.Set();
+                // ReSharper disable once AccessToDisposedClosure -- the hook runs on the pause task, which is awaited before the events are disposed.
+                releaseSettle.Wait(s_testGuard);
+            },
+        };
+
+        var pause = Task.Run(service.PauseMedia);
+        Assert.True(vlcPause.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.ResumeMediaForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        var exitedAt = runner.InvocationsSnapshot().Length;
+        vlcPause.ExitWith();
+        // The pause has exited but the worker has not settled it when the second shutdown runs.
+        Assert.True(pauseAtSettle.Wait(s_testGuard));
+        await Task.Run(() => service.ResumeMediaForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        releaseSettle.Set();
+        await pause.WaitAsync(s_testGuard);
+
+        Assert.True(IndexOf(runner.InvocationsSnapshot(), s_vlcPlay) >= exitedAt);
+        Assert.Equal(1, CountInvocations(runner, s_vlcPlay));
+    }
+
+    [Theory]
+    // The base instance vanished and a sibling appeared: nothing is resumed.
+    [InlineData("mpv.instance-b\n", null)]
+    // The base instance lives on: the new sibling is excluded.
+    [InlineData("mpv\nmpv.instance-b\n", "-p mpv -i mpv.instance-b play")]
+    public async Task A_late_pause_resume_targets_the_instances_live_when_it_runs(
+        string liveInstances,
+        string? expectedPlay
+    )
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(s_status),
+            "mpv Playing\n"
+        );
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(["-l"]),
+            liveInstances
+        );
+        var mpvPause = runner.Hold(s_mpvPause);
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new MediaPauseService(runner, errorLog.Object);
+
+        var pause = Task.Run(service.PauseMedia);
+        Assert.True(mpvPause.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.ResumeMediaForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        mpvPause.ExitWith();
+        await pause.WaitAsync(s_testGuard);
+
+        var plays = runner
+            .InvocationsSnapshot()
+            .Where(invocation => invocation.Args[^1] == "play")
+            .Select(invocation => string.Join(' ', invocation.Args))
+            .ToArray();
+        Assert.Equal(expectedPlay is null ? [] : [expectedPlay], plays);
+        errorLog.VerifyNoOtherCalls();
+    }
+
     // Spotify, vlc and mpv are playing.
     private static FakeProcessRunner CreateThreePlayerRunner()
     {

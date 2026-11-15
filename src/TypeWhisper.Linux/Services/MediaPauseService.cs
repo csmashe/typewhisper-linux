@@ -53,6 +53,9 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     // Test seam: runs under the gate, after the shutdown check and before the pause launches.
     internal Action? PauseCommandLaunching { get; init; }
 
+    // Test seam: runs after a pause command exits, before the pause settles it.
+    internal Action? PauseCommandExited { get; init; }
+
     public void PauseMedia()
     {
         lock (_playersGate)
@@ -128,6 +131,7 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                 }
                 finally
                 {
+                    PauseCommandExited?.Invoke();
                     lock (_playersGate)
                     {
                         landedAfterShutdownResume = SettlePause(pause);
@@ -199,21 +203,34 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
             // A failed command has still finished.
         }
 
+        bool stillRunning;
+        var landedAfterShutdownResume = false;
         lock (_playersGate)
         {
-            if (inFlightPause.Settled || inFlightPause.Command.IsCompleted)
+            stillRunning = inFlightPause is { Settled: false, Command.IsCompleted: false };
+            if (stillRunning)
             {
-                SettlePause(inFlightPause);
-                return;
+                // Resumed without it; the pause resumes this player itself once it exits.
+                inFlightPause.LandsAfterShutdownResume = true;
             }
-
-            // Resumed without it; the pause resumes this player itself once it exits.
-            inFlightPause.LandsAfterShutdownResume = true;
+            else
+            {
+                // An earlier shutdown call may have resumed without it; whoever settles it owes the resume.
+                landedAfterShutdownResume = SettlePause(inFlightPause);
+            }
         }
 
-        WriteDiagnostic(
-            $"[MediaPauseService] Pause still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; resuming without it."
-        );
+        if (landedAfterShutdownResume)
+        {
+            ResumeLatePause(inFlightPause);
+        }
+
+        if (stillRunning)
+        {
+            WriteDiagnostic(
+                $"[MediaPauseService] Pause still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; resuming without it."
+            );
+        }
     }
 
     // Caller holds _playersGate and the command has finished. Records a successful pause, or
@@ -245,23 +262,15 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         return false;
     }
 
-    // Shutdown resumed without this player, so the late pause is undone directly.
+    // Shutdown resumed without this player, so the late pause is undone directly. Instances
+    // are listed again: the ones seen at pause time can miss a sibling that appeared since.
     private void ResumeLatePause(InFlightPause pause)
     {
-        try
-        {
-            var result = RunPlayerctl(TargetInstance(pause.Player, pause.KnownInstances, "play"));
-            if (!result.Succeeded)
-            {
-                ReportResumeFailure(
-                    $"Failed to resume media player {pause.Player} after a late pause: {DescribeFailure(result)}"
-                );
-            }
-        }
-        catch (Exception ex)
+        var failure = ResumePlayer(pause.Player, ListInstances() ?? pause.KnownInstances);
+        if (failure is not null)
         {
             ReportResumeFailure(
-                $"Failed to resume media player {pause.Player} after a late pause: exception: {ex.Message}"
+                $"Failed to resume media player {pause.Player} after a late pause: {failure}"
             );
         }
     }
@@ -297,67 +306,69 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         var liveInstances = ListInstances();
         foreach (var player in players)
         {
-            string failure;
-            try
+            var failure = ResumePlayer(player, liveInstances);
+            if (failure is null)
             {
-                // "-p mpv" would fall through to a surviving "mpv.instance-…" sibling.
-                if (
-                    liveInstances is not null
-                    && !liveInstances.Contains(player, StringComparer.Ordinal)
-                    && liveInstances.Any(instance => IsSiblingInstance(player, instance))
-                )
+                lock (_playersGate)
                 {
-                    WriteDiagnostic(
-                        $"[MediaPauseService] Player {player} vanished; treating resume as completed."
-                    );
-                    lock (_playersGate)
-                    {
-                        _pausedPlayers.Remove(player);
-                    }
-
-                    continue;
+                    _pausedPlayers.Remove(player);
                 }
 
-                var result = RunPlayerctl(TargetInstance(player, liveInstances ?? [], "play"));
-                if (result.Succeeded)
-                {
-                    lock (_playersGate)
-                    {
-                        _pausedPlayers.Remove(player);
-                    }
-
-                    continue;
-                }
-
-                // playerctl reports a vanished player on stderr with a trailing newline;
-                // trim before the exact match or the classifier never fires in production.
-                if (
-                    string.Equals(
-                        result.StandardError.Trim(),
-                        "No players found",
-                        StringComparison.Ordinal
-                    )
-                )
-                {
-                    WriteDiagnostic(
-                        $"[MediaPauseService] Player {player} vanished; treating resume as completed."
-                    );
-                    lock (_playersGate)
-                    {
-                        _pausedPlayers.Remove(player);
-                    }
-
-                    continue;
-                }
-
-                failure = DescribeFailure(result);
-            }
-            catch (Exception ex)
-            {
-                failure = $"exception: {ex.Message}";
+                continue;
             }
 
             RecordResumeFailure(player, failure);
+        }
+    }
+
+    /// <summary>
+    ///     Resumes <paramref name="player" />. Returns null once it plays again or has vanished,
+    ///     otherwise the failure.
+    /// </summary>
+    private string? ResumePlayer(string player, IReadOnlyList<string>? liveInstances)
+    {
+        try
+        {
+            // "-p mpv" would fall through to a surviving "mpv.instance-…" sibling.
+            if (
+                liveInstances is not null
+                && !liveInstances.Contains(player, StringComparer.Ordinal)
+                && liveInstances.Any(instance => IsSiblingInstance(player, instance))
+            )
+            {
+                WriteDiagnostic(
+                    $"[MediaPauseService] Player {player} vanished; treating resume as completed."
+                );
+                return null;
+            }
+
+            var result = RunPlayerctl(TargetInstance(player, liveInstances ?? [], "play"));
+            if (result.Succeeded)
+            {
+                return null;
+            }
+
+            // playerctl reports a vanished player on stderr with a trailing newline;
+            // trim before the exact match or the classifier never fires in production.
+            if (
+                !string.Equals(
+                    result.StandardError.Trim(),
+                    "No players found",
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                return DescribeFailure(result);
+            }
+
+            WriteDiagnostic(
+                $"[MediaPauseService] Player {player} vanished; treating resume as completed."
+            );
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"exception: {ex.Message}";
         }
     }
 
