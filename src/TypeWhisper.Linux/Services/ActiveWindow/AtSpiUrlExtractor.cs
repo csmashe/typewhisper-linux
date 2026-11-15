@@ -1121,11 +1121,12 @@ public sealed partial class AtSpiUrlExtractor
     ///     </para>
     ///     <para>
     ///         An app whose process has the focused PID matches only when a complete scan saw it
-    ///         and it's the only possible owner of its program. Any other app is rejected when it's
-    ///         the same program as a possible owner, when an owner's name is unknown, or when the
-    ///         scan is incomplete or found no owner. So is an app whose bus connection has no known
-    ///         process (<paramref name="app" /> is null). A process that can't be attributed to any program, Flatpak's
-    ///         <c>xdg-dbus-proxy</c> or one with no readable name, is kept as before.
+    ///         and no other possible owner is the same program or has no readable name.
+    ///         Any other app is rejected when it's the same program as a possible owner, when an
+    ///         owner's name is unknown, or when the scan is incomplete or found no owner (the
+    ///         snapshot's name alone doesn't count). So is an app whose bus connection has no known
+    ///         process (<paramref name="app" /> is null). A process that can't be attributed to any
+    ///         program, Flatpak's <c>xdg-dbus-proxy</c> or one with no readable name, is kept as before.
     ///     </para>
     /// </summary>
     internal static bool IsAnotherInstance(
@@ -1147,13 +1148,15 @@ public sealed partial class AtSpiUrlExtractor
                 return true;
             }
 
+            // An unnamed process with the PID could be another instance of this program.
             var scan = scanProcesses();
             return !scan.IsComplete
                    || scan.Processes.All(p => p.ProcessId != appProcess.ProcessId)
-                   || scan.Processes.Count(p =>
-                       HasProcessId(p, focusedProcessId) && IsSameProgram(p.Name, appProcess.Name)
-                   )
-                   > 1;
+                   || scan.Processes.Any(p =>
+                       p.ProcessId != appProcess.ProcessId
+                       && HasProcessId(p, focusedProcessId)
+                       && (string.IsNullOrWhiteSpace(p.Name) || IsSameProgram(p.Name, appProcess.Name))
+                   );
         }
 
         if (string.IsNullOrWhiteSpace(appProcess.Name)
@@ -1172,13 +1175,18 @@ public sealed partial class AtSpiUrlExtractor
             .Where(p => HasProcessId(p, focusedProcessId))
             .Select(p => p.Name)
             .ToList();
+        // The snapshot's name may be stale, so it can't stand in for an owner the scan didn't find.
+        if (ownerNames.Count == 0)
+        {
+            return true;
+        }
+
         if (!string.IsNullOrWhiteSpace(focusedProcessName))
         {
             ownerNames.Add(focusedProcessName);
         }
 
-        return ownerNames.Count == 0
-               || ownerNames.Any(name => string.IsNullOrWhiteSpace(name) || IsSameProgram(appProcess.Name, name));
+        return ownerNames.Any(name => string.IsNullOrWhiteSpace(name) || IsSameProgram(appProcess.Name, name));
     }
 
     private static bool HasProcessId(ProcessIdentity process, int processId)

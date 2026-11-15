@@ -340,6 +340,16 @@ public sealed class AtSpiUrlExtractorTests
     }
 
     [Fact]
+    public void IsAnotherInstance_PidMatchSharedWithAnUnnamedProcess_IsAmbiguous()
+    {
+        // The unnamed sandbox sharing the PID could be another Firefox instance.
+        var app = new AtSpiUrlExtractor.ProcessIdentity(4242, 2, "firefox-bin");
+        var scan = Complete(app, new AtSpiUrlExtractor.ProcessIdentity(4343, 2, null));
+
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => scan));
+    }
+
+    [Fact]
     public void IsAnotherInstance_PidMatchWithAnUnreadableApp_IsAmbiguous()
     {
         var app = new AtSpiUrlExtractor.ProcessIdentity(100, null, null);
@@ -430,6 +440,15 @@ public sealed class AtSpiUrlExtractorTests
                 () => Complete(app, new AtSpiUrlExtractor.ProcessIdentity(200, null, null))
             )
         );
+    }
+
+    [Fact]
+    public void IsAnotherInstance_FocusedPidWithNoScannedOwner_IgnoresTheSnapshotName()
+    {
+        // The owner exited before the scan; the snapshot's name alone can't vouch for the app.
+        var app = new AtSpiUrlExtractor.ProcessIdentity(100, null, "firefox-bin");
+
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(200, "spotify", app, () => Complete(app)));
     }
 
     [Fact]
