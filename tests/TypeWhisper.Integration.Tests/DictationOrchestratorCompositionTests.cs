@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -429,52 +430,64 @@ public sealed class DictationOrchestratorCompositionTests
     {
         return BoundedTest.RunAsync(async () =>
         {
-            await using var fixture = new OrchestratorCompositionFixture(
-                focusedApp: ("language-app", "Language app — integration")
-            );
-            var constrained = new LanguageConstrainedRole(fixture.Plugin);
-            PluginManagerTestAccess.SetTranscriptionEngines(fixture.PluginManager, [constrained]);
-            var profiles = fixture.Provider.GetRequiredService<IProfileService>();
-            profiles.AddProfile(
-                new Profile
-                {
-                    Id = "integration-late-language",
-                    Name = "Late German",
-                    ProcessNames = ["language-app"],
-                    InputLanguage = "de",
-                }
-            );
+            // The overlay's "Transcription failed:" prefix comes from the catalog.
+            var previousLanguage = Loc.Instance.CurrentLanguage;
+            try
+            {
+                Loc.Instance.Initialize(LocalizationDir());
+                Loc.Instance.CurrentLanguage = "en";
 
-            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
-            await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
-            fixture.FeedNonSilentAudio();
-            var resultTask = fixture.WaitForResultAsync(sessionId);
-            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
-            var result = await BoundedTest.WaitAsync(resultTask);
+                await using var fixture = new OrchestratorCompositionFixture(
+                    focusedApp: ("language-app", "Language app — integration")
+                );
+                var constrained = new LanguageConstrainedRole(fixture.Plugin);
+                PluginManagerTestAccess.SetTranscriptionEngines(fixture.PluginManager, [constrained]);
+                var profiles = fixture.Provider.GetRequiredService<IProfileService>();
+                profiles.AddProfile(
+                    new Profile
+                    {
+                        Id = "integration-late-language",
+                        Name = "Late German",
+                        ProcessNames = ["language-app"],
+                        InputLanguage = "de",
+                    }
+                );
 
-            var expected = Loc.Instance.GetString(
-                "LanguageSelection.LanguageNotSupported",
-                constrained.ProviderId,
-                "de",
-                "en"
-            );
-            var overlay = fixture.Provider.GetRequiredService<OverlayCoordinator>();
+                var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+                await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
+                fixture.FeedNonSilentAudio();
+                var resultTask = fixture.WaitForResultAsync(sessionId);
+                await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+                var result = await BoundedTest.WaitAsync(resultTask);
 
-            Assert.Equal("failed", result.Status);
-            Assert.Equal(expected, result.Message);
-            Assert.Equal(0, fixture.Plugin.TranscriptionCount);
-            Assert.Empty(fixture.Plugin.ReceivedLanguages);
-            Assert.True(overlay.PresentedState.ShowFeedback);
-            Assert.True(overlay.PresentedState.FeedbackIsError);
-            Assert.Equal(
-                $"Transcription failed: {expected}",
-                overlay.PresentedState.FeedbackText
-            );
-            Assert.Empty(fixture.InsertionPlatform.Typed);
-            var failed = Assert.Single(fixture.History.Records);
-            Assert.Equal(TranscriptionRecordStatus.TranscriptionFailed, failed.Status);
-            Assert.Equal(expected, failed.FailureMessage);
-            Assert.Equal("de", failed.Language);
+                var expected = Loc.Instance.GetString(
+                    "LanguageSelection.LanguageNotSupported",
+                    constrained.ProviderId,
+                    "de",
+                    "en"
+                );
+                var overlay = fixture.Provider.GetRequiredService<OverlayCoordinator>();
+
+                Assert.Equal("failed", result.Status);
+                Assert.Equal(expected, result.Message);
+                Assert.Equal(0, fixture.Plugin.TranscriptionCount);
+                Assert.Empty(fixture.Plugin.ReceivedLanguages);
+                Assert.True(overlay.PresentedState.ShowFeedback);
+                Assert.True(overlay.PresentedState.FeedbackIsError);
+                Assert.Equal(
+                    $"Transcription failed: {expected}",
+                    overlay.PresentedState.FeedbackText
+                );
+                Assert.Empty(fixture.InsertionPlatform.Typed);
+                var failed = Assert.Single(fixture.History.Records);
+                Assert.Equal(TranscriptionRecordStatus.TranscriptionFailed, failed.Status);
+                Assert.Equal(expected, failed.FailureMessage);
+                Assert.Equal("de", failed.Language);
+            }
+            finally
+            {
+                Loc.Instance.CurrentLanguage = previousLanguage;
+            }
         });
     }
 
@@ -637,6 +650,14 @@ public sealed class DictationOrchestratorCompositionTests
             Text = rawText;
             return Task.FromResult(new PostProcessingResult { Text = rawText });
         }
+    }
+
+    private static string LocalizationDir([CallerFilePath] string thisFile = "")
+    {
+        var testDir = Path.GetDirectoryName(thisFile)!;
+        return Path.GetFullPath(
+            Path.Join(testDir, "..", "..", "src", "TypeWhisper.Linux", "Resources", "Localization")
+        );
     }
 
     private sealed class LanguageConstrainedRole(

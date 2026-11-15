@@ -12,6 +12,9 @@ public sealed class MediaPauseServiceTests
     private static readonly string[] s_status = ["-a", "--format", "{{playerInstance}} {{status}}", "status"];
     private static readonly string[] s_spotifyPause = ["-p", "spotify", "pause"];
     private static readonly string[] s_spotifyPlay = ["-p", "spotify", "play"];
+    private static readonly string[] s_vlcPause = ["-p", "vlc", "pause"];
+    private static readonly string[] s_vlcPlay = ["-p", "vlc", "play"];
+    private static readonly string[] s_mpvPause = ["-p", "mpv", "pause"];
 
     [Fact]
     public void ResumeMedia_retains_only_failed_player_for_dispose_retry()
@@ -432,33 +435,61 @@ public sealed class MediaPauseServiceTests
         Assert.Equal(1, CountInvocations(runner, s_spotifyPlay));
     }
 
-    [Fact]
-    public async Task ResumeMediaForShutdown_waits_for_an_in_flight_pause_and_resumes_before_returning()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Players_paused_before_a_pause_command_throws_are_still_resumed(bool resumeArrivesMidPause)
     {
-        using var pauseBlocked = new ManualResetEventSlim();
-        using var releasePause = new ManualResetEventSlim();
         var runner = new FakeProcessRunner();
         runner.RespondWith(
             (fileName, args) => fileName == "playerctl" && args.SequenceEqual(s_status),
-            "spotify Playing\n"
+            "spotify Playing\nvlc Playing\n"
         );
+        MediaPauseService? service = null;
+        // Side-effecting matcher, never matching: optionally lands a ResumeMedia mid-pause,
+        // then makes vlc's pause throw after spotify was already paused.
         runner.RespondWith(
             (_, args) =>
             {
                 // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
-                if (args.SequenceEqual(s_spotifyPause))
+                if (args.SequenceEqual(s_vlcPause))
                 {
-                    // ReSharper disable AccessToDisposedClosure -- the pause task is awaited below, before the usings dispose these events.
-                    pauseBlocked.Set();
-                    releasePause.Wait(s_testGuard);
-                    // ReSharper restore AccessToDisposedClosure
+                    if (resumeArrivesMidPause)
+                    {
+                        // ReSharper disable once AccessToModifiedClosure -- the matcher must call back
+                        // into the service constructed below; that back-reference is the seam under test.
+                        service!.ResumeMedia();
+                    }
+
+                    throw new InvalidOperationException("playerctl crashed");
                 }
 
                 return false;
             },
             string.Empty
         );
-        var service = new MediaPauseService(runner, Mock.Of<IErrorLogService>());
+        service = new MediaPauseService(runner, Mock.Of<IErrorLogService>());
+
+        service.PauseMedia();
+        if (!resumeArrivesMidPause)
+        {
+            service.ResumeMedia();
+        }
+
+        Assert.Equal(1, CountInvocations(runner, s_spotifyPlay));
+    }
+
+    [Fact]
+    public async Task ResumeMediaForShutdown_stops_an_in_flight_pause_and_resumes_before_returning()
+    {
+        using var pauseBlocked = new ManualResetEventSlim();
+        using var releasePause = new ManualResetEventSlim();
+        using var shutdownWaiting = new ManualResetEventSlim();
+        var runner = CreateBlockingPauseRunner(s_spotifyPause, pauseBlocked, releasePause);
+        var service = new MediaPauseService(runner, Mock.Of<IErrorLogService>())
+        {
+            ShutdownWaitStarting = shutdownWaiting.Set,
+        };
 
         var pause = Task.Run(service.PauseMedia);
         Assert.True(pauseBlocked.Wait(s_testGuard));
@@ -467,16 +498,79 @@ public sealed class MediaPauseServiceTests
             service.ResumeMediaForShutdown(s_testGuard);
             return runner.Invocations.ToArray();
         });
-        // Let shutdown reach its wait before the pause command returns.
-        await Task.WhenAny(shutdown, Task.Delay(200));
+        Assert.True(shutdownWaiting.Wait(s_testGuard));
+        Assert.False(shutdown.IsCompleted);
+
         releasePause.Set();
         var invocationsAtReturn = await shutdown.WaitAsync(s_testGuard);
         await pause.WaitAsync(s_testGuard);
 
         // Shutdown exits as soon as this returns, so the player must already be resumed.
         Assert.Contains(invocationsAtReturn, invocation => invocation.Args.SequenceEqual(s_spotifyPlay));
+        // The pause stopped after its running command instead of pausing the next player.
+        Assert.Equal(0, CountInvocations(runner, s_vlcPause));
         service.PauseMedia();
         Assert.Equal(1, CountInvocations(runner, s_status));
+    }
+
+    [Fact]
+    public async Task ResumeMediaForShutdown_resumes_already_paused_players_before_returning_when_the_pause_outlasts_its_wait()
+    {
+        using var pauseBlocked = new ManualResetEventSlim();
+        using var releasePause = new ManualResetEventSlim();
+        var runner = CreateBlockingPauseRunner(s_vlcPause, pauseBlocked, releasePause);
+        var service = new MediaPauseService(runner, Mock.Of<IErrorLogService>());
+
+        var pause = Task.Run(service.PauseMedia);
+        Assert.True(pauseBlocked.Wait(s_testGuard));
+        var invocationsAtReturn = await Task.Run(() =>
+            {
+                service.ResumeMediaForShutdown(TimeSpan.FromMilliseconds(100));
+                return runner.Invocations.ToArray();
+            })
+            .WaitAsync(s_testGuard);
+        Assert.False(pause.IsCompleted);
+
+        // Spotify was paused before the hung command, so it plays again before shutdown returns.
+        Assert.Contains(invocationsAtReturn, invocation => invocation.Args.SequenceEqual(s_spotifyPlay));
+
+        releasePause.Set();
+        await pause.WaitAsync(s_testGuard);
+
+        // The hung pause landed after shutdown's resume, so the pause resumes vlc itself.
+        Assert.Equal(1, CountInvocations(runner, s_vlcPlay));
+        Assert.Equal(0, CountInvocations(runner, s_mpvPause));
+        service.PauseMedia();
+        Assert.Equal(1, CountInvocations(runner, s_status));
+    }
+
+    // Spotify, vlc and mpv are playing; the pause matching blockedPause blocks until released.
+    private static FakeProcessRunner CreateBlockingPauseRunner(
+        string[] blockedPause,
+        ManualResetEventSlim pauseBlocked,
+        ManualResetEventSlim releasePause
+    )
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "playerctl" && args.SequenceEqual(s_status),
+            "spotify Playing\nvlc Playing\nmpv Playing\n"
+        );
+        runner.RespondWith(
+            (_, args) =>
+            {
+                // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
+                if (args.SequenceEqual(blockedPause))
+                {
+                    pauseBlocked.Set();
+                    releasePause.Wait(s_testGuard);
+                }
+
+                return false;
+            },
+            string.Empty
+        );
+        return runner;
     }
 
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)

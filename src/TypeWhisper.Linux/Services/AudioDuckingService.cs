@@ -59,8 +59,12 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     // duck just lowered quiet forever when shutdown or session loss races the duck.
     private bool _restorePending;
     private bool _isDucked;
-    // Set by RestoreAudioForShutdown: a duck starting after it would never be restored.
+    // Set by RestoreAudioForShutdown: refuses later ducks and stops an in-flight one before
+    // its next pactl call, so shutdown only waits for the command already running.
     private bool _shutDown;
+    // Set once shutdown starts restoring. A duck command that outlived shutdown's wait lands
+    // after that, so the duck restores again itself.
+    private bool _shutdownRestoreStarted;
     // Completes once the in-flight duck, including any restore it deferred, has finished.
     private TaskCompletionSource? _duckSettled;
 
@@ -69,6 +73,9 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         _processRunner = processRunner;
         _errorLog = errorLog;
     }
+
+    // Test seam: runs just before RestoreAudioForShutdown waits for an in-flight duck.
+    internal Action? ShutdownWaitStarting { get; init; }
 
     public void DuckAudio(float factor)
     {
@@ -91,7 +98,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             // The cookie must read the same on both sides of the listing: a restart in
             // between would pair one server's volumes with another server's ids.
             var serverCookie = ReadServerCookie();
-            if (serverCookie is null)
+            if (serverCookie is null || IsShutDown())
             {
                 return;
             }
@@ -108,7 +115,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             }
 
             var sinkInputs = ParseSinkInputVolumes(listingResult.StandardOutput).ToArray();
-            if (sinkInputs.Length == 0)
+            if (sinkInputs.Length == 0 || IsShutDown())
             {
                 return;
             }
@@ -121,22 +128,39 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             foreach (var (inputId, currentVolumes) in sinkInputs)
             {
                 var savedVolumes = currentVolumes.ToArray();
+                SavedVolumeState? savedState;
                 lock (_volumesGate)
                 {
-                    // TryAdd, never overwrite: an entry that survived a failed
-                    // restore still holds the ORIGINAL volume — replacing it
-                    // here would capture the already-ducked value and lower
-                    // that stream permanently.
-                    _savedVolumes.TryAdd(
-                        inputId,
-                        new SavedVolumeState(savedVolumes, serverCookie, 0)
-                    );
+                    // Checked with the save so shutdown's restore sees every stream lowered.
+                    if (_shutDown)
+                    {
+                        return;
+                    }
+
+                    // Never overwrite: an entry that survived a failed restore still
+                    // holds the ORIGINAL volume — replacing it here would capture the
+                    // already-ducked value and lower that stream permanently.
+                    if (!_savedVolumes.TryGetValue(inputId, out savedState))
+                    {
+                        savedState = new SavedVolumeState(savedVolumes, serverCookie, 0);
+                        _savedVolumes.Add(inputId, savedState);
+                    }
                 }
 
                 var duckedVolumes = savedVolumes
                     .Select(volume => ScaleVolume(volume, factor))
                     .ToArray();
                 _ = SetSinkInputVolume(inputId, duckedVolumes);
+
+                lock (_volumesGate)
+                {
+                    // This set may have landed after shutdown restored the stream, so
+                    // track it again for the finally to restore once more.
+                    if (_shutdownRestoreStarted)
+                    {
+                        _savedVolumes.TryAdd(inputId, savedState);
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -152,16 +176,16 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             {
                 _duckInProgress = false;
                 _isDucked = _savedVolumes.Count > 0;
-                restoreDeferred = _restorePending && _isDucked;
+                restoreDeferred = (_shutDown ? _shutdownRestoreStarted : _restorePending) && _isDucked;
                 _restorePending = false;
             }
 
             try
             {
-                // Outside the gate: RestoreAudio retakes it and runs pactl round trips.
+                // Outside the gate: the restore retakes it and runs pactl round trips.
                 if (restoreDeferred)
                 {
-                    RestoreAudio();
+                    RestoreSavedVolumes();
                 }
             }
             finally
@@ -180,21 +204,29 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             inFlightDuck = _duckInProgress ? _duckSettled?.Task : null;
         }
 
-        // Shutdown exits right after this returns, so a restore deferred to the duck's
-        // finally would never run. On timeout RestoreAudio still defers, as a best effort.
-        if (inFlightDuck is not null && !inFlightDuck.Wait(settleTimeout))
+        // pactl's own timeout bounds the one command still running.
+        if (inFlightDuck is not null)
         {
-            WriteDiagnostic(
-                $"[AudioDuckingService] Duck still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; its restore is deferred."
-            );
+            ShutdownWaitStarting?.Invoke();
+            if (!inFlightDuck.Wait(settleTimeout))
+            {
+                WriteDiagnostic(
+                    $"[AudioDuckingService] Duck still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; restoring without it."
+                );
+            }
         }
 
-        RestoreAudio();
+        lock (_volumesGate)
+        {
+            _shutdownRestoreStarted = true;
+        }
+
+        // Never deferred: shutdown exits right after this returns.
+        RestoreSavedVolumes();
     }
 
     public void RestoreAudio()
     {
-        KeyValuePair<string, SavedVolumeState>[] entries;
         lock (_volumesGate)
         {
             if (_duckInProgress)
@@ -204,6 +236,28 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             }
 
             if (!_isDucked)
+            {
+                return;
+            }
+        }
+
+        RestoreSavedVolumes();
+    }
+
+    private bool IsShutDown()
+    {
+        lock (_volumesGate)
+        {
+            return _shutDown;
+        }
+    }
+
+    private void RestoreSavedVolumes()
+    {
+        KeyValuePair<string, SavedVolumeState>[] entries;
+        lock (_volumesGate)
+        {
+            if (_savedVolumes.Count == 0)
             {
                 return;
             }

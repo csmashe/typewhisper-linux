@@ -88,8 +88,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     // hang the lock handler; long enough to outlast a normal StartAsync's synchronous setup.
     private static readonly TimeSpan s_sessionLossGateTimeout = TimeSpan.FromSeconds(5);
 
-    // Shutdown's wait for a duck or pause still in flight, which pactl/playerctl's 1.5 s
-    // per-call timeouts normally keep short. Waited once per service, so at most 4 s in all.
+    // Shutdown's wait for the one pactl/playerctl command an in-flight duck or pause is still
+    // running; their 1.5 s timeouts keep it shorter. Waited once per service.
     internal static readonly TimeSpan s_systemAudioSettleTimeout = TimeSpan.FromSeconds(2);
 
     // Hard cap on each captured reference-context source (screen / clipboard). Keeps token

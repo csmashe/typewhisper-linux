@@ -10,9 +10,9 @@ public interface IMediaPauseService
     void ResumeMedia();
 
     /// <summary>
-    ///     Resumes media before the process exits: refuses later pauses and first waits up to
-    ///     <paramref name="settleTimeout" /> for a pause still in flight, whose players
-    ///     <see cref="ResumeMedia" /> alone would only resume once that pause finished.
+    ///     Resumes media before the process exits, refusing later pauses. A pause still in
+    ///     flight pauses no more players; this waits up to <paramref name="settleTimeout" /> for
+    ///     its current command, then resumes every player paused so far before returning.
     /// </summary>
     void ResumeMediaForShutdown(TimeSpan settleTimeout);
 }

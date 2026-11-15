@@ -36,8 +36,12 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     // AudioDuckingService: run now, it would miss the player the pause is still recording.
     private bool _pauseInProgress;
     private bool _resumePending;
-    // Set by ResumeMediaForShutdown: a pause starting after it would never be resumed.
+    // Set by ResumeMediaForShutdown: refuses later pauses and stops an in-flight one before
+    // its next playerctl call, so shutdown only waits for the command already running.
     private bool _shutDown;
+    // Set once shutdown starts resuming. A pause command that outlived shutdown's wait lands
+    // after that, so the pause resumes again itself.
+    private bool _shutdownResumeStarted;
     // Completes once the in-flight pause, including any resume it deferred, has finished.
     private TaskCompletionSource? _pauseSettled;
 
@@ -46,6 +50,9 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         _processRunner = processRunner;
         _errorLog = errorLog;
     }
+
+    // Test seam: runs just before ResumeMediaForShutdown waits for an in-flight pause.
+    internal Action? ShutdownWaitStarting { get; init; }
 
     public void PauseMedia()
     {
@@ -100,6 +107,11 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                 )
             )
             {
+                if (IsShutDown())
+                {
+                    return;
+                }
+
                 if (!RunPlayerctl(TargetInstance(parts[0], instances, "pause")).Succeeded)
                 {
                     continue;
@@ -113,10 +125,10 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         }
         catch (Exception ex)
         {
+            // Players paused before the failure stay tracked: the next resume still owes them.
             Debug.WriteLine($"[MediaPauseService] Pause failed: {ex.Message}");
             lock (_playersGate)
             {
-                _pausedPlayers.Clear();
                 _pauseActive = false;
             }
         }
@@ -126,7 +138,7 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
             lock (_playersGate)
             {
                 _pauseInProgress = false;
-                resumeDeferred = _resumePending;
+                resumeDeferred = _shutDown ? _shutdownResumeStarted : _resumePending;
                 _resumePending = false;
             }
 
@@ -134,7 +146,7 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
             {
                 if (resumeDeferred)
                 {
-                    ResumeMedia();
+                    ResumePausedPlayers();
                 }
             }
             finally
@@ -153,21 +165,29 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
             inFlightPause = _pauseInProgress ? _pauseSettled?.Task : null;
         }
 
-        // Shutdown exits right after this returns, so a resume deferred to the pause's
-        // finally would never run. On timeout ResumeMedia still defers, as a best effort.
-        if (inFlightPause is not null && !inFlightPause.Wait(settleTimeout))
+        // playerctl's own timeout bounds the one command still running.
+        if (inFlightPause is not null)
         {
-            WriteDiagnostic(
-                $"[MediaPauseService] Pause still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; its resume is deferred."
-            );
+            ShutdownWaitStarting?.Invoke();
+            if (!inFlightPause.Wait(settleTimeout))
+            {
+                WriteDiagnostic(
+                    $"[MediaPauseService] Pause still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; resuming without it."
+                );
+            }
         }
 
-        ResumeMedia();
+        lock (_playersGate)
+        {
+            _shutdownResumeStarted = true;
+        }
+
+        // Never deferred: shutdown exits right after this returns.
+        ResumePausedPlayers();
     }
 
     public void ResumeMedia()
     {
-        string[] players;
         lock (_playersGate)
         {
             if (_pauseInProgress)
@@ -175,7 +195,24 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                 _resumePending = true;
                 return;
             }
+        }
 
+        ResumePausedPlayers();
+    }
+
+    private bool IsShutDown()
+    {
+        lock (_playersGate)
+        {
+            return _shutDown;
+        }
+    }
+
+    private void ResumePausedPlayers()
+    {
+        string[] players;
+        lock (_playersGate)
+        {
             _pauseActive = false;
             if (_pausedPlayers.Count == 0)
             {
