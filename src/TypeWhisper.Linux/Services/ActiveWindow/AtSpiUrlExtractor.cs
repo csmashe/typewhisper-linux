@@ -1083,73 +1083,123 @@ public sealed partial class AtSpiUrlExtractor
         return IsAnotherInstance(
             focusedProcessId.Value,
             focusedProcessName,
-            appProcessId,
-            TryReadInnermostNamespacePid(appProcessId),
-            TryReadProcComm(appProcessId)
+            TryReadProcessIdentity(appProcessId) ?? new ProcessIdentity(appProcessId, null, null),
+            EnumerateProcessIdentities
         );
     }
+
+    /// <summary>
+    ///     A process as <c>/proc/&lt;pid&gt;/status</c> describes it. <see cref="NamespacePid" /> is
+    ///     its PID in the innermost PID namespace, set only when that namespace isn't the host's.
+    /// </summary>
+    internal readonly record struct ProcessIdentity(int ProcessId, int? NamespacePid, string? Name);
 
     /// <summary>
     ///     True when the a11y app's process is a different instance of the focused program. The
     ///     focused PID inside the app's PID namespace (Flatpak) counts as the same instance; an
     ///     unattributable process (e.g. Flatpak's xdg-dbus-proxy) isn't rejected.
+    ///     A sandboxed app sets <c>_NET_WM_PID</c> in its own namespace, so two sandboxes can report
+    ///     the same PID: a PID match shared by another process of the same program is ambiguous
+    ///     and rejected, leaving the URL and context unavailable rather than borrowed.
     /// </summary>
     internal static bool IsAnotherInstance(
         int focusedProcessId,
         string? focusedProcessName,
-        int appProcessId,
-        int? appInnermostProcessId,
-        string? appProcessName
+        ProcessIdentity app,
+        Func<IEnumerable<ProcessIdentity>> processes
     )
     {
-        if (
-            appProcessId == focusedProcessId
-            || appInnermostProcessId == focusedProcessId
-            || string.IsNullOrWhiteSpace(appProcessName)
-            || string.IsNullOrWhiteSpace(focusedProcessName)
-        )
+        if (HasProcessId(app, focusedProcessId))
+        {
+            return !string.IsNullOrWhiteSpace(app.Name)
+                   && processes()
+                       .Count(p => HasProcessId(p, focusedProcessId) && IsSameProgram(p.Name, app.Name))
+                   > 1;
+        }
+
+        return IsSameProgram(app.Name, focusedProcessName);
+    }
+
+    private static bool HasProcessId(ProcessIdentity process, int processId)
+    {
+        return process.ProcessId == processId || process.NamespacePid == processId;
+    }
+
+    private static bool IsSameProgram(string? processName, string? otherProcessName)
+    {
+        if (string.IsNullOrWhiteSpace(processName) || string.IsNullOrWhiteSpace(otherProcessName))
         {
             return false;
         }
 
-        if (string.Equals(appProcessName, focusedProcessName, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(processName, otherProcessName, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        var appBrowser = BrowserDescriptorCatalog.ResolveProcessAlias(
-            appProcessName,
+        var browser = BrowserDescriptorCatalog.ResolveProcessAlias(
+            processName,
             BrowserCapabilities.AtSpiExtraction
         );
-        return appBrowser is not null
-               && appBrowser.Id
+        return browser is not null
+               && browser.Id
                == BrowserDescriptorCatalog.ResolveProcessAlias(
-                   focusedProcessName,
+                   otherProcessName,
                    BrowserCapabilities.AtSpiExtraction
                )?.Id;
     }
 
-    private static string? TryReadProcComm(int pid)
+    private static IEnumerable<ProcessIdentity> EnumerateProcessIdentities()
     {
+        IEnumerable<string> entries;
         try
         {
-            return File.ReadAllText($"/proc/{pid}/comm").Trim();
+            entries = Directory.EnumerateDirectories("/proc").ToList();
         }
         catch
         {
-            return null;
+            yield break;
+        }
+
+        foreach (var entry in entries)
+        {
+            if (
+                int.TryParse(Path.GetFileName(entry), out var pid)
+                && TryReadProcessIdentity(pid) is { } identity
+            )
+            {
+                yield return identity;
+            }
         }
     }
 
-    // /proc/<pid>/status "NSpid:" lists the PID in each nested namespace, innermost last.
-    private static int? TryReadInnermostNamespacePid(int pid)
+    // "Name:" is the comm; "NSpid:" lists the PID in each nested namespace, innermost last.
+    private static ProcessIdentity? TryReadProcessIdentity(int pid)
     {
         try
         {
-            var line = File.ReadLines($"/proc/{pid}/status")
-                .FirstOrDefault(l => l.StartsWith("NSpid:", StringComparison.Ordinal));
-            var last = line?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-            return int.TryParse(last, out var value) ? value : null;
+            string? name = null;
+            int? namespacePid = null;
+            foreach (var line in File.ReadLines($"/proc/{pid}/status"))
+            {
+                if (line.StartsWith("Name:", StringComparison.Ordinal))
+                {
+                    name = line["Name:".Length..].Trim();
+                }
+                else if (line.StartsWith("NSpid:", StringComparison.Ordinal))
+                {
+                    var levels = line["NSpid:".Length..]
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                    if (levels.Length > 1 && int.TryParse(levels[^1], out var innermost))
+                    {
+                        namespacePid = innermost;
+                    }
+
+                    break;
+                }
+            }
+
+            return new ProcessIdentity(pid, namespacePid, string.IsNullOrEmpty(name) ? null : name);
         }
         catch
         {
@@ -1659,8 +1709,8 @@ public sealed partial class AtSpiUrlExtractor
         params string[] signatureAndArgs
     )
     {
-        var args = new List<string>
-        {
+        List<string> args =
+        [
             $"--address={address}",
             "--",
             "call",
@@ -1668,8 +1718,8 @@ public sealed partial class AtSpiUrlExtractor
             path,
             @interface,
             method,
-        };
-        args.AddRange(signatureAndArgs);
+            .. signatureAndArgs,
+        ];
 
         var exitCode = RunProcess("busctl", args, out var output);
         return exitCode == 0 ? output?.Trim() : null;

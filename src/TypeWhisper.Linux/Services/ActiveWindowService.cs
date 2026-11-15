@@ -587,8 +587,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         IReadOnlyList<string> arguments
     )
     {
-        var args = new List<string> { "windowactivate", "--sync", windowId };
-        args.AddRange(arguments);
+        List<string> args = ["windowactivate", "--sync", windowId, .. arguments];
         var exitCode = RunProcess("xdotool", args, out _);
         return exitCode == 0;
     }
