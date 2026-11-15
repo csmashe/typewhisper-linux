@@ -15,7 +15,8 @@ public interface IAudioDuckingService
     /// <summary>
     ///     Restores volumes before the process exits, refusing later ducks. A duck still in
     ///     flight lowers no more streams; this waits up to <paramref name="settleTimeout" /> for
-    ///     its current command, then restores every stream lowered so far before returning.
+    ///     its current command to exit, then restores every stream lowered so far before
+    ///     returning. A command that outlasts the wait is undone by the duck once it exits.
     /// </summary>
     void RestoreAudioForShutdown(TimeSpan settleTimeout);
 }

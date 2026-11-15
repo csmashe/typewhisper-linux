@@ -89,8 +89,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     private static readonly TimeSpan s_sessionLossGateTimeout = TimeSpan.FromSeconds(5);
 
     // Shutdown's wait for the one pactl/playerctl command an in-flight duck or pause is still
-    // running; their 1.5 s timeouts keep it shorter. Waited once per service.
-    internal static readonly TimeSpan s_systemAudioSettleTimeout = TimeSpan.FromSeconds(2);
+    // running. The runner kills it at 1.5 s and reaps it within 0.5 s more. Waited once per service.
+    internal static readonly TimeSpan s_systemAudioSettleTimeout = TimeSpan.FromSeconds(2.5);
 
     // Hard cap on each captured reference-context source (screen / clipboard). Keeps token
     // cost small; the injection-safe framing re-caps at the same size in PromptProcessingService.

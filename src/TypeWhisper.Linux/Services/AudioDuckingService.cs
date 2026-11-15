@@ -44,7 +44,7 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     // Guarded by _volumesGate, mirroring MediaPauseService's _playersGate:
     // RestoreAudio is reachable from async continuations and Dispose, so two
     // threads can otherwise enumerate/mutate the dictionary concurrently.
-    // pactl round trips stay OUTSIDE the gate.
+    // pactl round trips stay OUTSIDE the gate; only a duck's set-volume is LAUNCHED inside it.
     private readonly Dictionary<string, SavedVolumeState> _savedVolumes =
         new(StringComparer.Ordinal);
     private readonly Lock _volumesGate = new();
@@ -59,14 +59,10 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     // duck just lowered quiet forever when shutdown or session loss races the duck.
     private bool _restorePending;
     private bool _isDucked;
-    // Set by RestoreAudioForShutdown: refuses later ducks and stops an in-flight one before
-    // its next pactl call, so shutdown only waits for the command already running.
+    // Set by RestoreAudioForShutdown under the gate; no duck set-volume starts after it.
     private bool _shutDown;
-    // Set once shutdown starts restoring. A duck command that outlived shutdown's wait lands
-    // after that, so the duck restores again itself.
-    private bool _shutdownRestoreStarted;
-    // Completes once the in-flight duck, including any restore it deferred, has finished.
-    private TaskCompletionSource? _duckSettled;
+    // The running duck set-volume, registered in the critical section that launched it.
+    private InFlightDuck? _inFlightDuck;
 
     public AudioDuckingService(IProcessRunner processRunner, IErrorLogService errorLog)
     {
@@ -74,12 +70,14 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         _errorLog = errorLog;
     }
 
-    // Test seam: runs just before RestoreAudioForShutdown waits for an in-flight duck.
+    // Test seam: runs just before RestoreAudioForShutdown waits for an in-flight set-volume.
     internal Action? ShutdownWaitStarting { get; init; }
+
+    // Test seam: runs under the gate, after the shutdown check and before the set-volume launches.
+    internal Action? DuckCommandLaunching { get; init; }
 
     public void DuckAudio(float factor)
     {
-        TaskCompletionSource duckSettled;
         lock (_volumesGate)
         {
             if (_shutDown || _isDucked || _duckInProgress)
@@ -88,9 +86,6 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             }
 
             _duckInProgress = true;
-            duckSettled = _duckSettled = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
         }
 
         try
@@ -127,11 +122,14 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
             foreach (var (inputId, currentVolumes) in sinkInputs)
             {
-                var savedVolumes = currentVolumes.ToArray();
-                SavedVolumeState? savedState;
+                var duckedVolumes = currentVolumes
+                    .Select(volume => ScaleVolume(volume, factor))
+                    .ToArray();
+                InFlightDuck duck;
                 lock (_volumesGate)
                 {
-                    // Checked with the save so shutdown's restore sees every stream lowered.
+                    // The check, the save and the launch share one critical section, so a
+                    // shutdown either refuses this set or finds it registered and waits for it.
                     if (_shutDown)
                     {
                         return;
@@ -140,25 +138,36 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                     // Never overwrite: an entry that survived a failed restore still
                     // holds the ORIGINAL volume — replacing it here would capture the
                     // already-ducked value and lower that stream permanently.
-                    if (!_savedVolumes.TryGetValue(inputId, out savedState))
+                    if (!_savedVolumes.TryGetValue(inputId, out var savedState))
                     {
-                        savedState = new SavedVolumeState(savedVolumes, serverCookie, 0);
+                        savedState = new SavedVolumeState([.. currentVolumes], serverCookie, 0);
                         _savedVolumes.Add(inputId, savedState);
                     }
+
+                    DuckCommandLaunching?.Invoke();
+                    // RunAsync returns once pactl has started, so only the launch holds the gate.
+                    duck = _inFlightDuck = new InFlightDuck(
+                        inputId,
+                        savedState.Volumes,
+                        StartSetSinkInputVolume(inputId, duckedVolumes)
+                    );
                 }
 
-                var duckedVolumes = savedVolumes
-                    .Select(volume => ScaleVolume(volume, factor))
-                    .ToArray();
-                _ = SetSinkInputVolume(inputId, duckedVolumes);
-
-                lock (_volumesGate)
+                try
                 {
-                    // This set may have landed after shutdown restored the stream, so
-                    // track it again for the finally to restore once more.
-                    if (_shutdownRestoreStarted)
+                    _ = duck.Command.GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    bool landedAfterShutdownRestore;
+                    lock (_volumesGate)
                     {
-                        _savedVolumes.TryAdd(inputId, savedState);
+                        landedAfterShutdownRestore = SettleDuck(duck);
+                    }
+
+                    if (landedAfterShutdownRestore)
+                    {
+                        UndoLateDuck(duck);
                     }
                 }
             }
@@ -176,53 +185,58 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             {
                 _duckInProgress = false;
                 _isDucked = _savedVolumes.Count > 0;
-                restoreDeferred = (_shutDown ? _shutdownRestoreStarted : _restorePending) && _isDucked;
+                // Shutdown restores everything itself and never defers to the duck.
+                restoreDeferred = !_shutDown && _restorePending && _isDucked;
                 _restorePending = false;
             }
 
-            try
+            // Outside the gate: the restore retakes it and runs pactl round trips.
+            if (restoreDeferred)
             {
-                // Outside the gate: the restore retakes it and runs pactl round trips.
-                if (restoreDeferred)
-                {
-                    RestoreSavedVolumes();
-                }
-            }
-            finally
-            {
-                duckSettled.TrySetResult();
+                RestoreSavedVolumes();
             }
         }
     }
 
     public void RestoreAudioForShutdown(TimeSpan settleTimeout)
     {
-        Task? inFlightDuck;
+        InFlightDuck? inFlightDuck;
         lock (_volumesGate)
         {
             _shutDown = true;
-            inFlightDuck = _duckInProgress ? _duckSettled?.Task : null;
+            inFlightDuck = _inFlightDuck;
         }
 
-        // pactl's own timeout bounds the one command still running.
         if (inFlightDuck is not null)
         {
-            ShutdownWaitStarting?.Invoke();
-            if (!inFlightDuck.Wait(settleTimeout))
-            {
-                WriteDiagnostic(
-                    $"[AudioDuckingService] Duck still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; restoring without it."
-                );
-            }
-        }
-
-        lock (_volumesGate)
-        {
-            _shutdownRestoreStarted = true;
+            SettleForShutdown(inFlightDuck, settleTimeout);
         }
 
         // Never deferred: shutdown exits right after this returns.
         RestoreSavedVolumes();
+    }
+
+    // The runner kills pactl at its timeout, so the set-volume normally exits within the wait.
+    private void SettleForShutdown(InFlightDuck inFlightDuck, TimeSpan settleTimeout)
+    {
+        ShutdownWaitStarting?.Invoke();
+        WaitForExit(inFlightDuck.Command, settleTimeout);
+
+        lock (_volumesGate)
+        {
+            if (inFlightDuck.Settled || inFlightDuck.Command.IsCompleted)
+            {
+                SettleDuck(inFlightDuck);
+                return;
+            }
+
+            // Restored without it; the duck undoes this set itself once it exits.
+            inFlightDuck.LandsAfterShutdownRestore = true;
+        }
+
+        WriteDiagnostic(
+            $"[AudioDuckingService] Set-volume still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; restoring without it."
+        );
     }
 
     public void RestoreAudio()
@@ -249,6 +263,57 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         lock (_volumesGate)
         {
             return _shutDown;
+        }
+    }
+
+    // Caller holds _volumesGate. Returns true when the set exited after shutdown's restore started.
+    private bool SettleDuck(InFlightDuck duck)
+    {
+        if (duck.Settled)
+        {
+            return false;
+        }
+
+        duck.Settled = true;
+        if (ReferenceEquals(_inFlightDuck, duck))
+        {
+            _inFlightDuck = null;
+        }
+
+        return duck.LandsAfterShutdownRestore;
+    }
+
+    // Shutdown already restored and dropped this stream's entry, so the late set is undone
+    // straight from the duck's own copy of the original volume.
+    private void UndoLateDuck(InFlightDuck duck)
+    {
+        try
+        {
+            var result = SetSinkInputVolume(duck.InputId, duck.OriginalVolumes);
+            if (!result.Succeeded)
+            {
+                ReportRestoreFailure(
+                    $"Failed to restore sink input {duck.InputId} after a late duck: {DescribeFailure(result)}"
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportRestoreFailure(
+                $"Failed to restore sink input {duck.InputId} after a late duck: exception: {ex.Message}"
+            );
+        }
+    }
+
+    private static void WaitForExit(Task command, TimeSpan timeout)
+    {
+        try
+        {
+            command.Wait(timeout);
+        }
+        catch (AggregateException)
+        {
+            // A failed command has still finished.
         }
     }
 
@@ -429,26 +494,33 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
     private ProcessRunResult SetSinkInputVolume(string inputId, string[] volumes)
     {
+        return StartSetSinkInputVolume(inputId, volumes).GetAwaiter().GetResult();
+    }
+
+    private Task<ProcessRunResult> StartSetSinkInputVolume(string inputId, string[] volumes)
+    {
         var arguments = new List<string>(2 + volumes.Length)
         {
             "set-sink-input-volume",
             inputId,
         };
         arguments.AddRange(volumes);
-        return RunPactl(arguments);
+        return StartPactl(arguments);
     }
 
     private ProcessRunResult RunPactl(IReadOnlyList<string> arguments)
     {
-        return _processRunner
-            .RunAsync(
-                "pactl",
-                arguments,
-                environment: s_pactlEnvironment,
-                timeout: s_pactlTimeout
-            )
-            .GetAwaiter()
-            .GetResult();
+        return StartPactl(arguments).GetAwaiter().GetResult();
+    }
+
+    private Task<ProcessRunResult> StartPactl(IReadOnlyList<string> arguments)
+    {
+        return _processRunner.RunAsync(
+            "pactl",
+            arguments,
+            environment: s_pactlEnvironment,
+            timeout: s_pactlTimeout
+        );
     }
 
     private void ReportRestoreFailure(string message)
@@ -511,4 +583,18 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         string ServerCookie,
         int FailedRestoreAttempts
     );
+
+    // Settled and LandsAfterShutdownRestore are guarded by _volumesGate.
+    private sealed class InFlightDuck(
+        string inputId,
+        string[] originalVolumes,
+        Task<ProcessRunResult> command
+    )
+    {
+        public string InputId { get; } = inputId;
+        public string[] OriginalVolumes { get; } = originalVolumes;
+        public Task<ProcessRunResult> Command { get; } = command;
+        public bool Settled { get; set; }
+        public bool LandsAfterShutdownRestore { get; set; }
+    }
 }

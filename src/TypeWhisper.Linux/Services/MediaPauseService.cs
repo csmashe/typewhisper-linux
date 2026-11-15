@@ -22,7 +22,7 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     private readonly IErrorLogService _errorLog;
 
     // Paused MPRIS instance -> consecutive failed resume attempts. Guarded by _playersGate;
-    // playerctl itself is always invoked outside the lock.
+    // playerctl runs outside the lock, except that a pause command is LAUNCHED inside it.
     private readonly Dictionary<string, int> _pausedPlayers =
         new(StringComparer.Ordinal);
 
@@ -36,14 +36,10 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     // AudioDuckingService: run now, it would miss the player the pause is still recording.
     private bool _pauseInProgress;
     private bool _resumePending;
-    // Set by ResumeMediaForShutdown: refuses later pauses and stops an in-flight one before
-    // its next playerctl call, so shutdown only waits for the command already running.
+    // Set by ResumeMediaForShutdown under the gate; no pause command starts after it.
     private bool _shutDown;
-    // Set once shutdown starts resuming. A pause command that outlived shutdown's wait lands
-    // after that, so the pause resumes again itself.
-    private bool _shutdownResumeStarted;
-    // Completes once the in-flight pause, including any resume it deferred, has finished.
-    private TaskCompletionSource? _pauseSettled;
+    // The running pause command, registered in the critical section that launched it.
+    private InFlightPause? _inFlightPause;
 
     public MediaPauseService(IProcessRunner processRunner, IErrorLogService errorLog)
     {
@@ -51,12 +47,14 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         _errorLog = errorLog;
     }
 
-    // Test seam: runs just before ResumeMediaForShutdown waits for an in-flight pause.
+    // Test seam: runs just before ResumeMediaForShutdown waits for an in-flight pause command.
     internal Action? ShutdownWaitStarting { get; init; }
+
+    // Test seam: runs under the gate, after the shutdown check and before the pause launches.
+    internal Action? PauseCommandLaunching { get; init; }
 
     public void PauseMedia()
     {
-        TaskCompletionSource pauseSettled;
         lock (_playersGate)
         {
             if (_shutDown || _pauseActive)
@@ -66,9 +64,6 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
 
             _pauseActive = true;
             _pauseInProgress = true;
-            pauseSettled = _pauseSettled = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
         }
 
         try
@@ -107,19 +102,41 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                 )
             )
             {
-                if (IsShutDown())
-                {
-                    return;
-                }
-
-                if (!RunPlayerctl(TargetInstance(parts[0], instances, "pause")).Succeeded)
-                {
-                    continue;
-                }
-
+                InFlightPause pause;
                 lock (_playersGate)
                 {
-                    _pausedPlayers[parts[0]] = 0;
+                    // The check and the launch share one critical section, so a shutdown
+                    // either refuses this pause or finds it registered and waits for it.
+                    if (_shutDown)
+                    {
+                        return;
+                    }
+
+                    PauseCommandLaunching?.Invoke();
+                    // RunAsync returns once playerctl has started, so only the launch holds the gate.
+                    pause = _inFlightPause = new InFlightPause(
+                        parts[0],
+                        instances,
+                        StartPlayerctl(TargetInstance(parts[0], instances, "pause"))
+                    );
+                }
+
+                bool landedAfterShutdownResume;
+                try
+                {
+                    _ = pause.Command.GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    lock (_playersGate)
+                    {
+                        landedAfterShutdownResume = SettlePause(pause);
+                    }
+                }
+
+                if (landedAfterShutdownResume)
+                {
+                    ResumeLatePause(pause);
                 }
             }
         }
@@ -138,52 +155,115 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
             lock (_playersGate)
             {
                 _pauseInProgress = false;
-                resumeDeferred = _shutDown ? _shutdownResumeStarted : _resumePending;
+                // Shutdown resumes everything itself and never defers to the pause.
+                resumeDeferred = !_shutDown && _resumePending;
                 _resumePending = false;
             }
 
-            try
+            if (resumeDeferred)
             {
-                if (resumeDeferred)
-                {
-                    ResumePausedPlayers();
-                }
-            }
-            finally
-            {
-                pauseSettled.TrySetResult();
+                ResumePausedPlayers();
             }
         }
     }
 
     public void ResumeMediaForShutdown(TimeSpan settleTimeout)
     {
-        Task? inFlightPause;
+        InFlightPause? inFlightPause;
         lock (_playersGate)
         {
             _shutDown = true;
-            inFlightPause = _pauseInProgress ? _pauseSettled?.Task : null;
+            inFlightPause = _inFlightPause;
         }
 
-        // playerctl's own timeout bounds the one command still running.
         if (inFlightPause is not null)
         {
-            ShutdownWaitStarting?.Invoke();
-            if (!inFlightPause.Wait(settleTimeout))
-            {
-                WriteDiagnostic(
-                    $"[MediaPauseService] Pause still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; resuming without it."
-                );
-            }
-        }
-
-        lock (_playersGate)
-        {
-            _shutdownResumeStarted = true;
+            SettleForShutdown(inFlightPause, settleTimeout);
         }
 
         // Never deferred: shutdown exits right after this returns.
         ResumePausedPlayers();
+    }
+
+    // The runner kills playerctl at its timeout, so the pause normally exits within the wait.
+    // Settling here records a successful pause without waiting for the pause thread.
+    private void SettleForShutdown(InFlightPause inFlightPause, TimeSpan settleTimeout)
+    {
+        ShutdownWaitStarting?.Invoke();
+        try
+        {
+            inFlightPause.Command.Wait(settleTimeout);
+        }
+        catch (AggregateException)
+        {
+            // A failed command has still finished.
+        }
+
+        lock (_playersGate)
+        {
+            if (inFlightPause.Settled || inFlightPause.Command.IsCompleted)
+            {
+                SettlePause(inFlightPause);
+                return;
+            }
+
+            // Resumed without it; the pause resumes this player itself once it exits.
+            inFlightPause.LandsAfterShutdownResume = true;
+        }
+
+        WriteDiagnostic(
+            $"[MediaPauseService] Pause still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; resuming without it."
+        );
+    }
+
+    // Caller holds _playersGate and the command has finished. Records a successful pause, or
+    // returns true when it exited after shutdown's resume and must be resumed by the caller.
+    private bool SettlePause(InFlightPause pause)
+    {
+        if (pause.Settled)
+        {
+            return false;
+        }
+
+        pause.Settled = true;
+        if (ReferenceEquals(_inFlightPause, pause))
+        {
+            _inFlightPause = null;
+        }
+
+        if (!pause.Command.IsCompletedSuccessfully || !pause.Command.Result.Succeeded)
+        {
+            return false;
+        }
+
+        if (pause.LandsAfterShutdownResume)
+        {
+            return true;
+        }
+
+        _pausedPlayers[pause.Player] = 0;
+        return false;
+    }
+
+    // Shutdown resumed without this player, so the late pause is undone directly.
+    private void ResumeLatePause(InFlightPause pause)
+    {
+        try
+        {
+            var result = RunPlayerctl(TargetInstance(pause.Player, pause.KnownInstances, "play"));
+            if (!result.Succeeded)
+            {
+                ReportResumeFailure(
+                    $"Failed to resume media player {pause.Player} after a late pause: {DescribeFailure(result)}"
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportResumeFailure(
+                $"Failed to resume media player {pause.Player} after a late pause: exception: {ex.Message}"
+            );
+        }
     }
 
     public void ResumeMedia()
@@ -198,14 +278,6 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         }
 
         ResumePausedPlayers();
-    }
-
-    private bool IsShutDown()
-    {
-        lock (_playersGate)
-        {
-            return _shutDown;
-        }
     }
 
     private void ResumePausedPlayers()
@@ -385,15 +457,17 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
 
     private ProcessRunResult RunPlayerctl(IReadOnlyList<string> arguments)
     {
-        return _processRunner
-            .RunAsync(
-                "playerctl",
-                arguments,
-                environment: s_playerctlEnvironment,
-                timeout: s_playerctlTimeout
-            )
-            .GetAwaiter()
-            .GetResult();
+        return StartPlayerctl(arguments).GetAwaiter().GetResult();
+    }
+
+    private Task<ProcessRunResult> StartPlayerctl(IReadOnlyList<string> arguments)
+    {
+        return _processRunner.RunAsync(
+            "playerctl",
+            arguments,
+            environment: s_playerctlEnvironment,
+            timeout: s_playerctlTimeout
+        );
     }
 
     private void ReportResumeFailure(string message)
@@ -430,5 +504,19 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         {
             // Restoration and retries must not depend on diagnostic output.
         }
+    }
+
+    // Settled and LandsAfterShutdownResume are guarded by _playersGate.
+    private sealed class InFlightPause(
+        string player,
+        IReadOnlyList<string> knownInstances,
+        Task<ProcessRunResult> command
+    )
+    {
+        public string Player { get; } = player;
+        public IReadOnlyList<string> KnownInstances { get; } = knownInstances;
+        public Task<ProcessRunResult> Command { get; } = command;
+        public bool Settled { get; set; }
+        public bool LandsAfterShutdownResume { get; set; }
     }
 }
