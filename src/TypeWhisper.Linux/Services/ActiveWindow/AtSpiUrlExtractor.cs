@@ -10,7 +10,8 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// <summary>
 ///     Focused AT-SPI walker that pulls the active URL from a browser's address bar.
 ///     1. Resolve the focused browser descriptor (AT-SPI walks cost 50–200 ms each).
-///     2. Polling caches by <c>(descriptor ID, title)</c>; dictation always walks, because two tabs can share a title.
+///     2. Polling caches by <c>(descriptor ID, PID, window ID, title)</c>, so one instance's URL never
+///        serves another window; dictation always walks, because two tabs can share a title.
 ///     3. Narrow to the matching AT-SPI app and walk only its tree, skipping other instances of the
 ///        focused program when its PID is known.
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
@@ -96,11 +97,13 @@ public sealed partial class AtSpiUrlExtractor
     private string? _cachedTitle;
     private string? _cachedUrl;
     private DateTime _cachedUrlAt;
+    private string? _cachedWindowId;
     private string? _lastDiagnosticKey;
     private DateTime _missAt;
     private string? _missDescriptorId;
     private int? _missProcessId;
     private string? _missTitle;
+    private string? _missWindowId;
 
     // Test seam standing in for the AT-SPI tree walk, so the cache/miss-backoff state machine
     // can be exercised without busctl, gdbus, or a live a11y bus. Always null in production.
@@ -162,6 +165,7 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedAppId,
         string? focusedTitle,
         int? focusedProcessId,
+        string? focusedWindowId,
         string url
     )
     {
@@ -176,6 +180,7 @@ public sealed partial class AtSpiUrlExtractor
             if (
                 !string.Equals(_cachedDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
                 || _cachedProcessId != focusedProcessId
+                || !string.Equals(_cachedWindowId, focusedWindowId, StringComparison.Ordinal)
                 || !string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
                 || !string.Equals(_cachedUrl, url, StringComparison.Ordinal)
             )
@@ -185,6 +190,7 @@ public sealed partial class AtSpiUrlExtractor
 
             _cachedDescriptorId = null;
             _cachedProcessId = null;
+            _cachedWindowId = null;
             _cachedTitle = null;
             _cachedUrl = null;
             _cachedUrlAt = default;
@@ -196,7 +202,8 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedAppId,
         string? focusedTitle,
         bool isPolling = false,
-        int? focusedProcessId = null
+        int? focusedProcessId = null,
+        string? focusedWindowId = null
     )
     {
         var browser = ResolveBrowserDescriptor(
@@ -226,6 +233,7 @@ public sealed partial class AtSpiUrlExtractor
                         StringComparison.OrdinalIgnoreCase
                     )
                     && _cachedProcessId == focusedProcessId
+                    && string.Equals(_cachedWindowId, focusedWindowId, StringComparison.Ordinal)
                     && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
                     && now - _cachedUrlAt < s_cacheTtl
                 )
@@ -236,6 +244,7 @@ public sealed partial class AtSpiUrlExtractor
                 if (
                     string.Equals(_missDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
                     && _missProcessId == focusedProcessId
+                    && string.Equals(_missWindowId, focusedWindowId, StringComparison.Ordinal)
                     && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
                     && now - _missAt < s_missBackoff
                 )
@@ -289,11 +298,13 @@ public sealed partial class AtSpiUrlExtractor
             {
                 _cachedDescriptorId = browser.Id;
                 _cachedProcessId = focusedProcessId;
+                _cachedWindowId = focusedWindowId;
                 _cachedTitle = focusedTitle;
                 _cachedUrl = url;
                 _cachedUrlAt = DateTime.UtcNow;
                 _missDescriptorId = null;
                 _missProcessId = null;
+                _missWindowId = null;
                 _missTitle = null;
                 _missAt = default;
             }
@@ -302,6 +313,7 @@ public sealed partial class AtSpiUrlExtractor
                 // Dictation misses must not throttle the next poll on this (descriptor, title).
                 _missDescriptorId = browser.Id;
                 _missProcessId = focusedProcessId;
+                _missWindowId = focusedWindowId;
                 _missTitle = focusedTitle;
                 _missAt = DateTime.UtcNow;
             }
@@ -1084,7 +1096,7 @@ public sealed partial class AtSpiUrlExtractor
             focusedProcessId.Value,
             focusedProcessName,
             TryReadProcessIdentity(appProcessId) ?? new ProcessIdentity(appProcessId, null, null),
-            EnumerateProcessIdentities
+            ScanProcesses
         );
     }
 
@@ -1095,29 +1107,58 @@ public sealed partial class AtSpiUrlExtractor
     internal readonly record struct ProcessIdentity(int ProcessId, int? NamespacePid, string? Name);
 
     /// <summary>
+    ///     The processes a <c>/proc</c> scan read. <see cref="IsComplete" /> is false when the scan
+    ///     failed or skipped a live process it couldn't read, so a process may be missing.
+    /// </summary>
+    internal sealed record ProcessScan(IReadOnlyList<ProcessIdentity> Processes, bool IsComplete);
+
+    /// <summary>
     ///     True when the a11y app's process is a different instance of the focused program. The
     ///     focused PID inside the app's PID namespace (Flatpak) counts as the same instance; an
     ///     unattributable process (e.g. Flatpak's xdg-dbus-proxy) isn't rejected.
     ///     A sandboxed app sets <c>_NET_WM_PID</c> in its own namespace, so two sandboxes can report
-    ///     the same PID: a PID match shared by another process of the same program is ambiguous
-    ///     and rejected, leaving the URL and context unavailable rather than borrowed.
+    ///     the same PID: a PID match counts only when the scan saw the app and no other process of
+    ///     the same program has that PID. Otherwise it's ambiguous and rejected, leaving the URL and
+    ///     context unavailable rather than borrowed.
+    ///     The name fallback trusts <paramref name="focusedProcessName" />, the host process with
+    ///     the focused PID, only when the scan finds no sandboxed process with that PID. Otherwise
+    ///     the PID may be namespace-local and the host process unrelated (e.g. kthreadd), so the app
+    ///     is compared with the sandboxed processes that could own the window instead.
     /// </summary>
     internal static bool IsAnotherInstance(
         int focusedProcessId,
         string? focusedProcessName,
         ProcessIdentity app,
-        Func<IEnumerable<ProcessIdentity>> processes
+        Func<ProcessScan> scanProcesses
     )
     {
         if (HasProcessId(app, focusedProcessId))
         {
-            return !string.IsNullOrWhiteSpace(app.Name)
-                   && processes()
-                       .Count(p => HasProcessId(p, focusedProcessId) && IsSameProgram(p.Name, app.Name))
+            if (string.IsNullOrWhiteSpace(app.Name))
+            {
+                return true;
+            }
+
+            var scan = scanProcesses();
+            return !scan.IsComplete
+                   || scan.Processes.All(p => p.ProcessId != app.ProcessId)
+                   || scan.Processes.Count(p =>
+                       HasProcessId(p, focusedProcessId) && IsSameProgram(p.Name, app.Name)
+                   )
                    > 1;
         }
 
-        return IsSameProgram(app.Name, focusedProcessName);
+        if (string.IsNullOrWhiteSpace(app.Name))
+        {
+            return false;
+        }
+
+        var sandboxedOwners = scanProcesses()
+            .Processes.Where(p => p.NamespacePid == focusedProcessId)
+            .ToList();
+        return sandboxedOwners.Count == 0
+            ? IsSameProgram(app.Name, focusedProcessName)
+            : sandboxedOwners.Any(p => IsSameProgram(app.Name, p.Name));
     }
 
     private static bool HasProcessId(ProcessIdentity process, int processId)
@@ -1149,28 +1190,39 @@ public sealed partial class AtSpiUrlExtractor
                )?.Id;
     }
 
-    private static IEnumerable<ProcessIdentity> EnumerateProcessIdentities()
+    private static ProcessScan ScanProcesses()
     {
-        IEnumerable<string> entries;
+        List<string> entries;
         try
         {
             entries = Directory.EnumerateDirectories("/proc").ToList();
         }
         catch
         {
-            yield break;
+            return new ProcessScan([], false);
         }
 
+        var processes = new List<ProcessIdentity>(entries.Count);
+        var isComplete = true;
         foreach (var entry in entries)
         {
-            if (
-                int.TryParse(Path.GetFileName(entry), out var pid)
-                && TryReadProcessIdentity(pid) is { } identity
-            )
+            if (!int.TryParse(Path.GetFileName(entry), out var pid))
             {
-                yield return identity;
+                continue;
+            }
+
+            if (TryReadProcessIdentity(pid) is { } identity)
+            {
+                processes.Add(identity);
+            }
+            // A process that exited mid-scan owns no window; one still there might be the other instance.
+            else if (Directory.Exists(entry))
+            {
+                isComplete = false;
             }
         }
+
+        return new ProcessScan(processes, isComplete);
     }
 
     // "Name:" is the comm; "NSpid:" lists the PID in each nested namespace, innermost last.

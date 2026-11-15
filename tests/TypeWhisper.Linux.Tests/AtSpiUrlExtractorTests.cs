@@ -95,7 +95,7 @@ public sealed class AtSpiUrlExtractorTests
 
         // The dictation walk ran after a switch to tab B but is keyed on tab A's title.
         Assert.Equal(current, sut.TryGetBrowserUrl(Browser, "Tab A"));
-        sut.ForgetCachedUrl(Browser, null, "Tab A", null, current);
+        sut.ForgetCachedUrl(Browser, null, "Tab A", null, null, current);
 
         current = "http://127.0.0.1:19794/tab-a";
         Assert.Equal(current, sut.TryGetBrowserUrl(Browser, "Tab A", isPolling: true));
@@ -113,7 +113,7 @@ public sealed class AtSpiUrlExtractorTests
         });
 
         Assert.Equal("https://example.com/", sut.TryGetBrowserUrl(Browser, "Example", isPolling: true));
-        sut.ForgetCachedUrl(Browser, null, "Example", null, "https://other.example/");
+        sut.ForgetCachedUrl(Browser, null, "Example", null, null, "https://other.example/");
 
         Assert.Equal("https://example.com/", sut.TryGetBrowserUrl(Browser, "Example", isPolling: true));
         Assert.Equal(1, walks);
@@ -221,6 +221,33 @@ public sealed class AtSpiUrlExtractorTests
         Assert.Equal(2, walks);
     }
 
+    [Fact]
+    public void TryGetBrowserUrl_Polling_DoesNotServeAnotherWindowsCachedUrlUnderTheSamePid()
+    {
+        var current = "http://127.0.0.1:19794/a.html";
+        var walks = 0;
+        // ReSharper disable once AccessToModifiedClosure -- the stub deliberately returns whichever instance is focused when it walks.
+        var sut = Build(_ =>
+        {
+            walks++;
+            return current;
+        });
+
+        Assert.Equal(
+            current,
+            sut.TryGetBrowserUrl(Browser, null, "Same title", isPolling: true, focusedProcessId: 4242, focusedWindowId: "1")
+        );
+
+        // A sandboxed instance whose namespace PID is also 4242 must walk (and be checked), not
+        // reuse the host instance's URL.
+        current = "http://localhost:19794/b.html";
+        Assert.Equal(
+            current,
+            sut.TryGetBrowserUrl(Browser, null, "Same title", isPolling: true, focusedProcessId: 4242, focusedWindowId: "2")
+        );
+        Assert.Equal(2, walks);
+    }
+
     [Theory]
     // Same process, or the focused PID as seen inside the app's PID namespace (Flatpak).
     [InlineData(100, "firefox-bin", 100, null, "firefox-bin", false)]
@@ -246,7 +273,7 @@ public sealed class AtSpiUrlExtractorTests
 
         Assert.Equal(
             expected,
-            AtSpiUrlExtractor.IsAnotherInstance(focusedProcessId, focusedProcessName, app, () => [app])
+            AtSpiUrlExtractor.IsAnotherInstance(focusedProcessId, focusedProcessName, app, () => Complete(app))
         );
     }
 
@@ -256,35 +283,102 @@ public sealed class AtSpiUrlExtractorTests
         // Both sandboxes set _NET_WM_PID to 2, so the focused window could belong to either.
         var a = new AtSpiUrlExtractor.ProcessIdentity(4242, 2, "firefox-bin");
         var b = new AtSpiUrlExtractor.ProcessIdentity(4343, 2, "firefox");
-        AtSpiUrlExtractor.ProcessIdentity[] processes = [a, b];
+        var scan = Complete(a, b);
 
-        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", a, () => processes));
-        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", b, () => processes));
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", a, () => scan));
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", b, () => scan));
     }
 
     [Fact]
     public void IsAnotherInstance_SingleSandboxedInstance_StillMatches()
     {
         var app = new AtSpiUrlExtractor.ProcessIdentity(4242, 2, "firefox-bin");
-        AtSpiUrlExtractor.ProcessIdentity[] processes =
-        [
+        var scan = Complete(
             app,
             // Other programs' sandboxes, this instance's helpers and an unsandboxed instance.
-            new(5000, 2, "spotify"),
-            new(4250, 7, "Isolated Web Co"),
-            new(4300, null, "firefox-bin"),
-        ];
+            new AtSpiUrlExtractor.ProcessIdentity(5000, 2, "spotify"),
+            new AtSpiUrlExtractor.ProcessIdentity(4250, 7, "Isolated Web Co"),
+            new AtSpiUrlExtractor.ProcessIdentity(4300, null, "firefox-bin")
+        );
 
-        Assert.False(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => processes));
+        Assert.False(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => scan));
     }
 
     [Fact]
     public void IsAnotherInstance_HostPidSharedWithASandboxedInstance_IsAmbiguous()
     {
         var host = new AtSpiUrlExtractor.ProcessIdentity(4242, null, "firefox-bin");
-        AtSpiUrlExtractor.ProcessIdentity[] processes = [host, new(5000, 4242, "firefox-bin")];
+        var scan = Complete(host, new AtSpiUrlExtractor.ProcessIdentity(5000, 4242, "firefox-bin"));
 
-        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(4242, "firefox-bin", host, () => processes));
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(4242, "firefox-bin", host, () => scan));
+    }
+
+    [Fact]
+    public void IsAnotherInstance_PidMatchWithAnIncompleteScan_IsAmbiguous()
+    {
+        // The other sandbox sharing the PID may be the process the scan couldn't read.
+        var app = new AtSpiUrlExtractor.ProcessIdentity(4242, 2, "firefox-bin");
+
+        Assert.True(
+            AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => new AtSpiUrlExtractor.ProcessScan([app], false))
+        );
+    }
+
+    [Fact]
+    public void IsAnotherInstance_PidMatchTheScanDidNotSee_IsAmbiguous()
+    {
+        var app = new AtSpiUrlExtractor.ProcessIdentity(4242, 2, "firefox-bin");
+
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => Complete()));
+        Assert.True(
+            AtSpiUrlExtractor.IsAnotherInstance(
+                2,
+                "kthreadd",
+                app,
+                () => Complete(new AtSpiUrlExtractor.ProcessIdentity(5000, 2, "spotify"))
+            )
+        );
+    }
+
+    [Fact]
+    public void IsAnotherInstance_PidMatchWithAnUnreadableApp_IsAmbiguous()
+    {
+        var app = new AtSpiUrlExtractor.ProcessIdentity(100, null, null);
+
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(100, "firefox-bin", app, () => Complete(app)));
+    }
+
+    [Fact]
+    public void IsAnotherInstance_SandboxedFocus_RejectsAnUnsandboxedInstanceDespiteTheUnrelatedHostName()
+    {
+        // The focused sandbox reports PID 2; the host's PID 2 is kthreadd, so its name says nothing.
+        var focused = new AtSpiUrlExtractor.ProcessIdentity(4242, 2, "firefox-bin");
+        var unsandboxed = new AtSpiUrlExtractor.ProcessIdentity(4300, null, "firefox-bin");
+        var scan = Complete(new AtSpiUrlExtractor.ProcessIdentity(2, null, "kthreadd"), focused, unsandboxed);
+
+        Assert.True(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", unsandboxed, () => scan));
+    }
+
+    [Theory]
+    [InlineData("xdg-dbus-proxy")]
+    [InlineData(null)]
+    // The host name isn't trusted while a sandboxed process has the focused PID.
+    [InlineData("kthreadd")]
+    public void IsAnotherInstance_SandboxedFocus_KeepsAppsItCantAttributeToTheFocusedProgram(string? appProcessName)
+    {
+        var app = new AtSpiUrlExtractor.ProcessIdentity(100, null, appProcessName);
+        var scan = Complete(
+            new AtSpiUrlExtractor.ProcessIdentity(2, null, "kthreadd"),
+            new AtSpiUrlExtractor.ProcessIdentity(4242, 2, "firefox-bin"),
+            app
+        );
+
+        Assert.False(AtSpiUrlExtractor.IsAnotherInstance(2, "kthreadd", app, () => scan));
+    }
+
+    private static AtSpiUrlExtractor.ProcessScan Complete(params AtSpiUrlExtractor.ProcessIdentity[] processes)
+    {
+        return new AtSpiUrlExtractor.ProcessScan(processes, true);
     }
 
     private static AtSpiUrlExtractor Build(Func<string, string?> walk)

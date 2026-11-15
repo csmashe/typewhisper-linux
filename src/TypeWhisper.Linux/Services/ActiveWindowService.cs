@@ -121,7 +121,8 @@ public sealed class ActiveWindowService : IActiveWindowService
             snapshot?.AppId,
             snapshot?.Title,
             isPolling,
-            snapshot?.ProcessId
+            snapshot?.ProcessId,
+            snapshot?.WindowId
         );
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
     }
@@ -147,6 +148,7 @@ public sealed class ActiveWindowService : IActiveWindowService
             snapshot.AppId,
             snapshot.Title,
             snapshot.ProcessId,
+            snapshot.WindowId,
             url
         );
     }

@@ -42,15 +42,10 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
                 return null;
             }
 
-            var title = await RunXdotoolAsync(
-                    ["getactivewindow", "getwindowname"],
-                    ct
-                )
+            // Query the captured window, not the active one again: focus can move between calls.
+            var title = await RunXdotoolAsync(["getwindowname", windowId], ct)
                 .ConfigureAwait(false);
-            var pidText = await RunXdotoolAsync(
-                    ["getactivewindow", "getwindowpid"],
-                    ct
-                )
+            var pidText = await RunXdotoolAsync(["getwindowpid", windowId], ct)
                 .ConfigureAwait(false);
 
             string? processName = null;
