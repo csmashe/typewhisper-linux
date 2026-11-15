@@ -9,6 +9,7 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class AudioDuckingServiceTests
 {
     private const string ServerCookie = "3922:700c";
+    private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(10);
 
     [Fact]
     public void DuckAndRestore_preserve_channel_vectors_for_each_sink_input()
@@ -476,6 +477,87 @@ public sealed class AudioDuckingServiceTests
         // The deferred restore completed, so a later restore has nothing left to undo.
         service.RestoreAudio();
         Assert.Equal(6, runner.Invocations.Count);
+    }
+
+    [Fact]
+    public async Task RestoreAudioForShutdown_waits_for_an_in_flight_duck_and_restores_before_returning()
+    {
+        using var duckBlocked = new ManualResetEventSlim();
+        using var releaseDuck = new ManualResetEventSlim();
+        var runner = CreateBlockingDuckRunner(duckBlocked, releaseDuck);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duckBlocked.Wait(s_testGuard));
+        var shutdown = Task.Run(() =>
+        {
+            service.RestoreAudioForShutdown(s_testGuard);
+            return runner.Invocations.ToArray();
+        });
+        // Let shutdown reach its wait before the duck's set-volume lands.
+        await Task.WhenAny(shutdown, Task.Delay(200));
+        releaseDuck.Set();
+        var invocationsAtReturn = await shutdown.WaitAsync(s_testGuard);
+        await duck.WaitAsync(s_testGuard);
+
+        // Shutdown exits as soon as this returns, so the restore cannot be left to the duck.
+        Assert.Contains(
+            invocationsAtReturn,
+            invocation => invocation.Args.SequenceEqual(["set-sink-input-volume", "593", "45875"])
+        );
+    }
+
+    [Fact]
+    public async Task RestoreAudioForShutdown_stops_waiting_for_a_hung_duck_and_refuses_later_ducks()
+    {
+        using var duckBlocked = new ManualResetEventSlim();
+        using var releaseDuck = new ManualResetEventSlim();
+        var runner = CreateBlockingDuckRunner(duckBlocked, releaseDuck);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duckBlocked.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.FromMilliseconds(100)))
+            .WaitAsync(s_testGuard);
+        Assert.False(duck.IsCompleted);
+
+        releaseDuck.Set();
+        await duck.WaitAsync(s_testGuard);
+
+        // The restore deferred on timeout still runs when the duck finishes.
+        Assert.Equal(1, CountInvocations(runner, ["set-sink-input-volume", "593", "45875"]));
+        service.DuckAudio(0.5f);
+        Assert.Equal(1, CountInvocations(runner, ["list", "sink-inputs"]));
+    }
+
+    // The duck's set-volume for sink input 593 blocks until released.
+    private static FakeProcessRunner CreateBlockingDuckRunner(
+        ManualResetEventSlim duckBlocked,
+        ManualResetEventSlim releaseDuck
+    )
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) =>
+                fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            "Sink Input #593\n    Volume: mono: 45875 / 70% / -9.30 dB\n"
+        );
+        runner.RespondWith(
+            (_, args) =>
+            {
+                // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
+                if (args.SequenceEqual(["set-sink-input-volume", "593", "22938"]))
+                {
+                    duckBlocked.Set();
+                    releaseDuck.Wait(s_testGuard);
+                }
+
+                return false;
+            },
+            string.Empty
+        );
+        ScriptServerCookies(runner);
+        return runner;
     }
 
     [Fact]

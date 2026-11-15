@@ -1151,12 +1151,14 @@ public class App : Application
     }
 
     // Normally DictationOrchestrator.Dispose does this; teardown paths that skip it call this instead.
-    // Both services are idempotent and run pactl/playerctl outside their locks.
+    // Both services are idempotent and run pactl/playerctl outside their locks. Each blocks for
+    // a bounded wait on a duck or pause still in flight, which needs no UI thread to finish.
     private static void RestoreAudioAndMedia(IServiceProvider services)
     {
         try
         {
-            services.GetService<IAudioDuckingService>()?.RestoreAudio();
+            services.GetService<IAudioDuckingService>()
+                ?.RestoreAudioForShutdown(DictationOrchestrator.s_systemAudioSettleTimeout);
         }
         catch (Exception ex)
         {
@@ -1165,7 +1167,8 @@ public class App : Application
 
         try
         {
-            services.GetService<IMediaPauseService>()?.ResumeMedia();
+            services.GetService<IMediaPauseService>()
+                ?.ResumeMediaForShutdown(DictationOrchestrator.s_systemAudioSettleTimeout);
         }
         catch (Exception ex)
         {

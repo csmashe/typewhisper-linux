@@ -32,6 +32,15 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
     // _pausedPlayers so a player we still owe a resume can't suppress future pause scans.
     private bool _pauseActive;
 
+    // A resume that arrives mid-pause is deferred to the pause's finally, mirroring
+    // AudioDuckingService: run now, it would miss the player the pause is still recording.
+    private bool _pauseInProgress;
+    private bool _resumePending;
+    // Set by ResumeMediaForShutdown: a pause starting after it would never be resumed.
+    private bool _shutDown;
+    // Completes once the in-flight pause, including any resume it deferred, has finished.
+    private TaskCompletionSource? _pauseSettled;
+
     public MediaPauseService(IProcessRunner processRunner, IErrorLogService errorLog)
     {
         _processRunner = processRunner;
@@ -40,14 +49,19 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
 
     public void PauseMedia()
     {
+        TaskCompletionSource pauseSettled;
         lock (_playersGate)
         {
-            if (_pauseActive)
+            if (_shutDown || _pauseActive)
             {
                 return;
             }
 
             _pauseActive = true;
+            _pauseInProgress = true;
+            pauseSettled = _pauseSettled = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
         }
 
         try
@@ -106,6 +120,49 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
                 _pauseActive = false;
             }
         }
+        finally
+        {
+            bool resumeDeferred;
+            lock (_playersGate)
+            {
+                _pauseInProgress = false;
+                resumeDeferred = _resumePending;
+                _resumePending = false;
+            }
+
+            try
+            {
+                if (resumeDeferred)
+                {
+                    ResumeMedia();
+                }
+            }
+            finally
+            {
+                pauseSettled.TrySetResult();
+            }
+        }
+    }
+
+    public void ResumeMediaForShutdown(TimeSpan settleTimeout)
+    {
+        Task? inFlightPause;
+        lock (_playersGate)
+        {
+            _shutDown = true;
+            inFlightPause = _pauseInProgress ? _pauseSettled?.Task : null;
+        }
+
+        // Shutdown exits right after this returns, so a resume deferred to the pause's
+        // finally would never run. On timeout ResumeMedia still defers, as a best effort.
+        if (inFlightPause is not null && !inFlightPause.Wait(settleTimeout))
+        {
+            WriteDiagnostic(
+                $"[MediaPauseService] Pause still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; its resume is deferred."
+            );
+        }
+
+        ResumeMedia();
     }
 
     public void ResumeMedia()
@@ -113,6 +170,12 @@ public sealed class MediaPauseService : IMediaPauseService, IDisposable
         string[] players;
         lock (_playersGate)
         {
+            if (_pauseInProgress)
+            {
+                _resumePending = true;
+                return;
+            }
+
             _pauseActive = false;
             if (_pausedPlayers.Count == 0)
             {

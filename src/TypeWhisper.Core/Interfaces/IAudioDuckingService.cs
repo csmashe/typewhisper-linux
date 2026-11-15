@@ -11,4 +11,11 @@ public interface IAudioDuckingService
 
     /// <summary>Restores volumes to the levels captured before the last <see cref="DuckAudio" /> call.</summary>
     void RestoreAudio();
+
+    /// <summary>
+    ///     Restores volumes before the process exits: refuses later ducks and first waits up to
+    ///     <paramref name="settleTimeout" /> for a duck still in flight, whose streams
+    ///     <see cref="RestoreAudio" /> alone would only restore once that duck finished.
+    /// </summary>
+    void RestoreAudioForShutdown(TimeSpan settleTimeout);
 }

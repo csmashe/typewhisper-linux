@@ -1081,7 +1081,7 @@ public sealed class RecorderSectionViewModelTests : IDisposable
         }
     }
 
-    // RestoreAudio throws so the test also proves ResumeMedia still runs after it fails.
+    // The shutdown restore throws so the test also proves the shutdown resume still runs after it fails.
     private sealed class ShutdownSystemAudio : IAudioDuckingService, IMediaPauseService
     {
         public int RestoreAudioCalls { get; private set; }
@@ -1089,7 +1089,10 @@ public sealed class RecorderSectionViewModelTests : IDisposable
 
         public void DuckAudio(float factor) { }
 
-        public void RestoreAudio()
+        public void RestoreAudio() =>
+            throw new InvalidOperationException("Shutdown must wait for an in-flight duck.");
+
+        public void RestoreAudioForShutdown(TimeSpan settleTimeout)
         {
             RestoreAudioCalls++;
             throw new InvalidOperationException("pactl failed");
@@ -1097,7 +1100,10 @@ public sealed class RecorderSectionViewModelTests : IDisposable
 
         public void PauseMedia() { }
 
-        public void ResumeMedia() => ResumeMediaCalls++;
+        public void ResumeMedia() =>
+            throw new InvalidOperationException("Shutdown must wait for an in-flight pause.");
+
+        public void ResumeMediaForShutdown(TimeSpan settleTimeout) => ResumeMediaCalls++;
     }
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService

@@ -59,6 +59,10 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
     // duck just lowered quiet forever when shutdown or session loss races the duck.
     private bool _restorePending;
     private bool _isDucked;
+    // Set by RestoreAudioForShutdown: a duck starting after it would never be restored.
+    private bool _shutDown;
+    // Completes once the in-flight duck, including any restore it deferred, has finished.
+    private TaskCompletionSource? _duckSettled;
 
     public AudioDuckingService(IProcessRunner processRunner, IErrorLogService errorLog)
     {
@@ -68,14 +72,18 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
 
     public void DuckAudio(float factor)
     {
+        TaskCompletionSource duckSettled;
         lock (_volumesGate)
         {
-            if (_isDucked || _duckInProgress)
+            if (_shutDown || _isDucked || _duckInProgress)
             {
                 return;
             }
 
             _duckInProgress = true;
+            duckSettled = _duckSettled = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
         }
 
         try
@@ -148,12 +156,40 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
                 _restorePending = false;
             }
 
-            // Outside the gate: RestoreAudio retakes it and runs pactl round trips.
-            if (restoreDeferred)
+            try
             {
-                RestoreAudio();
+                // Outside the gate: RestoreAudio retakes it and runs pactl round trips.
+                if (restoreDeferred)
+                {
+                    RestoreAudio();
+                }
+            }
+            finally
+            {
+                duckSettled.TrySetResult();
             }
         }
+    }
+
+    public void RestoreAudioForShutdown(TimeSpan settleTimeout)
+    {
+        Task? inFlightDuck;
+        lock (_volumesGate)
+        {
+            _shutDown = true;
+            inFlightDuck = _duckInProgress ? _duckSettled?.Task : null;
+        }
+
+        // Shutdown exits right after this returns, so a restore deferred to the duck's
+        // finally would never run. On timeout RestoreAudio still defers, as a best effort.
+        if (inFlightDuck is not null && !inFlightDuck.Wait(settleTimeout))
+        {
+            WriteDiagnostic(
+                $"[AudioDuckingService] Duck still running after {settleTimeout.TotalMilliseconds:0} ms at shutdown; its restore is deferred."
+            );
+        }
+
+        RestoreAudio();
     }
 
     public void RestoreAudio()
