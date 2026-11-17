@@ -226,7 +226,8 @@ public sealed partial class PromptProcessingService
         string? providerOverride = null,
         bool reportProviderProblems = true,
         CancellationToken ct = default,
-        string? referenceContext = null
+        string? referenceContext = null,
+        Action? referenceContextSent = null
     )
     {
         var (provider, modelId) = ResolveProvider(providerOverride, reportProviderProblems);
@@ -236,6 +237,10 @@ public sealed partial class PromptProcessingService
         }
 
         systemPrompt = AppendReferenceContext(systemPrompt, referenceContext);
+        if (!string.IsNullOrWhiteSpace(referenceContext))
+        {
+            referenceContextSent?.Invoke();
+        }
         var userPrompt = FormatPromptActionInput(inputText);
         var provenance = RecordProvenance(
             capture,
