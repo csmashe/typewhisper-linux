@@ -104,8 +104,7 @@
                                 Padding="10,6">
                             <SelectableTextBlock Text="{Binding InstallLocation}"
                                                  FontFamily="Cascadia Mono, JetBrains Mono, monospace"
-                                                 FontSize="12"
-                                                 TextWrapping="Wrap" />
+                                                 FontSize="12" />
                         </Border>
                         <TextBlock Grid.Row="1"
                                    Grid.Column="0"
@@ -123,8 +122,7 @@
                                 Padding="10,6">
                             <SelectableTextBlock Text="{Binding DataLocation}"
                                                  FontFamily="Cascadia Mono, JetBrains Mono, monospace"
-                                                 FontSize="12"
-                                                 TextWrapping="Wrap" />
+                                                 FontSize="12" />
                         </Border>
                     </Grid>
                 </StackPanel>

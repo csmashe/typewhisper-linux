@@ -44,8 +44,7 @@ public sealed class LlmCleanupService
         bool isDraft = false,
         TimeSpan? draftTimeout = null,
         CancellationToken ct = default,
-        string? referenceContext = null,
-        Action? referenceContextSent = null
+        string? referenceContext = null
     )
     {
         ct.ThrowIfCancellationRequested();
@@ -85,8 +84,7 @@ public sealed class LlmCleanupService
                 providerOverride,
                 isDraft,
                 ct,
-                referenceContext,
-                referenceContextSent
+                referenceContext
             );
             ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
@@ -133,8 +131,7 @@ public sealed class LlmCleanupService
     // Only drafts pass a deadline. Final cleanup waits for its provider or caller cancellation.
     private async Task<string> ProcessWithinBudgetAsync(
         string prompt, string text, LlmCallCapture? capture, TimeSpan timeout,
-        string? providerOverride, bool isDraft, CancellationToken ct, string? referenceContext,
-        Action? referenceContextSent)
+        string? providerOverride, bool isDraft, CancellationToken ct, string? referenceContext)
     {
         var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var timerCts = new CancellationTokenSource();
@@ -145,8 +142,7 @@ public sealed class LlmCleanupService
             return await _promptProcessing.ProcessSystemPromptAsync(
                 prompt, text, capture, providerOverride,
                 reportProviderProblems: !isDraft, ct: requestCts.Token,
-                referenceContext: referenceContext,
-                referenceContextSent: referenceContextSent).ConfigureAwait(false);
+                referenceContext: referenceContext).ConfigureAwait(false);
         }, requestCts.Token);
         try
         {

@@ -42,9 +42,6 @@ internal sealed record RecordingContext(
 {
     public string? ScreenContext { get; init; }
     public string? ClipboardContext { get; init; }
-
-    /// <summary>Shared across <c>with</c> copies, so cleanup can mark the references as sent.</summary>
-    public ReferenceContextUse ReferenceContextUse { get; } = new();
     public LockedFocusTarget? LockedFocusField { get; init; }
 
     /// <summary>The window focused at recording start, used to catch a focus move when there is no xdotool <see cref="WindowId" />.</summary>
@@ -90,10 +87,6 @@ public sealed partial class DictationOrchestrator : IDisposable
     // Bound the wait for the toggle gate during session-loss teardown so a stuck start/stop can't
     // hang the lock handler; long enough to outlast a normal StartAsync's synchronous setup.
     private static readonly TimeSpan s_sessionLossGateTimeout = TimeSpan.FromSeconds(5);
-
-    // Shutdown's wait for the one pactl/playerctl command an in-flight duck or pause is still
-    // running. The runner kills it at 1.5 s and reaps it within 0.5 s more. Waited once per service.
-    internal static readonly TimeSpan s_systemAudioSettleTimeout = TimeSpan.FromSeconds(2.5);
 
     // Hard cap on each captured reference-context source (screen / clipboard). Keeps token
     // cost small; the injection-safe framing re-caps at the same size in PromptProcessingService.
@@ -514,8 +507,7 @@ public sealed partial class DictationOrchestrator : IDisposable
 
         try
         {
-            // A start that outlived the toggle-gate close may still be ducking or pausing.
-            audioDucking.RestoreAudioForShutdown(s_systemAudioSettleTimeout);
+            audioDucking.RestoreAudio();
         }
         catch (Exception ex)
         {
@@ -524,7 +516,7 @@ public sealed partial class DictationOrchestrator : IDisposable
 
         try
         {
-            mediaPause.ResumeMediaForShutdown(s_systemAudioSettleTimeout);
+            mediaPause.ResumeMedia();
         }
         catch (Exception ex)
         {
@@ -1222,8 +1214,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Screen,
                             needs.Clipboard,
                             appProcess,
-                            appTitle,
-                            initialSnap?.ProcessId
+                            appTitle
                         );
                     }
                 }
@@ -1353,8 +1344,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Screen,
                             needs.Clipboard,
                             appProcess,
-                            appTitle,
-                            initialSnap?.ProcessId
+                            appTitle
                         );
                     }
                 }
@@ -4151,8 +4141,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         bool screenEnabled,
         bool clipboardEnabled,
         string? windowProcess,
-        string? windowTitle,
-        int? windowProcessId
+        string? windowTitle
     )
     {
         if (!_sessionActivityMonitor.IsInputAllowed)
@@ -4167,7 +4156,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             ? CaptureClipboardContextAsync()
             : Task.FromResult<string?>(null);
         var screenTask = screenEnabled
-            ? CaptureScreenContextAsync(windowProcess, windowTitle, windowProcessId)
+            ? CaptureScreenContextAsync(windowProcess, windowTitle)
             : Task.FromResult<string?>(null);
 
         var clipboard = await clipboardTask.ConfigureAwait(false);
@@ -4217,22 +4206,14 @@ public sealed partial class DictationOrchestrator : IDisposable
         }
     }
 
-    private async Task<string?> CaptureScreenContextAsync(
-        string? windowProcess,
-        string? windowTitle,
-        int? windowProcessId
-    )
+    private async Task<string?> CaptureScreenContextAsync(string? windowProcess, string? windowTitle)
     {
         try
         {
             return TruncateReferenceContext(
                 await Task.Run(
                         () => _sessionActivityMonitor.IsInputAllowed
-                            ? _activeWindow.GetFocusedScreenContext(
-                                windowProcess,
-                                windowTitle,
-                                windowProcessId
-                            )
+                            ? _activeWindow.GetFocusedScreenContext(windowProcess, windowTitle)
                             : null
                     )
                     .ConfigureAwait(false)
@@ -4449,8 +4430,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Localization.Loc.Instance["TextInsertion.YdotoolSocketClipboardFallback"],
             InsertionFailureReason.WtypeXWaylandTarget =>
                 Localization.Loc.Instance["TextInsertion.WtypeXWaylandClipboardFallback"],
-            InsertionFailureReason.WtypeGtk3PasteTarget =>
-                Localization.Loc.Instance["TextInsertion.WtypeGtk3ClipboardFallback"],
             InsertionFailureReason.NoWaylandTypingTool =>
                 Localization.Loc.Instance.GetString(
                     "TextInsertion.ClipboardFallbackWithHint", _commands.GetSnapshot().PasteToolInstallHint),
@@ -4730,8 +4709,7 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         try
         {
-            // Captured references count as applied only when a cleanup request carried them.
-            var referenceContextSent = context.ReferenceContextUse.Sent;
+            var referenceContextConsumed = cleanupLevel is CleanupLevel.Medium or CleanupLevel.High;
 
             var record =
                 BuildHistoryRecord(
@@ -4770,9 +4748,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                         pipelineResult,
                         PostProcessingStepNames.Translation
                     ),
-                    ScreenContextApplied = referenceContextSent
+                    ScreenContextApplied = referenceContextConsumed
                         && !string.IsNullOrWhiteSpace(context.ScreenContext),
-                    ClipboardContextApplied = referenceContextSent
+                    ClipboardContextApplied = referenceContextConsumed
                         && !string.IsNullOrWhiteSpace(context.ClipboardContext),
                     LlmCalls = context.Capture?.Calls ?? [],
                 };

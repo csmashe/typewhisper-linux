@@ -1419,7 +1419,6 @@
   "TextInsertion.Title": "テキスト挿入",
   "TextInsertion.WtypeInstalledWaylandOnly": "インストール済みです（Waylandのみ）。",
   "TextInsertion.WtypeUnsupportedCompositor": "インストール済みですが、このコンポジターはwtypeの仮想キーボードプロトコルに対応していません。",
-  "TextInsertion.WtypeGtk3ClipboardFallback": "クリップボードにコピーしました。wtypeはGTK3アプリに貼り付けできません。自動貼り付けを有効にするには、設定 → テキスト挿入でydotoolをセットアップしてください。",
   "TextInsertion.WtypeXWaylandClipboardFallback": "クリップボードにコピーしました。wtypeはXWaylandアプリに入力できません。自動貼り付けを有効にするには、設定 → テキスト挿入でydotoolをセットアップしてください。",
   "TextInsertion.WtypeXWaylandFailed": "テキストを挿入できませんでした。wtypeはXWaylandアプリに入力できません。設定 → テキスト挿入でydotoolをセットアップしてください。",
   "TextInsertion.XdotoolAvailableXWaylandOnly": "xdotool を利用可能 (XWayland のみ)",

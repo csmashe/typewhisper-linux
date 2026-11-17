@@ -1419,7 +1419,6 @@
   "TextInsertion.Title": "Вставка текста",
   "TextInsertion.WtypeInstalledWaylandOnly": "Установлено (только Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Установлено, но этот композитор не поддерживает протокол виртуальной клавиатуры wtype.",
-  "TextInsertion.WtypeGtk3ClipboardFallback": "Скопировано в буфер обмена. wtype не может вставлять текст в приложения GTK3 — настройте ydotool в разделе Настройки → Вставка текста, чтобы включить автовставку.",
   "TextInsertion.WtypeXWaylandClipboardFallback": "Скопировано в буфер обмена. wtype не может вводить текст в приложения XWayland — настройте ydotool в разделе Настройки → Вставка текста, чтобы включить автовставку.",
   "TextInsertion.WtypeXWaylandFailed": "Не удалось вставить текст. wtype не может вводить текст в приложения XWayland — настройте ydotool в разделе Настройки → Вставка текста.",
   "TextInsertion.XdotoolAvailableXWaylandOnly": "xdotool доступен (только XWayland)",

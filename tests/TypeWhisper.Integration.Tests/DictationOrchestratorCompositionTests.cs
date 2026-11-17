@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -468,7 +467,7 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.True(overlay.PresentedState.ShowFeedback);
             Assert.True(overlay.PresentedState.FeedbackIsError);
             Assert.Equal(
-                Loc.Instance.GetString("Overlay.TranscriptionFailedWithReason", expected),
+                $"Transcription failed: {expected}",
                 overlay.PresentedState.FeedbackText
             );
             Assert.Empty(fixture.InsertionPlatform.Typed);
@@ -638,14 +637,6 @@ public sealed class DictationOrchestratorCompositionTests
             Text = rawText;
             return Task.FromResult(new PostProcessingResult { Text = rawText });
         }
-    }
-
-    private static string LocalizationDir([CallerFilePath] string thisFile = "")
-    {
-        var testDir = Path.GetDirectoryName(thisFile)!;
-        return Path.GetFullPath(
-            Path.Join(testDir, "..", "..", "src", "TypeWhisper.Linux", "Resources", "Localization")
-        );
     }
 
     private sealed class LanguageConstrainedRole(

@@ -120,21 +120,14 @@ public sealed class ActiveWindowService : IActiveWindowService
             snapshot?.ProcessName,
             snapshot?.AppId,
             snapshot?.Title,
-            isPolling,
-            snapshot?.ProcessId,
-            snapshot?.WindowId
+            isPolling
         );
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
     }
 
-    public string? GetFocusedScreenContext(string? processName, string? title, int? processId = null)
+    public string? GetFocusedScreenContext(string? processName, string? title)
     {
-        return _atSpiUrlExtractor.TryHarvestFocusedContext(
-            processName,
-            title,
-            SelfAtSpiAppName,
-            processId
-        );
+        return _atSpiUrlExtractor.TryHarvestFocusedContext(processName, title, SelfAtSpiAppName);
     }
 
     /// <summary>
@@ -143,14 +136,7 @@ public sealed class ActiveWindowService : IActiveWindowService
     /// </summary>
     public void ForgetBrowserUrl(ActiveWindowSnapshot snapshot, string url)
     {
-        _atSpiUrlExtractor.ForgetCachedUrl(
-            snapshot.ProcessName,
-            snapshot.AppId,
-            snapshot.Title,
-            snapshot.ProcessId,
-            snapshot.WindowId,
-            url
-        );
+        _atSpiUrlExtractor.ForgetCachedUrl(snapshot.ProcessName, snapshot.AppId, snapshot.Title, url);
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -413,32 +399,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         var host = value.Split('/')[0];
         // Address bars show a local server as "localhost:8080/…", with no scheme and no dot.
         return host.Contains('.')
-               || host.Split(':')[0].Equals("localhost", StringComparison.OrdinalIgnoreCase)
-               || IsSingleLabelHostAddress(value, host);
-    }
-
-    // Intranet hosts ("wiki/page", "build-server:8080/…") also have no dot. A port or path is
-    // required so a bare word typed into the address bar isn't taken for a URL.
-    private static bool IsSingleLabelHostAddress(string value, string host)
-    {
-        var colon = host.IndexOf(':');
-        var name = colon < 0 ? host : host[..colon];
-        if (
-            name.Length == 0
-            || name.All(char.IsAsciiDigit)
-            || Uri.CheckHostName(name) != UriHostNameType.Dns
-        )
-        {
-            return false;
-        }
-
-        if (colon < 0)
-        {
-            return value.Length > host.Length;
-        }
-
-        var port = host[(colon + 1)..];
-        return port.Length is >= 1 and <= 5 && port.All(char.IsAsciiDigit);
+               || host.Split(':')[0].Equals("localhost", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeUrl(string value)
@@ -614,7 +575,8 @@ public sealed class ActiveWindowService : IActiveWindowService
         IReadOnlyList<string> arguments
     )
     {
-        List<string> args = ["windowactivate", "--sync", windowId, .. arguments];
+        var args = new List<string> { "windowactivate", "--sync", windowId };
+        args.AddRange(arguments);
         var exitCode = RunProcess("xdotool", args, out _);
         return exitCode == 0;
     }
