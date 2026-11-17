@@ -42,22 +42,19 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
                 return null;
             }
 
-            var title = await RunXdotoolAsync(
-                    ["getactivewindow", "getwindowname"],
-                    ct
-                )
+            // Query the captured window, not the active one again: focus can move between calls.
+            var title = await RunXdotoolAsync(["getwindowname", windowId], ct)
                 .ConfigureAwait(false);
-            var pidText = await RunXdotoolAsync(
-                    ["getactivewindow", "getwindowpid"],
-                    ct
-                )
+            var pidText = await RunXdotoolAsync(["getwindowpid", windowId], ct)
                 .ConfigureAwait(false);
 
             string? processName = null;
+            int? processId = null;
             // ReSharper disable once InvertIf — no early-exit tail; the block conditionally
             // resolves processName and uses the `out var pid` binding, so a guard wouldn't simplify.
             if (!string.IsNullOrWhiteSpace(pidText) && int.TryParse(pidText, out var pid))
             {
+                processId = pid;
                 try
                 {
                     using var proc = Process.GetProcessById(pid);
@@ -74,7 +71,8 @@ public sealed class XdotoolActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 null,
-                Name
+                Name,
+                processId
             );
         }
         catch

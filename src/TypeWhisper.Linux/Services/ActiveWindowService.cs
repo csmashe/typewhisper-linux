@@ -120,14 +120,21 @@ public sealed class ActiveWindowService : IActiveWindowService
             snapshot?.ProcessName,
             snapshot?.AppId,
             snapshot?.Title,
-            isPolling
+            isPolling,
+            snapshot?.ProcessId,
+            snapshot?.WindowId
         );
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
     }
 
-    public string? GetFocusedScreenContext(string? processName, string? title)
+    public string? GetFocusedScreenContext(string? processName, string? title, int? processId = null)
     {
-        return _atSpiUrlExtractor.TryHarvestFocusedContext(processName, title, SelfAtSpiAppName);
+        return _atSpiUrlExtractor.TryHarvestFocusedContext(
+            processName,
+            title,
+            SelfAtSpiAppName,
+            processId
+        );
     }
 
     /// <summary>
@@ -136,7 +143,14 @@ public sealed class ActiveWindowService : IActiveWindowService
     /// </summary>
     public void ForgetBrowserUrl(ActiveWindowSnapshot snapshot, string url)
     {
-        _atSpiUrlExtractor.ForgetCachedUrl(snapshot.ProcessName, snapshot.AppId, snapshot.Title, url);
+        _atSpiUrlExtractor.ForgetCachedUrl(
+            snapshot.ProcessName,
+            snapshot.AppId,
+            snapshot.Title,
+            snapshot.ProcessId,
+            snapshot.WindowId,
+            url
+        );
     }
 
     public IReadOnlyList<string> GetRunningAppProcessNames()
@@ -600,8 +614,7 @@ public sealed class ActiveWindowService : IActiveWindowService
         IReadOnlyList<string> arguments
     )
     {
-        var args = new List<string> { "windowactivate", "--sync", windowId };
-        args.AddRange(arguments);
+        List<string> args = ["windowactivate", "--sync", windowId, .. arguments];
         var exitCode = RunProcess("xdotool", args, out _);
         return exitCode == 0;
     }

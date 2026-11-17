@@ -10,8 +10,10 @@ namespace TypeWhisper.Linux.Services.ActiveWindow;
 /// <summary>
 ///     Focused AT-SPI walker that pulls the active URL from a browser's address bar.
 ///     1. Resolve the focused browser descriptor (AT-SPI walks cost 50–200 ms each).
-///     2. Polling caches by <c>(descriptor ID, title)</c>; dictation always walks, because two tabs can share a title.
-///     3. Narrow to the matching AT-SPI app and walk only its tree.
+///     2. Polling caches by <c>(descriptor ID, PID, window ID, title)</c>, so one instance's URL never
+///        serves another window; dictation always walks, because two tabs can share a title.
+///     3. Narrow to the matching AT-SPI app and walk only its tree, skipping other instances of the
+///        focused program when its PID is known.
 ///     4. Score showing/visible entries for likely URL candidates; return the best match.
 ///     Total walk budget: 2.5 s (the orchestrator's deferred-URL timeout is 4 s).
 /// </summary>
@@ -19,6 +21,7 @@ public sealed partial class AtSpiUrlExtractor
 {
     private const string AtSpiRegistryBusName = "org.a11y.atspi.Registry";
     private const string AtSpiRootPath = "/org/a11y/atspi/accessible/root";
+    private const string DbusProxyProcessName = "xdg-dbus-proxy";
     private const int AtSpiStateActive = 1;
     private const int AtSpiStateShowing = 25;
     private const int AtSpiStateVisible = 30;
@@ -91,13 +94,17 @@ public sealed partial class AtSpiUrlExtractor
     private readonly IProcessRunner _processRunner;
     private readonly AsyncLocal<CancellationToken> _harvestCallCancellation = new();
     private string? _cachedDescriptorId;
+    private int? _cachedProcessId;
     private string? _cachedTitle;
     private string? _cachedUrl;
     private DateTime _cachedUrlAt;
+    private string? _cachedWindowId;
     private string? _lastDiagnosticKey;
     private DateTime _missAt;
     private string? _missDescriptorId;
+    private int? _missProcessId;
     private string? _missTitle;
+    private string? _missWindowId;
 
     // Test seam standing in for the AT-SPI tree walk, so the cache/miss-backoff state machine
     // can be exercised without busctl, gdbus, or a live a11y bus. Always null in production.
@@ -158,6 +165,8 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedProcessName,
         string? focusedAppId,
         string? focusedTitle,
+        int? focusedProcessId,
+        string? focusedWindowId,
         string url
     )
     {
@@ -171,6 +180,8 @@ public sealed partial class AtSpiUrlExtractor
         {
             if (
                 !string.Equals(_cachedDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                || _cachedProcessId != focusedProcessId
+                || !string.Equals(_cachedWindowId, focusedWindowId, StringComparison.Ordinal)
                 || !string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
                 || !string.Equals(_cachedUrl, url, StringComparison.Ordinal)
             )
@@ -179,6 +190,8 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             _cachedDescriptorId = null;
+            _cachedProcessId = null;
+            _cachedWindowId = null;
             _cachedTitle = null;
             _cachedUrl = null;
             _cachedUrlAt = default;
@@ -189,7 +202,9 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedProcessName,
         string? focusedAppId,
         string? focusedTitle,
-        bool isPolling = false
+        bool isPolling = false,
+        int? focusedProcessId = null,
+        string? focusedWindowId = null
     )
     {
         var browser = ResolveBrowserDescriptor(
@@ -218,6 +233,8 @@ public sealed partial class AtSpiUrlExtractor
                         browser.Id,
                         StringComparison.OrdinalIgnoreCase
                     )
+                    && _cachedProcessId == focusedProcessId
+                    && string.Equals(_cachedWindowId, focusedWindowId, StringComparison.Ordinal)
                     && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
                     && now - _cachedUrlAt < s_cacheTtl
                 )
@@ -227,6 +244,8 @@ public sealed partial class AtSpiUrlExtractor
 
                 if (
                     string.Equals(_missDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                    && _missProcessId == focusedProcessId
+                    && string.Equals(_missWindowId, focusedWindowId, StringComparison.Ordinal)
                     && string.Equals(_missTitle, focusedTitle, StringComparison.Ordinal)
                     && now - _missAt < s_missBackoff
                 )
@@ -260,7 +279,15 @@ public sealed partial class AtSpiUrlExtractor
             }
 
             using var cts = new CancellationTokenSource(s_walkBudget);
-            url = WalkForUrl(address, browser, focusedTitle, stats, cts.Token);
+            url = WalkForUrl(
+                address,
+                browser,
+                focusedProcessName,
+                focusedProcessId,
+                focusedTitle,
+                stats,
+                cts.Token
+            );
             budgetExhausted = cts.IsCancellationRequested;
         }
 
@@ -271,10 +298,14 @@ public sealed partial class AtSpiUrlExtractor
             if (!string.IsNullOrWhiteSpace(url))
             {
                 _cachedDescriptorId = browser.Id;
+                _cachedProcessId = focusedProcessId;
+                _cachedWindowId = focusedWindowId;
                 _cachedTitle = focusedTitle;
                 _cachedUrl = url;
                 _cachedUrlAt = DateTime.UtcNow;
                 _missDescriptorId = null;
+                _missProcessId = null;
+                _missWindowId = null;
                 _missTitle = null;
                 _missAt = default;
             }
@@ -282,6 +313,8 @@ public sealed partial class AtSpiUrlExtractor
             {
                 // Dictation misses must not throttle the next poll on this (descriptor, title).
                 _missDescriptorId = browser.Id;
+                _missProcessId = focusedProcessId;
+                _missWindowId = focusedWindowId;
                 _missTitle = focusedTitle;
                 _missAt = DateTime.UtcNow;
             }
@@ -316,7 +349,8 @@ public sealed partial class AtSpiUrlExtractor
     public string? TryHarvestFocusedContext(
         string? processName,
         string? title,
-        string? selfAppName
+        string? selfAppName,
+        int? processId = null
     )
     {
         if (!_isBusctlAvailable || !_isGdbusAvailable
@@ -336,7 +370,7 @@ public sealed partial class AtSpiUrlExtractor
             cts.Token.ThrowIfCancellationRequested();
             return string.IsNullOrWhiteSpace(address)
                 ? null
-                : HarvestFocusedContext(address, processName, title, selfAppName, cts.Token);
+                : HarvestFocusedContext(address, processName, processId, title, selfAppName, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -356,6 +390,7 @@ public sealed partial class AtSpiUrlExtractor
     private string? HarvestFocusedContext(
         string address,
         string? processName,
+        int? processId,
         string? title,
         string? selfAppName,
         CancellationToken ct
@@ -388,7 +423,10 @@ public sealed partial class AtSpiUrlExtractor
                 continue;
             }
 
-            if (!IsFocusTargetApp(appName, processName, title))
+            if (
+                !IsFocusTargetApp(appName, processName, title)
+                || IsAppOwnedByAnotherInstance(address, app, processName, processId)
+            )
             {
                 continue;
             }
@@ -589,7 +627,7 @@ public sealed partial class AtSpiUrlExtractor
         var raw = new List<string?>
         {
             TryGetAccessibleText(address, focused, interfaces, HarvestMaxOutputChars)
-            ?? GetAccessibleName(address, focused)
+            ?? GetAccessibleName(address, focused),
         };
 
         // Nearby labels: the focused node's parent's showing+visible, text-bearing children.
@@ -725,6 +763,7 @@ public sealed partial class AtSpiUrlExtractor
             return true;
         }
 
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- the body spends the shared visit budget per window; LINQ would hide that.
         foreach (var window in windows)
         {
             if (window == frame)
@@ -970,6 +1009,8 @@ public sealed partial class AtSpiUrlExtractor
     private string? WalkForUrl(
         string address,
         BrowserDescriptor focusedBrowser,
+        string? focusedProcessName,
+        int? focusedProcessId,
         string? focusedTitle,
         WalkStats stats,
         CancellationToken ct
@@ -993,7 +1034,10 @@ public sealed partial class AtSpiUrlExtractor
                 stats.AppsSeen.Add(appName);
             }
 
-            if (!IsMatchingApp(appName, focusedBrowser))
+            if (
+                !IsMatchingApp(appName, focusedBrowser)
+                || IsAppOwnedByAnotherInstance(address, app, focusedProcessName, focusedProcessId)
+            )
             {
                 continue;
             }
@@ -1017,6 +1061,230 @@ public sealed partial class AtSpiUrlExtractor
         }
 
         return null;
+    }
+
+    // Two instances of a browser can share a name and window title while only one is on the a11y
+    // bus; without this, focusing the other would read that one's URL and context.
+    private bool IsAppOwnedByAnotherInstance(
+        string address,
+        AccessibleRef app,
+        string? focusedProcessName,
+        int? focusedProcessId
+    )
+    {
+        // Wayland providers report no PID; the name-and-title match stands alone there.
+        if (focusedProcessId is not > 0)
+        {
+            return false;
+        }
+
+        var appProcessId = ParseLastInt(
+            RunBusctlCall(
+                address,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "GetConnectionUnixProcessID",
+                "s",
+                app.BusName
+            )
+        );
+        return IsAnotherInstance(
+            focusedProcessId.Value,
+            focusedProcessName,
+            appProcessId > 0
+                ? TryReadProcessIdentity(appProcessId) ?? new ProcessIdentity(appProcessId, null, null)
+                : null,
+            ScanProcesses
+        );
+    }
+
+    /// <summary>
+    ///     A process as <c>/proc/&lt;pid&gt;/status</c> describes it. <see cref="NamespacePid" /> is
+    ///     its PID in the innermost PID namespace, set only when that namespace isn't the host's.
+    /// </summary>
+    internal readonly record struct ProcessIdentity(int ProcessId, int? NamespacePid, string? Name);
+
+    /// <summary>
+    ///     The processes a <c>/proc</c> scan read. <see cref="IsComplete" /> is false when the scan
+    ///     failed or skipped a live process it couldn't read, so a process may be missing.
+    /// </summary>
+    internal sealed record ProcessScan(IReadOnlyList<ProcessIdentity> Processes, bool IsComplete);
+
+    /// <summary>
+    ///     True unless the a11y app's process can be tied to the focused window, so a URL or
+    ///     context is never borrowed from another instance of the focused program.
+    ///     <para>
+    ///         <c>_NET_WM_PID</c> may be a host PID or, for a sandboxed app, a namespace-local one,
+    ///         and the scan can't say which. Every process with that number at host or innermost
+    ///         namespace level is a possible owner of the focused window.
+    ///     </para>
+    ///     <para>
+    ///         An app whose process has the focused PID matches only when a complete scan saw it
+    ///         and no other possible owner is the same program or has no readable name.
+    ///         Any other app is rejected when it's the same program as a possible owner, when an
+    ///         owner's name is unknown, or when the scan is incomplete or found no owner (the
+    ///         snapshot's name alone doesn't count). So is an app whose bus connection has no known
+    ///         process (<paramref name="app" /> is null). A process that can't be attributed to any
+    ///         program, Flatpak's <c>xdg-dbus-proxy</c> or one with no readable name, is kept as before.
+    ///     </para>
+    /// </summary>
+    internal static bool IsAnotherInstance(
+        int focusedProcessId,
+        string? focusedProcessName,
+        ProcessIdentity? app,
+        Func<ProcessScan> scanProcesses
+    )
+    {
+        if (app is not { } appProcess)
+        {
+            return true;
+        }
+
+        if (HasProcessId(appProcess, focusedProcessId))
+        {
+            if (string.IsNullOrWhiteSpace(appProcess.Name))
+            {
+                return true;
+            }
+
+            // An unnamed process with the PID could be another instance of this program.
+            var scan = scanProcesses();
+            return !scan.IsComplete
+                   || scan.Processes.All(p => p.ProcessId != appProcess.ProcessId)
+                   || scan.Processes.Any(p =>
+                       p.ProcessId != appProcess.ProcessId
+                       && HasProcessId(p, focusedProcessId)
+                       && (string.IsNullOrWhiteSpace(p.Name) || IsSameProgram(p.Name, appProcess.Name))
+                   );
+        }
+
+        if (string.IsNullOrWhiteSpace(appProcess.Name)
+            || string.Equals(appProcess.Name, DbusProxyProcessName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var processes = scanProcesses();
+        if (!processes.IsComplete)
+        {
+            return true;
+        }
+
+        var ownerNames = processes.Processes
+            .Where(p => HasProcessId(p, focusedProcessId))
+            .Select(p => p.Name)
+            .ToList();
+        // The snapshot's name may be stale, so it can't stand in for an owner the scan didn't find.
+        if (ownerNames.Count == 0)
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(focusedProcessName))
+        {
+            ownerNames.Add(focusedProcessName);
+        }
+
+        return ownerNames.Any(name => string.IsNullOrWhiteSpace(name) || IsSameProgram(appProcess.Name, name));
+    }
+
+    private static bool HasProcessId(ProcessIdentity process, int processId)
+    {
+        return process.ProcessId == processId || process.NamespacePid == processId;
+    }
+
+    private static bool IsSameProgram(string? processName, string? otherProcessName)
+    {
+        if (string.IsNullOrWhiteSpace(processName) || string.IsNullOrWhiteSpace(otherProcessName))
+        {
+            return false;
+        }
+
+        if (string.Equals(processName, otherProcessName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var browser = BrowserDescriptorCatalog.ResolveProcessAlias(
+            processName,
+            BrowserCapabilities.AtSpiExtraction
+        );
+        return browser is not null
+               && browser.Id
+               == BrowserDescriptorCatalog.ResolveProcessAlias(
+                   otherProcessName,
+                   BrowserCapabilities.AtSpiExtraction
+               )?.Id;
+    }
+
+    private static ProcessScan ScanProcesses()
+    {
+        List<string> entries;
+        try
+        {
+            entries = Directory.EnumerateDirectories("/proc").ToList();
+        }
+        catch
+        {
+            return new ProcessScan([], false);
+        }
+
+        var processes = new List<ProcessIdentity>(entries.Count);
+        var isComplete = true;
+        foreach (var entry in entries)
+        {
+            if (!int.TryParse(Path.GetFileName(entry), out var pid))
+            {
+                continue;
+            }
+
+            if (TryReadProcessIdentity(pid) is { } identity)
+            {
+                processes.Add(identity);
+            }
+            // A process that exited mid-scan owns no window; one still there might be the other instance.
+            else if (Directory.Exists(entry))
+            {
+                isComplete = false;
+            }
+        }
+
+        return new ProcessScan(processes, isComplete);
+    }
+
+    // "Name:" is the comm; "NSpid:" lists the PID in each nested namespace, innermost last.
+    private static ProcessIdentity? TryReadProcessIdentity(int pid)
+    {
+        try
+        {
+            string? name = null;
+            int? namespacePid = null;
+            foreach (var line in File.ReadLines($"/proc/{pid}/status"))
+            {
+                if (line.StartsWith("Name:", StringComparison.Ordinal))
+                {
+                    name = line["Name:".Length..].Trim();
+                }
+                else if (line.StartsWith("NSpid:", StringComparison.Ordinal))
+                {
+                    var levels = line["NSpid:".Length..]
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                    if (levels.Length > 1 && int.TryParse(levels[^1], out var innermost))
+                    {
+                        namespacePid = innermost;
+                    }
+
+                    break;
+                }
+            }
+
+            return new ProcessIdentity(pid, namespacePid, string.IsNullOrEmpty(name) ? null : name);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     internal static BrowserDescriptor? ResolveBrowserDescriptor(
@@ -1521,8 +1789,8 @@ public sealed partial class AtSpiUrlExtractor
         params string[] signatureAndArgs
     )
     {
-        var args = new List<string>
-        {
+        List<string> args =
+        [
             $"--address={address}",
             "--",
             "call",
@@ -1530,8 +1798,8 @@ public sealed partial class AtSpiUrlExtractor
             path,
             @interface,
             method,
-        };
-        args.AddRange(signatureAndArgs);
+            .. signatureAndArgs,
+        ];
 
         var exitCode = RunProcess("busctl", args, out var output);
         return exitCode == 0 ? output?.Trim() : null;

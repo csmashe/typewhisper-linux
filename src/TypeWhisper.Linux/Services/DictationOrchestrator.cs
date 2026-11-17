@@ -1217,7 +1217,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Screen,
                             needs.Clipboard,
                             appProcess,
-                            appTitle
+                            appTitle,
+                            initialSnap?.ProcessId
                         );
                     }
                 }
@@ -1347,7 +1348,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Screen,
                             needs.Clipboard,
                             appProcess,
-                            appTitle
+                            appTitle,
+                            initialSnap?.ProcessId
                         );
                     }
                 }
@@ -4144,7 +4146,8 @@ public sealed partial class DictationOrchestrator : IDisposable
         bool screenEnabled,
         bool clipboardEnabled,
         string? windowProcess,
-        string? windowTitle
+        string? windowTitle,
+        int? windowProcessId
     )
     {
         if (!_sessionActivityMonitor.IsInputAllowed)
@@ -4159,7 +4162,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             ? CaptureClipboardContextAsync()
             : Task.FromResult<string?>(null);
         var screenTask = screenEnabled
-            ? CaptureScreenContextAsync(windowProcess, windowTitle)
+            ? CaptureScreenContextAsync(windowProcess, windowTitle, windowProcessId)
             : Task.FromResult<string?>(null);
 
         var clipboard = await clipboardTask.ConfigureAwait(false);
@@ -4209,14 +4212,22 @@ public sealed partial class DictationOrchestrator : IDisposable
         }
     }
 
-    private async Task<string?> CaptureScreenContextAsync(string? windowProcess, string? windowTitle)
+    private async Task<string?> CaptureScreenContextAsync(
+        string? windowProcess,
+        string? windowTitle,
+        int? windowProcessId
+    )
     {
         try
         {
             return TruncateReferenceContext(
                 await Task.Run(
                         () => _sessionActivityMonitor.IsInputAllowed
-                            ? _activeWindow.GetFocusedScreenContext(windowProcess, windowTitle)
+                            ? _activeWindow.GetFocusedScreenContext(
+                                windowProcess,
+                                windowTitle,
+                                windowProcessId
+                            )
                             : null
                     )
                     .ConfigureAwait(false)
