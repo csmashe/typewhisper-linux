@@ -2149,15 +2149,30 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             }
 
             return FindSwayFocusedNativePid(result.StandardOutput) is { } pid
-                   && IsGtk3WidgetProcess(
-                       await File.ReadAllLinesAsync($"/proc/{pid}/maps").ConfigureAwait(false)
-                   );
+                   && await IsGtk3OrUnverifiableTargetAsync(
+                       () => File.ReadAllLinesAsync($"/proc/{pid}/maps")
+                   ).ConfigureAwait(false);
         }
         catch (Exception ex)
             when (ex is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             Trace.WriteLine($"[TextInsertionService] sway focused-window probe failed: {ex.Message}");
             return false;
+        }
+    }
+
+    // A target in another user or namespace hides its maps. That can't rule GTK3 out, and a
+    // dropped wtype chord still exits 0, so an unreadable target skips the chord too.
+    internal static async Task<bool> IsGtk3OrUnverifiableTargetAsync(Func<Task<string[]>> readMaps)
+    {
+        try
+        {
+            return IsGtk3WidgetProcess(await readMaps().ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine($"[TextInsertionService] sway focused-window toolkit unreadable: {ex.Message}");
+            return true;
         }
     }
 

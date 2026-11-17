@@ -3813,6 +3813,20 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(expected, LinuxTextInsertionPlatform.IsGtk3WidgetProcess(maps));
     }
 
+    private static readonly string[] s_firefoxMaps =
+        ["7f0000000000-7f0000001000 r--p 00000000 103:06 42  /usr/lib/firefox/libxul.so"];
+
+    [Fact]
+    public async Task IsGtk3OrUnverifiableTarget_TreatsUnreadableMapsAsGtk3()
+    {
+        Assert.True(await LinuxTextInsertionPlatform.IsGtk3OrUnverifiableTargetAsync(
+            () => throw new UnauthorizedAccessException("Access to the path '/proc/42/maps' is denied.")));
+        Assert.True(await LinuxTextInsertionPlatform.IsGtk3OrUnverifiableTargetAsync(
+            () => throw new FileNotFoundException("/proc/42/maps")));
+        Assert.False(await LinuxTextInsertionPlatform.IsGtk3OrUnverifiableTargetAsync(
+            () => Task.FromResult(s_firefoxMaps)));
+    }
+
     [Fact]
     public async Task LinuxTextInsertionPlatform_HyprlandProbe_ReadsXWaylandFlagFromHyprctl()
     {
