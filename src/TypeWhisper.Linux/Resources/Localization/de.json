@@ -1419,6 +1419,7 @@
   "TextInsertion.Title": "Texteinfügung",
   "TextInsertion.WtypeInstalledWaylandOnly": "Installiert (nur Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Installiert, aber dieser Compositor unterstützt das Virtual-Keyboard-Protokoll von wtype nicht.",
+  "TextInsertion.WtypeGtk3ClipboardFallback": "In die Zwischenablage kopiert. wtype kann nicht in GTK3-Apps einfügen – richten Sie ydotool unter Einstellungen → Texteinfügung ein, um automatisches Einfügen zu aktivieren.",
   "TextInsertion.WtypeXWaylandClipboardFallback": "In die Zwischenablage kopiert. wtype kann nicht in XWayland-Apps tippen – richten Sie ydotool unter Einstellungen → Texteinfügung ein, um automatisches Einfügen zu aktivieren.",
   "TextInsertion.WtypeXWaylandFailed": "Texteinfügung fehlgeschlagen. wtype kann nicht in XWayland-Apps tippen – richten Sie ydotool unter Einstellungen → Texteinfügung ein.",
   "TextInsertion.XdotoolAvailableXWaylandOnly": "xdotool verfügbar (nur XWayland)",
