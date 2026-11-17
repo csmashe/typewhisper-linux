@@ -1604,17 +1604,12 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 ).ConfigureAwait(false);
                 if (!bounded.Succeeded && bounded.Status != ProcessRunStatus.OutputLimitExceeded)
                 {
-                    return null;
+                    return useWaylandClipboard || bounded.Status != ProcessRunStatus.Exited
+                        ? null
+                        : Truncate(await TryReadCompoundTextAsync(ct).ConfigureAwait(false), maxChars);
                 }
 
-                var text = bounded.StandardOutputText;
-                var length = Math.Min(text.Length, maxChars);
-                if (length < text.Length && length > 0 && char.IsHighSurrogate(text[length - 1]))
-                {
-                    length--;
-                }
-
-                return text[..length];
+                return Truncate(bounded.StandardOutputText, maxChars);
             }
 
             var result = await _ioRunner.RunAsync(
@@ -1640,13 +1635,45 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 return null;
             }
 
-            return result.Succeeded ? result.StandardOutput : null;
+            if (result.Succeeded)
+            {
+                return result.StandardOutput;
+            }
+
+            return useWaylandClipboard ? null : await TryReadCompoundTextAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
             return null;
         }
+    }
+
+    // xclip's default read tries only UTF8_STRING and STRING; some owners offer text only as COMPOUND_TEXT.
+    private async Task<string?> TryReadCompoundTextAsync(CancellationToken ct)
+    {
+        var data = await RunClipboardReadAsync(
+            ["-selection", "clipboard", "-o", "-t", "COMPOUND_TEXT"],
+            MaxRichClipboardBytes,
+            ct
+        ).ConfigureAwait(false);
+        return data is null ? null : CompoundTextDecoder.TryDecode(data);
+    }
+
+    private static string? Truncate(string? text, int maxChars)
+    {
+        if (text is null)
+        {
+            return null;
+        }
+
+        var length = Math.Min(text.Length, maxChars);
+        if (length < text.Length && length > 0 && char.IsHighSurrogate(text[length - 1]))
+        {
+            length--;
+        }
+
+        return text[..length];
     }
 
     public async Task<bool> ClipboardHasNonTextFormatsAsync()
@@ -1737,7 +1764,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     public Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats) =>
         UsesWaylandClipboard ? Task.FromResult(false) : RichClipboardWriter.TrySetAsync(text, formats);
 
-    private async Task<byte[]?> RunClipboardReadAsync(IReadOnlyList<string> args, int maxBytes)
+    private async Task<byte[]?> RunClipboardReadAsync(
+        IReadOnlyList<string> args,
+        int maxBytes,
+        CancellationToken ct = default
+    )
     {
         var result = await _ioRunner.RunOneShotAsync(
             new ProcessCommand("xclip", args),
@@ -1748,7 +1779,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             )
             {
                 MaximumStandardOutputBytes = maxBytes,
-            }
+            },
+            ct
         ).ConfigureAwait(false);
         return result.Succeeded ? result.StandardOutput : null;
     }
