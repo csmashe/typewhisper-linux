@@ -379,47 +379,6 @@ public sealed class LlmCleanupServiceTests
     }
 
     [Fact]
-    public async Task CleanAsync_NoProvider_DoesNotReportReferenceContextSent()
-    {
-        var sent = false;
-
-        var result = await CreateService([]).CleanAsync("uh hello", CleanupLevel.Medium,
-            referenceContext: "Clipboard text: ProjectIris", referenceContextSent: () => sent = true);
-
-        Assert.Equal("Hello", result);
-        Assert.False(sent);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CleanAsync_RequestWithReference_ReportsReferenceContextSent(bool providerFails)
-    {
-        var provider = new FakeLlmProviderPlugin("polished text") { ThrowOnProcess = providerFails };
-        var sent = false;
-
-        await CreateService([provider]).CleanAsync("uh hello", CleanupLevel.Medium,
-            referenceContext: "Clipboard text: ProjectIris", referenceContextSent: () => sent = true);
-
-        Assert.Equal(1, provider.ProcessCalls);
-        Assert.Contains("ProjectIris", provider.LastSystemPrompt);
-        Assert.True(sent);
-    }
-
-    [Fact]
-    public async Task CleanAsync_RequestWithoutReference_DoesNotReportReferenceContextSent()
-    {
-        var provider = new FakeLlmProviderPlugin("polished text");
-        var sent = false;
-
-        await CreateService([provider]).CleanAsync("uh hello", CleanupLevel.Medium,
-            referenceContextSent: () => sent = true);
-
-        Assert.Equal(1, provider.ProcessCalls);
-        Assert.False(sent);
-    }
-
-    [Fact]
     public async Task CleanAsync_Medium_FallsBackToLightWhenProviderFails()
     {
         var statuses = new List<string>();

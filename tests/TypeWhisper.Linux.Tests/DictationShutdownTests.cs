@@ -243,11 +243,6 @@ public sealed class DictationShutdownTests
 
         public void RestoreAudio()
         {
-            throw new InvalidOperationException("Dispose must wait for an in-flight duck.");
-        }
-
-        public void RestoreAudioForShutdown(TimeSpan settleTimeout)
-        {
             RestoreCallCount++;
             if (throwOnRestore)
             {
@@ -266,11 +261,6 @@ public sealed class DictationShutdownTests
         }
 
         public void ResumeMedia()
-        {
-            throw new InvalidOperationException("Dispose must wait for an in-flight pause.");
-        }
-
-        public void ResumeMediaForShutdown(TimeSpan settleTimeout)
         {
             ResumeCallCount++;
         }

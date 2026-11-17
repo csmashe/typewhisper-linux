@@ -1419,7 +1419,6 @@
   "TextInsertion.Title": "Text insertion",
   "TextInsertion.WtypeInstalledWaylandOnly": "Installed (Wayland only).",
   "TextInsertion.WtypeUnsupportedCompositor": "Installed, but this compositor doesn't support wtype's virtual-keyboard protocol.",
-  "TextInsertion.WtypeGtk3ClipboardFallback": "Copied to clipboard. wtype can't paste into GTK3 apps — set up ydotool from Settings → Text insertion to enable auto-paste.",
   "TextInsertion.WtypeXWaylandClipboardFallback": "Copied to clipboard. wtype can't type into XWayland apps — set up ydotool from Settings → Text insertion to enable auto-paste.",
   "TextInsertion.WtypeXWaylandFailed": "Text insertion failed. wtype can't type into XWayland apps — set up ydotool from Settings → Text insertion.",
   "TextInsertion.XdotoolAvailableXWaylandOnly": "xdotool available (XWayland only)",

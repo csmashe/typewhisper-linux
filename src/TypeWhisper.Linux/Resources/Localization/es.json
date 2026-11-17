@@ -1419,7 +1419,6 @@
   "TextInsertion.Title": "Inserción de texto",
   "TextInsertion.WtypeInstalledWaylandOnly": "Instalado (solo Wayland).",
   "TextInsertion.WtypeUnsupportedCompositor": "Instalado, pero este compositor no admite el protocolo de teclado virtual de wtype.",
-  "TextInsertion.WtypeGtk3ClipboardFallback": "Texto copiado al portapapeles. wtype no puede pegar en aplicaciones GTK3: configura ydotool en Ajustes → Inserción de texto para activar el pegado automático.",
   "TextInsertion.WtypeXWaylandClipboardFallback": "Texto copiado al portapapeles. wtype no puede escribir en aplicaciones XWayland: configura ydotool en Ajustes → Inserción de texto para activar el pegado automático.",
   "TextInsertion.WtypeXWaylandFailed": "Error al insertar el texto. wtype no puede escribir en aplicaciones XWayland: configura ydotool en Ajustes → Inserción de texto.",
   "TextInsertion.XdotoolAvailableXWaylandOnly": "xdotool disponible (solo XWayland)",
