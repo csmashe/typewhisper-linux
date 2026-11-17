@@ -1,7 +1,7 @@
 {
   "id": "com.typewhisper.gemma-local",
   "name": "Gemma 4 (Local)",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
   "description": "Run Google Gemma 4 locally on the CPU with llama.cpp",
