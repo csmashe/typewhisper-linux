@@ -334,6 +334,20 @@ public sealed class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void PurgeOldRecords_KeepsAudioStillReferencedByRetainedRecord()
+    {
+        var audioPath = Path.Join(_audioDirectory, "shared.wav");
+        File.WriteAllText(audioPath, "audio");
+        _sut.AddRecord(CreateRecord("expired", DateTime.UtcNow.AddHours(-3), "shared.wav"));
+        _sut.AddRecord(CreateRecord("retained", DateTime.UtcNow, "shared.wav"));
+
+        _sut.PurgeOldRecords(TimeSpan.FromHours(1));
+
+        Assert.Equal("retained", Assert.Single(_sut.Records).Id);
+        Assert.True(File.Exists(audioPath));
+    }
+
+    [Fact]
     public void ClearAll_DeletesAssociatedAudioFiles()
     {
         const string audioFile = "session.wav";
