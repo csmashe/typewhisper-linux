@@ -102,7 +102,8 @@ public sealed class SwayActiveWindowProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 string.IsNullOrWhiteSpace(appId) ? null : appId,
-                Name
+                Name,
+                pidValue is > 0 ? pidValue : null
             );
         }
         catch (OperationCanceledException)
