@@ -524,6 +524,58 @@ public sealed class DefaultDeviceWatcherFallbackTests
     }
 
     [Fact]
+    public async Task PactlWatcher_Dispose_WaitsForSigtermTeardownStillKillingPactl()
+    {
+        // App teardown or a second SIGTERM can arrive while the SIGTERM handler is still killing
+        // pactl. Returning early let the process exit mid-kill, leaving pactl stopped.
+        Action? onSigterm = null;
+        var registration = new TrackingDisposable();
+        var registeredDuringKill = false;
+        var reader = new BlockingSubscriptionReader();
+        using var killEntered = new ManualResetEventSlim(false);
+        using var releaseKill = new ManualResetEventSlim(false);
+        var sut = new PactlDefaultDeviceWatcher(
+            isPactlAvailable: () => true,
+            subscriptionFactory: () => PactlSubscription.ForTest(
+                reader,
+                onKill: () =>
+                {
+                    registeredDuringKill = !registration.Disposed;
+                    // ReSharper disable once AccessToDisposedClosure -- the kill finishes before both tasks are awaited below, ahead of the using disposal.
+                    killEntered.Set();
+                    // ReSharper disable once AccessToDisposedClosure -- the kill finishes before both tasks are awaited below, ahead of the using disposal.
+                    releaseKill.Wait();
+                    reader.Release();
+                }),
+            registerSigtermHandler: callback =>
+            {
+                onSigterm = callback;
+                return registration;
+            });
+        sut.Start(() => { });
+        Assert.NotNull(onSigterm);
+
+        var sigterm = Task.Run(onSigterm);
+        Task teardown;
+        try
+        {
+            Assert.True(killEntered.Wait(TimeSpan.FromSeconds(5)));
+            teardown = Task.Run(sut.Dispose);
+
+            var first = await Task.WhenAny(teardown, Task.Delay(TimeSpan.FromMilliseconds(200)));
+            Assert.False(ReferenceEquals(first, teardown), "Dispose returned while pactl was still being killed.");
+        }
+        finally
+        {
+            releaseKill.Set();
+        }
+
+        await Task.WhenAll(sigterm, teardown).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(registeredDuringKill, "A second SIGTERM during the kill would skip this handler.");
+        Assert.True(registration.Disposed);
+    }
+
+    [Fact]
     public void PactlWatcher_StillStarts_WhenSigtermRegistrationFails()
     {
         var reader = new BlockingSubscriptionReader();

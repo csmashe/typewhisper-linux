@@ -224,6 +224,7 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     private readonly Func<PactlSubscription> _subscriptionFactory;
     private readonly TimeSpan _debounce;
     private readonly Lock _gate = new();
+    private readonly Lock _disposeGate = new();
 
     private DefaultDeviceChangeDispatcher? _dispatcher;
     private PactlSubscription? _subscription;
@@ -803,20 +804,28 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        // A second caller waits until the first has killed pactl: app teardown or a second SIGTERM
+        // can land mid tree kill, and exiting then orphans pactl, often left SIGSTOPped.
+        lock (_disposeGate)
         {
-            return;
-        }
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return;
+            }
 
-        IDisposable? sigtermRegistration;
-        lock (_gate)
-        {
-            sigtermRegistration = _sigtermRegistration;
-            _sigtermRegistration = null;
-        }
+            Volatile.Write(ref _disposed, 1);
+            Stop();
 
-        sigtermRegistration?.Dispose();
-        Stop();
+            // Only after the kill, so a second SIGTERM still runs this handler and waits above.
+            IDisposable? sigtermRegistration;
+            lock (_gate)
+            {
+                sigtermRegistration = _sigtermRegistration;
+                _sigtermRegistration = null;
+            }
+
+            sigtermRegistration?.Dispose();
+        }
     }
 
     private void TryRegisterSigtermHandlerLocked()

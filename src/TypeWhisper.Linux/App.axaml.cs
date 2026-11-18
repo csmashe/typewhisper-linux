@@ -1147,7 +1147,7 @@ public class App : Application
         RestoreAudioAndMedia(services);
 
         // 128 + SIGTERM, the status of a process the signal ended.
-        Environment.Exit(143);
+        SigtermShutdown.ExitImmediately(143);
     }
 
     // Normally DictationOrchestrator.Dispose does this; teardown paths that skip it call this instead.

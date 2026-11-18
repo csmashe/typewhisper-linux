@@ -8,7 +8,7 @@ namespace TypeWhisper.Linux.Services;
 ///     skips App's teardown, leaving media a dictation paused paused and ducked streams quiet.
 ///     A second SIGTERM, or a quit still running after the fallback delay, ends the process.
 /// </summary>
-internal sealed class SigtermShutdown : IDisposable
+internal sealed partial class SigtermShutdown : IDisposable
 {
     private static readonly TimeSpan s_defaultFallbackDelay = TimeSpan.FromSeconds(15);
 
@@ -85,4 +85,13 @@ internal sealed class SigtermShutdown : IDisposable
         _registration.Dispose();
         _fallback?.Dispose();
     }
+
+    /// <summary>
+    ///     Ends the process without running exit handlers. With the UI thread stuck on an
+    ///     unresponsive display, Environment.Exit kept the process alive until the display answered.
+    /// </summary>
+    internal static void ExitImmediately(int status) => LibcExit(status);
+
+    [LibraryImport("libc", EntryPoint = "_exit")]
+    private static partial void LibcExit(int status);
 }
