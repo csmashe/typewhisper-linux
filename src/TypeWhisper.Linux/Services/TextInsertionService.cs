@@ -1609,12 +1609,10 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                         : Truncate(await TryReadCompoundTextAsync(ct).ConfigureAwait(false), maxChars);
                 }
 
-                if (useWaylandClipboard && bounded is { Succeeded: true, StandardOutput.Length: 0 })
-                {
-                    return Truncate(await TryReadWaylandCompoundTextAsync(ct).ConfigureAwait(false), maxChars);
-                }
-
-                return Truncate(bounded.StandardOutputText, maxChars);
+                var text = Truncate(bounded.StandardOutputText, maxChars)!;
+                return useWaylandClipboard && MayBeNonTextRead(text)
+                    ? Truncate(await ReadWaylandCompoundTextOrAsync(text, ct).ConfigureAwait(false), maxChars)
+                    : text;
             }
 
             var result = await _ioRunner.RunAsync(
@@ -1642,8 +1640,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
             if (result.Succeeded)
             {
-                return useWaylandClipboard && result.StandardOutput.Length == 0
-                    ? await TryReadWaylandCompoundTextAsync(ct).ConfigureAwait(false)
+                return useWaylandClipboard && MayBeNonTextRead(result.StandardOutput)
+                    ? await ReadWaylandCompoundTextOrAsync(result.StandardOutput, ct).ConfigureAwait(false)
                     : result.StandardOutput;
             }
 
@@ -1668,14 +1666,21 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     }
 
     // Mutter and Hyprland bridge an Xwayland COMPOUND_TEXT-only owner with no text type, so wl-paste's
-    // default read picks a negotiation target and succeeds with nothing. Any other empty read stays "".
-    private async Task<string?> TryReadWaylandCompoundTextAsync(CancellationToken ct)
+    // default read returns its first type raw: nothing for SAVE_TARGETS/MULTIPLE, undecoded bytes for
+    // COMPOUND_TEXT. Those carry escapes, controls or invalid UTF-8 (its Latin-1 bytes), while printable
+    // ASCII reads the same in both encodings, so only such reads need the type listing.
+    private static bool MayBeNonTextRead(string text) =>
+        text.Length == 0
+        || text.Any(c => c == '\uFFFD' || (char.IsControl(c) && c is not '\t' and not '\n' and not '\r'));
+
+    // Returns the decoded COMPOUND_TEXT when the clipboard offers no text type, otherwise the default read.
+    private async Task<string?> ReadWaylandCompoundTextOrAsync(string defaultRead, CancellationToken ct)
     {
         var listing = await RunClipboardToolReadAsync("wl-paste", ["--list-types"], MaxRichClipboardBytes, ct)
             .ConfigureAwait(false);
         if (listing is null || !ListingOffersOnlyCompoundText(Encoding.UTF8.GetString(listing)))
         {
-            return string.Empty;
+            return defaultRead;
         }
 
         var data = await RunClipboardToolReadAsync(
