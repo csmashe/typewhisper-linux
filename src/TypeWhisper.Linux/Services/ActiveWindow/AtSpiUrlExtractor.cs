@@ -1072,7 +1072,7 @@ public sealed partial class AtSpiUrlExtractor
         int? focusedProcessId
     )
     {
-        // Providers without a PID (KWin, GNOME) leave the name-and-title match to stand alone.
+        // Providers without a PID (KWin) leave the name-and-title match to stand alone.
         if (focusedProcessId is not > 0)
         {
             return false;

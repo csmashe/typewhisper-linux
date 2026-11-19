@@ -58,4 +58,54 @@ public sealed class CompositorActiveWindowProviderTests
         Assert.Equal("firefox", snapshot.ProcessName);
         Assert.Equal(ForeignPid, snapshot.ProcessId);
     }
+
+    [Fact]
+    public async Task GnomeWindowCallsSnapshotCarriesTheFocusedWindowsPid()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, _) => file == "gdbus",
+            $$"""('[{"id":1,"title":"Same Title","wm_class":"firefox","pid":{{ForeignPid}},"has_focus":false},{"id":2,"title":"Same Title","wm_class":"firefox","pid":{{ForeignPid - 1}},"has_focus":true}]',)"""
+        );
+
+        var snapshot = await new GnomeWindowCallsProvider(runner).TryGetActiveWindowAsync(CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("firefox", snapshot.ProcessName);
+        Assert.Equal("2", snapshot.WindowId);
+        Assert.Equal(ForeignPid - 1, snapshot.ProcessId);
+    }
+
+    [Fact]
+    public async Task GnomeWindowCallsSnapshotHasNoPidWhenWindowCallsReportsNone()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, _) => file == "gdbus",
+            """('[{"id":2,"title":"Same Title","wm_class":"firefox","pid":0,"has_focus":true}]',)"""
+        );
+
+        var snapshot = await new GnomeWindowCallsProvider(runner).TryGetActiveWindowAsync(CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("firefox", snapshot.ProcessName);
+        Assert.Null(snapshot.ProcessId);
+    }
+
+    [Fact]
+    public async Task GnomeShellIntrospectSnapshotCarriesTheFocusedWindowsPid()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, _) => file == "gdbus",
+            $$$"""({uint64 1: {'app-id': <'firefox.desktop'>, 'wm-class': <'firefox'>, 'title': <'Same Title'>, 'has-focus': <false>, 'pid': <uint32 {{{ForeignPid}}}>}, uint64 2: {'app-id': <'firefox.desktop'>, 'wm-class': <'firefox'>, 'title': <'Same Title'>, 'has-focus': <true>, 'pid': <uint32 {{{ForeignPid - 1}}}>}},)"""
+        );
+
+        var snapshot = await new GnomeShellActiveWindowProvider(runner).TryGetActiveWindowAsync(CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("firefox", snapshot.ProcessName);
+        Assert.Equal("2", snapshot.WindowId);
+        Assert.Equal(ForeignPid - 1, snapshot.ProcessId);
+    }
 }
