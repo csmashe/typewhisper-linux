@@ -32,6 +32,7 @@ public class App : Application
 
     // Held so the signal registration is not finalized away.
     private static SigtermShutdown? s_sigtermShutdown;
+    private static readonly TimeSpan s_forcedExitTraceBudget = TimeSpan.FromMilliseconds(200);
 
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
@@ -1141,20 +1142,47 @@ public class App : Application
     }
 
     // The normal quit hung before restoring what dictation changed, so restore it directly.
+    // Nothing is traced until then: the stdout listener blocks while its pipe is full.
     private static void ForceExitAfterSigterm(IServiceProvider services)
     {
-        Trace.WriteLine("[App] Quit after SIGTERM did not finish in time; forcing exit.");
-        RestoreAudioAndMedia(services);
+        var failures = TryRestoreAudioAndMedia(services);
+        TraceWithin(
+            s_forcedExitTraceBudget,
+            ["[App] Quit after SIGTERM did not finish in time; forcing exit.", .. failures]
+        );
 
         // 128 + SIGTERM, the status of a process the signal ended.
         SigtermShutdown.ExitImmediately(143);
     }
 
+    // _exit drops whatever is still unwritten, so a blocked listener cannot hold the process.
+    private static void TraceWithin(TimeSpan budget, IReadOnlyList<string> messages)
+    {
+        Task.Run(() =>
+            {
+                foreach (var message in messages)
+                {
+                    SafeTrace(message);
+                }
+            })
+            .Wait(budget);
+    }
+
     // Normally DictationOrchestrator.Dispose does this; teardown paths that skip it call this instead.
-    // Both services are idempotent and run pactl/playerctl outside their locks. Each blocks for
-    // a bounded wait on a duck or pause still in flight, which needs no UI thread to finish.
     private static void RestoreAudioAndMedia(IServiceProvider services)
     {
+        foreach (var failure in TryRestoreAudioAndMedia(services))
+        {
+            Trace.WriteLine(failure);
+        }
+    }
+
+    // Both services are idempotent and run pactl/playerctl outside their locks. Each blocks for
+    // a bounded wait on a duck or pause still in flight, which needs no UI thread to finish.
+    // Failures are returned rather than traced, so the caller decides whether tracing is safe.
+    private static List<string> TryRestoreAudioAndMedia(IServiceProvider services)
+    {
+        List<string> failures = [];
         try
         {
             services.GetService<IAudioDuckingService>()
@@ -1162,7 +1190,7 @@ public class App : Application
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[App] RestoreAudio during shutdown failed: {ex.Message}");
+            failures.Add($"[App] RestoreAudio during shutdown failed: {ex.Message}");
         }
 
         try
@@ -1172,8 +1200,10 @@ public class App : Application
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[App] ResumeMedia during shutdown failed: {ex.Message}");
+            failures.Add($"[App] ResumeMedia during shutdown failed: {ex.Message}");
         }
+
+        return failures;
     }
 
     private static async Task ShutdownAndExitAsync(

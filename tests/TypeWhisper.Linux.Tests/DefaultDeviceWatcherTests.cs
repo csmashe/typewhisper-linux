@@ -560,10 +560,8 @@ public sealed class DefaultDeviceWatcherFallbackTests
         try
         {
             Assert.True(killEntered.Wait(TimeSpan.FromSeconds(5)));
-            teardown = Task.Run(sut.Dispose);
-
-            var first = await Task.WhenAny(teardown, Task.Delay(TimeSpan.FromMilliseconds(200)));
-            Assert.False(ReferenceEquals(first, teardown), "Dispose returned while pactl was still being killed.");
+            // Fails if Dispose returns instead of waiting for the kill.
+            teardown = await BlockedThread.StartAndWaitUntilBlocked(sut.Dispose, TimeSpan.FromSeconds(5));
         }
         finally
         {

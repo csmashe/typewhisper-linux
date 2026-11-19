@@ -284,8 +284,8 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
         }
     }
 
-    // Caller holds _volumesGate and the set has finished. Returns true when it lowered the
-    // stream after shutdown's restore started, so the caller must undo it.
+    // Caller holds _volumesGate and the set has finished. Returns true when it may have lowered
+    // the stream after shutdown's restore started, so the caller must undo it.
     private bool SettleDuck(InFlightDuck duck)
     {
         if (duck.Settled)
@@ -299,10 +299,15 @@ public sealed partial class AudioDuckingService : IAudioDuckingService, IDisposa
             _inFlightDuck = null;
         }
 
+        // A timed-out set may still have landed: the server can apply it before pactl reads the reply.
         return duck is
         {
             LandsAfterShutdownRestore: true,
-            Command: { IsCompletedSuccessfully: true, Result.Succeeded: true },
+            Command:
+            {
+                IsCompletedSuccessfully: true,
+                Result: { Succeeded: true } or { Started: true, TimedOut: true },
+            },
         };
     }
 

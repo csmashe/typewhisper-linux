@@ -557,11 +557,16 @@ public sealed class MediaPauseServiceTests
 
         var pause = Task.Run(service.PauseMedia);
         Assert.True(pauseAtLaunch.Wait(s_testGuard));
-        var shutdown = Task.Run(() =>
-        {
-            service.ResumeMediaForShutdown(s_testGuard);
-            return runner.InvocationsSnapshot();
-        });
+        // The pause is released only once shutdown is blocked on the gate it holds for the launch.
+        var shutdown = await BlockedThread.StartAndWaitUntilBlocked(
+            () =>
+            {
+                service.ResumeMediaForShutdown(s_testGuard);
+                return runner.InvocationsSnapshot();
+            },
+            s_testGuard
+        );
+        Assert.False(shutdownWaiting.IsSet);
         releaseLaunch.Set();
 
         // Shutdown cannot slip in between the check and the launch, so it always finds the pause.
@@ -639,10 +644,14 @@ public sealed class MediaPauseServiceTests
         // The pause has exited but the worker has not settled it when the second shutdown runs.
         Assert.True(pauseAtSettle.Wait(s_testGuard));
         await Task.Run(() => service.ResumeMediaForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+
+        // The second shutdown resumed vlc itself, while the pause worker was still held.
+        Assert.True(IndexOf(runner.InvocationsSnapshot(), s_vlcPlay) >= exitedAt);
+        Assert.Equal(1, CountInvocations(runner, s_vlcPlay));
+
         releaseSettle.Set();
         await pause.WaitAsync(s_testGuard);
 
-        Assert.True(IndexOf(runner.InvocationsSnapshot(), s_vlcPlay) >= exitedAt);
         Assert.Equal(1, CountInvocations(runner, s_vlcPlay));
     }
 

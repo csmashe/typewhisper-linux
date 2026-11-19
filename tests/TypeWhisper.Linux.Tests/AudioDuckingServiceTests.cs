@@ -541,11 +541,16 @@ public sealed class AudioDuckingServiceTests
 
         var duck = Task.Run(() => service.DuckAudio(0.5f));
         Assert.True(duckAtLaunch.Wait(s_testGuard));
-        var shutdown = Task.Run(() =>
-        {
-            service.RestoreAudioForShutdown(s_testGuard);
-            return runner.InvocationsSnapshot();
-        });
+        // The duck is released only once shutdown is blocked on the gate it holds for the launch.
+        var shutdown = await BlockedThread.StartAndWaitUntilBlocked(
+            () =>
+            {
+                service.RestoreAudioForShutdown(s_testGuard);
+                return runner.InvocationsSnapshot();
+            },
+            s_testGuard
+        );
+        Assert.False(shutdownWaiting.IsSet);
         releaseLaunch.Set();
 
         // Shutdown cannot slip in between the check and the launch, so it always finds the set.
@@ -613,6 +618,45 @@ public sealed class AudioDuckingServiceTests
     }
 
     [Fact]
+    public async Task A_late_set_volume_that_times_out_is_still_undone()
+    {
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        var invocationsAtReturn = await Task.Run(() =>
+            {
+                service.RestoreAudioForShutdown(TimeSpan.Zero);
+                return runner.InvocationsSnapshot();
+            })
+            .WaitAsync(s_testGuard);
+
+        // The server may have applied the set before pactl gave up waiting for its reply.
+        duck594.Exit.SetResult(new ProcessRunResult(true, true, -1, string.Empty, string.Empty));
+        await duck.WaitAsync(s_testGuard);
+
+        Assert.True(LastIndexOf(runner.InvocationsSnapshot(), s_restore594) >= invocationsAtReturn.Length);
+    }
+
+    [Fact]
+    public async Task A_late_set_volume_that_never_started_is_not_undone()
+    {
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        duck594.Exit.SetResult(FakeProcessRunner.NotStarted());
+        await duck.WaitAsync(s_testGuard);
+
+        Assert.Equal(1, CountInvocations(runner, s_restore594));
+    }
+
+    [Fact]
     public async Task A_late_set_volume_exiting_while_shutdown_restores_that_stream_still_ends_restored()
     {
         var runner = CreateThreeStreamRunner();
@@ -668,10 +712,14 @@ public sealed class AudioDuckingServiceTests
         // The set has exited but the duck has not settled it when the second shutdown runs.
         Assert.True(duckAtSettle.Wait(s_testGuard));
         await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+
+        // The second shutdown undid the late set itself, while the duck was still held.
+        Assert.True(LastIndexOf(runner.InvocationsSnapshot(), s_restore594) >= exitedAt);
+        Assert.Equal(2, CountInvocations(runner, s_restore594));
+
         releaseSettle.Set();
         await duck.WaitAsync(s_testGuard);
 
-        Assert.True(LastIndexOf(runner.InvocationsSnapshot(), s_restore594) >= exitedAt);
         Assert.Equal(2, CountInvocations(runner, s_restore594));
     }
 
