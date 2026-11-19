@@ -1,3 +1,8 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.RegularExpressions;
 using Moq;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
@@ -5,12 +10,13 @@ using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
+using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
 using Xunit;
 
 namespace TypeWhisper.Linux.Tests;
 
-public sealed class LlmCleanupServiceTests
+public sealed partial class LlmCleanupServiceTests
 {
     [Fact]
     public async Task CleanAsync_Deadline_CancelsProviderAndReturnsLight()
@@ -417,6 +423,181 @@ public sealed class LlmCleanupServiceTests
 
         Assert.Equal(1, provider.ProcessCalls);
         Assert.False(sent);
+    }
+
+    [Fact]
+    public async Task CleanAsync_ConnectionRefused_DoesNotReportReferenceContextSent()
+    {
+        using var http = new HttpClient();
+        var closedPort = GetClosedLoopbackPort();
+        var provider = new FakeLlmProviderPlugin("unused");
+        // ReSharper disable once AccessToDisposedClosure -- CleanAsync runs the provider and finishes before the using scope disposes it.
+        provider.Process = token => SendRealChatRequestAsync(http, closedPort, provider, token);
+        var sent = false;
+
+        var result = await CreateService([provider]).CleanAsync("uh hello", CleanupLevel.Medium,
+            referenceContext: "Clipboard text: ProjectIris", referenceContextSent: () => sent = true);
+
+        Assert.Equal("Hello", result);
+        Assert.Equal(3, provider.ProcessCalls);
+        Assert.False(sent);
+    }
+
+    [Fact]
+    public async Task CleanAsync_ConnectionRefusedThenRetrySucceeds_ReportsReferenceContextSent()
+    {
+        using var http = new HttpClient();
+        var closedPort = GetClosedLoopbackPort();
+        var provider = new FakeLlmProviderPlugin("unused");
+        // ReSharper disable once AccessToDisposedClosure -- CleanAsync runs the provider and finishes before the using scope disposes it.
+        provider.Process = token => provider.ProcessCalls == 1
+            ? SendRealChatRequestAsync(http, closedPort, provider, token)
+            : Task.FromResult("Polished");
+        var sent = false;
+
+        var result = await CreateService([provider]).CleanAsync("uh hello", CleanupLevel.Medium,
+            referenceContext: "Clipboard text: ProjectIris", referenceContextSent: () => sent = true);
+
+        Assert.Equal("Polished", result);
+        Assert.Equal(2, provider.ProcessCalls);
+        Assert.True(sent);
+    }
+
+    [Theory]
+    [InlineData("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")]
+    [InlineData(null)]
+    public async Task CleanAsync_ServerReceivedRequestThenFailed_ReportsReferenceContextSent(string? response)
+    {
+        using var http = new HttpClient();
+        await using var server = new RawHttpServer(response);
+        var provider = new FakeLlmProviderPlugin("unused");
+        // CleanAsync runs the provider and finishes before the using scopes dispose http and server.
+        // ReSharper disable AccessToDisposedClosure
+        provider.Process = token => SendRealChatRequestAsync(http, server.Port, provider, token);
+        // ReSharper restore AccessToDisposedClosure
+        var sent = false;
+
+        var result = await CreateService([provider]).CleanAsync("uh hello", CleanupLevel.Medium,
+            referenceContext: "Clipboard text: ProjectIris", referenceContextSent: () => sent = true);
+
+        Assert.Equal("Hello", result);
+        Assert.Contains(server.Requests, request => request.Contains("ProjectIris"));
+        Assert.True(sent);
+    }
+
+    [Fact]
+    public async Task CleanAsync_ServerErrorThenRetrySucceeds_ReportsReferenceContextSent()
+    {
+        var provider = new FakeLlmProviderPlugin("unused");
+        provider.Process = _ => provider.ProcessCalls == 1
+            ? throw new PluginRequestException("API error 500", PluginRequestFailureKind.ServerError, 500, TimeSpan.Zero)
+            : Task.FromResult("Polished");
+        var sent = false;
+
+        var result = await CreateService([provider]).CleanAsync("uh hello", CleanupLevel.Medium,
+            referenceContext: "Clipboard text: ProjectIris", referenceContextSent: () => sent = true);
+
+        Assert.Equal("Polished", result);
+        Assert.Equal(2, provider.ProcessCalls);
+        Assert.True(sent);
+    }
+
+    public static TheoryData<Exception, bool> ProviderFailures => new()
+    {
+        { Wrapped(new HttpRequestException(HttpRequestError.ConnectionError, "refused")), true },
+        { Wrapped(new HttpRequestException(HttpRequestError.NameResolutionError, "no such host")), true },
+        { Wrapped(new HttpRequestException(HttpRequestError.SecureConnectionError, "tls")), true },
+        { Wrapped(new HttpRequestException(HttpRequestError.ProxyTunnelError, "proxy")), true },
+        { new HttpRequestException(HttpRequestError.ConnectionError, "unwrapped refused"), true },
+        { Wrapped(new HttpRequestException(HttpRequestError.ResponseEnded, "ended")), false },
+        { Wrapped(new HttpRequestException("unknown")), false },
+        { new PluginRequestException("network", PluginRequestFailureKind.Network), false },
+        { new PluginRequestException("API error 400", PluginRequestFailureKind.InvalidRequest, 400), false },
+        { new TimeoutException("timed out"), false },
+        { new OperationCanceledException(), false },
+    };
+
+    // Exception instances aren't serializable for row enumeration; the real exception types are the point.
+#pragma warning disable xUnit1045
+    [Theory]
+    [MemberData(nameof(ProviderFailures), DisableDiscoveryEnumeration = true)]
+    public void NeverReachedProvider_OnlyForFailuresBeforeAConnection(Exception failure, bool expected)
+#pragma warning restore xUnit1045
+    {
+        Assert.Equal(expected, PromptProcessingService.NeverReachedProvider(failure));
+    }
+
+    private static PluginRequestException Wrapped(HttpRequestException inner) =>
+        new($"Network error: {inner.Message}", PluginRequestFailureKind.Network, innerException: inner);
+
+    private static Task<string> SendRealChatRequestAsync(
+        HttpClient http, int port, FakeLlmProviderPlugin provider, CancellationToken token) =>
+        OpenAiChatHelper.SendChatCompletionAsync(http, $"http://127.0.0.1:{port}", "key", "model-a",
+            provider.LastSystemPrompt!, provider.LastUserText!, token);
+
+    private static int GetClosedLoopbackPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    // Reads each request, then sends the canned response, or drops the connection when it is null.
+    private sealed partial class RawHttpServer : IAsyncDisposable
+    {
+        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource _stop = new();
+        private readonly Task _loop;
+
+        public RawHttpServer(string? response)
+        {
+            _listener.Start();
+            _loop = Task.Run(() => ServeAsync(response));
+        }
+
+        [GeneratedRegex(@"Content-Length:\s*(\d+)", RegexOptions.IgnoreCase)]
+        private static partial Regex ContentLengthPattern();
+
+        public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+        public ConcurrentQueue<string> Requests { get; } = new();
+
+        private async Task ServeAsync(string? response)
+        {
+            while (!_stop.IsCancellationRequested)
+            {
+                using var client = await _listener.AcceptTcpClientAsync(_stop.Token);
+                var stream = client.GetStream();
+                var buffer = new byte[64 * 1024];
+                var received = new StringBuilder();
+                while (true)
+                {
+                    var read = await stream.ReadAsync(buffer, _stop.Token);
+                    if (read == 0) break;
+                    received.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                    var text = received.ToString();
+                    var headerEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+                    if (headerEnd < 0) continue;
+                    var lengthMatch = ContentLengthPattern().Match(text[..headerEnd]);
+                    var bodyLength = lengthMatch.Success ? int.Parse(lengthMatch.Groups[1].Value) : 0;
+                    if (Encoding.UTF8.GetByteCount(text[(headerEnd + 4)..]) >= bodyLength) break;
+                }
+                Requests.Enqueue(received.ToString());
+                if (response is not null)
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(response), _stop.Token);
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _stop.CancelAsync();
+            _listener.Stop();
+            try { await _loop; }
+            catch (OperationCanceledException) { }
+            catch (SocketException) { }
+            _stop.Dispose();
+        }
     }
 
     [Fact]
