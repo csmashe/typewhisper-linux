@@ -1609,6 +1609,11 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                         : Truncate(await TryReadCompoundTextAsync(ct).ConfigureAwait(false), maxChars);
                 }
 
+                if (useWaylandClipboard && bounded is { Succeeded: true, StandardOutput.Length: 0 })
+                {
+                    return Truncate(await TryReadWaylandCompoundTextAsync(ct).ConfigureAwait(false), maxChars);
+                }
+
                 return Truncate(bounded.StandardOutputText, maxChars);
             }
 
@@ -1637,7 +1642,9 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
             if (result.Succeeded)
             {
-                return result.StandardOutput;
+                return useWaylandClipboard && result.StandardOutput.Length == 0
+                    ? await TryReadWaylandCompoundTextAsync(ct).ConfigureAwait(false)
+                    : result.StandardOutput;
             }
 
             return useWaylandClipboard ? null : await TryReadCompoundTextAsync(ct).ConfigureAwait(false);
@@ -1658,6 +1665,36 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             ct
         ).ConfigureAwait(false);
         return data is null ? null : CompoundTextDecoder.TryDecode(data);
+    }
+
+    // Mutter and Hyprland bridge an Xwayland COMPOUND_TEXT-only owner with no text type, so wl-paste's
+    // default read picks a negotiation target and succeeds with nothing. Any other empty read stays "".
+    private async Task<string?> TryReadWaylandCompoundTextAsync(CancellationToken ct)
+    {
+        var listing = await RunClipboardToolReadAsync("wl-paste", ["--list-types"], MaxRichClipboardBytes, ct)
+            .ConfigureAwait(false);
+        if (listing is null || !ListingOffersOnlyCompoundText(Encoding.UTF8.GetString(listing)))
+        {
+            return string.Empty;
+        }
+
+        var data = await RunClipboardToolReadAsync(
+            "wl-paste",
+            ["--no-newline", "-t", "COMPOUND_TEXT"],
+            MaxRichClipboardBytes,
+            ct
+        ).ConfigureAwait(false);
+        return data is null ? null : CompoundTextDecoder.TryDecode(data);
+    }
+
+    // True when COMPOUND_TEXT is listed but nothing wl-paste would pick as text on its own.
+    private static bool ListingOffersOnlyCompoundText(string listing)
+    {
+        var targets = listing.Split('\n').Select(rawLine => rawLine.Trim()).ToList();
+        return targets.Contains("COMPOUND_TEXT")
+               && !targets.Any(target =>
+                   target.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+                   || target is "UTF8_STRING" or "STRING" or "TEXT");
     }
 
     private static string? Truncate(string? text, int maxChars)
@@ -1764,14 +1801,22 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     public Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats) =>
         UsesWaylandClipboard ? Task.FromResult(false) : RichClipboardWriter.TrySetAsync(text, formats);
 
-    private async Task<byte[]?> RunClipboardReadAsync(
+    private Task<byte[]?> RunClipboardReadAsync(
         IReadOnlyList<string> args,
         int maxBytes,
         CancellationToken ct = default
+    ) =>
+        RunClipboardToolReadAsync("xclip", args, maxBytes, ct);
+
+    private async Task<byte[]?> RunClipboardToolReadAsync(
+        string fileName,
+        IReadOnlyList<string> args,
+        int maxBytes,
+        CancellationToken ct
     )
     {
         var result = await _ioRunner.RunOneShotAsync(
-            new ProcessCommand("xclip", args),
+            new ProcessCommand(fileName, args),
             new ProcessOneShotOptions(
                 Timeout: s_clipboardOperationTimeout,
                 StandardOutput: ProcessCaptureMode.Binary,
