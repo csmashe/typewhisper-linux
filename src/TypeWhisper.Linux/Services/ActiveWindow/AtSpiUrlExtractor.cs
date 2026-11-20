@@ -1072,7 +1072,7 @@ public sealed partial class AtSpiUrlExtractor
         int? focusedProcessId
     )
     {
-        // Providers without a PID (KWin) leave the name-and-title match to stand alone.
+        // A snapshot without a PID (the provider couldn't report one) keeps the name-and-title match.
         if (focusedProcessId is not > 0)
         {
             return false;

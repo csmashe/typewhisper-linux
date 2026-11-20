@@ -347,6 +347,35 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
     }
 
     [Fact]
+    public async Task TryGetBrowserUrl_KWinSnapshot_DoesNotBorrowAnotherInstancesUrl()
+    {
+        // The focused Chrome isn't on the bus; a same-title Chrome owned by another process is.
+        // KWin's snapshot must carry the focused PID so the walk rejects that app.
+        const int focusedPid = 2147483000; // Above pid_max: no process owns it.
+        var kdotool = new FakeProcessRunner();
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getactivewindow", "{win-b}\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowclassname", "google-chrome\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowname", "QA IDN - Google Chrome\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowpid", $"{focusedPid}\n");
+        var snapshot = await new KWinActiveWindowProvider(kdotool).TryGetActiveWindowAsync(CancellationToken.None);
+        Assert.NotNull(snapshot);
+
+        var runner = BuildChromeTree("other-instance.example/qa");
+        Respond(runner, "/org/freedesktop/DBus", "GetConnectionUnixProcessID", $"u {Environment.ProcessId}");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Null(
+            extractor.TryGetBrowserUrl(
+                snapshot.ProcessName,
+                snapshot.AppId,
+                snapshot.Title,
+                focusedProcessId: snapshot.ProcessId,
+                focusedWindowId: snapshot.WindowId
+            )
+        );
+    }
+
+    [Fact]
     public void TryHarvestFocusedContext_CollectionMatch_FindsFieldBeyondTheWalkBudget()
     {
         const string title = "QA Reference Browser — Mozilla Firefox";

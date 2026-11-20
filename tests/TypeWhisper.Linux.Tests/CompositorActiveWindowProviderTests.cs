@@ -12,6 +12,8 @@ public sealed class CompositorActiveWindowProviderTests
     // Above Linux's pid_max, so no /proc entry exists and the parse stays deterministic.
     private const int ForeignPid = 2147483000;
 
+    private const string KWinWindowId = "{6f1c2c7e-0000-4000-8000-000000000001}";
+
     [Fact]
     public async Task HyprlandSnapshotCarriesTheFocusedWindowsPid()
     {
@@ -107,5 +109,101 @@ public sealed class CompositorActiveWindowProviderTests
         Assert.Equal("firefox", snapshot.ProcessName);
         Assert.Equal("2", snapshot.WindowId);
         Assert.Equal(ForeignPid - 1, snapshot.ProcessId);
+    }
+
+    [Fact]
+    public async Task KWinSnapshotCarriesTheFocusedWindowsPid()
+    {
+        var runner = KWinRunner($"{ForeignPid}\n");
+
+        var snapshot = await new KWinActiveWindowProvider(runner).TryGetActiveWindowAsync(CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("firefox", snapshot.ProcessName);
+        Assert.Equal("Same Title", snapshot.Title);
+        Assert.Equal(KWinWindowId, snapshot.WindowId);
+        Assert.Equal(ForeignPid, snapshot.ProcessId);
+        // The PID comes from the captured window, not a second getactivewindow.
+        Assert.Contains(
+            runner.SupervisorInvocations,
+            invocation => invocation.Command.Arguments.SequenceEqual(["getwindowpid", KWinWindowId])
+        );
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \n")]
+    [InlineData("0")]
+    [InlineData("-42")]
+    [InlineData("+42")]
+    [InlineData("42 43")]
+    [InlineData("42\n43")]
+    [InlineData("not a pid")]
+    [InlineData("99999999999")]
+    public async Task KWinSnapshotHasNoPidWhenKdotoolPrintsNoUsablePid(string output)
+    {
+        var snapshot = await new KWinActiveWindowProvider(KWinRunner(output))
+            .TryGetActiveWindowAsync(CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("firefox", snapshot.ProcessName);
+        Assert.Null(snapshot.ProcessId);
+    }
+
+    [Fact]
+    public async Task KWinSnapshotHasNoPidWhenGetwindowpidFails()
+    {
+        var runner = new FakeProcessRunner();
+        runner.FailWhen(IsGetWindowPid); // Overrides match in order, so this one wins.
+        AddKWinWindow(runner, $"{ForeignPid}");
+
+        var snapshot = await new KWinActiveWindowProvider(runner).TryGetActiveWindowAsync(CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("Same Title", snapshot.Title);
+        Assert.Null(snapshot.ProcessId);
+    }
+
+    [Fact]
+    public async Task KWinSnapshotHasNoPidWhenGetwindowpidTimesOut()
+    {
+        var runner = new FakeProcessRunner();
+        runner.TimeOutWhen(IsGetWindowPid);
+        AddKWinWindow(runner, $"{ForeignPid}");
+
+        var snapshot = await new KWinActiveWindowProvider(runner).TryGetActiveWindowAsync(CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("Same Title", snapshot.Title);
+        Assert.Null(snapshot.ProcessId);
+    }
+
+    private static bool IsGetWindowPid(string file, IReadOnlyList<string> args)
+    {
+        return file == "kdotool" && args.Count > 0 && args[0] == "getwindowpid";
+    }
+
+    private static FakeProcessRunner KWinRunner(string pidOutput)
+    {
+        var runner = new FakeProcessRunner();
+        AddKWinWindow(runner, pidOutput);
+        return runner;
+    }
+
+    private static void AddKWinWindow(FakeProcessRunner runner, string pidOutput)
+    {
+        runner.RespondWith((file, args) => file == "kdotool" && args[0] == "getactivewindow", KWinWindowId + "\n");
+        runner.RespondWith(
+            (file, args) => file == "kdotool" && args.SequenceEqual(["getwindowclassname", KWinWindowId]),
+            "firefox\n"
+        );
+        runner.RespondWith(
+            (file, args) => file == "kdotool" && args.SequenceEqual(["getwindowname", KWinWindowId]),
+            "Same Title\n"
+        );
+        runner.RespondWith(
+            (file, args) => file == "kdotool" && args.SequenceEqual(["getwindowpid", KWinWindowId]),
+            pidOutput
+        );
     }
 }

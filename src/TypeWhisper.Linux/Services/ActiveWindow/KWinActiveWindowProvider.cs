@@ -1,3 +1,4 @@
+using System.Globalization;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Hotkey.DeSetup;
@@ -65,6 +66,13 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider, IActiveWin
                 .ConfigureAwait(false);
             var title = nameExit == 0 ? nameOutput?.Trim() : null;
 
+            // KWin knows the owning PID of both Wayland-native and XWayland clients. Without it
+            // the URL and screen-context readers can't tell two same-title instances apart.
+            var (pidExit, pidOutput) = await _processRunner
+                .RunAsync("kdotool", ["getwindowpid", windowId], ct)
+                .ConfigureAwait(false);
+            var processId = pidExit == 0 ? ParsePid(pidOutput) : null;
+
             var processName = !string.IsNullOrWhiteSpace(klass)
                 ? ProcessNameNormalizer.Normalize(klass).ToLowerInvariant()
                 : null;
@@ -74,7 +82,8 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider, IActiveWin
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 windowId,
                 string.IsNullOrWhiteSpace(klass) ? null : klass,
-                Name
+                Name,
+                processId
             );
         }
         catch (OperationCanceledException)
@@ -93,5 +102,17 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider, IActiveWin
             .RunAsync("kdotool", ["windowactivate", windowId], ct)
             .ConfigureAwait(false);
         return exitCode == 0;
+    }
+
+    private static int? ParsePid(string? output)
+    {
+        return int.TryParse(
+            output?.Trim(),
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out var pid
+        ) && pid > 0
+            ? pid
+            : null;
     }
 }
