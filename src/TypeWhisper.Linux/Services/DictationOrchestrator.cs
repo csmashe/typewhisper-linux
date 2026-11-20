@@ -42,6 +42,9 @@ internal sealed record RecordingContext(
 {
     public string? ScreenContext { get; init; }
     public string? ClipboardContext { get; init; }
+
+    /// <summary>Shared across <c>with</c> copies, so cleanup can mark the references as sent.</summary>
+    public ReferenceContextUse ReferenceContextUse { get; } = new();
     public LockedFocusTarget? LockedFocusField { get; init; }
 
     /// <summary>The window focused at recording start, used to catch a focus move when there is no xdotool <see cref="WindowId" />.</summary>
@@ -1219,7 +1222,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Screen,
                             needs.Clipboard,
                             appProcess,
-                            appTitle
+                            appTitle,
+                            initialSnap?.ProcessId,
+                            initialSnap?.ProcessIdUnresolved == true
                         );
                     }
                 }
@@ -1349,7 +1354,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Screen,
                             needs.Clipboard,
                             appProcess,
-                            appTitle
+                            appTitle,
+                            initialSnap?.ProcessId,
+                            initialSnap?.ProcessIdUnresolved == true
                         );
                     }
                 }
@@ -4146,7 +4153,9 @@ public sealed partial class DictationOrchestrator : IDisposable
         bool screenEnabled,
         bool clipboardEnabled,
         string? windowProcess,
-        string? windowTitle
+        string? windowTitle,
+        int? windowProcessId,
+        bool windowProcessIdUnresolved
     )
     {
         if (!_sessionActivityMonitor.IsInputAllowed)
@@ -4161,7 +4170,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             ? CaptureClipboardContextAsync()
             : Task.FromResult<string?>(null);
         var screenTask = screenEnabled
-            ? CaptureScreenContextAsync(windowProcess, windowTitle)
+            ? CaptureScreenContextAsync(windowProcess, windowTitle, windowProcessId, windowProcessIdUnresolved)
             : Task.FromResult<string?>(null);
 
         var clipboard = await clipboardTask.ConfigureAwait(false);
@@ -4211,14 +4220,24 @@ public sealed partial class DictationOrchestrator : IDisposable
         }
     }
 
-    private async Task<string?> CaptureScreenContextAsync(string? windowProcess, string? windowTitle)
+    private async Task<string?> CaptureScreenContextAsync(
+        string? windowProcess,
+        string? windowTitle,
+        int? windowProcessId,
+        bool windowProcessIdUnresolved
+    )
     {
         try
         {
             return TruncateReferenceContext(
                 await Task.Run(
                         () => _sessionActivityMonitor.IsInputAllowed
-                            ? _activeWindow.GetFocusedScreenContext(windowProcess, windowTitle)
+                            ? _activeWindow.GetFocusedScreenContext(
+                                windowProcess,
+                                windowTitle,
+                                windowProcessId,
+                                windowProcessIdUnresolved
+                            )
                             : null
                     )
                     .ConfigureAwait(false)
@@ -4435,6 +4454,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Localization.Loc.Instance["TextInsertion.YdotoolSocketClipboardFallback"],
             InsertionFailureReason.WtypeXWaylandTarget =>
                 Localization.Loc.Instance["TextInsertion.WtypeXWaylandClipboardFallback"],
+            InsertionFailureReason.WtypeGtk3PasteTarget =>
+                Localization.Loc.Instance["TextInsertion.WtypeGtk3ClipboardFallback"],
             InsertionFailureReason.NoWaylandTypingTool =>
                 Localization.Loc.Instance.GetString(
                     "TextInsertion.ClipboardFallbackWithHint", _commands.GetSnapshot().PasteToolInstallHint),
@@ -4714,7 +4735,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         try
         {
-            var referenceContextConsumed = cleanupLevel is CleanupLevel.Medium or CleanupLevel.High;
+            // Captured references count as applied only when a cleanup request carried them.
+            var referenceContextSent = context.ReferenceContextUse.Sent;
 
             var record =
                 BuildHistoryRecord(
@@ -4753,9 +4775,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                         pipelineResult,
                         PostProcessingStepNames.Translation
                     ),
-                    ScreenContextApplied = referenceContextConsumed
+                    ScreenContextApplied = referenceContextSent
                         && !string.IsNullOrWhiteSpace(context.ScreenContext),
-                    ClipboardContextApplied = referenceContextConsumed
+                    ClipboardContextApplied = referenceContextSent
                         && !string.IsNullOrWhiteSpace(context.ClipboardContext),
                     LlmCalls = context.Capture?.Calls ?? [],
                 };
@@ -4968,6 +4990,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             || string.IsNullOrWhiteSpace(a.Title)
             || string.IsNullOrWhiteSpace(b.Title)
             || !string.Equals(a.Title, b.Title, StringComparison.Ordinal)
+            // Same window ID and title can't vouch for a window whose owner changed.
+            || (a.ProcessId is > 0 && b.ProcessId is > 0 && a.ProcessId != b.ProcessId)
         )
         {
             return false;

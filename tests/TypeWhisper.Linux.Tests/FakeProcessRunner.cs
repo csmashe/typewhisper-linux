@@ -16,6 +16,11 @@ internal sealed class FakeProcessRunner : IProcessRunner
         )> _overrides = [];
     private readonly List<HeldCommand> _held = [];
 
+    private readonly List<(
+        Func<string, IReadOnlyList<string>, bool> Match,
+        byte[] Stdout
+        )> _byteOverrides = [];
+
     public List<Invocation> Invocations { get; } = [];
     public List<SupervisorInvocation> SupervisorInvocations { get; } = [];
     public List<SessionInvocation> SessionInvocations { get; } = [];
@@ -60,6 +65,17 @@ internal sealed class FakeProcessRunner : IProcessRunner
         if (held is not null)
         {
             return held.Exit.Task;
+        }
+
+        foreach (var (match, stdout) in _byteOverrides)
+        {
+            if (match(fileName, args))
+            {
+                // Text callers see the bytes the way the real runner decodes them (invalid UTF-8 → U+FFFD).
+                return Task.FromResult(
+                    new ProcessRunResult(true, false, 0, System.Text.Encoding.UTF8.GetString(stdout), string.Empty)
+                );
+            }
         }
 
         foreach (var (match, result) in _overrides)
@@ -111,12 +127,16 @@ internal sealed class FakeProcessRunner : IProcessRunner
                 ? ProcessRunStatus.TimedOut
                 : ProcessRunStatus.Exited
             : ProcessRunStatus.StartFailed;
+        var rawStdout = _byteOverrides
+            .Where(entry => entry.Match(command.FileName, command.Arguments))
+            .Select(entry => entry.Stdout)
+            .FirstOrDefault();
         return new ProcessRunOutcome(
             status,
             status == ProcessRunStatus.Exited ? legacy.ExitCode : null,
             options.StandardOutput == ProcessCaptureMode.Discard
                 ? []
-                : System.Text.Encoding.UTF8.GetBytes(legacy.StandardOutput),
+                : rawStdout ?? System.Text.Encoding.UTF8.GetBytes(legacy.StandardOutput),
             options.StandardError == ProcessCaptureMode.Discard
                 ? []
                 : System.Text.Encoding.UTF8.GetBytes(legacy.StandardError),
@@ -204,6 +224,29 @@ internal sealed class FakeProcessRunner : IProcessRunner
                     true,
                     false,
                     exitCode,
+                    string.Empty,
+                    string.Empty
+                )
+            )
+        );
+    }
+
+    /// <summary>Make calls matching <paramref name="match" /> succeed with the given raw stdout bytes.</summary>
+    public void RespondWithBytes(Func<string, IReadOnlyList<string>, bool> match, byte[] stdout)
+    {
+        _byteOverrides.Add((match, stdout));
+    }
+
+    /// <summary>Make calls matching <paramref name="match" /> hit their timeout.</summary>
+    public void TimeOutWhen(Func<string, IReadOnlyList<string>, bool> match)
+    {
+        _overrides.Add(
+            (
+                match,
+                new ProcessRunResult(
+                    true,
+                    true,
+                    -1,
                     string.Empty,
                     string.Empty
                 )

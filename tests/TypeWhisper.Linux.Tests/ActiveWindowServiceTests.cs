@@ -382,8 +382,13 @@ public sealed class ActiveWindowServiceTests
     [InlineData("not a url", null)]
     [InlineData("localhost:19797/chrome-b?qa=updated", "https://localhost:19797/chrome-b?qa=updated")]
     [InlineData("localhost/path", "https://localhost/path")]
-    [InlineData("localhostish:8080/path", null)]
+    [InlineData("qa-intranet:19837/single?qa=updated", "https://qa-intranet:19837/single?qa=updated")]
+    [InlineData("wiki/page", "https://wiki/page")]
+    [InlineData("build-server:8080", "https://build-server:8080")]
     [InlineData("weather", null)]
+    [InlineData("intranet:abc/path", null)]
+    [InlineData("-bad-:8080/path", null)]
+    [InlineData("12345/path", null)]
     public void SanitizeCapturedBrowserUrl_NormalizesLikelyUrls(string value, string? expected)
     {
         Assert.Equal(expected, ActiveWindowService.SanitizeCapturedBrowserUrl(value));

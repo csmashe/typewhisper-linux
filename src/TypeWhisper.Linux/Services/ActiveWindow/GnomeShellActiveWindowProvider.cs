@@ -112,7 +112,8 @@ public sealed partial class GnomeShellActiveWindowProvider : IActiveWindowProvid
                 string.IsNullOrWhiteSpace(title) ? null : title,
                 window.Id,
                 string.IsNullOrWhiteSpace(appId) ? null : appId,
-                Name
+                Name,
+                pid is > 0 ? pid : null
             );
         }
 

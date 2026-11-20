@@ -18,6 +18,11 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
     private const string FramePath = "/org/a11y/atspi/accessible/frame";
     private const string EntryPath = "/org/a11y/atspi/accessible/entry";
     private const string DocumentPath = "/org/a11y/atspi/accessible/document";
+    private const string ReferenceBrowserTitle = "QA Reference Browser — Mozilla Firefox";
+    private const string ZenMailTitle = "Inbox Mail — Zen Browser";
+
+    // Above Linux's pid_max, so no process owns it.
+    private const int ForeignPid = 2147483000;
 
     // Role word 2 with only bit 31 (document web, role 95) set.
     private const string DocumentRoleWord = "-2147483648";
@@ -347,9 +352,176 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
     }
 
     [Fact]
+    public async Task TryGetBrowserUrl_KWinSnapshot_DoesNotBorrowAnotherInstancesUrl()
+    {
+        // The focused Chrome isn't on the bus; a same-title Chrome owned by another process is.
+        // KWin's snapshot must carry the focused PID so the walk rejects that app.
+        const int focusedPid = 2147483000; // Above pid_max: no process owns it.
+        var kdotool = new FakeProcessRunner();
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getactivewindow", "{win-b}\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowclassname", "google-chrome\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowname", "QA IDN - Google Chrome\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowpid", $"{focusedPid}\n");
+        var snapshot = await new KWinActiveWindowProvider(kdotool).TryGetActiveWindowAsync(CancellationToken.None);
+        Assert.NotNull(snapshot);
+
+        var runner = BuildChromeTree("other-instance.example/qa");
+        Respond(runner, "/org/freedesktop/DBus", "GetConnectionUnixProcessID", $"u {Environment.ProcessId}");
+        var extractor = new AtSpiUrlExtractor(runner);
+
+        Assert.Null(
+            extractor.TryGetBrowserUrl(
+                snapshot.ProcessName,
+                snapshot.AppId,
+                snapshot.Title,
+                focusedProcessId: snapshot.ProcessId,
+                focusedWindowId: snapshot.WindowId
+            )
+        );
+    }
+
+    [Fact]
+    public async Task GetBrowserUrlForSnapshot_KWinPidTimedOut_DoesNotFallBackToTheTitle()
+    {
+        // The provider's budget ran out on getwindowpid. A same-title Chrome is on the bus, but
+        // with the owner unknown it can't be told apart from the focused window.
+        var kdotool = KWinRunner("google-chrome", "QA IDN - Google Chrome");
+        var snapshot = await new KWinActiveWindowProvider(kdotool).TryGetActiveWindowAsync(CancellationToken.None);
+        Assert.NotNull(snapshot);
+        Assert.True(snapshot.ProcessIdUnresolved);
+
+        var runner = BuildChromeTree("other-instance.example/qa");
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot));
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot, isPolling: true));
+        // Control: a provider that never reports a PID keeps the name-and-title match.
+        Assert.Equal(
+            "https://other-instance.example/qa",
+            service.GetBrowserUrlForSnapshot(snapshot with { ProcessIdUnresolved = false })
+        );
+    }
+
+    [Fact]
+    public async Task GetBrowserUrlForSnapshot_KWinPidTimedOut_DoesNotGuessFromTheTitle()
+    {
+        var snapshot = await new KWinActiveWindowProvider(KWinRunner("zen", ZenMailTitle))
+            .TryGetActiveWindowAsync(CancellationToken.None);
+        Assert.NotNull(snapshot);
+        var runner = BuildChromeTree("other-instance.example/qa", appName: "Zen");
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot));
+    }
+
+    [Fact]
+    public void GetBrowserUrlForSnapshot_AnotherInstanceRejected_DoesNotGuessFromTheTitle()
+    {
+        // The focused Zen isn't on the bus; the Zen that is belongs to another process.
+        var snapshot = new ActiveWindowSnapshot("zen", ZenMailTitle, "{win-b}", "zen", "kwin", ForeignPid);
+        var runner = BuildChromeTree("other-instance.example/qa", appName: "Zen");
+        Respond(runner, "/org/freedesktop/DBus", "GetConnectionUnixProcessID", $"u {Environment.ProcessId}");
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot));
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot, isPolling: true));
+        // The second poll is answered by the miss backoff, which must remember the rejection.
+        var invocations = runner.SupervisorInvocations.Count;
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot, isPolling: true));
+        Assert.Equal(invocations, runner.SupervisorInvocations.Count);
+    }
+
+    [Fact]
+    public void TryGetBrowserUrl_RejectionAfterACachedRead_DropsTheCachedUrl()
+    {
+        // A poll cached the URL while the bus app was tied to the focused window (both are this
+        // test process). A later dictation walk can't learn the app's owner and rejects it, so
+        // the next poll must not serve the cached URL.
+        var focusedPid = Environment.ProcessId;
+        var ownerGone = false;
+        var runner = BuildChromeTree("cached.example/qa", appName: "Zen");
+        // ReSharper disable once AccessToModifiedClosure -- the owner deliberately disappears between walks.
+        runner.RespondWith(
+            (file, args) => file == "busctl" && args.Contains("GetConnectionUnixProcessID") && ownerGone,
+            "u 0\n"
+        );
+        Respond(runner, "/org/freedesktop/DBus", "GetConnectionUnixProcessID", $"u {focusedPid}");
+        var extractor = new AtSpiUrlExtractor(runner);
+        Assert.Equal(
+            "https://cached.example/qa",
+            extractor.TryGetBrowserUrl("zen", "zen", ZenMailTitle, true, focusedPid, "{win-b}", out _)
+        );
+
+        ownerGone = true;
+        Assert.Null(extractor.TryGetBrowserUrl("zen", "zen", ZenMailTitle, false, focusedPid, "{win-b}", out var rejected));
+        Assert.True(rejected);
+        Assert.Null(extractor.TryGetBrowserUrl("zen", "zen", ZenMailTitle, true, focusedPid, "{win-b}", out _));
+    }
+
+    [Fact]
+    public void GetBrowserUrlForSnapshot_NoInstanceRejected_KeepsTheTitleGuess()
+    {
+        var snapshot = new ActiveWindowSnapshot("zen", ZenMailTitle, "{win-b}", "zen", "kwin", ForeignPid);
+        var runner = new FakeProcessRunner
+        {
+            Default = new ProcessRunResult(true, false, 0, "('unix:path=/tmp/a11y-test',)\n", ""),
+        };
+        Respond(runner, "/org/a11y/atspi/accessible/root", "GetChildren", "a(so) 0");
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Equal("https://mail.google.com", service.GetBrowserUrlForSnapshot(snapshot));
+    }
+
+    [Fact]
+    public async Task GetFocusedScreenContext_KWinPidTimedOut_ReadsNothing()
+    {
+        var kdotool = KWinRunner("firefox", ReferenceBrowserTitle);
+        var snapshot = await new KWinActiveWindowProvider(kdotool).TryGetActiveWindowAsync(CancellationToken.None);
+        Assert.NotNull(snapshot);
+        var runner = BuildFirefoxFocusedFieldTree();
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Null(
+            service.GetFocusedScreenContext(
+                snapshot.ProcessName,
+                snapshot.Title,
+                snapshot.ProcessId,
+                snapshot.ProcessIdUnresolved
+            )
+        );
+        // Control: the same window with its owner unchecked would be read by title.
+        Assert.Equal(
+            "QA_REFERENCE_SCREEN_ASTER",
+            service.GetFocusedScreenContext(snapshot.ProcessName, snapshot.Title)
+        );
+    }
+
+    [Fact]
     public void TryHarvestFocusedContext_CollectionMatch_FindsFieldBeyondTheWalkBudget()
     {
-        const string title = "QA Reference Browser — Mozilla Firefox";
+        var extractor = new AtSpiUrlExtractor(BuildFirefoxFocusedFieldTree());
+
+        Assert.Equal(
+            "QA_REFERENCE_SCREEN_ASTER",
+            extractor.TryHarvestFocusedContext("firefox", ReferenceBrowserTitle, "TypeWhisper")
+        );
+    }
+
+    // kdotool reporting the focused window, with getwindowpid cut off by the provider's budget.
+    private static FakeProcessRunner KWinRunner(string windowClass, string title)
+    {
+        var kdotool = new FakeProcessRunner();
+        kdotool.TimeOutWhen((file, args) => file == "kdotool" && args[0] == "getwindowpid");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getactivewindow", "{win-b}\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowclassname", windowClass + "\n");
+        kdotool.RespondWith((file, args) => file == "kdotool" && args[0] == "getwindowname", title + "\n");
+        return kdotool;
+    }
+
+    // Registry root -> Firefox app -> frame with 60 chrome nodes -> focused page field.
+    private static FakeProcessRunner BuildFirefoxFocusedFieldTree()
+    {
+        const string title = ReferenceBrowserTitle;
         var runner = new FakeProcessRunner
         {
             Default = new ProcessRunResult(true, false, 0, "('unix:path=/tmp/a11y-test',)\n", ""),
@@ -397,12 +569,7 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
         );
         Respond(runner, EntryPath, "CharacterCount", "i 25");
         Respond(runner, EntryPath, "GetText", @"s ""QA_REFERENCE_SCREEN_ASTER""");
-        var extractor = new AtSpiUrlExtractor(runner);
-
-        Assert.Equal(
-            "QA_REFERENCE_SCREEN_ASTER",
-            extractor.TryHarvestFocusedContext("firefox", title, "TypeWhisper")
-        );
+        return runner;
     }
 
     // Registry root -> Chrome app -> active frame -> focused, editable address bar.
