@@ -43,6 +43,8 @@ public sealed class CompositorActiveWindowProviderTests
 
         Assert.NotNull(snapshot);
         Assert.Null(snapshot.ProcessId);
+        // Other providers leave the old name-and-title match in place.
+        Assert.False(snapshot.ProcessIdUnresolved);
     }
 
     [Fact]
@@ -92,6 +94,8 @@ public sealed class CompositorActiveWindowProviderTests
         Assert.NotNull(snapshot);
         Assert.Equal("firefox", snapshot.ProcessName);
         Assert.Null(snapshot.ProcessId);
+        // Other providers leave the old name-and-title match in place.
+        Assert.False(snapshot.ProcessIdUnresolved);
     }
 
     [Fact]
@@ -123,6 +127,7 @@ public sealed class CompositorActiveWindowProviderTests
         Assert.Equal("Same Title", snapshot.Title);
         Assert.Equal(KWinWindowId, snapshot.WindowId);
         Assert.Equal(ForeignPid, snapshot.ProcessId);
+        Assert.False(snapshot.ProcessIdUnresolved);
         // The PID comes from the captured window, not a second getactivewindow.
         Assert.Contains(
             runner.SupervisorInvocations,
@@ -148,6 +153,7 @@ public sealed class CompositorActiveWindowProviderTests
         Assert.NotNull(snapshot);
         Assert.Equal("firefox", snapshot.ProcessName);
         Assert.Null(snapshot.ProcessId);
+        Assert.True(snapshot.ProcessIdUnresolved);
     }
 
     [Fact]
@@ -162,6 +168,7 @@ public sealed class CompositorActiveWindowProviderTests
         Assert.NotNull(snapshot);
         Assert.Equal("Same Title", snapshot.Title);
         Assert.Null(snapshot.ProcessId);
+        Assert.True(snapshot.ProcessIdUnresolved);
     }
 
     [Fact]
@@ -176,6 +183,7 @@ public sealed class CompositorActiveWindowProviderTests
         Assert.NotNull(snapshot);
         Assert.Equal("Same Title", snapshot.Title);
         Assert.Null(snapshot.ProcessId);
+        Assert.True(snapshot.ProcessIdUnresolved);
     }
 
     private static bool IsGetWindowPid(string file, IReadOnlyList<string> args)

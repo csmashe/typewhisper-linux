@@ -1215,7 +1215,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Clipboard,
                             appProcess,
                             appTitle,
-                            initialSnap?.ProcessId
+                            initialSnap?.ProcessId,
+                            initialSnap?.ProcessIdUnresolved == true
                         );
                     }
                 }
@@ -1346,7 +1347,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                             needs.Clipboard,
                             appProcess,
                             appTitle,
-                            initialSnap?.ProcessId
+                            initialSnap?.ProcessId,
+                            initialSnap?.ProcessIdUnresolved == true
                         );
                     }
                 }
@@ -4144,7 +4146,8 @@ public sealed partial class DictationOrchestrator : IDisposable
         bool clipboardEnabled,
         string? windowProcess,
         string? windowTitle,
-        int? windowProcessId
+        int? windowProcessId,
+        bool windowProcessIdUnresolved
     )
     {
         if (!_sessionActivityMonitor.IsInputAllowed)
@@ -4159,7 +4162,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             ? CaptureClipboardContextAsync()
             : Task.FromResult<string?>(null);
         var screenTask = screenEnabled
-            ? CaptureScreenContextAsync(windowProcess, windowTitle, windowProcessId)
+            ? CaptureScreenContextAsync(windowProcess, windowTitle, windowProcessId, windowProcessIdUnresolved)
             : Task.FromResult<string?>(null);
 
         var clipboard = await clipboardTask.ConfigureAwait(false);
@@ -4212,7 +4215,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     private async Task<string?> CaptureScreenContextAsync(
         string? windowProcess,
         string? windowTitle,
-        int? windowProcessId
+        int? windowProcessId,
+        bool windowProcessIdUnresolved
     )
     {
         try
@@ -4223,7 +4227,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                             ? _activeWindow.GetFocusedScreenContext(
                                 windowProcess,
                                 windowTitle,
-                                windowProcessId
+                                windowProcessId,
+                                windowProcessIdUnresolved
                             )
                             : null
                     )
@@ -4974,6 +4979,8 @@ public sealed partial class DictationOrchestrator : IDisposable
             || string.IsNullOrWhiteSpace(a.Title)
             || string.IsNullOrWhiteSpace(b.Title)
             || !string.Equals(a.Title, b.Title, StringComparison.Ordinal)
+            // Same window ID and title can't vouch for a window whose owner changed.
+            || (a.ProcessId is > 0 && b.ProcessId is > 0 && a.ProcessId != b.ProcessId)
         )
         {
             return false;

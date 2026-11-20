@@ -116,25 +116,36 @@ public sealed class ActiveWindowService : IActiveWindowService
         bool isPolling = false
     )
     {
-        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(
-            snapshot?.ProcessName,
-            snapshot?.AppId,
-            snapshot?.Title,
-            isPolling,
-            snapshot?.ProcessId,
-            snapshot?.WindowId
-        );
+        // Without the owner's PID the AT-SPI walk could only match by name and title, which can
+        // read another instance's address bar.
+        var atSpiUrl = snapshot is { ProcessIdUnresolved: true }
+            ? null
+            : _atSpiUrlExtractor.TryGetBrowserUrl(
+                snapshot?.ProcessName,
+                snapshot?.AppId,
+                snapshot?.Title,
+                isPolling,
+                snapshot?.ProcessId,
+                snapshot?.WindowId
+            );
         return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
     }
 
-    public string? GetFocusedScreenContext(string? processName, string? title, int? processId = null)
+    public string? GetFocusedScreenContext(
+        string? processName,
+        string? title,
+        int? processId = null,
+        bool processIdUnresolved = false
+    )
     {
-        return _atSpiUrlExtractor.TryHarvestFocusedContext(
-            processName,
-            title,
-            SelfAtSpiAppName,
-            processId
-        );
+        return processIdUnresolved
+            ? null
+            : _atSpiUrlExtractor.TryHarvestFocusedContext(
+                processName,
+                title,
+                SelfAtSpiAppName,
+                processId
+            );
     }
 
     /// <summary>

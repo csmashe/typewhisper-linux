@@ -36,11 +36,17 @@ public interface IActiveWindowService
     ///     Bounded text reference from the captured window's focused accessible element.
     ///     Callers must obtain screen-context consent before invoking this method. Missing or
     ///     unconfirmed window identity and password fields return null. A known
-    ///     <paramref name="processId" /> excludes other instances of the same program. Older
+    ///     <paramref name="processId" /> excludes other instances of the same program; with
+    ///     <paramref name="processIdUnresolved" /> the owner is unknown and nothing is read. Older
     ///     implementations expose no screen context.
     /// </summary>
     // ReSharper disable once UnusedMemberInSuper.Global -- the orchestrator calls the concrete ActiveWindowService; other implementations keep this no-context default.
-    string? GetFocusedScreenContext(string? processName, string? title, int? processId = null) => null;
+    string? GetFocusedScreenContext(
+        string? processName,
+        string? title,
+        int? processId = null,
+        bool processIdUnresolved = false
+    ) => null;
 
     /// <summary>Returns distinct process names of all visible windows (sorted).</summary>
     IReadOnlyList<string> GetRunningAppProcessNames();

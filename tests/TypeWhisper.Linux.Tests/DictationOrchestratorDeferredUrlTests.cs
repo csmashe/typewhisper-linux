@@ -24,6 +24,17 @@ public sealed class DictationOrchestratorDeferredUrlTests
     }
 
     [Fact]
+    public void Different_owner_pid_discards_the_deferred_url()
+    {
+        var owned = s_tabA with { ProcessId = 100 };
+
+        Assert.False(DictationOrchestrator.IsSameWindowAndTab(owned, owned with { ProcessId = 200 }));
+        Assert.True(DictationOrchestrator.IsSameWindowAndTab(owned, owned with { }));
+        // A side without a PID keeps the window-ID comparison.
+        Assert.True(DictationOrchestrator.IsSameWindowAndTab(owned, s_tabA));
+    }
+
+    [Fact]
     public void Different_window_discards_the_deferred_url()
     {
         Assert.False(DictationOrchestrator.IsSameWindowAndTab(s_tabA, s_tabA with { WindowId = "43" }));

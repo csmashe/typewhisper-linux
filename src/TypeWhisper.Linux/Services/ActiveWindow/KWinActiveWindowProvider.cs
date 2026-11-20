@@ -66,8 +66,10 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider, IActiveWin
                 .ConfigureAwait(false);
             var title = nameExit == 0 ? nameOutput?.Trim() : null;
 
-            // KWin knows the owning PID of both Wayland-native and XWayland clients. Without it
-            // the URL and screen-context readers can't tell two same-title instances apart.
+            // KWin knows the owning PID of both Wayland-native and XWayland clients, and every
+            // kdotool release has getwindowpid. Without it the URL and screen-context readers
+            // can't tell two same-title instances apart, so a missed PID (including the caller's
+            // budget running out) marks the owner unresolved instead of leaving it to the title.
             var (pidExit, pidOutput) = await _processRunner
                 .RunAsync("kdotool", ["getwindowpid", windowId], ct)
                 .ConfigureAwait(false);
@@ -83,7 +85,8 @@ public sealed class KWinActiveWindowProvider : IActiveWindowProvider, IActiveWin
                 windowId,
                 string.IsNullOrWhiteSpace(klass) ? null : klass,
                 Name,
-                processId
+                processId,
+                processId is null
             );
         }
         catch (OperationCanceledException)
