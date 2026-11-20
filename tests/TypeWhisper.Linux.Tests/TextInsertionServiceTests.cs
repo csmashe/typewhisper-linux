@@ -2872,6 +2872,228 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_X11ClipboardRead_FallsBackToCompoundText()
+    {
+        var runner = new FakeProcessRunner();
+        runner.FailWhen(
+            (file, args) => file == "xclip" && args.SequenceEqual(["-selection", "clipboard", "-o"]),
+            "Error: target STRING not available"
+        );
+        runner.RespondWith(
+            (file, args) =>
+                file == "xclip"
+                && args.SequenceEqual(["-selection", "clipboard", "-o", "-t", "COMPOUND_TEXT"]),
+            "PRIOR \e$(BEl5~"
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", true, false, "xclip"), runner);
+
+        Assert.Equal("PRIOR 東京", await platform.TryGetClipboardTextAsync());
+        Assert.Equal("PRIOR 東", await platform.TryGetClipboardTextAsync(7));
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_X11ClipboardRead_TextOwnerMakesNoExtraReads()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "xclip" && args.SequenceEqual(["-selection", "clipboard", "-o"]),
+            "PRIOR café"
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", true, false, "xclip"), runner);
+
+        Assert.Equal("PRIOR café", await platform.TryGetClipboardTextAsync());
+        Assert.Equal("PRIOR", await platform.TryGetClipboardTextAsync(5));
+        Assert.All(runner.Invocations, call => Assert.Equal(["-selection", "clipboard", "-o"], call.Args));
+        Assert.Equal(2, runner.Invocations.Count);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_X11ClipboardRead_EmptyTextStaysEmptyWithoutWlPaste()
+    {
+        var runner = new FakeProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("X11", true, false, "xclip"), runner);
+
+        Assert.Equal("", await platform.TryGetClipboardTextAsync());
+        var call = Assert.Single(runner.Invocations);
+        Assert.Equal("xclip", call.FileName);
+    }
+
+    private const string GnomeCompoundTextWithSaveTargets = "SAVE_TARGETS\nCOMPOUND_TEXT\nMULTIPLE\nTARGETS\nTIMESTAMP\n";
+    private const string GnomeCompoundTextOnly = "COMPOUND_TEXT\nMULTIPLE\nTARGETS\nTIMESTAMP\n";
+
+    // COMPOUND_TEXT a GTK3 owner serves: "latin" = "PRIOR café Ω 東京" (Latin-1 bytes plus escapes),
+    // "escapes" = "PRIOR 東京" (7-bit escapes only, so valid UTF-8), "ascii" = "PRIOR cafe".
+    private static (byte[] Bytes, string Text) CompoundTextSample(string kind) =>
+        kind switch
+        {
+            "latin" => (
+                [
+                    .. "PRIOR caf"u8, 0xE9, (byte)' ', 0x1B, (byte)'-', (byte)'F', 0xD9, (byte)' ',
+                    0x1B, (byte)'$', (byte)'(', (byte)'B', .. "El5~"u8,
+                ],
+                "PRIOR café Ω 東京"),
+            "escapes" => ([.. "PRIOR "u8, 0x1B, (byte)'$', (byte)'(', (byte)'B', .. "El5~"u8], "PRIOR 東京"),
+            _ => ("PRIOR cafe"u8.ToArray(), "PRIOR cafe"),
+        };
+
+    // Mutter (GNOME) and Hyprland bridge an Xwayland owner that offers only COMPOUND_TEXT with no text type.
+    // wl-paste's default read returns the first listed type raw: nothing for SAVE_TARGETS or MULTIPLE, the
+    // undecoded bytes when COMPOUND_TEXT comes first (GNOME without SAVE_TARGETS).
+    [Theory]
+    [InlineData(GnomeCompoundTextWithSaveTargets, false, "latin")]
+    [InlineData(GnomeCompoundTextWithSaveTargets, false, "escapes")]
+    [InlineData(GnomeCompoundTextWithSaveTargets, false, "ascii")]
+    [InlineData(GnomeCompoundTextOnly, true, "latin")]
+    [InlineData(GnomeCompoundTextOnly, true, "escapes")]
+    [InlineData(GnomeCompoundTextOnly, true, "ascii")]
+    [InlineData("MULTIPLE\nCOMPOUND_TEXT\nSAVE_TARGETS\n", false, "latin")]
+    [InlineData("MULTIPLE\nCOMPOUND_TEXT\nSAVE_TARGETS\n", false, "ascii")]
+    [InlineData("MULTIPLE\nCOMPOUND_TEXT\n", false, "latin")]
+    [InlineData("MULTIPLE\nCOMPOUND_TEXT\n", false, "escapes")]
+    public async Task LinuxTextInsertionPlatform_WaylandClipboardRead_DecodesCompoundTextOnlyOwner(
+        string listing,
+        bool defaultReadIsRawCompoundText,
+        string kind
+    )
+    {
+        var (bytes, text) = CompoundTextSample(kind);
+        var runner = new FakeProcessRunner();
+        runner.RespondWithBytes(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--no-newline"]),
+            defaultReadIsRawCompoundText ? bytes : []
+        );
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            listing
+        );
+        runner.RespondWithBytes(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--no-newline", "-t", "COMPOUND_TEXT"]),
+            bytes
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", false, true), runner);
+
+        Assert.Equal(text, await platform.TryGetClipboardTextAsync());
+        Assert.Equal(text[..8], await platform.TryGetClipboardTextAsync(8));
+        Assert.DoesNotContain(runner.Invocations, call => call.FileName == "xclip");
+    }
+
+    [Theory]
+    [InlineData(GnomeCompoundTextWithSaveTargets, "")]
+    [InlineData(GnomeCompoundTextOnly, "\e%/1")]
+    public async Task LinuxTextInsertionPlatform_WaylandClipboardRead_UndecodableCompoundTextOnlyOwnerIsUnknown(
+        string listing,
+        string defaultRead
+    )
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--no-newline"]),
+            defaultRead
+        );
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            listing
+        );
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--no-newline", "-t", "COMPOUND_TEXT"]),
+            "\e%/1"
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", false, true), runner);
+
+        Assert.Null(await platform.TryGetClipboardTextAsync());
+    }
+
+    // Text owners as GNOME, KDE and Hyprland list them: printable text never consults the type listing.
+    [Theory]
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n", "PRIOR cafe")]
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n", "PRIOR café Ω 東京")]
+    [InlineData("text/plain\ntext/plain;charset=utf-8\nSTRING\nTEXT\nCOMPOUND_TEXT\nUTF8_STRING\nSAVE_TARGETS\nMULTIPLE\nTARGETS\nTIMESTAMP\n", "PRIOR café Ω 東京")]
+    [InlineData("UTF8_STRING\nCOMPOUND_TEXT\nSAVE_TARGETS\nMULTIPLE\nTARGETS\nTIMESTAMP\n", "PRIOR café Ω 東京\nline2\t✓")]
+    [InlineData("UTF8_STRING\nSTRING\nTEXT\ntext/plain;charset=utf-8\ntext/plain\n", "PRIOR cafe")]
+    public async Task LinuxTextInsertionPlatform_WaylandClipboardRead_TextOwnerMakesNoExtraReads(
+        string listing,
+        string text
+    )
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--no-newline"]),
+            text
+        );
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            listing
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", false, true), runner);
+
+        Assert.Equal(text, await platform.TryGetClipboardTextAsync());
+        Assert.Equal(text[..5], await platform.TryGetClipboardTextAsync(5));
+        Assert.All(runner.Invocations, call => Assert.Equal(["--no-newline"], call.Args));
+        Assert.Equal(2, runner.Invocations.Count);
+    }
+
+    // Text with escapes or invalid UTF-8 from an owner that lists a text type is returned as read.
+    [Theory]
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\n", "\e[1mbold\e[0m")]
+    [InlineData("UTF8_STRING\nCOMPOUND_TEXT\nMULTIPLE\nTARGETS\nTIMESTAMP\n", "bad \uFFFD byte")]
+    public async Task LinuxTextInsertionPlatform_WaylandClipboardRead_ControlTextFromTextOwnerIsUnchanged(
+        string listing,
+        string text
+    )
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--no-newline"]),
+            text
+        );
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            listing
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", false, true), runner);
+
+        Assert.Equal(text, await platform.TryGetClipboardTextAsync());
+        Assert.Equal(text[..4], await platform.TryGetClipboardTextAsync(4));
+        Assert.DoesNotContain(runner.Invocations, call => call.Args.Contains("COMPOUND_TEXT"));
+    }
+
+    // An owner that lists a text type really holds empty text; the GTK lists carry COMPOUND_TEXT too.
+    [Theory]
+    [InlineData("text/plain;charset=utf-8\nUTF8_STRING\nCOMPOUND_TEXT\nTEXT\ntext/plain\nSTRING\nSAVE_TARGETS\n")]
+    [InlineData("SAVE_TARGETS\nTIMESTAMP\nTARGETS\nUTF8_STRING\nCOMPOUND_TEXT\n")]
+    [InlineData("STRING\nCOMPOUND_TEXT\n")]
+    [InlineData("TEXT\nCOMPOUND_TEXT\n")]
+    [InlineData("application/x-zerosize\n")]
+    [InlineData("")]
+    public async Task LinuxTextInsertionPlatform_WaylandClipboardRead_EmptyReadWithoutCompoundTextOnlyListingStaysEmpty(
+        string listing
+    )
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (file, args) => file == "wl-paste" && args.SequenceEqual(["--list-types"]),
+            listing
+        );
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", false, true), runner);
+
+        Assert.Equal("", await platform.TryGetClipboardTextAsync());
+        Assert.Equal("", await platform.TryGetClipboardTextAsync(7));
+        Assert.DoesNotContain(runner.Invocations, call => call.Args.Contains("COMPOUND_TEXT"));
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_WaylandClipboardRead_FailedReadStaysNullWithoutFallback()
+    {
+        var runner = new FakeProcessRunner();
+        runner.FailWhen((file, _) => file == "wl-paste", "Nothing is copied");
+        var platform = new LinuxTextInsertionPlatform(SnapshotFor("Wayland", false, true), runner);
+
+        Assert.Null(await platform.TryGetClipboardTextAsync());
+        Assert.Null(await platform.TryGetClipboardTextAsync(7));
+        Assert.Equal(2, runner.Invocations.Count);
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_WaylandSessionWithXclipRoute_UsesXclipForAllClipboardOperations()
     {
         var runner = new FakeProcessRunner();
@@ -2994,9 +3216,9 @@ public sealed class TextInsertionServiceTests
 
         await platform.TryGetClipboardTextAsync();
 
-        var call = Assert.Single(runner.Invocations);
-        Assert.Equal("wl-paste", call.FileName);
-        Assert.Equal(TimeSpan.FromSeconds(5), call.Timeout);
+        Assert.Equal("wl-paste", runner.Invocations[0].FileName);
+        Assert.Equal(["--no-newline"], runner.Invocations[0].Args);
+        Assert.All(runner.Invocations, call => Assert.Equal(TimeSpan.FromSeconds(5), call.Timeout));
     }
 
     [Fact]

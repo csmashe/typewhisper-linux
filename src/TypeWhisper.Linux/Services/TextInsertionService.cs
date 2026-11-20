@@ -1604,17 +1604,15 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 ).ConfigureAwait(false);
                 if (!bounded.Succeeded && bounded.Status != ProcessRunStatus.OutputLimitExceeded)
                 {
-                    return null;
+                    return useWaylandClipboard || bounded.Status != ProcessRunStatus.Exited
+                        ? null
+                        : Truncate(await TryReadCompoundTextAsync(ct).ConfigureAwait(false), maxChars);
                 }
 
-                var text = bounded.StandardOutputText;
-                var length = Math.Min(text.Length, maxChars);
-                if (length < text.Length && length > 0 && char.IsHighSurrogate(text[length - 1]))
-                {
-                    length--;
-                }
-
-                return text[..length];
+                var text = Truncate(bounded.StandardOutputText, maxChars)!;
+                return useWaylandClipboard && MayBeNonTextRead(text)
+                    ? Truncate(await ReadWaylandCompoundTextOrAsync(text, ct).ConfigureAwait(false), maxChars)
+                    : text;
             }
 
             var result = await _ioRunner.RunAsync(
@@ -1640,13 +1638,84 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 return null;
             }
 
-            return result.Succeeded ? result.StandardOutput : null;
+            if (result.Succeeded)
+            {
+                return useWaylandClipboard && MayBeNonTextRead(result.StandardOutput)
+                    ? await ReadWaylandCompoundTextOrAsync(result.StandardOutput, ct).ConfigureAwait(false)
+                    : result.StandardOutput;
+            }
+
+            return useWaylandClipboard ? null : await TryReadCompoundTextAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[TextInsertionService] clipboard read failed: {ex.Message}");
             return null;
         }
+    }
+
+    // xclip's default read tries only UTF8_STRING and STRING; some owners offer text only as COMPOUND_TEXT.
+    private async Task<string?> TryReadCompoundTextAsync(CancellationToken ct)
+    {
+        var data = await RunClipboardReadAsync(
+            ["-selection", "clipboard", "-o", "-t", "COMPOUND_TEXT"],
+            MaxRichClipboardBytes,
+            ct
+        ).ConfigureAwait(false);
+        return data is null ? null : CompoundTextDecoder.TryDecode(data);
+    }
+
+    // Mutter and Hyprland bridge an Xwayland COMPOUND_TEXT-only owner with no text type, so wl-paste's
+    // default read returns its first type raw: nothing for SAVE_TARGETS/MULTIPLE, undecoded bytes for
+    // COMPOUND_TEXT. Those carry escapes, controls or invalid UTF-8 (its Latin-1 bytes), while printable
+    // ASCII reads the same in both encodings, so only such reads need the type listing.
+    private static bool MayBeNonTextRead(string text) =>
+        text.Length == 0
+        || text.Any(c => c == '\uFFFD' || (char.IsControl(c) && c is not '\t' and not '\n' and not '\r'));
+
+    // Returns the decoded COMPOUND_TEXT when the clipboard offers no text type, otherwise the default read.
+    private async Task<string?> ReadWaylandCompoundTextOrAsync(string defaultRead, CancellationToken ct)
+    {
+        var listing = await RunClipboardToolReadAsync("wl-paste", ["--list-types"], MaxRichClipboardBytes, ct)
+            .ConfigureAwait(false);
+        if (listing is null || !ListingOffersOnlyCompoundText(Encoding.UTF8.GetString(listing)))
+        {
+            return defaultRead;
+        }
+
+        var data = await RunClipboardToolReadAsync(
+            "wl-paste",
+            ["--no-newline", "-t", "COMPOUND_TEXT"],
+            MaxRichClipboardBytes,
+            ct
+        ).ConfigureAwait(false);
+        return data is null ? null : CompoundTextDecoder.TryDecode(data);
+    }
+
+    // True when COMPOUND_TEXT is listed but nothing wl-paste would pick as text on its own.
+    private static bool ListingOffersOnlyCompoundText(string listing)
+    {
+        var targets = listing.Split('\n').Select(rawLine => rawLine.Trim()).ToList();
+        return targets.Contains("COMPOUND_TEXT")
+               && !targets.Any(target =>
+                   target.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+                   || target is "UTF8_STRING" or "STRING" or "TEXT");
+    }
+
+    private static string? Truncate(string? text, int maxChars)
+    {
+        if (text is null)
+        {
+            return null;
+        }
+
+        var length = Math.Min(text.Length, maxChars);
+        if (length < text.Length && length > 0 && char.IsHighSurrogate(text[length - 1]))
+        {
+            length--;
+        }
+
+        return text[..length];
     }
 
     public async Task<bool> ClipboardHasNonTextFormatsAsync()
@@ -1737,10 +1806,22 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     public Task<bool> TryRestoreRichClipboardAsync(string text, IReadOnlyList<ClipboardFormatData> formats) =>
         UsesWaylandClipboard ? Task.FromResult(false) : RichClipboardWriter.TrySetAsync(text, formats);
 
-    private async Task<byte[]?> RunClipboardReadAsync(IReadOnlyList<string> args, int maxBytes)
+    private Task<byte[]?> RunClipboardReadAsync(
+        IReadOnlyList<string> args,
+        int maxBytes,
+        CancellationToken ct = default
+    ) =>
+        RunClipboardToolReadAsync("xclip", args, maxBytes, ct);
+
+    private async Task<byte[]?> RunClipboardToolReadAsync(
+        string fileName,
+        IReadOnlyList<string> args,
+        int maxBytes,
+        CancellationToken ct
+    )
     {
         var result = await _ioRunner.RunOneShotAsync(
-            new ProcessCommand("xclip", args),
+            new ProcessCommand(fileName, args),
             new ProcessOneShotOptions(
                 Timeout: s_clipboardOperationTimeout,
                 StandardOutput: ProcessCaptureMode.Binary,
@@ -1748,7 +1829,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             )
             {
                 MaximumStandardOutputBytes = maxBytes,
-            }
+            },
+            ct
         ).ConfigureAwait(false);
         return result.Succeeded ? result.StandardOutput : null;
     }
