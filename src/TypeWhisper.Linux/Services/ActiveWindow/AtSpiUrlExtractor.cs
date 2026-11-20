@@ -103,6 +103,7 @@ public sealed partial class AtSpiUrlExtractor
     private DateTime _missAt;
     private string? _missDescriptorId;
     private int? _missProcessId;
+    private bool _missRejectedAnotherInstance;
     private string? _missTitle;
     private string? _missWindowId;
 
@@ -207,6 +208,32 @@ public sealed partial class AtSpiUrlExtractor
         string? focusedWindowId = null
     )
     {
+        return TryGetBrowserUrl(
+            focusedProcessName,
+            focusedAppId,
+            focusedTitle,
+            isPolling,
+            focusedProcessId,
+            focusedWindowId,
+            out _
+        );
+    }
+
+    /// <param name="rejectedAnotherInstance">
+    ///     True when a matching app was skipped because it belongs to another instance, so
+    ///     the focused window's identity wasn't established and no URL should be guessed.
+    /// </param>
+    internal string? TryGetBrowserUrl(
+        string? focusedProcessName,
+        string? focusedAppId,
+        string? focusedTitle,
+        bool isPolling,
+        int? focusedProcessId,
+        string? focusedWindowId,
+        out bool rejectedAnotherInstance
+    )
+    {
+        rejectedAnotherInstance = false;
         var browser = ResolveBrowserDescriptor(
             focusedProcessName,
             focusedAppId,
@@ -250,6 +277,7 @@ public sealed partial class AtSpiUrlExtractor
                     && now - _missAt < s_missBackoff
                 )
                 {
+                    rejectedAnotherInstance = _missRejectedAnotherInstance;
                     return null;
                 }
             }
@@ -291,6 +319,8 @@ public sealed partial class AtSpiUrlExtractor
             budgetExhausted = cts.IsCancellationRequested;
         }
 
+        rejectedAnotherInstance = stats.RejectedAnotherInstance;
+
         lock (_cacheLock)
         {
             // Only cache successes — caching null here would re-key a still-valid previous
@@ -308,6 +338,7 @@ public sealed partial class AtSpiUrlExtractor
                 _missWindowId = null;
                 _missTitle = null;
                 _missAt = default;
+                _missRejectedAnotherInstance = false;
             }
             else if (isPolling)
             {
@@ -317,6 +348,7 @@ public sealed partial class AtSpiUrlExtractor
                 _missWindowId = focusedWindowId;
                 _missTitle = focusedTitle;
                 _missAt = DateTime.UtcNow;
+                _missRejectedAnotherInstance = stats.RejectedAnotherInstance;
             }
         }
 
@@ -1034,11 +1066,14 @@ public sealed partial class AtSpiUrlExtractor
                 stats.AppsSeen.Add(appName);
             }
 
-            if (
-                !IsMatchingApp(appName, focusedBrowser)
-                || IsAppOwnedByAnotherInstance(address, app, focusedProcessName, focusedProcessId)
-            )
+            if (!IsMatchingApp(appName, focusedBrowser))
             {
+                continue;
+            }
+
+            if (IsAppOwnedByAnotherInstance(address, app, focusedProcessName, focusedProcessId))
+            {
+                stats.RejectedAnotherInstance = true;
                 continue;
             }
 
@@ -1984,6 +2019,7 @@ public sealed partial class AtSpiUrlExtractor
     {
         public List<string> AppsSeen { get; } = [];
         public string? MatchedApp { get; set; }
+        public bool RejectedAnotherInstance { get; set; }
         public bool WindowFound { get; set; }
         public int NodesWalked { get; set; }
         public int BestScore { get; set; } = int.MinValue;

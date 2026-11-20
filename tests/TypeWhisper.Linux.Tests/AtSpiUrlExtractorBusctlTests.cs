@@ -19,6 +19,10 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
     private const string EntryPath = "/org/a11y/atspi/accessible/entry";
     private const string DocumentPath = "/org/a11y/atspi/accessible/document";
     private const string ReferenceBrowserTitle = "QA Reference Browser — Mozilla Firefox";
+    private const string ZenMailTitle = "Inbox Mail — Zen Browser";
+
+    // Above Linux's pid_max, so no process owns it.
+    private const int ForeignPid = 2147483000;
 
     // Role word 2 with only bit 31 (document web, role 95) set.
     private const string DocumentRoleWord = "-2147483648";
@@ -396,6 +400,49 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
             "https://other-instance.example/qa",
             service.GetBrowserUrlForSnapshot(snapshot with { ProcessIdUnresolved = false })
         );
+    }
+
+    [Fact]
+    public async Task GetBrowserUrlForSnapshot_KWinPidTimedOut_DoesNotGuessFromTheTitle()
+    {
+        var snapshot = await new KWinActiveWindowProvider(KWinRunner("zen", ZenMailTitle))
+            .TryGetActiveWindowAsync(CancellationToken.None);
+        Assert.NotNull(snapshot);
+        var runner = BuildChromeTree("other-instance.example/qa", appName: "Zen");
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot));
+    }
+
+    [Fact]
+    public void GetBrowserUrlForSnapshot_AnotherInstanceRejected_DoesNotGuessFromTheTitle()
+    {
+        // The focused Zen isn't on the bus; the Zen that is belongs to another process.
+        var snapshot = new ActiveWindowSnapshot("zen", ZenMailTitle, "{win-b}", "zen", "kwin", ForeignPid);
+        var runner = BuildChromeTree("other-instance.example/qa", appName: "Zen");
+        Respond(runner, "/org/freedesktop/DBus", "GetConnectionUnixProcessID", $"u {Environment.ProcessId}");
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot));
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot, isPolling: true));
+        // The second poll is answered by the miss backoff, which must remember the rejection.
+        var invocations = runner.SupervisorInvocations.Count;
+        Assert.Null(service.GetBrowserUrlForSnapshot(snapshot, isPolling: true));
+        Assert.Equal(invocations, runner.SupervisorInvocations.Count);
+    }
+
+    [Fact]
+    public void GetBrowserUrlForSnapshot_NoInstanceRejected_KeepsTheTitleGuess()
+    {
+        var snapshot = new ActiveWindowSnapshot("zen", ZenMailTitle, "{win-b}", "zen", "kwin", ForeignPid);
+        var runner = new FakeProcessRunner
+        {
+            Default = new ProcessRunResult(true, false, 0, "('unix:path=/tmp/a11y-test',)\n", ""),
+        };
+        Respond(runner, "/org/a11y/atspi/accessible/root", "GetChildren", "a(so) 0");
+        var service = new ActiveWindowService([], new AtSpiUrlExtractor(runner), runner);
+
+        Assert.Equal("https://mail.google.com", service.GetBrowserUrlForSnapshot(snapshot));
     }
 
     [Fact]

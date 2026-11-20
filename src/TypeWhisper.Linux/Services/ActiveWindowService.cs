@@ -117,18 +117,23 @@ public sealed class ActiveWindowService : IActiveWindowService
     )
     {
         // Without the owner's PID the AT-SPI walk could only match by name and title, which can
-        // read another instance's address bar.
-        var atSpiUrl = snapshot is { ProcessIdUnresolved: true }
-            ? null
-            : _atSpiUrlExtractor.TryGetBrowserUrl(
-                snapshot?.ProcessName,
-                snapshot?.AppId,
-                snapshot?.Title,
-                isPolling,
-                snapshot?.ProcessId,
-                snapshot?.WindowId
-            );
-        return atSpiUrl ?? TryInferBrowserUrlFromTitle(snapshot?.Title);
+        // read another instance's address bar. Unknown or rejected ownership leaves the
+        // window unidentified, so the title isn't used to guess a URL either.
+        if (snapshot is { ProcessIdUnresolved: true })
+        {
+            return null;
+        }
+
+        var atSpiUrl = _atSpiUrlExtractor.TryGetBrowserUrl(
+            snapshot?.ProcessName,
+            snapshot?.AppId,
+            snapshot?.Title,
+            isPolling,
+            snapshot?.ProcessId,
+            snapshot?.WindowId,
+            out var rejectedAnotherInstance
+        );
+        return atSpiUrl ?? (rejectedAnotherInstance ? null : TryInferBrowserUrlFromTitle(snapshot?.Title));
     }
 
     public string? GetFocusedScreenContext(
