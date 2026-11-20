@@ -13,7 +13,8 @@ public sealed partial class DictationOrchestrator
     internal static async Task<string> CompleteCleanupAsync(
         LlmCleanupService cleanup, PromptProcessingService prompts, LiveCleanupDraft? draft,
         string text, CleanupLevel level, LlmCallCapture? capture,
-        Func<string, Task>? status, CancellationToken token, string? referenceContext = null)
+        Func<string, Task>? status, CancellationToken token, string? referenceContext = null,
+        Action? referenceContextSent = null)
     {
         // ReSharper disable once InvertIf -- inverting would duplicate the final cleanup call below.
         if (draft is not null)
@@ -44,7 +45,7 @@ public sealed partial class DictationOrchestrator
             finally { draft.Dispose(); }
         }
         return await cleanup.CleanAsync(text, level, status, capture, ct: token,
-            referenceContext: referenceContext);
+            referenceContext: referenceContext, referenceContextSent: referenceContextSent);
     }
 
     private readonly Lock _recoveryLock = new();
@@ -118,7 +119,7 @@ public sealed partial class DictationOrchestrator
                         {
                             ReportStatus(context, message, DictationOverlayPhase.Transcribing);
                             return Task.CompletedTask;
-                        }, token, referenceContext),
+                        }, token, referenceContext, context.ReferenceContextUse.MarkSent),
             SnippetExpander = text =>
                 _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null
