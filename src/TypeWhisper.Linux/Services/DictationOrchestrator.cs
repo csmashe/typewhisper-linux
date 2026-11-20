@@ -42,6 +42,9 @@ internal sealed record RecordingContext(
 {
     public string? ScreenContext { get; init; }
     public string? ClipboardContext { get; init; }
+
+    /// <summary>Shared across <c>with</c> copies, so cleanup can mark the references as sent.</summary>
+    public ReferenceContextUse ReferenceContextUse { get; } = new();
     public LockedFocusTarget? LockedFocusField { get; init; }
 
     /// <summary>The window focused at recording start, used to catch a focus move when there is no xdotool <see cref="WindowId" />.</summary>
@@ -4446,6 +4449,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Localization.Loc.Instance["TextInsertion.YdotoolSocketClipboardFallback"],
             InsertionFailureReason.WtypeXWaylandTarget =>
                 Localization.Loc.Instance["TextInsertion.WtypeXWaylandClipboardFallback"],
+            InsertionFailureReason.WtypeGtk3PasteTarget =>
+                Localization.Loc.Instance["TextInsertion.WtypeGtk3ClipboardFallback"],
             InsertionFailureReason.NoWaylandTypingTool =>
                 Localization.Loc.Instance.GetString(
                     "TextInsertion.ClipboardFallbackWithHint", _commands.GetSnapshot().PasteToolInstallHint),
@@ -4725,7 +4730,8 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         try
         {
-            var referenceContextConsumed = cleanupLevel is CleanupLevel.Medium or CleanupLevel.High;
+            // Captured references count as applied only when a cleanup request carried them.
+            var referenceContextSent = context.ReferenceContextUse.Sent;
 
             var record =
                 BuildHistoryRecord(
@@ -4764,9 +4770,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                         pipelineResult,
                         PostProcessingStepNames.Translation
                     ),
-                    ScreenContextApplied = referenceContextConsumed
+                    ScreenContextApplied = referenceContextSent
                         && !string.IsNullOrWhiteSpace(context.ScreenContext),
-                    ClipboardContextApplied = referenceContextConsumed
+                    ClipboardContextApplied = referenceContextSent
                         && !string.IsNullOrWhiteSpace(context.ClipboardContext),
                     LlmCalls = context.Capture?.Calls ?? [],
                 };

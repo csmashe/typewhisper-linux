@@ -429,7 +429,32 @@ public sealed class ActiveWindowService : IActiveWindowService
         var host = value.Split('/')[0];
         // Address bars show a local server as "localhost:8080/…", with no scheme and no dot.
         return host.Contains('.')
-               || host.Split(':')[0].Equals("localhost", StringComparison.OrdinalIgnoreCase);
+               || host.Split(':')[0].Equals("localhost", StringComparison.OrdinalIgnoreCase)
+               || IsSingleLabelHostAddress(value, host);
+    }
+
+    // Intranet hosts ("wiki/page", "build-server:8080/…") also have no dot. A port or path is
+    // required so a bare word typed into the address bar isn't taken for a URL.
+    private static bool IsSingleLabelHostAddress(string value, string host)
+    {
+        var colon = host.IndexOf(':');
+        var name = colon < 0 ? host : host[..colon];
+        if (
+            name.Length == 0
+            || name.All(char.IsAsciiDigit)
+            || Uri.CheckHostName(name) != UriHostNameType.Dns
+        )
+        {
+            return false;
+        }
+
+        if (colon < 0)
+        {
+            return value.Length > host.Length;
+        }
+
+        var port = host[(colon + 1)..];
+        return port.Length is >= 1 and <= 5 && port.All(char.IsAsciiDigit);
     }
 
     private static string NormalizeUrl(string value)

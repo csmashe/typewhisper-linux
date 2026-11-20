@@ -219,6 +219,11 @@ public sealed partial class PromptProcessingService
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1068:CancellationToken parameters must come last",
+        Justification = "The optional reference parameters trail ct; every caller passes them by name."
+    )]
     public async Task<string> ProcessSystemPromptAsync(
         string systemPrompt,
         string inputText,
@@ -226,7 +231,8 @@ public sealed partial class PromptProcessingService
         string? providerOverride = null,
         bool reportProviderProblems = true,
         CancellationToken ct = default,
-        string? referenceContext = null
+        string? referenceContext = null,
+        Action? referenceContextSent = null
     )
     {
         var (provider, modelId) = ResolveProvider(providerOverride, reportProviderProblems);
@@ -236,6 +242,10 @@ public sealed partial class PromptProcessingService
         }
 
         systemPrompt = AppendReferenceContext(systemPrompt, referenceContext);
+        if (string.IsNullOrWhiteSpace(referenceContext))
+        {
+            referenceContextSent = null;
+        }
         var userPrompt = FormatPromptActionInput(inputText);
         var provenance = RecordProvenance(
             capture,
@@ -247,8 +257,24 @@ public sealed partial class PromptProcessingService
             injectedMemoryContext: null
         );
 
-        var response = await LlmRequestRetryPolicy.ExecuteAsync(
-            token => provider.ProcessAsync(systemPrompt, userPrompt, modelId, token), ct);
+        var response = await LlmRequestRetryPolicy.ExecuteAsync(async token =>
+        {
+            try
+            {
+                var result = await provider.ProcessAsync(systemPrompt, userPrompt, modelId, token);
+                referenceContextSent?.Invoke();
+                return result;
+            }
+            catch (Exception ex)
+            {
+                // A failure after the request went out (HTTP 400, 500, timeout) still sent the references.
+                if (!NeverReachedProvider(ex))
+                {
+                    referenceContextSent?.Invoke();
+                }
+                throw;
+            }
+        }, ct);
         // A timed-out optional cleanup may have already inserted Light output. Its late
         // response must not be attached to that recording as the cleanup that was used.
         ct.ThrowIfCancellationRequested();
@@ -325,6 +351,27 @@ public sealed partial class PromptProcessingService
         };
         capture.Add(provenance);
         return provenance;
+    }
+
+    // True only when the failure proves no connection to the provider was established,
+    // so the request (and any reference text in it) never left the machine.
+    internal static bool NeverReachedProvider(Exception ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is HttpRequestException
+                {
+                    HttpRequestError: HttpRequestError.NameResolutionError
+                    or HttpRequestError.ConnectionError
+                    or HttpRequestError.SecureConnectionError
+                    or HttpRequestError.ProxyTunnelError,
+                })
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Appends on-screen / clipboard reference text to the system prompt as INERT DATA.

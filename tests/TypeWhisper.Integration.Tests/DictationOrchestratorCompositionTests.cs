@@ -467,7 +467,7 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.True(overlay.PresentedState.ShowFeedback);
             Assert.True(overlay.PresentedState.FeedbackIsError);
             Assert.Equal(
-                $"Transcription failed: {expected}",
+                Loc.Instance.GetString("Overlay.TranscriptionFailedWithReason", expected),
                 overlay.PresentedState.FeedbackText
             );
             Assert.Empty(fixture.InsertionPlatform.Typed);
