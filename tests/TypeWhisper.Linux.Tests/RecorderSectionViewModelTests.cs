@@ -613,6 +613,46 @@ public sealed class RecorderSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task TearDownAsync_WhenRecorderDrainFails_RestoresAudioAndMediaButSkipsAudioDispose()
+    {
+        using var audio = CreateAudioService();
+        var settings = new FakeSettingsService(AppSettings.Default);
+        // A faulting quiesce is a failed drain, the same path as a recorder that outlives its budget.
+        var sut = new RecorderSectionViewModel(
+            new RecorderService(audio, settings, _tempDir),
+            new AudioPlaybackService(
+                () => { },
+                () => { },
+                _ => { },
+                () => throw new InvalidOperationException("playback wedged")
+            ),
+            _tempDir,
+            (_, _) => Task.FromResult<string?>(null),
+            action => action()
+        );
+        var systemAudio = new ShutdownSystemAudio();
+
+        try
+        {
+            await App.TearDownAsync(new TearDownServiceProvider(sut, audio, systemAudio))
+                .WaitAsync(s_testGuard);
+
+            Assert.True(App.SkipProviderDisposal);
+        }
+        finally
+        {
+            App.ResetShutdownDisposalDecisionForTests();
+        }
+
+        Assert.Equal(1, systemAudio.RestoreAudioCalls);
+        Assert.Equal(1, systemAudio.ResumeMediaCalls);
+        var probeSession = Assert.IsType<AudioRecordingService.AudioCaptureSession>(
+            audio.TryStartRecording(whisperModeEnabled: false)
+        );
+        await audio.StopRecordingAsync(probeSession);
+    }
+
+    [Fact]
     public async Task ToggleRecordingCommand_WhenAudioAlreadyOwned_ShowsNoMicrophoneAndDoesNotClaimRecording()
     {
         using var audio = CreateAudioService();
@@ -1021,7 +1061,8 @@ public sealed class RecorderSectionViewModelTests : IDisposable
 
     private sealed class TearDownServiceProvider(
         RecorderSectionViewModel recorder,
-        AudioRecordingService audio
+        AudioRecordingService audio,
+        ShutdownSystemAudio? systemAudio = null
     ) : IServiceProvider
     {
         public object? GetService(Type serviceType)
@@ -1031,8 +1072,38 @@ public sealed class RecorderSectionViewModelTests : IDisposable
                 return recorder;
             }
 
+            if (serviceType == typeof(IAudioDuckingService) || serviceType == typeof(IMediaPauseService))
+            {
+                return systemAudio;
+            }
+
             return serviceType == typeof(AudioRecordingService) ? audio : null;
         }
+    }
+
+    // The shutdown restore throws so the test also proves the shutdown resume still runs after it fails.
+    private sealed class ShutdownSystemAudio : IAudioDuckingService, IMediaPauseService
+    {
+        public int RestoreAudioCalls { get; private set; }
+        public int ResumeMediaCalls { get; private set; }
+
+        public void DuckAudio(float factor) { }
+
+        public void RestoreAudio() =>
+            throw new InvalidOperationException("Shutdown must wait for an in-flight duck.");
+
+        public void RestoreAudioForShutdown(TimeSpan settleTimeout)
+        {
+            RestoreAudioCalls++;
+            throw new InvalidOperationException("pactl failed");
+        }
+
+        public void PauseMedia() { }
+
+        public void ResumeMedia() =>
+            throw new InvalidOperationException("Shutdown must wait for an in-flight pause.");
+
+        public void ResumeMediaForShutdown(TimeSpan settleTimeout) => ResumeMediaCalls++;
     }
 
     private sealed class FakeSettingsService(AppSettings current) : ISettingsService

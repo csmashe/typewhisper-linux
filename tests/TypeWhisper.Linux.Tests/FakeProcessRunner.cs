@@ -14,6 +14,7 @@ internal sealed class FakeProcessRunner : IProcessRunner
         Func<string, IReadOnlyList<string>, bool> Match,
         ProcessRunResult Result
         )> _overrides = [];
+    private readonly List<HeldCommand> _held = [];
 
     private readonly List<(
         Func<string, IReadOnlyList<string>, bool> Match,
@@ -52,8 +53,20 @@ internal sealed class FakeProcessRunner : IProcessRunner
         CancellationToken ct = default
     )
     {
-        Invocations.Add(new Invocation(fileName, args.ToArray(), standardInput, timeout));
+        HeldCommand? held;
+        lock (Invocations)
+        {
+            Invocations.Add(new Invocation(fileName, args.ToArray(), standardInput, timeout));
+            held = _held.FirstOrDefault(command => !command.Launched.IsSet && command.Args.SequenceEqual(args));
+            held?.Launched.Set();
+        }
+
         LastStandardInput = standardInput;
+        if (held is not null)
+        {
+            return held.Exit.Task;
+        }
+
         foreach (var (match, stdout) in _byteOverrides)
         {
             if (match(fileName, args))
@@ -153,6 +166,30 @@ internal sealed class FakeProcessRunner : IProcessRunner
     {
         LaunchedUris.Add(uri);
         return DetachedDefault;
+    }
+
+    /// <summary>
+    ///     Keeps the first call with exactly <paramref name="args" /> running until the returned
+    ///     command is told to exit; <see cref="RunAsync" /> returns at once, as a started process does.
+    /// </summary>
+    public HeldCommand Hold(IReadOnlyList<string> args)
+    {
+        var held = new HeldCommand([.. args]);
+        lock (Invocations)
+        {
+            _held.Add(held);
+        }
+
+        return held;
+    }
+
+    /// <summary>A thread-safe copy of <see cref="Invocations" /> for tests that call from several threads.</summary>
+    public Invocation[] InvocationsSnapshot()
+    {
+        lock (Invocations)
+        {
+            return [.. Invocations];
+        }
     }
 
     /// <summary>Make calls matching <paramref name="match" /> exit non-zero.</summary>
@@ -255,6 +292,20 @@ internal sealed class FakeProcessRunner : IProcessRunner
             string.Empty,
             "fake: process not started"
         );
+    }
+
+    public sealed class HeldCommand(string[] args)
+    {
+        public string[] Args { get; } = args;
+        public ManualResetEventSlim Launched { get; } = new();
+
+        public TaskCompletionSource<ProcessRunResult> Exit { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void ExitWith(int exitCode = 0, string stdout = "")
+        {
+            Exit.SetResult(new ProcessRunResult(true, false, exitCode, stdout, string.Empty));
+        }
     }
 
     public sealed record Invocation(

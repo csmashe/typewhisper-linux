@@ -9,6 +9,12 @@ namespace TypeWhisper.Linux.Tests;
 public sealed class AudioDuckingServiceTests
 {
     private const string ServerCookie = "3922:700c";
+    private static readonly TimeSpan s_testGuard = TimeSpan.FromSeconds(10);
+    private static readonly string[] s_duck593 = ["set-sink-input-volume", "593", "22938"];
+    private static readonly string[] s_restore593 = ["set-sink-input-volume", "593", "45875"];
+    private static readonly string[] s_duck594 = ["set-sink-input-volume", "594", "20000"];
+    private static readonly string[] s_restore594 = ["set-sink-input-volume", "594", "40000"];
+    private static readonly string[] s_duck595 = ["set-sink-input-volume", "595", "15000"];
 
     [Fact]
     public void DuckAndRestore_preserve_channel_vectors_for_each_sink_input()
@@ -479,6 +485,349 @@ public sealed class AudioDuckingServiceTests
     }
 
     [Fact]
+    public async Task RestoreAudioForShutdown_waits_for_the_running_set_volume_to_exit_before_restoring()
+    {
+        using var shutdownWaiting = new ManualResetEventSlim();
+        var runner = CreateThreeStreamRunner();
+        var duck593 = runner.Hold(s_duck593);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>())
+        {
+            ShutdownWaitStarting = shutdownWaiting.Set,
+        };
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck593.Launched.Wait(s_testGuard));
+        var shutdown = Task.Run(() =>
+        {
+            service.RestoreAudioForShutdown(s_testGuard);
+            return runner.InvocationsSnapshot();
+        });
+        Assert.True(shutdownWaiting.Wait(s_testGuard));
+        Assert.False(shutdown.IsCompleted);
+        Assert.Equal(0, CountInvocations(runner, s_restore593));
+
+        var exitedAt = runner.InvocationsSnapshot().Length;
+        duck593.ExitWith();
+        var invocationsAtReturn = await shutdown.WaitAsync(s_testGuard);
+        await duck.WaitAsync(s_testGuard);
+
+        // Shutdown exits as soon as this returns, so the restore follows the set-volume's exit.
+        Assert.True(IndexOf(invocationsAtReturn, s_restore593) >= exitedAt);
+        // The duck stopped after its running command instead of lowering the next stream.
+        Assert.Equal(0, CountInvocations(runner, s_duck594));
+        service.DuckAudio(0.5f);
+        Assert.Equal(1, CountInvocations(runner, ["list", "sink-inputs"]));
+    }
+
+    [Fact]
+    public async Task A_duck_held_between_its_shutdown_check_and_its_launch_is_ordered_before_the_final_restore()
+    {
+        using var duckAtLaunch = new ManualResetEventSlim();
+        using var releaseLaunch = new ManualResetEventSlim();
+        using var shutdownWaiting = new ManualResetEventSlim();
+        var runner = CreateThreeStreamRunner();
+        var duck593 = runner.Hold(s_duck593);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>())
+        {
+            ShutdownWaitStarting = shutdownWaiting.Set,
+            DuckCommandLaunching = () =>
+            {
+                // ReSharper disable once AccessToDisposedClosure -- the hook runs on the duck task, which is awaited before the events are disposed.
+                duckAtLaunch.Set();
+                // ReSharper disable once AccessToDisposedClosure -- the hook runs on the duck task, which is awaited before the events are disposed.
+                releaseLaunch.Wait(s_testGuard);
+            },
+        };
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duckAtLaunch.Wait(s_testGuard));
+        // The duck is released only once shutdown is blocked on the gate it holds for the launch.
+        var shutdown = await BlockedThread.StartAndWaitUntilBlocked(
+            () =>
+            {
+                service.RestoreAudioForShutdown(s_testGuard);
+                return runner.InvocationsSnapshot();
+            },
+            s_testGuard
+        );
+        Assert.False(shutdownWaiting.IsSet);
+        releaseLaunch.Set();
+
+        // Shutdown cannot slip in between the check and the launch, so it always finds the set.
+        Assert.True(shutdownWaiting.Wait(s_testGuard));
+        Assert.True(duck593.Launched.IsSet);
+        Assert.False(shutdown.IsCompleted);
+        var exitedAt = runner.InvocationsSnapshot().Length;
+        duck593.ExitWith();
+        var invocationsAtReturn = await shutdown.WaitAsync(s_testGuard);
+        await duck.WaitAsync(s_testGuard);
+
+        Assert.True(IndexOf(invocationsAtReturn, s_restore593) >= exitedAt);
+        Assert.Equal(0, CountInvocations(runner, s_duck594));
+    }
+
+    [Fact]
+    public async Task A_duck_still_reading_volumes_at_shutdown_never_launches_a_set_volume()
+    {
+        var runner = CreateThreeStreamRunner();
+        runner.Hold(["info"]).ExitWith(stdout: $"Cookie: {ServerCookie}\n");
+        // The cookie re-read after the listing is the duck's last command before its first set.
+        var cookieRecheck = runner.Hold(["info"]);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(cookieRecheck.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(s_testGuard)).WaitAsync(s_testGuard);
+        cookieRecheck.ExitWith(stdout: $"Cookie: {ServerCookie}\n");
+        await duck.WaitAsync(s_testGuard);
+
+        Assert.DoesNotContain(
+            runner.InvocationsSnapshot(),
+            invocation => invocation.Args[0] == "set-sink-input-volume"
+        );
+    }
+
+    [Fact]
+    public async Task A_set_volume_that_outlasts_shutdowns_wait_is_undone_once_it_exits()
+    {
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        var invocationsAtReturn = await Task.Run(() =>
+            {
+                service.RestoreAudioForShutdown(TimeSpan.Zero);
+                return runner.InvocationsSnapshot();
+            })
+            .WaitAsync(s_testGuard);
+
+        // Everything already tracked is restored before shutdown returns.
+        Assert.Contains(invocationsAtReturn, invocation => invocation.Args.SequenceEqual(s_restore593));
+        Assert.Contains(invocationsAtReturn, invocation => invocation.Args.SequenceEqual(s_restore594));
+        Assert.False(duck.IsCompleted);
+
+        duck594.ExitWith();
+        await duck.WaitAsync(s_testGuard);
+
+        // The duck's set landed after shutdown's restore, so the duck restored 594 once more.
+        var invocations = runner.InvocationsSnapshot();
+        Assert.True(LastIndexOf(invocations, s_restore594) >= invocationsAtReturn.Length);
+        Assert.Equal(0, CountInvocations(runner, s_duck595));
+    }
+
+    [Fact]
+    public async Task A_late_set_volume_that_times_out_is_still_undone()
+    {
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        var invocationsAtReturn = await Task.Run(() =>
+            {
+                service.RestoreAudioForShutdown(TimeSpan.Zero);
+                return runner.InvocationsSnapshot();
+            })
+            .WaitAsync(s_testGuard);
+
+        // The server may have applied the set before pactl gave up waiting for its reply.
+        duck594.Exit.SetResult(new ProcessRunResult(true, true, -1, string.Empty, string.Empty));
+        await duck.WaitAsync(s_testGuard);
+
+        Assert.True(LastIndexOf(runner.InvocationsSnapshot(), s_restore594) >= invocationsAtReturn.Length);
+    }
+
+    [Fact]
+    public async Task A_late_set_volume_that_never_started_is_not_undone()
+    {
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        duck594.Exit.SetResult(FakeProcessRunner.NotStarted());
+        await duck.WaitAsync(s_testGuard);
+
+        Assert.Equal(1, CountInvocations(runner, s_restore594));
+    }
+
+    [Fact]
+    public async Task A_late_set_volume_exiting_while_shutdown_restores_that_stream_still_ends_restored()
+    {
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var shutdownRestore594 = runner.Hold(s_restore594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        var shutdown = Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero));
+        // Shutdown is restoring 594 and has not yet dropped its entry when the duck's set exits.
+        Assert.True(shutdownRestore594.Launched.Wait(s_testGuard));
+        var exitedAt = runner.InvocationsSnapshot().Length;
+        duck594.ExitWith();
+        await duck.WaitAsync(s_testGuard);
+
+        // The duck restored 594 from its own copy, after its set exited.
+        Assert.True(LastIndexOf(runner.InvocationsSnapshot(), s_restore594) >= exitedAt);
+
+        shutdownRestore594.ExitWith();
+        await shutdown.WaitAsync(s_testGuard);
+        Assert.Equal(2, CountInvocations(runner, s_restore594));
+    }
+
+    [Fact]
+    public async Task A_second_shutdown_that_settles_a_late_set_volume_still_undoes_it()
+    {
+        using var duckAtSettle = new ManualResetEventSlim();
+        using var releaseSettle = new ManualResetEventSlim();
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>())
+        {
+            DuckCommandExited = () =>
+            {
+                if (!duck594.Launched.IsSet)
+                {
+                    return;
+                }
+
+                // ReSharper disable once AccessToDisposedClosure -- the hook runs on the duck task, which is awaited before the events are disposed.
+                duckAtSettle.Set();
+                // ReSharper disable once AccessToDisposedClosure -- the hook runs on the duck task, which is awaited before the events are disposed.
+                releaseSettle.Wait(s_testGuard);
+            },
+        };
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        var exitedAt = runner.InvocationsSnapshot().Length;
+        duck594.ExitWith();
+        // The set has exited but the duck has not settled it when the second shutdown runs.
+        Assert.True(duckAtSettle.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+
+        // The second shutdown undid the late set itself, while the duck was still held.
+        Assert.True(LastIndexOf(runner.InvocationsSnapshot(), s_restore594) >= exitedAt);
+        Assert.Equal(2, CountInvocations(runner, s_restore594));
+
+        releaseSettle.Set();
+        await duck.WaitAsync(s_testGuard);
+
+        Assert.Equal(2, CountInvocations(runner, s_restore594));
+    }
+
+    [Fact]
+    public async Task A_late_set_volume_is_not_undone_after_an_audio_server_restart()
+    {
+        // The duck reads the cookie twice; the server has restarted by shutdown's restore.
+        const string restartedCookie = "296a:0996";
+        var runner = CreateThreeStreamRunner(ServerCookie, ServerCookie, restartedCookie, restartedCookie);
+        var duck594 = runner.Hold(s_duck594);
+        var errorLog = new Mock<IErrorLogService>();
+        var service = new AudioDuckingService(runner, errorLog.Object);
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        duck594.ExitWith();
+        await duck.WaitAsync(s_testGuard);
+
+        // Id 594 may belong to another stream on the new server, so nothing is written to it.
+        Assert.Equal(0, CountInvocations(runner, s_restore594));
+        Assert.Equal(4, CountInvocations(runner, ["info"]));
+        errorLog.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task A_late_set_volume_that_failed_is_not_undone()
+    {
+        var runner = CreateThreeStreamRunner();
+        var duck594 = runner.Hold(s_duck594);
+        var service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        var duck = Task.Run(() => service.DuckAudio(0.5f));
+        Assert.True(duck594.Launched.Wait(s_testGuard));
+        await Task.Run(() => service.RestoreAudioForShutdown(TimeSpan.Zero)).WaitAsync(s_testGuard);
+        var exitedAt = runner.InvocationsSnapshot().Length;
+        duck594.ExitWith(exitCode: 1);
+        await duck.WaitAsync(s_testGuard);
+
+        // Only shutdown's own restore of 594 ran; the failed set never lowered the stream.
+        Assert.Equal(1, CountInvocations(runner, s_restore594));
+        Assert.Equal(exitedAt, runner.InvocationsSnapshot().Length);
+    }
+
+    [Fact]
+    public void RestoreAudio_arriving_mid_duck_still_restores_streams_lowered_before_a_set_volume_throws()
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) => fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            "Sink Input #593\n    Volume: mono: 45875 / 70% / -9.30 dB\nSink Input #594\n    Volume: mono: 40000 / 61% / -12.00 dB\n"
+        );
+        AudioDuckingService? service = null;
+        runner.RespondWith(
+            (_, args) =>
+            {
+                // ReSharper disable once InvertIf -- inverting would duplicate the trailing return.
+                if (args.SequenceEqual(s_duck594))
+                {
+                    // ReSharper disable once AccessToModifiedClosure -- the matcher must call back
+                    // into the service constructed below; that back-reference is the seam under test.
+                    service!.RestoreAudio();
+                    throw new InvalidOperationException("pactl crashed");
+                }
+
+                return false;
+            },
+            string.Empty
+        );
+        ScriptServerCookies(runner);
+        service = new AudioDuckingService(runner, Mock.Of<IErrorLogService>());
+
+        service.DuckAudio(0.5f);
+
+        Assert.Equal(1, CountInvocations(runner, s_restore593));
+    }
+
+    // Lists sink inputs 593-595; the cookies script the `pactl info` answers as in ScriptServerCookies.
+    private static FakeProcessRunner CreateThreeStreamRunner(params string?[] cookies)
+    {
+        var runner = new FakeProcessRunner();
+        runner.RespondWith(
+            (fileName, args) =>
+                fileName == "pactl" && args.SequenceEqual(["list", "sink-inputs"]),
+            """
+            Sink Input #593
+                Volume: mono: 45875 / 70% / -9.30 dB
+            Sink Input #594
+                Volume: mono: 40000 / 61% / -12.00 dB
+            Sink Input #595
+                Volume: mono: 30000 / 46% / -20.00 dB
+            """
+        );
+        ScriptServerCookies(runner, cookies);
+        return runner;
+    }
+
+    private static int IndexOf(FakeProcessRunner.Invocation[] invocations, string[] args)
+    {
+        return Array.FindIndex(invocations, invocation => invocation.Args.SequenceEqual(args));
+    }
+
+    private static int LastIndexOf(FakeProcessRunner.Invocation[] invocations, string[] args)
+    {
+        return Array.FindLastIndex(invocations, invocation => invocation.Args.SequenceEqual(args));
+    }
+
+    [Fact]
     public void RestoreAudio_after_server_restart_retires_entries_instead_of_restoring_reused_ids()
     {
         const string listing = """
@@ -620,6 +969,6 @@ public sealed class AudioDuckingServiceTests
 
     private static int CountInvocations(FakeProcessRunner runner, IReadOnlyList<string> args)
     {
-        return runner.Invocations.Count(invocation => invocation.Args.SequenceEqual(args));
+        return runner.InvocationsSnapshot().Count(invocation => invocation.Args.SequenceEqual(args));
     }
 }

@@ -39,6 +39,8 @@ internal sealed class RecordingSystemAudio : IAudioDuckingService, IMediaPauseSe
         IsDucked = false;
     }
 
+    public void RestoreAudioForShutdown(TimeSpan settleTimeout) => RestoreAudio();
+
     public Action? OnPauseMedia { get; set; }
 
     public void PauseMedia()
@@ -53,6 +55,8 @@ internal sealed class RecordingSystemAudio : IAudioDuckingService, IMediaPauseSe
         ResumeCount++;
         IsPaused = false;
     }
+
+    public void ResumeMediaForShutdown(TimeSpan settleTimeout) => ResumeMedia();
 }
 
 internal sealed class RecordingAudioBoundary

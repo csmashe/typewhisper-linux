@@ -30,6 +30,10 @@ public class App : Application
     private static readonly TimeSpan s_shutdownQuiesceBudget = TimeSpan.FromSeconds(5);
     private static int s_skipProviderDisposal;
 
+    // Held so the signal registration is not finalized away.
+    private static SigtermShutdown? s_sigtermShutdown;
+    private static readonly TimeSpan s_forcedExitTraceBudget = TimeSpan.FromMilliseconds(200);
+
     /// <summary>
     ///     Tray-menu Exit flips this; Close-button handler checks it to decide
     ///     whether to actually quit or hide to the tray. Access is UI-thread-only.
@@ -304,6 +308,7 @@ public class App : Application
                 ShuttingDown = true;
                 _ = ShutdownAndExitAsync(services, desktop);
             };
+            RegisterSigtermShutdown(services, desktop);
 
             var dictation = services.GetRequiredService<DictationOrchestrator>();
             dictation.Initialize();
@@ -1111,6 +1116,96 @@ public class App : Application
             static t => Debug.WriteLine($"[App] Background hotkey action failed: {t.Exception}"),
             TaskContinuationOptions.OnlyOnFaulted);
 
+    private static void RegisterSigtermShutdown(
+        IServiceProvider services,
+        IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
+        {
+            s_sigtermShutdown ??= SigtermShutdown.Register(
+                () => Dispatcher.UIThread.Post(() =>
+                {
+                    if (ShuttingDown)
+                    {
+                        return;
+                    }
+
+                    ShuttingDown = true;
+                    _ = ShutdownAndExitAsync(services, desktop);
+                }),
+                () => ForceExitAfterSigterm(services));
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[App] Failed to register SIGTERM handler: {ex.Message}");
+        }
+    }
+
+    // The normal quit hung before restoring what dictation changed, so restore it directly.
+    // Nothing is traced until then: the stdout listener blocks while its pipe is full.
+    private static void ForceExitAfterSigterm(IServiceProvider services)
+    {
+        var failures = TryRestoreAudioAndMedia(services);
+        TraceWithin(
+            s_forcedExitTraceBudget,
+            ["[App] Quit after SIGTERM did not finish in time; forcing exit.", .. failures]
+        );
+
+        // 128 + SIGTERM, the status of a process the signal ended.
+        SigtermShutdown.ExitImmediately(143);
+    }
+
+    // _exit drops whatever is still unwritten, so a blocked listener cannot hold the process.
+    private static void TraceWithin(TimeSpan budget, IReadOnlyList<string> messages)
+    {
+        Task.Run(() =>
+            {
+                foreach (var message in messages)
+                {
+                    SafeTrace(message);
+                }
+            })
+            .Wait(budget);
+    }
+
+    // Normally DictationOrchestrator.Dispose does this; teardown paths that skip it call this instead.
+    private static void RestoreAudioAndMedia(IServiceProvider services)
+    {
+        foreach (var failure in TryRestoreAudioAndMedia(services))
+        {
+            Trace.WriteLine(failure);
+        }
+    }
+
+    // Both services are idempotent and run pactl/playerctl outside their locks. Each blocks for
+    // a bounded wait on a duck or pause still in flight, which needs no UI thread to finish.
+    // Failures are returned rather than traced, so the caller decides whether tracing is safe.
+    private static List<string> TryRestoreAudioAndMedia(IServiceProvider services)
+    {
+        List<string> failures = [];
+        try
+        {
+            services.GetService<IAudioDuckingService>()
+                ?.RestoreAudioForShutdown(DictationOrchestrator.s_systemAudioSettleTimeout);
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"[App] RestoreAudio during shutdown failed: {ex.Message}");
+        }
+
+        try
+        {
+            services.GetService<IMediaPauseService>()
+                ?.ResumeMediaForShutdown(DictationOrchestrator.s_systemAudioSettleTimeout);
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"[App] ResumeMedia during shutdown failed: {ex.Message}");
+        }
+
+        return failures;
+    }
+
     private static async Task ShutdownAndExitAsync(
         IServiceProvider services,
         IClassicDesktopStyleApplicationLifetime desktop,
@@ -1311,9 +1406,11 @@ public class App : Application
             // audio, and model cleanup; Program observes SkipProviderDisposal and skips the
             // provider too, so those DI-owned dependencies are not disposed underneath the
             // recorder workflow or admitted HTTP handler that outlived its drain budget.
+            // Audio and media are still restored: nothing else will.
             Debug.WriteLine(
                 "[App] Recorder or HTTP API drain failed; skipping dependent and provider disposal before process exit."
             );
+            RestoreAudioAndMedia(services);
             return;
         }
 
@@ -1337,6 +1434,7 @@ public class App : Application
         if (!ApplyRecoveryDrainResult(recoveryDrained))
         {
             Debug.WriteLine("[App] Recovery is still running; skipping dictation, audio, model and provider disposal.");
+            RestoreAudioAndMedia(services);
             return;
         }
 
