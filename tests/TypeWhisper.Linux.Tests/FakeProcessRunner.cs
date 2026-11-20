@@ -200,6 +200,23 @@ internal sealed class FakeProcessRunner : IProcessRunner
         _byteOverrides.Add((match, stdout));
     }
 
+    /// <summary>Make calls matching <paramref name="match" /> hit their timeout.</summary>
+    public void TimeOutWhen(Func<string, IReadOnlyList<string>, bool> match)
+    {
+        _overrides.Add(
+            (
+                match,
+                new ProcessRunResult(
+                    true,
+                    true,
+                    -1,
+                    string.Empty,
+                    string.Empty
+                )
+            )
+        );
+    }
+
     /// <summary>Make calls matching <paramref name="match" /> succeed with the given stdout.</summary>
     public void RespondWith(Func<string, IReadOnlyList<string>, bool> match, string stdout)
     {

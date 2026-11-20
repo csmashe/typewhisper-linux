@@ -124,7 +124,8 @@ public sealed class GnomeWindowCallsProvider : IActiveWindowProvider
                 string.IsNullOrWhiteSpace(focused.Value.WmClass)
                     ? null
                     : focused.Value.WmClass,
-                Name
+                Name,
+                focused.Value.Pid is > 0 ? focused.Value.Pid : null
             );
         }
         catch
