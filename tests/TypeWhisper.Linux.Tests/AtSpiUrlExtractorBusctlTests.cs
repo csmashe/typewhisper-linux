@@ -432,6 +432,33 @@ public sealed class AtSpiUrlExtractorBusctlTests : IDisposable
     }
 
     [Fact]
+    public void TryGetBrowserUrl_RejectionAfterACachedRead_DropsTheCachedUrl()
+    {
+        // A poll cached the URL while the bus app was tied to the focused window (both are this
+        // test process). A later dictation walk can't learn the app's owner and rejects it, so
+        // the next poll must not serve the cached URL.
+        var focusedPid = Environment.ProcessId;
+        var ownerGone = false;
+        var runner = BuildChromeTree("cached.example/qa", appName: "Zen");
+        // ReSharper disable once AccessToModifiedClosure -- the owner deliberately disappears between walks.
+        runner.RespondWith(
+            (file, args) => file == "busctl" && args.Contains("GetConnectionUnixProcessID") && ownerGone,
+            "u 0\n"
+        );
+        Respond(runner, "/org/freedesktop/DBus", "GetConnectionUnixProcessID", $"u {focusedPid}");
+        var extractor = new AtSpiUrlExtractor(runner);
+        Assert.Equal(
+            "https://cached.example/qa",
+            extractor.TryGetBrowserUrl("zen", "zen", ZenMailTitle, true, focusedPid, "{win-b}", out _)
+        );
+
+        ownerGone = true;
+        Assert.Null(extractor.TryGetBrowserUrl("zen", "zen", ZenMailTitle, false, focusedPid, "{win-b}", out var rejected));
+        Assert.True(rejected);
+        Assert.Null(extractor.TryGetBrowserUrl("zen", "zen", ZenMailTitle, true, focusedPid, "{win-b}", out _));
+    }
+
+    [Fact]
     public void GetBrowserUrlForSnapshot_NoInstanceRejected_KeepsTheTitleGuess()
     {
         var snapshot = new ActiveWindowSnapshot("zen", ZenMailTitle, "{win-b}", "zen", "kwin", ForeignPid);

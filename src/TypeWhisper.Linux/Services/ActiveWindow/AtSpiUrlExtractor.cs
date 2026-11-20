@@ -350,6 +350,21 @@ public sealed partial class AtSpiUrlExtractor
                 _missAt = DateTime.UtcNow;
                 _missRejectedAnotherInstance = stats.RejectedAnotherInstance;
             }
+
+            // A walk that could no longer tie the bus app to this window outranks a URL it
+            // cached earlier, so polling must not keep serving that URL.
+            if (
+                string.IsNullOrWhiteSpace(url)
+                && stats.RejectedAnotherInstance
+                && string.Equals(_cachedDescriptorId, browser.Id, StringComparison.OrdinalIgnoreCase)
+                && _cachedProcessId == focusedProcessId
+                && string.Equals(_cachedWindowId, focusedWindowId, StringComparison.Ordinal)
+                && string.Equals(_cachedTitle, focusedTitle, StringComparison.Ordinal)
+            )
+            {
+                _cachedUrl = null;
+                _cachedUrlAt = default;
+            }
         }
 
         // Guarded here too, not just inside LogOnce: building the line is StringBuilder and
