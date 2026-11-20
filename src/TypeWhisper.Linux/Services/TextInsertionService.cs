@@ -40,6 +40,7 @@ public enum InsertionFailureReason
     LockedFieldUnavailable,
     WtypeXWaylandTarget,
     NonAsciiTypingUnavailable,
+    WtypeGtk3PasteTarget,
 }
 
 public sealed record TextInsertionRequest(
@@ -1073,6 +1074,7 @@ public sealed class TextInsertionService
                 or InsertionFailureReason.YdotoolSocketUnreachable
                 or InsertionFailureReason.NoWaylandTypingTool
                 or InsertionFailureReason.WtypeXWaylandTarget
+                or InsertionFailureReason.WtypeGtk3PasteTarget
             )
             {
                 // First-failing structural reason within this request wins — a later,
@@ -1440,8 +1442,14 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     // kept injected as a DI/test seam; not consumed in-tree
     // ReSharper disable once NotAccessedField.Local
     private readonly SystemCommandAvailabilityService? _commands;
+    // Toolkits that load libgtk-3 (for dialogs or theming) but match shortcuts themselves,
+    // so wtype's Ctrl+V reaches them: Gecko, Chromium/Electron and Qt.
+    private static readonly string[] s_ownShortcutToolkitMarkers =
+        ["/libxul.so", "/icudtl.dat", "/libQt5Core.so", "/libQt6Core.so"];
+
     private readonly IProcessRunner _ioRunner;
     private readonly Func<Task<bool>> _focusedWindowIsXWayland;
+    private readonly Func<Task<bool>> _focusedWindowIsGtk3;
     private readonly bool _isWayland;
     private readonly ProcessRunnerWithEnv _processRunner;
 
@@ -1510,7 +1518,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
             IReadOnlyList<string>,
             Task<(int exitCode, string stderr)>
         >? processRunnerWithStderr = null,
-        Func<Task<bool>>? focusedWindowIsXWayland = null
+        Func<Task<bool>>? focusedWindowIsXWayland = null,
+        Func<Task<bool>>? focusedWindowIsGtk3 = null
     )
     {
         _ioRunner = new ProcessRunner();
@@ -1518,6 +1527,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         _processRunner = processRunner;
         _processRunnerWithStderr = processRunnerWithStderr;
         _focusedWindowIsXWayland = focusedWindowIsXWayland ?? (() => Task.FromResult(false));
+        _focusedWindowIsGtk3 = focusedWindowIsGtk3 ?? (() => Task.FromResult(false));
         _isWayland = snapshot.SessionType == "Wayland";
         _chain = BuildChain(snapshot);
     }
@@ -1532,6 +1542,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         _processRunner = DefaultProcessRunnerWithEnv;
         _processRunnerWithStderr = DefaultProcessRunnerWithStderr;
         _focusedWindowIsXWayland = IsHyprlandFocusedWindowXWaylandAsync;
+        _focusedWindowIsGtk3 = IsSwayFocusedWindowGtk3Async;
         _isWayland = snapshot.SessionType == "Wayland";
         _chain = BuildChain(snapshot);
     }
@@ -1944,7 +1955,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
                 ),
                 _ => false,
             },
-            preferYdotool: true
+            preferYdotool: true,
+            isPasteChord: true
         );
     }
 
@@ -2123,7 +2135,8 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
     private async Task<bool> WalkChainAsync(
         Func<InputBackend, Task<bool>> attempt,
         InputBackend? skip = null,
-        bool preferYdotool = false
+        bool preferYdotool = false,
+        bool isPasteChord = false
     )
     {
         var chain = preferYdotool ? _chain.OrderBy(b => b != InputBackend.Ydotool).ToList() : _chain;
@@ -2139,6 +2152,7 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
         var anyAttempted = false;
         var skippedWtypeForXWayland = false;
+        var skippedWtypeForGtk3 = false;
         var skippedBackendForThisText = false;
         // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator -- body awaits and mutates state; the explicit disabled-backend guard is clearer than a LINQ Where
         foreach (var backend in chain)
@@ -2156,9 +2170,18 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
 
             // XWayland ignores wtype's uploaded keymap: typed text arrives as unrelated
             // keys and chords are dropped, yet wtype still exits 0.
+            // ReSharper disable once ConvertIfStatementToSwitchStatement -- independent awaited guards read clearer than a switch
             if (backend == InputBackend.Wtype && await _focusedWindowIsXWayland())
             {
                 skippedWtypeForXWayland = true;
+                continue;
+            }
+
+            // GTK3 widgets ignore the modifier on wtype's chord, so nothing is pasted, yet
+            // wtype still exits 0. Typing reaches them, so only the paste chord skips wtype.
+            if (backend == InputBackend.Wtype && isPasteChord && await _focusedWindowIsGtk3())
+            {
+                skippedWtypeForGtk3 = true;
                 continue;
             }
 
@@ -2180,10 +2203,119 @@ internal sealed class LinuxTextInsertionPlatform : ITextInsertionPlatform
         {
             LastFailureReason = skippedWtypeForXWayland
                 ? InsertionFailureReason.WtypeXWaylandTarget
-                : InsertionFailureReason.NoWaylandTypingTool;
+                : skippedWtypeForGtk3
+                    ? InsertionFailureReason.WtypeGtk3PasteTarget
+                    : InsertionFailureReason.NoWaylandTypingTool;
         }
 
         return false;
+    }
+
+    private async Task<bool> IsSwayFocusedWindowGtk3Async()
+    {
+        if (!_isWayland || _snapshot.Compositor != "sway")
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = await _ioRunner.RunAsync(
+                "swaymsg",
+                ["-t", "get_tree", "-r"],
+                timeout: s_focusedWindowProbeTimeout
+            ).ConfigureAwait(false);
+            if (!result.Succeeded || string.IsNullOrWhiteSpace(result.StandardOutput))
+            {
+                return false;
+            }
+
+            return FindSwayFocusedNativePid(result.StandardOutput) is { } pid
+                   && await IsGtk3OrUnverifiableTargetAsync(
+                       () => File.ReadAllLinesAsync($"/proc/{pid}/maps")
+                   ).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+            when (ex is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine($"[TextInsertionService] sway focused-window probe failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    // A target in another user or namespace hides its maps. That can't rule GTK3 out, and a
+    // dropped wtype chord still exits 0, so an unreadable target skips the chord too.
+    internal static async Task<bool> IsGtk3OrUnverifiableTargetAsync(Func<Task<string[]>> readMaps)
+    {
+        try
+        {
+            return IsGtk3WidgetProcess(await readMaps().ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine($"[TextInsertionService] sway focused-window toolkit unreadable: {ex.Message}");
+            return true;
+        }
+    }
+
+    internal static int? FindSwayFocusedNativePid(string treeJson)
+    {
+        using var doc = JsonDocument.Parse(treeJson);
+        return FindFocused(doc.RootElement);
+
+        static int? FindFocused(JsonElement node)
+        {
+            if (node.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (node.TryGetProperty("focused", out var focused) && focused.ValueKind == JsonValueKind.True)
+            {
+                return node.TryGetProperty("shell", out var shell)
+                       && shell.ValueKind == JsonValueKind.String
+                       && shell.GetString() == "xdg_shell"
+                       && node.TryGetProperty("pid", out var pid)
+                       && pid.TryGetInt32(out var value)
+                       && value > 0
+                    ? value
+                    : null;
+            }
+
+            foreach (var children in (string[])["nodes", "floating_nodes"])
+            {
+                if (!node.TryGetProperty(children, out var list) || list.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var child in list.EnumerateArray())
+                {
+                    if (FindFocused(child) is { } found)
+                    {
+                        return found;
+                    }
+                }
+            }
+
+            return null;
+        }
+    }
+
+    internal static bool IsGtk3WidgetProcess(IEnumerable<string> mapsLines)
+    {
+        var hasGtk3 = false;
+        foreach (var line in mapsLines)
+        {
+            if (s_ownShortcutToolkitMarkers.Any(marker => line.Contains(marker, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+
+            hasGtk3 |= line.Contains("/libgtk-3.so", StringComparison.Ordinal);
+        }
+
+        return hasGtk3;
     }
 
     private async Task<bool> IsHyprlandFocusedWindowXWaylandAsync()

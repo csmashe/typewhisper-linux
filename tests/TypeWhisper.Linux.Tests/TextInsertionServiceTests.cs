@@ -3944,6 +3944,112 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task LinuxTextInsertionPlatform_SwayGtk3TargetWithOnlyWtype_ReportsPasteFailureButStillTypes()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "sway", false, false),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            focusedWindowIsGtk3: () => Task.FromResult(true)
+        );
+
+        Assert.False(await platform.SendPasteAsync());
+        Assert.Equal(InsertionFailureReason.WtypeGtk3PasteTarget, platform.LastFailureReason);
+        Assert.Empty(runner.Calls);
+
+        Assert.True(await platform.TypeTextAsync("hi"));
+        Assert.Equal("wtype", Assert.Single(runner.Calls).FileName);
+    }
+
+    [Fact]
+    public async Task LinuxTextInsertionPlatform_SwayGtk3Target_PastesWithYdotool()
+    {
+        var runner = new RecordingProcessRunner();
+        var platform = new LinuxTextInsertionPlatform(
+            SnapshotFor("Wayland", false, true, "sway", true, true),
+            (file, args, _) => runner.Run(file, args),
+            async (file, args) => (await runner.Run(file, args), string.Empty),
+            focusedWindowIsGtk3: () => Task.FromResult(true)
+        );
+
+        Assert.True(await platform.SendPasteAsync());
+        Assert.Equal("ydotool", Assert.Single(runner.Calls).FileName);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_gtk3_paste_target_copies_once_without_retrying()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = false,
+            PasteFailureReason = InsertionFailureReason.WtypeGtk3PasteTarget,
+        };
+        var sut = new TextInsertionService(platform);
+
+        var result = await sut.InsertTextAsync("hello", targetProcessName: "gedit");
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.WtypeGtk3PasteTarget, sut.LastFailureReason);
+        Assert.Equal(1, platform.PasteAttemptCount);
+        Assert.Equal("hello", platform.Clipboard);
+    }
+
+    [Fact]
+    public void FindSwayFocusedNativePid_ReturnsFocusedXdgShellPid()
+    {
+        const string tree = """
+            {"type":"root","focused":false,"nodes":[{"type":"output","focused":false,"nodes":[
+              {"type":"workspace","focused":false,"nodes":[
+                {"type":"con","focused":false,"shell":"xdg_shell","pid":11,"nodes":[]},
+                {"type":"con","focused":false,"shell":"xwayland","pid":12,"nodes":[]}
+              ],"floating_nodes":[
+                {"type":"floating_con","focused":true,"shell":"xdg_shell","pid":13,"nodes":[]}
+              ]}]}]}
+            """;
+
+        Assert.Equal(13, LinuxTextInsertionPlatform.FindSwayFocusedNativePid(tree));
+    }
+
+    [Theory]
+    [InlineData("xwayland", 12)]
+    [InlineData("xdg_shell", 0)]
+    public void FindSwayFocusedNativePid_IgnoresXWaylandAndMissingPid(string shell, int pid)
+    {
+        var tree = $$"""{"focused":false,"nodes":[{"focused":true,"shell":"{{shell}}","pid":{{pid}}}]}""";
+
+        Assert.Null(LinuxTextInsertionPlatform.FindSwayFocusedNativePid(tree));
+    }
+
+    [Theory]
+    [InlineData(true, "/usr/lib/x86_64-linux-gnu/libgtk-3.so.0.2404.29")]
+    [InlineData(false, "/usr/lib/x86_64-linux-gnu/libgtk-3.so.0.2404.29", "/usr/lib/firefox/libxul.so")]
+    [InlineData(false, "/usr/lib/x86_64-linux-gnu/libgtk-3.so.0.2404.29", "/opt/App/icudtl.dat")]
+    [InlineData(false, "/usr/lib/x86_64-linux-gnu/libgtk-3.so.0.2404.29", "/usr/lib/libQt6Core.so.6.4.2")]
+    [InlineData(false, "/usr/lib/x86_64-linux-gnu/libgtk-4.so.1.600.9")]
+    public void IsGtk3WidgetProcess_MatchesOnlyGtk3Toolkit(bool expected, params string[] mappedFiles)
+    {
+        var maps = mappedFiles.Select(file => $"7f0000000000-7f0000001000 r--p 00000000 103:06 42  {file}");
+
+        Assert.Equal(expected, LinuxTextInsertionPlatform.IsGtk3WidgetProcess(maps));
+    }
+
+    private static readonly string[] s_firefoxMaps =
+        ["7f0000000000-7f0000001000 r--p 00000000 103:06 42  /usr/lib/firefox/libxul.so"];
+
+    [Fact]
+    public async Task IsGtk3OrUnverifiableTarget_TreatsUnreadableMapsAsGtk3()
+    {
+        Assert.True(await LinuxTextInsertionPlatform.IsGtk3OrUnverifiableTargetAsync(
+            () => throw new UnauthorizedAccessException("Access to the path '/proc/42/maps' is denied.")));
+        Assert.True(await LinuxTextInsertionPlatform.IsGtk3OrUnverifiableTargetAsync(
+            () => throw new FileNotFoundException("/proc/42/maps")));
+        Assert.False(await LinuxTextInsertionPlatform.IsGtk3OrUnverifiableTargetAsync(
+            () => Task.FromResult(s_firefoxMaps)));
+    }
+
+    [Fact]
     public async Task LinuxTextInsertionPlatform_HyprlandProbe_ReadsXWaylandFlagFromHyprctl()
     {
         var runner = new FakeProcessRunner();
