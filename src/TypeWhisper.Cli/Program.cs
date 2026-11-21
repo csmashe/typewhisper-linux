@@ -22,6 +22,12 @@ public static class Program
     internal static async Task<int> RunAsync(string[] args, Func<bool>? isInputRedirected = null)
     {
         var options = CliOptions.Parse(args);
+        // Shells call the hidden ID helper while completing, so it must stay silent even for bad input.
+        if (args is ["__complete", ..])
+        {
+            return await CompleteIdsAsync(options);
+        }
+
         if (options.ShowHelp)
         {
             UsageText.Print();
@@ -65,6 +71,7 @@ public static class Program
             "history" or "last" => await WithApiAsync((api, ct) => HistoryCommand.RunAsync(api, options, ct)),
             "dictation" => await WithApiAsync((api, ct) => DictationCommand.RunAsync(api, options, ct)),
             "transcribe" => await WithApiAsync((api, ct) => TranscribeCommand.RunAsync(api, options, ct)),
+            "completions" => PrintCompletions(options.Positionals[0]),
             _ => ConsoleOutput.Error($"Unknown command: {options.Command}"),
         };
 
@@ -91,9 +98,7 @@ public static class Program
                 );
             }
 
-            var token = options.TokenWasExplicit
-                ? options.Token
-                : options.Token ?? discovered.Token;
+            var token = ResolveToken(options, discovered);
 
             // Install after synchronous, uncancellable discovery so Ctrl+C still
             // terminates normally if discovery blocks.
@@ -119,5 +124,72 @@ public static class Program
                 api.TranscribeHttp.Dispose();
             }
         }
+    }
+
+    private static string? ResolveToken(CliOptions options, DiscoveryFile discovered)
+    {
+        return options.TokenWasExplicit ? options.Token : options.Token ?? discovered.Token;
+    }
+
+    private static int PrintCompletions(string shell)
+    {
+        // CliOptions.Parse already rejected an unsupported shell.
+        Console.Out.Write(CliCompletions.Script(shell));
+        return ExitCodes.Success;
+    }
+
+    /// <summary>
+    ///     Prints engine or model IDs for shell completion, one per line. Prints nothing and
+    ///     succeeds when the app is unavailable, so a shell never shows errors or waits long.
+    /// </summary>
+    private static async Task<int> CompleteIdsAsync(CliOptions options)
+    {
+        if (options.ErrorMessage is not null
+            || options.Positionals is not [var kind]
+            || kind is not ("engines" or "models"))
+        {
+            return ExitCodes.Success;
+        }
+
+        try
+        {
+            var discovered = DiscoveryFileReader.TryRead();
+            // Same discovery rules as a real command: no TCP fallback, protocol version 2 only.
+            if (discovered is not { SocketPath: var socketPath }
+                || discovered.Version is not (null or 2)
+                || string.IsNullOrWhiteSpace(socketPath))
+            {
+                return ExitCodes.Success;
+            }
+
+            var api = new ApiClient(socketPath, ResolveToken(options, discovered));
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1.5));
+                using var response = await api.Http.GetAsync($"{api.BaseUrl}/v1/models", cts.Token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return ExitCodes.Success;
+                }
+
+                var body = await response.Content.ReadAsStringAsync(cts.Token);
+                foreach (var id in CliCompletions.Ids(body, kind == "engines", options.Engine))
+                {
+                    // LF only, whatever Console.Out.NewLine is: shells keep a CR as part of the ID.
+                    await Console.Out.WriteAsync(id + "\n");
+                }
+            }
+            finally
+            {
+                api.Http.Dispose();
+                api.TranscribeHttp.Dispose();
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Completion offers no IDs rather than printing errors into the user's shell.
+        }
+
+        return ExitCodes.Success;
     }
 }

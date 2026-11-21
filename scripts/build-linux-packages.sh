@@ -182,6 +182,23 @@ mkdir -p "$PUBLISH_DIR/Cli"
 cp "$CLI_PUBLISH_DIR/typewhisper-cli" "$PUBLISH_DIR/Cli/typewhisper-cli"
 chmod 0755 "$PUBLISH_DIR/Cli/typewhisper-cli"
 
+echo "==> Generating typewhisper-cli shell completions"
+COMPLETIONS_DIR="$STAGE_ROOT/completions"
+mkdir -p "$COMPLETIONS_DIR"
+for shell in bash zsh fish; do
+  "$PUBLISH_DIR/Cli/typewhisper-cli" completions "$shell" >"$COMPLETIONS_DIR/typewhisper-cli.$shell"
+done
+
+# Debian loads zsh completions from vendor-completions, Fedora from site-functions.
+stage_cli_completions() {
+  local root="$1" zsh_dir="$2"
+  install -Dm0644 "$COMPLETIONS_DIR/typewhisper-cli.bash" \
+    "$root/usr/share/bash-completion/completions/typewhisper-cli"
+  install -Dm0644 "$COMPLETIONS_DIR/typewhisper-cli.zsh" "$root/$zsh_dir/_typewhisper-cli"
+  install -Dm0644 "$COMPLETIONS_DIR/typewhisper-cli.fish" \
+    "$root/usr/share/fish/vendor_completions.d/typewhisper-cli.fish"
+}
+
 echo "==> Bundling Linux plugins"
 # Pass VERSION so PluginSDK and plugins build with the same AssemblyVersion as
 # the host. Otherwise plugins reference PluginSDK at the Directory.Build.props
@@ -348,6 +365,7 @@ EOF
 exec /opt/typewhisper/Cli/typewhisper-cli "$@"
 EOF
   chmod 0755 "$DEB_STAGE/usr/bin/typewhisper-cli"
+  stage_cli_completions "$DEB_STAGE" usr/share/zsh/vendor-completions
 
   cat > "$DEB_STAGE/usr/share/applications/typewhisper.desktop" <<EOF
 [Desktop Entry]
@@ -433,6 +451,7 @@ EOF
 exec /opt/typewhisper/Cli/typewhisper-cli "$@"
 EOF
   chmod 0755 "$RPM_SRC/usr/bin/typewhisper-cli"
+  stage_cli_completions "$RPM_SRC" usr/share/zsh/site-functions
 
   cat > "$RPM_SRC/usr/share/applications/typewhisper.desktop" <<EOF
 [Desktop Entry]
@@ -527,6 +546,9 @@ cp -a usr %{buildroot}/
 /opt/typewhisper
 /usr/bin/typewhisper
 /usr/bin/typewhisper-cli
+/usr/share/bash-completion/completions/typewhisper-cli
+/usr/share/zsh/site-functions/_typewhisper-cli
+/usr/share/fish/vendor_completions.d/typewhisper-cli.fish
 /usr/share/applications/typewhisper.desktop
 /usr/share/icons/hicolor/128x128/apps/typewhisper.png
 
