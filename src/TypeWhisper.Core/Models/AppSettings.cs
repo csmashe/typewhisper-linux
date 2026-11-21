@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using TypeWhisper.Core.Services.Diagnostics;
 
 namespace TypeWhisper.Core.Models;
@@ -249,6 +251,11 @@ public record AppSettings
     // When true (default), uses the evdev backend for global hotkeys on Wayland
     // (reads /dev/input/event*). Disable to fall back to focused-only SharpHook.
     public bool WaylandEvdevHotkeysEnabled { get; init; } = true;
+
+    // Keys this build doesn't know (written by a newer build, or retired) ride along on save,
+    // so stepping back from a beta to stable doesn't wipe the beta's settings.
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? UnmappedSettings { get; init; }
 
     /// <summary>Effective ordered hints: the stored list, else the legacy single language, else empty for auto.</summary>
     public IReadOnlyList<string> GetLanguageHints()

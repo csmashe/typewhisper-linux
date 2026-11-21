@@ -779,6 +779,67 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Update_PreservesKeysThisBuildDoesNotKnow()
+    {
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "language": "en",
+              "featureFromNewerBuild": { "enabled": true, "items": [1, "two", null] },
+              "retiredFlag": false
+            }
+            """
+        );
+
+        var sut = new SettingsService(_filePath);
+        sut.Update(s => s with { Language = "de" });
+
+        using (var saved = JsonDocument.Parse(File.ReadAllText(_filePath)))
+        {
+            var root = saved.RootElement;
+            Assert.Equal("de", root.GetProperty("language").GetString());
+            Assert.Equal(
+                """{"enabled":true,"items":[1,"two",null]}""",
+                JsonSerializer.Serialize(root.GetProperty("featureFromNewerBuild")));
+            Assert.False(root.GetProperty("retiredFlag").GetBoolean());
+        }
+
+        // A second build round-trips the same keys, and a no-op save is still a no-op.
+        var reloaded = new SettingsService(_filePath);
+        var changes = 0;
+        reloaded.SettingsChanged += _ => changes++;
+        reloaded.Update(s => s);
+        Assert.Equal(0, changes);
+        Assert.Contains("\"featureFromNewerBuild\"", File.ReadAllText(_filePath));
+    }
+
+    [Fact]
+    public void Update_KeptLegacyKeys_DoNotReMigrateOverNewerChoices()
+    {
+        File.WriteAllText(
+            _filePath,
+            """
+            {
+              "computeBackend": "cuda",
+              "historyRetentionDays": 7
+            }
+            """
+        );
+
+        new SettingsService(_filePath).Update(s => s with
+        {
+            LocalModelAcceleration = AppSettings.LocalModelAccelerationCpu,
+            HistoryRetentionMode = HistoryRetentionMode.Forever,
+        });
+
+        var reloaded = new SettingsService(_filePath).Current;
+        Assert.Equal(AppSettings.LocalModelAccelerationCpu, reloaded.LocalModelAcceleration);
+        Assert.Equal(HistoryRetentionMode.Forever, reloaded.HistoryRetentionMode);
+        Assert.Contains("\"computeBackend\"", File.ReadAllText(_filePath));
+    }
+
+    [Fact]
     public void Load_LegacyHistoryRetentionDays_MigratesToMinutes()
     {
         File.WriteAllText(
