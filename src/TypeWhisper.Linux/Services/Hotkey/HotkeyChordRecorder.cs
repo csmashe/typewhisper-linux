@@ -26,6 +26,10 @@ internal sealed class HotkeyChordRecorder
             var name = KeyName(key);
             if (name is null) return new CaptureResult(Unsupported: true);
             if (_chord is not null) return default;
+            // The hotkey backends listen passively, so a lone typing or navigation key would
+            // still reach the focused app. Only function keys may stand alone.
+            if (modifiers == KeyModifiers.None && !IsFunctionKey(name))
+                return new CaptureResult(NeedsModifier: true);
             var parts = new List<string>();
             if (modifiers.HasFlag(KeyModifiers.Control)) parts.Add("Ctrl");
             if (modifiers.HasFlag(KeyModifiers.Shift)) parts.Add("Shift");
@@ -45,6 +49,9 @@ internal sealed class HotkeyChordRecorder
         _hadNonModifier = false;
         return new CaptureResult(Chord: chord);
     }
+
+    private static bool IsFunctionKey(string name) =>
+        name.StartsWith('F') && int.TryParse(name[1..], out var f) && f is >= 1 and <= 24;
 
     private static string? ModifierName(Key key) => key switch
     {
@@ -69,7 +76,7 @@ internal sealed class HotkeyChordRecorder
             case [>= 'A' and <= 'Z']: return name;
             case ['D', >= '0' and <= '9']: return name[1..];
         }
-        if (name.StartsWith('F') && int.TryParse(name[1..], out var f) && f is >= 1 and <= 24) return name;
+        if (IsFunctionKey(name)) return name;
         return key switch
         {
             Key.Space => "Space", Key.Enter => "Enter", Key.Tab => "Tab",
@@ -81,4 +88,4 @@ internal sealed class HotkeyChordRecorder
     }
 }
 
-internal readonly record struct CaptureResult(string? Chord = null, bool Cancelled = false, bool Unsupported = false);
+internal readonly record struct CaptureResult(string? Chord = null, bool Cancelled = false, bool Unsupported = false, bool NeedsModifier = false);

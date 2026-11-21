@@ -1605,6 +1605,7 @@
   "Shortcuts.CapturePrompt": "按下一个键或组合键，然后松开所有按键以应用。按Esc取消。",
   "Shortcuts.PreviewManagedBlock": "{0} — 托管块：",
   "Shortcuts.UnsupportedCaptureKey": "不支持此按键。请使用字母、数字、功能键、导航键或单个修饰键。",
+  "Shortcuts.CaptureKeyNeedsModifier": "此按键用于输入文字或移动光标，因此需要搭配 Ctrl、Alt、Shift 或 Meta 等修饰键。功能键和单个修饰键可以单独使用。",
   "Window.LearnedCorrectionTitle": "TypeWhisper 已学习的更正",
   "Window.LiveTextTitle": "TypeWhisper 实时文本",
   "Window.OverlayTitle": "TypeWhisper 浮层"

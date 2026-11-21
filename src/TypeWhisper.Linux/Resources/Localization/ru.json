@@ -1605,6 +1605,7 @@
   "Shortcuts.CapturePrompt": "Нажмите клавишу или сочетание клавиш и отпустите все клавиши. Escape отменяет запись.",
   "Shortcuts.PreviewManagedBlock": "{0} — управляемый блок:",
   "Shortcuts.UnsupportedCaptureKey": "Эта клавиша не поддерживается. Используйте букву, цифру, функциональную клавишу, клавишу навигации или один модификатор.",
+  "Shortcuts.CaptureKeyNeedsModifier": "Эта клавиша вводит текст или перемещает курсор, поэтому ей нужен модификатор, например Ctrl, Alt, Shift или Meta. Функциональные клавиши и одиночный модификатор работают без сочетания.",
   "Window.LearnedCorrectionTitle": "Изученное исправление TypeWhisper",
   "Window.LiveTextTitle": "Текст в реальном времени TypeWhisper",
   "Window.OverlayTitle": "Оверлей TypeWhisper"
