@@ -31,7 +31,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_PreservesHintOrder()
     {
-        using var doc = JsonDocument.Parse(SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, ["de-DE", "en"]));
+        using var doc = JsonDocument.Parse(SonioxSession.BuildConfigMessage(SonioxModels.FallbackRealtimeModelId, ["de-DE", "en"]));
         Assert.Equal(["de-DE", "en"], doc.RootElement.GetProperty("language_hints").EnumerateArray().Select(e => e.GetString()));
     }
 
@@ -155,12 +155,12 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_IncludesRawPcmFormatAndModel()
     {
-        var json = SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, []);
+        var json = SonioxSession.BuildConfigMessage(SonioxModels.FallbackRealtimeModelId, []);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         Assert.False(root.TryGetProperty("api_key", out _));
-        Assert.Equal("stt-rt-v5", root.GetProperty("model").GetString());
+        Assert.Equal("stt-rt-v6", root.GetProperty("model").GetString());
         Assert.Equal("pcm_s16le", root.GetProperty("audio_format").GetString());
         Assert.Equal(16000, root.GetProperty("sample_rate").GetInt32());
         Assert.Equal(1, root.GetProperty("num_channels").GetInt32());
@@ -173,7 +173,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_OmitsLanguageHints_WhenEmpty()
     {
-        var json = SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, []);
+        var json = SonioxSession.BuildConfigMessage(SonioxModels.FallbackRealtimeModelId, []);
 
         using var doc = JsonDocument.Parse(json);
         Assert.False(doc.RootElement.TryGetProperty("language_hints", out _));
@@ -182,7 +182,7 @@ public class SonioxPluginTests
     [Fact]
     public void BuildConfigMessage_AddsLanguageHints_WhenLanguageGiven()
     {
-        var json = SonioxSession.BuildConfigMessage(SonioxSession.RealtimeModel, ["de"]);
+        var json = SonioxSession.BuildConfigMessage(SonioxModels.FallbackRealtimeModelId, ["de"]);
 
         using var doc = JsonDocument.Parse(json);
         var hints = doc.RootElement.GetProperty("language_hints");
@@ -559,7 +559,7 @@ public class SonioxPluginTests
 
         var definitions = sut.GetSettingDefinitions();
 
-        Assert.Equal(2, definitions.Count);
+        Assert.Equal(3, definitions.Count);
         Assert.Equal("region", definitions[1].Key);
         Assert.Equal(PluginSettingKind.Dropdown, definitions[1].Kind);
         Assert.Equal(["us", "eu", "jp", "in"], definitions[1].Options!.Select(option => option.Value));
@@ -625,11 +625,13 @@ public class SonioxPluginTests
     {
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
         host.SetSetting("region", "eu");
-        var sut = new SonioxPlugin();
+        using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}")));
+        var sut = new SonioxPlugin(httpClient);
         await sut.ActivateAsync(host);
 
         Uri? connected = null;
-        sut.ConnectStreaming = (_, realtimeUri, _, _) =>
+        sut.ConnectStreaming = (_, realtimeUri, _, _, _) =>
         {
             connected = realtimeUri;
             throw new InvalidOperationException("connection captured");
@@ -644,7 +646,7 @@ public class SonioxPluginTests
             () => sut.StartStreamingAsync(null, CancellationToken.None));
         Assert.Equal("wss://stt-rt.in.soniox.com/transcribe-websocket", connected?.ToString());
 
-        var adapter = new SonioxWebSocketAdapter("key", connected!, []);
+        var adapter = new SonioxWebSocketAdapter("key", connected!, SonioxModels.FallbackRealtimeModelId, []);
         var options = await adapter.GetConnectionOptionsAsync(CancellationToken.None);
         Assert.Equal(connected, options.Uri);
         Assert.Equal("Bearer key", options.Headers!["Authorization"]);
@@ -815,7 +817,8 @@ public class SonioxPluginTests
             {
                 using var doc = JsonDocument.Parse(body ?? throw new InvalidOperationException("Missing body"));
                 var root = doc.RootElement;
-                Assert.Equal("stt-async-v5", root.GetProperty("model").GetString());
+                Assert.Equal("stt-async-v6", root.GetProperty("model").GetString());
+                Assert.True(root.GetProperty("enable_language_identification").GetBoolean());
                 Assert.Equal("84c32fc6-4fb5-4e7a-b656-b5ec70493753", root.GetProperty("file_id").GetString());
                 Assert.Equal(["de", "en"], root.GetProperty("language_hints").EnumerateArray().Select(e => e.GetString()!).ToArray());
                 return JsonResponse("""{ "id": "73d4357d-cad2-4338-a60d-ec6f2044f721", "status": "queued" }""", HttpStatusCode.Created);
@@ -887,7 +890,8 @@ public class SonioxPluginTests
             {
                 using var doc = JsonDocument.Parse(body ?? throw new InvalidOperationException("Missing body"));
                 var root = doc.RootElement;
-                Assert.Equal("stt-async-v5", root.GetProperty("model").GetString());
+                Assert.Equal("stt-async-v6", root.GetProperty("model").GetString());
+                Assert.True(root.GetProperty("enable_language_identification").GetBoolean());
                 Assert.Equal("84c32fc6-4fb5-4e7a-b656-b5ec70493753", root.GetProperty("file_id").GetString());
                 Assert.Equal(["de"], root.GetProperty("language_hints").EnumerateArray().Select(e => e.GetString()!).ToArray());
                 return JsonResponse("""{ "id": "73d4357d-cad2-4338-a60d-ec6f2044f721", "status": "queued" }""", HttpStatusCode.Created);
@@ -1524,6 +1528,392 @@ public class SonioxPluginTests
             sut.TranscribeAsync([1, 2, 3], "en", translate: false, prompt: null, CancellationToken.None));
 
         Assert.Equal(["/v1/transcriptions/73d4357d-cad2-4338-a60d-ec6f2044f721"], handler.DeletedPaths);
+    }
+
+    private const string CatalogJson = """
+        {
+          "models": [
+            { "id": "stt-rt-v5", "transcription_mode": "real_time" },
+            { "id": "stt-async-v5", "transcription_mode": "async" },
+            { "id": "stt-rt-v7", "transcription_mode": "real_time" },
+            { "id": "stt-async-v7", "transcription_mode": "async" },
+            { "id": "stt-rt-v10-preview", "transcription_mode": "real_time" },
+            { "id": "stt-rt-v4", "aliased_model_id": "stt-rt-v5", "transcription_mode": "real_time" },
+            { "id": "tts-rt-v2", "transcription_mode": "tts" }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void SonioxModels_FallBackToV6WithoutACatalog()
+    {
+        Assert.Equal("stt-rt-v6", SonioxModels.ResolveSttModelId(SonioxModels.Automatic, null, SonioxModels.RealtimeMode));
+        Assert.Equal("stt-async-v6", SonioxModels.ResolveSttModelId(SonioxModels.Automatic, [], SonioxModels.AsyncMode));
+    }
+
+    [Fact]
+    public void SonioxModels_AutomaticPicksNewestNonPreviewNonAliasModel()
+    {
+        var models = SonioxModels.ParseSttModels(CatalogJson);
+
+        Assert.DoesNotContain(models, model => model.Id == "tts-rt-v2");
+        Assert.Equal("stt-rt-v7", SonioxModels.PreferredSttModelId(models, SonioxModels.RealtimeMode));
+        Assert.Equal("stt-async-v7", SonioxModels.PreferredSttModelId(models, SonioxModels.AsyncMode));
+        Assert.Equal(["v7", "v5"], SonioxModels.SelectableVersions(models));
+    }
+
+    [Fact]
+    public void SonioxModels_OrdersVersionsNumerically()
+    {
+        var models = SonioxModels.ParseSttModels("""
+            { "models": [
+              { "id": "stt-async-v9", "transcription_mode": "async" },
+              { "id": "stt-async-v10", "transcription_mode": "async" }
+            ] }
+            """);
+
+        Assert.Equal("stt-async-v10", SonioxModels.PreferredSttModelId(models, SonioxModels.AsyncMode));
+    }
+
+    [Fact]
+    public void SonioxModels_MovingAliasWinsOverNewestVersion()
+    {
+        var models = SonioxModels.ParseSttModels("""
+            { "models": [
+              { "id": "stt-rt-v7", "transcription_mode": "real_time" },
+              { "id": "stt-rt-latest", "aliased_model_id": "stt-rt-v6", "transcription_mode": "real_time" },
+              { "id": "stt-async-v7", "transcription_mode": "async" },
+              { "id": "stt-async-latest", "aliased_model_id": "stt-async-v8-preview", "transcription_mode": "async" }
+            ] }
+            """);
+
+        Assert.Equal("stt-rt-latest", SonioxModels.PreferredSttModelId(models, SonioxModels.RealtimeMode));
+        Assert.Equal("stt-async-v7", SonioxModels.PreferredSttModelId(models, SonioxModels.AsyncMode));
+    }
+
+    [Theory]
+    [InlineData(null, "automatic")]
+    [InlineData("", "automatic")]
+    [InlineData("automatic", "automatic")]
+    [InlineData("v5", "v5")]
+    [InlineData(" stt-rt-v5 ", "v5")]
+    [InlineData("stt-async-v5", "v5")]
+    [InlineData("Not a version!", "automatic")]
+    public void SonioxModels_NormalizeSelectionReadsFullModelIdsAsVersions(string? stored, string expected)
+    {
+        Assert.Equal(expected, SonioxModels.NormalizeSelection(stored));
+    }
+
+    [Fact]
+    public void SonioxModels_PinnedVersionResolvesBothModes()
+    {
+        Assert.Equal("stt-rt-v5", SonioxModels.ResolveSttModelId("v5", null, SonioxModels.RealtimeMode));
+        Assert.Equal("stt-async-v5", SonioxModels.ResolveSttModelId("v5", null, SonioxModels.AsyncMode));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_CachesProbedModelListAndTranscriptionUsesNewestModel()
+    {
+        string? createdModel = null;
+        var flow = new SonioxFlowHandler(body =>
+        {
+            using var doc = JsonDocument.Parse(body);
+            createdModel = doc.RootElement.GetProperty("model").GetString();
+        });
+        var handler = new AsyncCapturingHandler(async (request, _, ct) =>
+            request.RequestUri?.AbsolutePath == "/v1/models"
+                ? JsonResponse(CatalogJson)
+                : await new HttpMessageInvoker(flow).SendAsync(request, ct));
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.LastCleanupTask;
+
+        Assert.True(result!.IsSuccess);
+        Assert.Equal("stt-async-v7", createdModel);
+        Assert.Equal("us", host.GetSetting<SonioxCatalog>(SonioxPlugin.CatalogSettingKey)?.Region);
+
+        // A restart restores the cached list without asking Soniox again.
+        var restarted = new SonioxPlugin(httpClient);
+        await restarted.ActivateAsync(host);
+        Assert.Equal("stt-rt-v7", restarted.CaptureSettings().RealtimeModelId);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_KeepsCachedListWhenProbeBodyIsNotAModelList()
+    {
+        var handler = new CapturingHandler((_, _) => JsonResponse("{}"));
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting(SonioxPlugin.CatalogSettingKey, new SonioxCatalog(
+            "us", DateTimeOffset.UnixEpoch, [new SonioxSttModel("stt-async-v7", null, SonioxModels.AsyncMode)]));
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ValidateAsync();
+
+        Assert.True(result!.IsSuccess);
+        Assert.Equal("stt-async-v7", sut.CaptureSettings().AsyncModelId);
+    }
+
+    [Fact]
+    public async Task CatalogFromAnotherRegionIsIgnored()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting(SonioxPlugin.CatalogSettingKey, new SonioxCatalog(
+            "eu", DateTimeOffset.UnixEpoch, SonioxModels.ParseSttModels(CatalogJson)));
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("stt-async-v6", sut.CaptureSettings().AsyncModelId);
+
+        sut.SetRegion("eu");
+        Assert.Equal("stt-async-v7", sut.CaptureSettings().AsyncModelId);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_IgnoresDamagedCatalogAndModelSettings()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting(SonioxPlugin.CatalogSettingKey, "not a catalog");
+        host.SetSetting(SonioxPlugin.ModelSettingKey, 42);
+        var sut = new SonioxPlugin();
+
+        await sut.ActivateAsync(host);
+
+        Assert.Null(sut.CurrentCatalog);
+        Assert.Equal(SonioxModels.Automatic, sut.ModelSelection);
+    }
+
+    [Fact]
+    public async Task ModelSetting_PinsVersionForRecordingsAndLiveText()
+    {
+        string? createdModel = null;
+        var handler = new SonioxFlowHandler(body =>
+        {
+            using var doc = JsonDocument.Parse(body);
+            createdModel = doc.RootElement.GetProperty("model").GetString();
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
+        await sut.ActivateAsync(host);
+        string? streamingModel = null;
+        sut.ConnectStreaming = (_, _, model, _, _) =>
+        {
+            streamingModel = model;
+            throw new InvalidOperationException("connection captured");
+        };
+
+        await sut.SetSettingValueAsync(SonioxPlugin.ModelSettingKey, "stt-rt-v5");
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.LastCleanupTask;
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartStreamingAsync(null, CancellationToken.None));
+
+        Assert.Equal("v5", await sut.GetSettingValueAsync(SonioxPlugin.ModelSettingKey));
+        Assert.Equal("v5", host.GetSetting<string>(SonioxPlugin.ModelSettingKey));
+        Assert.Equal("stt-async-v5", createdModel);
+        Assert.Equal("stt-rt-v5", streamingModel);
+    }
+
+    [Fact]
+    public async Task GetSettingDefinitions_OffersAutomaticAndCachedVersions()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting(SonioxPlugin.CatalogSettingKey, new SonioxCatalog(
+            "us", DateTimeOffset.UnixEpoch, SonioxModels.ParseSttModels(CatalogJson)));
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        var model = sut.GetSettingDefinitions().Single(definition => definition.Key == SonioxPlugin.ModelSettingKey);
+
+        Assert.Equal(PluginSettingKind.Dropdown, model.Kind);
+        Assert.Equal(["automatic", "v7", "v5"], model.Options!.Select(option => option.Value));
+        Assert.Equal("Settings.ModelAutomatic", model.Options![0].Label);
+    }
+
+    [Fact]
+    public async Task GetSettingDefinitions_OffersOnlyAutomaticWhenNoVersionCoversBothModes()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting(SonioxPlugin.CatalogSettingKey, new SonioxCatalog(
+            "us", DateTimeOffset.UnixEpoch, [new SonioxSttModel("stt-rt-v7", null, SonioxModels.RealtimeMode)]));
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        var model = sut.GetSettingDefinitions().Single(definition => definition.Key == SonioxPlugin.ModelSettingKey);
+
+        Assert.Equal(["automatic"], model.Options!.Select(option => option.Value));
+    }
+
+    [Fact]
+    public void GetSettingDefinitions_OffersV6PinWithoutACatalog()
+    {
+        var model = new SonioxPlugin().GetSettingDefinitions().Single(definition => definition.Key == SonioxPlugin.ModelSettingKey);
+
+        Assert.Equal(["automatic", "v6"], model.Options!.Select(option => option.Value));
+    }
+
+    [Fact]
+    public async Task RefreshModelsAction_CachesSelectedRegionsList()
+    {
+        var handler = new CapturingHandler((request, _) =>
+        {
+            Assert.Equal("https://api.jp.soniox.com/v1/models", request.RequestUri?.ToString());
+            Assert.Equal("Bearer soniox-key", request.Headers.Authorization?.ToString());
+            return JsonResponse(CatalogJson);
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting("region", "jp");
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var action = Assert.Single(sut.GetSettingsActions());
+        var result = await sut.ExecuteSettingsActionAsync(action.Id, CancellationToken.None);
+
+        Assert.True(action.IsEnabled);
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Settings.ModelsRefreshed", result.Message);
+        Assert.Equal("jp", sut.CurrentCatalog?.Region);
+        Assert.Equal("stt-rt-v7", sut.CaptureSettings().RealtimeModelId);
+    }
+
+    [Fact]
+    public async Task RefreshModelsAction_ReportsFailuresWithoutClearingCache()
+    {
+        var handler = new CapturingHandler((_, _) => JsonResponse("""{ "error_message": "bad key" }""", HttpStatusCode.Unauthorized));
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting(SonioxPlugin.CatalogSettingKey, new SonioxCatalog(
+            "us", DateTimeOffset.UnixEpoch, SonioxModels.ParseSttModels(CatalogJson)));
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ExecuteSettingsActionAsync(SonioxPlugin.RefreshModelsActionId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("bad key", result.Message);
+        Assert.Equal("stt-async-v7", sut.CaptureSettings().AsyncModelId);
+    }
+
+    [Fact]
+    public async Task RefreshModelsAction_RequiresApiKey()
+    {
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        var result = await sut.ExecuteSettingsActionAsync(SonioxPlugin.RefreshModelsActionId, CancellationToken.None);
+
+        Assert.False(Assert.Single(sut.GetSettingsActions()).IsEnabled);
+        Assert.False(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task RefreshModelsAction_DropsListFetchedWithReplacedKey()
+    {
+        SonioxPlugin? sut = null;
+        var handler = new AsyncCapturingHandler(async (_, _, _) =>
+        {
+            // ReSharper disable once AccessToModifiedClosure
+            await sut!.SetApiKeyAsync("other-key");
+            return JsonResponse(CatalogJson);
+        });
+        using var httpClient = new HttpClient(handler);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+
+        var result = await sut.ExecuteSettingsActionAsync(SonioxPlugin.RefreshModelsActionId, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Settings.SettingsChangedDuringProbe", result.Message);
+        Assert.Null(sut.CurrentCatalog);
+    }
+
+    [Fact]
+    public async Task BackgroundRefresh_LoadsMissingListOnceAndRefreshesAfterADay()
+    {
+        var modelRequests = 0;
+        var flow = new SonioxFlowHandler(static _ => { });
+        var handler = new AsyncCapturingHandler(async (request, _, ct) =>
+        {
+            if (request.RequestUri?.AbsolutePath != "/v1/models")
+                return await new HttpMessageInvoker(flow).SendAsync(request, ct);
+
+            Interlocked.Increment(ref modelRequests);
+            return JsonResponse(CatalogJson);
+        });
+        using var httpClient = new HttpClient(handler);
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        var sut = new SonioxPlugin(
+            httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2, timeProvider: time, backgroundCatalogRefresh: true);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+
+        Assert.Equal(1, modelRequests);
+        Assert.Equal("stt-async-v7", sut.CaptureSettings().AsyncModelId);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+
+        time.Now += SonioxPlugin.s_catalogMaximumAge;
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.LastCleanupTask;
+
+        Assert.Equal(2, modelRequests);
+    }
+
+    [Fact]
+    public async Task BackgroundRefresh_WaitsBeforeRetryingAFailure()
+    {
+        var modelRequests = 0;
+        var flow = new SonioxFlowHandler(static _ => { });
+        var handler = new AsyncCapturingHandler(async (request, _, ct) =>
+        {
+            if (request.RequestUri?.AbsolutePath != "/v1/models")
+                return await new HttpMessageInvoker(flow).SendAsync(request, ct);
+
+            Interlocked.Increment(ref modelRequests);
+            return JsonResponse("{}", HttpStatusCode.InternalServerError);
+        });
+        using var httpClient = new HttpClient(handler);
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        var sut = new SonioxPlugin(
+            httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2, timeProvider: time, backgroundCatalogRefresh: true);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        Assert.Equal(1, modelRequests);
+        Assert.Contains(host.Logs, log => log.Message.StartsWith("Soniox model list refresh failed", StringComparison.Ordinal));
+
+        time.Now += SonioxPlugin.s_catalogRetryDelay;
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.LastCleanupTask;
+
+        Assert.Equal(2, modelRequests);
+        Assert.Equal("stt-async-v6", sut.CaptureSettings().AsyncModelId);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     private static SonioxSession.SonioxMessage Final(string text) =>
