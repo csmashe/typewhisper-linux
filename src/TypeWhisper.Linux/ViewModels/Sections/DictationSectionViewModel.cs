@@ -109,6 +109,9 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _lockPasteToFocusedField;
 
+    [ObservableProperty]
+    private bool _preserveClipboard;
+
     private readonly IAtSpiEventClient? _atSpiClient;
 
     public bool IsLockPasteToFocusedFieldAvailable => TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
@@ -1070,6 +1073,7 @@ public partial class DictationSectionViewModel : ObservableObject
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
         LockPasteToFocusedField = settings.LockPasteToFocusedField;
+        PreserveClipboard = settings.PreserveClipboard;
         OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays.ToString(CultureInfo.InvariantCulture);
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
@@ -2236,6 +2240,11 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnLockPasteToFocusedFieldChanged(bool value)
     {
         _settings.Update(current => current with { LockPasteToFocusedField = value });
+    }
+
+    partial void OnPreserveClipboardChanged(bool value)
+    {
+        _settings.Update(current => current with { PreserveClipboard = value });
     }
 
     [ObservableProperty]

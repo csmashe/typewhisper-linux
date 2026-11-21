@@ -410,6 +410,7 @@ public sealed class SupportReportService
             settings.OnlineAsrBatchLiveTranscriptionEnabled,
             settings.AutoPaste,
             settings.LockPasteToFocusedField,
+            settings.PreserveClipboard,
             settings.CleanupLevel.ToString(),
             settings.SpokenFormattingStrategy.ToString(),
             settings.TranscriptionNumberNormalizationEnabled,

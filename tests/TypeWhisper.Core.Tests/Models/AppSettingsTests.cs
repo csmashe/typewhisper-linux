@@ -17,6 +17,9 @@ public class AppSettingsTests
         Assert.False(AppSettings.Default.LockPasteToFocusedField);
 
     [Fact]
+    public void DefaultPreserveClipboard_IsTrue() => Assert.True(AppSettings.Default.PreserveClipboard);
+
+    [Fact]
     public void GetLanguageHints_AutoLanguage_IsEmpty() => Assert.Empty(AppSettings.Default.GetLanguageHints());
 
     [Fact]

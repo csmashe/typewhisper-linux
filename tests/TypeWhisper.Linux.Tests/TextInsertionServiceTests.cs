@@ -448,6 +448,122 @@ public sealed class TextInsertionServiceTests
     }
 
     [Fact]
+    public async Task InsertTextAsync_preserve_clipboard_off_leaves_pasted_text_on_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: confirmation,
+            preserveClipboard: static () => false
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.Equal(1, platform.SetClipboardCount);
+        Assert.NotNull(confirmation.LastWatch);
+        Assert.True(confirmation.LastWatch.Disposed);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InsertTextAsync_preserve_clipboard_is_read_after_the_delivery_gate(bool preserve)
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            PasteSucceeds = true,
+        };
+        var preserveClipboard = !preserve;
+        var confirmation = new FakePasteConfirmationSource
+        {
+            Result = true,
+            OnWait = () => preserveClipboard = preserve,
+        };
+        var sut = new TextInsertionService(
+            platform,
+            pasteConfirmation: confirmation,
+            preserveClipboard: () => preserveClipboard
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(preserve ? "previous" : "new text", platform.Clipboard);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_preserve_clipboard_off_skips_rich_restore_without_logging()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ClipboardHasNonTextFormats = true,
+            RichFormats = [new ClipboardFormatData("text/html", "<p>previous</p>"u8.ToArray())],
+            PasteSucceeds = true,
+        };
+        var confirmation = new FakePasteConfirmationSource { Result = true };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(
+            platform,
+            errorLog,
+            confirmation,
+            preserveClipboard: static () => false
+        );
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.Null(platform.RestoredRichFormats);
+        Assert.Empty(errorLog.AddedEntries);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_preserve_clipboard_off_does_not_log_unrestorable_nontext_clipboard()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = null,
+            ClipboardHasNonTextFormats = true,
+            PasteSucceeds = true,
+        };
+        var errorLog = new RecordingErrorLogService();
+        var sut = new TextInsertionService(platform, errorLog, preserveClipboard: static () => false);
+
+        var result = await sut.InsertTextAsync("new text");
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal("new text", platform.Clipboard);
+        Assert.Empty(errorLog.AddedEntries);
+    }
+
+    [Fact]
+    public async Task InsertTextAsync_preserve_clipboard_off_still_restores_after_unsent_terminal_paste()
+    {
+        var platform = new FakeTextInsertionPlatform
+        {
+            Clipboard = "previous",
+            ActiveWindowId = "other",
+            ActivateSucceeds = false,
+        };
+        var sut = new TextInsertionService(platform, preserveClipboard: static () => false);
+
+        var result = await sut.InsertTextAsync("line1\nline2", true, "term-window", "konsole");
+
+        Assert.Equal(InsertionResult.Failed, result);
+        Assert.False(platform.PasteSent);
+        Assert.Equal("previous", platform.Clipboard);
+    }
+
+    [Fact]
     public async Task InsertTextAsync_retries_failed_paste_before_fallback()
     {
         var platform = new FakeTextInsertionPlatform

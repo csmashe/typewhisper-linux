@@ -422,6 +422,8 @@
   "Dictation.LocalModelAcceleration": "Lokale Modellbeschleunigung",
   "Dictation.LockPasteToFocusedField": "Einfügen auf das ursprüngliche Textfeld beschränken",
   "Dictation.LockPasteToFocusedFieldHint": "Stellt vor dem Einfügen den Fokus des Feldes wieder her, das beim Start des Diktats aktiv war. Ist es nicht mehr verfügbar, bleibt der Text in der Zwischenablage. Benötigt den Bedienungshilfen-Listener, den das Lernen von Korrekturen pro Zielanwendung einschaltet.",
+  "Dictation.PreserveClipboard": "Inhalt der Zwischenablage beibehalten",
+  "Dictation.PreserveClipboardHint": "Stellt nach dem Einfügen den vorherigen Inhalt der Zwischenablage wieder her. Ausgeschaltet bleibt der diktierte Text in der Zwischenablage, wo der Zwischenablage-Verlauf ihn sieht.",
   "Dictation.LockedFieldGone": "Das beim Start des Diktats aktive Textfeld ist nicht mehr da. Der Text wurde in die Zwischenablage kopiert.",
   "Dictation.Microphone": "Mikrofon",
   "Dictation.MicTest": "Mikrofontest",
