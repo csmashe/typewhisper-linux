@@ -118,40 +118,63 @@
                         BorderThickness="1"
                         CornerRadius="6"
                         Padding="2">
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="2"
-                                VerticalAlignment="Center">
-                        <Button Command="{Binding OpenUpdateCommand}"
+                    <!-- The version text trims in a narrow window so the actions stay clear of Open Wizard. -->
+                    <Grid ColumnDefinitions="*,Auto,Auto,Auto"
+                          ColumnSpacing="2"
+                          VerticalAlignment="Center">
+                        <Button Grid.Column="0"
+                                Command="{Binding OpenUpdateCommand}"
                                 Background="Transparent"
                                 BorderThickness="0"
                                 Padding="8,4"
                                 MinHeight="0"
+                                HorizontalContentAlignment="Stretch"
                                 ToolTip.Tip="{loc:Str MainWindow.OpenUpdateTooltip}">
-                            <StackPanel Orientation="Horizontal"
-                                        Spacing="7"
-                                        VerticalAlignment="Center">
-                                <TextBlock Text="↓"
+                            <DockPanel VerticalAlignment="Center">
+                                <TextBlock DockPanel.Dock="Left"
+                                           Text="↓"
+                                           Margin="0,0,7,0"
                                            FontSize="14"
                                            FontWeight="Bold"
                                            Foreground="{DynamicResource TwAccentTextBrush}"
                                            VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding UpdateBannerText}"
                                            FontSize="12"
+                                           TextTrimming="CharacterEllipsis"
                                            Foreground="{DynamicResource TwAccentSubtleTextBrush}"
                                            VerticalAlignment="Center" />
-                            </StackPanel>
+                            </DockPanel>
                         </Button>
-                        <Button Command="{Binding DismissUpdateCommand}"
-                                Content="✕"
-                                AutomationProperties.Name="Dismiss update"
-                                FontSize="11"
+                        <Button Grid.Column="1"
+                                Command="{Binding OpenReleaseNotesCommand}"
+                                Content="{loc:Str Update.ReleaseNotes}"
+                                FontSize="12"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="6,4"
+                                MinHeight="0"
+                                Foreground="{DynamicResource TwAccentTextBrush}" />
+                        <Button Grid.Column="2"
+                                Command="{Binding SnoozeUpdateCommand}"
+                                Content="{loc:Str Update.Later}"
+                                FontSize="12"
                                 Background="Transparent"
                                 BorderThickness="0"
                                 Padding="6,4"
                                 MinHeight="0"
                                 Foreground="{DynamicResource TwTextSecondaryBrush}"
-                                ToolTip.Tip="{loc:Str Common.Dismiss}" />
-                    </StackPanel>
+                                ToolTip.Tip="{loc:Str Update.LaterTooltip}" />
+                        <Button Grid.Column="3"
+                                Command="{Binding DismissUpdateCommand}"
+                                Content="{loc:Str Update.SkipVersion}"
+                                FontSize="12"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="6,4"
+                                MinHeight="0"
+                                Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                ToolTip.Tip="{loc:Str Update.SkipVersionTooltip}" />
+                    </Grid>
                 </Border>
 
                 <StackPanel Grid.Column="1"

@@ -27,8 +27,8 @@ public sealed record UpdateCheckResult
 
 /// <summary>
 ///     Checks the project's GitHub Releases for a newer version. Backs the
-///     About section's "Check for Updates" button and a once-per-day startup
-///     check that drives a non-obtrusive banner in the main window.
+///     About section's "Check for Updates" button and a daily background check
+///     that drives a non-obtrusive banner in the main window.
 /// </summary>
 public sealed class UpdateCheckService
 {
@@ -41,18 +41,40 @@ public sealed class UpdateCheckService
     private const string ReleasesPage =
         "https://github.com/csmashe/typewhisper-linux/releases/latest";
 
-    private static readonly TimeSpan s_startupCheckInterval = TimeSpan.FromHours(24);
+    private static readonly TimeSpan s_checkInterval = TimeSpan.FromHours(24);
+    private static readonly TimeSpan s_failedCheckRetry = TimeSpan.FromHours(1);
+    private static readonly TimeSpan s_recordingDeferral = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan s_minimumWait = TimeSpan.FromMinutes(1);
+    internal static readonly TimeSpan s_snoozeDuration = TimeSpan.FromHours(24);
 
     private static readonly JsonSerializerOptions s_jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private readonly SemaphoreSlim _gate = new(1, 1);
 
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly HttpClient _httpClient;
     private readonly LinuxPreferencesService _prefs;
+    private readonly Func<DateTime> _utcNow;
+
+    private DateTime? _lastAttemptUtc;
+    private string? _notifiedVersion;
 
     public UpdateCheckService(LinuxPreferencesService prefs, HttpClient? httpClient = null)
+        : this(prefs, httpClient, utcNow: null, delay: null)
+    {
+    }
+
+    // Test seam: a settable clock and a delay the test completes by hand.
+    internal UpdateCheckService(
+        LinuxPreferencesService prefs,
+        HttpClient? httpClient,
+        Func<DateTime>? utcNow,
+        Func<TimeSpan, CancellationToken, Task>? delay
+    )
     {
         _prefs = prefs;
+        _utcNow = utcNow ?? (static () => DateTime.UtcNow);
+        _delay = delay ?? Task.Delay;
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
         // GitHub's API rejects requests without a User-Agent.
@@ -66,22 +88,34 @@ public sealed class UpdateCheckService
     public UpdateCheckResult LastResult { get; private set; } = UpdateCheckResult.NotChecked;
 
     /// <summary>
-    ///     Called once at startup. Honors the opt-out, rate-limits to once per day,
-    ///     and re-surfaces the cached result when no check is due.
+    ///     Checks at startup, then daily for the app's lifetime. Waits out recordings, retries a
+    ///     failed check after an hour, wakes when Later ends, and stops once the opt-out is set.
     /// </summary>
-    public async Task CheckOnStartupAsync(CancellationToken cancellationToken = default)
+    public async Task RunBackgroundChecksAsync(
+        Func<bool> isRecording,
+        CancellationToken cancellationToken = default
+    )
     {
-        if (!_prefs.Current.CheckForUpdatesOnStartup)
+        while (_prefs.Current.CheckForUpdatesOnStartup)
         {
-            return;
+            if (isRecording())
+            {
+                await _delay(s_recordingDeferral, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            await CheckIfDueAsync(cancellationToken).ConfigureAwait(false);
+            RaiseNoticeIfDue();
+            await _delay(TimeUntilNextWake(), cancellationToken).ConfigureAwait(false);
         }
+    }
 
-        var last = _prefs.Current.LastUpdateCheckUtc;
-        var due = last is not { } stamp || DateTime.UtcNow - stamp >= s_startupCheckInterval;
-
-        if (due)
+    private async Task CheckIfDueAsync(CancellationToken cancellationToken)
+    {
+        // A failed refresh falls back to the cached release, so a known update keeps its banner.
+        if (_utcNow() >= NextCheckDueUtc()
+            && !(await CheckAsync(cancellationToken).ConfigureAwait(false)).Faulted)
         {
-            await CheckAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -91,6 +125,7 @@ public sealed class UpdateCheckService
             return;
         }
 
+        // Re-surface the cached result so listeners recompute the banner (e.g. a snooze ended).
         var current = AppVersion.Display;
         Publish(
             new UpdateCheckResult
@@ -106,12 +141,66 @@ public sealed class UpdateCheckService
         );
     }
 
-    /// <summary>Live GitHub check. Used by the manual button and the due startup path. Serialized against races.</summary>
+    private DateTime NextCheckDueUtc()
+    {
+        // A stamp from a clock that later went backwards counts as due.
+        var next = _prefs.Current.LastUpdateCheckUtc is { } last && last <= _utcNow()
+            ? last + s_checkInterval
+            : DateTime.MinValue;
+
+        // A failed check doesn't move LastUpdateCheckUtc, so back off from the attempt instead.
+        if (_lastAttemptUtc is { } attempt && attempt + s_failedCheckRetry > next)
+        {
+            next = attempt + s_failedCheckRetry;
+        }
+
+        return next;
+    }
+
+    private TimeSpan TimeUntilNextWake()
+    {
+        var now = _utcNow();
+        var wake = NextCheckDueUtc();
+        if (_prefs.Current.UpdateSnoozedUntilUtc is { } snoozedUntil && snoozedUntil > now && snoozedUntil < wake)
+        {
+            wake = snoozedUntil;
+        }
+
+        var wait = wake - now;
+        return wait < s_minimumWait ? s_minimumWait : wait;
+    }
+
+    // Announces each new version once, unless the user already skipped it or said Later.
+    private void RaiseNoticeIfDue()
+    {
+        if (LastResult is not { Checked: true, Faulted: false, UpdateAvailable: true, LatestVersion: { } version }
+            || IsSuppressed(version)
+            || string.Equals(_notifiedVersion ?? _prefs.Current.LastNotifiedUpdateVersion, version, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        // Kept in memory too, so a preferences write failure can't turn this into a daily repeat.
+        _notifiedVersion = version;
+        try
+        {
+            _prefs.Update(current => current with { LastNotifiedUpdateVersion = version });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine($"[UpdateCheck] Could not persist the notified version: {ex.Message}");
+        }
+
+        UpdateNoticeDue?.Invoke(LastResult);
+    }
+
+    /// <summary>Live GitHub check. Used by the manual button and the background loop. Serialized against races.</summary>
     public async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            _lastAttemptUtc = _utcNow();
             var current = AppVersion.Display;
             UpdateCheckResult result;
 
@@ -180,7 +269,7 @@ public sealed class UpdateCheckService
                         preferences =>
                             preferences with
                             {
-                                LastUpdateCheckUtc = DateTime.UtcNow,
+                                LastUpdateCheckUtc = _utcNow(),
                                 LastKnownLatestVersion = result.LatestVersion,
                                 LastKnownLatestUrl = result.ReleaseUrl,
                             }
@@ -228,19 +317,40 @@ public sealed class UpdateCheckService
         ResultChanged?.Invoke(LastResult);
     }
 
-    /// <summary>True when <paramref name="version" /> was dismissed from the banner.</summary>
-    public bool IsDismissed(string? version)
+    /// <summary>"Later": hides the banner for <see cref="s_snoozeDuration" />, whatever version is out.</summary>
+    public void SnoozeUpdate()
     {
-        return !string.IsNullOrWhiteSpace(version)
-               && string.Equals(
-                   _prefs.Current.DismissedUpdateVersion,
-                   version,
-                   StringComparison.OrdinalIgnoreCase
-               );
+        try
+        {
+            _prefs.Update(current => current with { UpdateSnoozedUntilUtc = _utcNow() + s_snoozeDuration });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine($"[UpdateCheck] Could not persist the snooze: {ex.Message}");
+            return;
+        }
+
+        ResultChanged?.Invoke(LastResult);
+    }
+
+    /// <summary>True when the banner must stay hidden for <paramref name="version" />: skipped, or snoozed with Later.</summary>
+    public bool IsSuppressed(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return false;
+        }
+
+        var prefs = _prefs.Current;
+        return string.Equals(prefs.DismissedUpdateVersion, version, StringComparison.OrdinalIgnoreCase)
+               || prefs.UpdateSnoozedUntilUtc > _utcNow();
     }
 
     /// <summary>Raised (possibly off the UI thread) whenever <see cref="LastResult" /> changes.</summary>
     public event Action<UpdateCheckResult>? ResultChanged;
+
+    /// <summary>Raised (off the UI thread) the first time the background check finds a version the user hasn't been told about.</summary>
+    public event Action<UpdateCheckResult>? UpdateNoticeDue;
 
     private void Publish(UpdateCheckResult result)
     {
