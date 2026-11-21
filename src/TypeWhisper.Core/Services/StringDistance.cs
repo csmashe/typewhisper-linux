@@ -7,6 +7,8 @@ namespace TypeWhisper.Core.Services;
 /// </summary>
 public static class StringDistance
 {
+    private const int StackRowLimit = 128;
+
     /// <summary>
     ///     Classic two-row Levenshtein (insert/delete/substitute cost 1). Returns the
     ///     minimum number of single-character edits to turn <paramref name="source" />
@@ -24,8 +26,11 @@ public static class StringDistance
             return source.Length;
         }
 
-        var previous = new int[target.Length + 1];
-        var current = new int[target.Length + 1];
+        // Stack rows for short strings: the vocabulary booster calls this thousands of times per dictation.
+        var rowLength = target.Length + 1;
+        var rows = rowLength <= StackRowLimit ? stackalloc int[rowLength * 2] : new int[rowLength * 2];
+        var previous = rows[..rowLength];
+        var current = rows[rowLength..];
 
         for (var j = 0; j <= target.Length; j++)
         {
@@ -44,7 +49,9 @@ public static class StringDistance
                 );
             }
 
-            (previous, current) = (current, previous);
+            var swap = previous;
+            previous = current;
+            current = swap;
         }
 
         return previous[target.Length];
