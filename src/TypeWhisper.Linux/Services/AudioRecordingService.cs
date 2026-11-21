@@ -17,12 +17,35 @@ public sealed class AudioRecordingService : IDisposable
 {
     internal sealed class AudioCaptureSession
     {
-        internal AudioCaptureSession(long diagnosticId)
+        private const long NoFrameYet = long.MinValue;
+        private long _firstFrameTimestamp = NoFrameYet;
+
+        internal AudioCaptureSession(
+            long diagnosticId,
+            long startRequestedTimestamp = 0,
+            long streamReadyTimestamp = 0
+        )
         {
             DiagnosticId = diagnosticId;
+            StartRequestedTimestamp = startRequestedTimestamp;
+            StreamReadyTimestamp = streamReadyTimestamp;
         }
 
         internal long DiagnosticId { get; }
+
+        internal long StartRequestedTimestamp { get; }
+
+        internal long StreamReadyTimestamp { get; }
+
+        internal long? FirstFrameTimestamp =>
+            Volatile.Read(ref _firstFrameTimestamp) is var timestamp && timestamp != NoFrameYet
+                ? timestamp
+                : null;
+
+        internal void MarkFirstFrame(long timestamp)
+        {
+            Interlocked.CompareExchange(ref _firstFrameTimestamp, timestamp, NoFrameYet);
+        }
 
         public override string ToString() => $"AudioCaptureSession({DiagnosticId})";
     }
@@ -450,6 +473,7 @@ public sealed class AudioRecordingService : IDisposable
         CaptureReservation? reservation = null
     )
     {
+        var startRequestedTimestamp = _timeProvider.GetTimestamp();
         lock (_captureLock)
         {
             if (_activeCaptureSession is not null || Volatile.Read(ref _disposed) == 1
@@ -460,6 +484,7 @@ public sealed class AudioRecordingService : IDisposable
             }
 
             EndMicrophoneTestLocked(MicrophoneTestEnd.DictationStarted);
+            long streamReadyTimestamp;
             try
             {
                 if (!EnsureInputStreamStarted())
@@ -471,6 +496,8 @@ public sealed class AudioRecordingService : IDisposable
                     );
                     return null;
                 }
+
+                streamReadyTimestamp = _timeProvider.GetTimestamp();
             }
             catch (Exception ex)
             {
@@ -493,7 +520,11 @@ public sealed class AudioRecordingService : IDisposable
 
             Volatile.Write(ref _whisperModeEnabled, whisperModeEnabled ? 1 : 0);
             Volatile.Write(ref _liveFrameSink, null);
-            var session = new AudioCaptureSession(++_captureSessionGeneration);
+            var session = new AudioCaptureSession(
+                ++_captureSessionGeneration,
+                startRequestedTimestamp,
+                streamReadyTimestamp
+            );
             Volatile.Write(ref _activeCaptureSession, session);
             Volatile.Write(ref _isRecording, 1);
             PublishLevelGenerationLocked(acceptsFrameUpdates: true, session);
@@ -571,7 +602,9 @@ public sealed class AudioRecordingService : IDisposable
 
             // Keep the capture lock through materialization. A new owner cannot
             // clear or reuse the sample list until this WAV is complete.
-            wav = BuildWavFromRecordedAudio(SnapshotRecordedAudio());
+            var snapshot = SnapshotRecordedAudio();
+            TraceStartLatency(session, snapshot);
+            wav = BuildWavFromRecordedAudio(snapshot);
             migrationPending = _preferredDeviceMigrationPending;
         }
 
@@ -1053,6 +1086,11 @@ public sealed class AudioRecordingService : IDisposable
             if (!ReferenceEquals(Volatile.Read(ref _activeCaptureSession), captureSession))
             {
                 return StreamCallbackResult.Continue;
+            }
+
+            if (_sampleCount == 0)
+            {
+                captureSession.MarkFirstFrame(_timeProvider.GetTimestamp());
             }
 
             _sampleChunks.Add(processedBuffer);
@@ -1829,6 +1867,40 @@ public sealed class AudioRecordingService : IDisposable
                 CaptureSampleRate
             );
         }
+    }
+
+    // Speech is clipped when the stream opens slowly, the first frame arrives late,
+    // or the device delivers silence while it wakes (a Bluetooth profile switch).
+    private void TraceStartLatency(AudioCaptureSession session, RecordedAudioSnapshot snapshot)
+    {
+        var streamReadyMs = _timeProvider
+            .GetElapsedTime(session.StartRequestedTimestamp, session.StreamReadyTimestamp)
+            .TotalMilliseconds;
+        var firstFrame = session.FirstFrameTimestamp is { } firstFrameTimestamp
+            ? $"{_timeProvider.GetElapsedTime(session.StartRequestedTimestamp, firstFrameTimestamp).TotalMilliseconds:F0} ms"
+            : "none";
+
+        var leadingSilentSamples = 0;
+        foreach (var chunk in snapshot.Chunks)
+        {
+            var firstSound = Array.FindIndex(chunk, static sample => sample != 0f);
+            if (firstSound >= 0)
+            {
+                leadingSilentSamples += firstSound;
+                break;
+            }
+
+            leadingSilentSamples += chunk.Length;
+        }
+
+        var leadingSilenceMs = snapshot.CaptureSampleRate > 0
+            ? leadingSilentSamples * 1000.0 / snapshot.CaptureSampleRate
+            : 0;
+        Trace.WriteLine(
+            $"[AudioRecordingService] Capture start latency: session={session.DiagnosticId}, "
+            + $"streamReady={streamReadyMs:F0} ms, firstFrame={firstFrame}, "
+            + $"leadingSilence={leadingSilenceMs:F0} ms."
+        );
     }
 
     private byte[] BuildWavFromRecordedAudio(RecordedAudioSnapshot snapshot)
