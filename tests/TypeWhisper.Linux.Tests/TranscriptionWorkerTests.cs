@@ -202,6 +202,18 @@ public sealed class TranscriptionWorkerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ThePluginStaysLoadableAfterAGarbageCollectionInTheWorker()
+    {
+        var dependency = typeof(ProcessTestChildMarker).Assembly;
+        File.Copy(dependency.Location, Path.Join(PackageDirectory, Path.GetFileName(dependency.Location)));
+        var engine = Engine();
+
+        await engine.TranscribeAsync(s_audio, "collect-then-load", false, dependency.GetName().Name, CancellationToken.None);
+
+        await WaitForLogAsync("loaded " + dependency.GetName().Name);
+    }
+
+    [Fact]
     public async Task EngineErrorsKeepTheirKindAndTheWorker()
     {
         var engine = Engine();
