@@ -31,6 +31,8 @@ public sealed class WhisperCppPlugin
 {
     private const string NoSpeechThresholdKey = "noSpeechThreshold";
     private const float DefaultNoSpeechThreshold = 0.6f;
+    // Below this the host's WhisperHallucinationFilter treats a transcript as confident speech.
+    private const float ConfidentSpeechNoSpeechProbability = 0.3f;
     private static readonly IReadOnlyList<ModelDefinition> s_models =
     [
         new(
@@ -280,6 +282,10 @@ public sealed class WhisperCppPlugin
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public bool SupportsModelDownload => true;
     public IReadOnlyList<string> SupportedLanguages => LanguagesFor(SelectedModelId);
+
+    // Terms arrive with exact boundaries, so WhisperPrompt keeps or drops each one whole.
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget { get; } = new(MaxTotalChars: WhisperPrompt.MaxBytes);
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
         [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda,
@@ -880,50 +886,105 @@ public sealed class WhisperCppPlugin
             if (_factory is null || _loadedModelId is null)
                 throw new InvalidOperationException("No model loaded. Call LoadModelAsync first.");
 
+            var factory = _factory;
             var threshold = _noSpeechThreshold;
-
-            var builder = _factory
-                .CreateBuilder()
-                .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language)
-                .WithNoSpeechThreshold(threshold);
-
-            if (!string.IsNullOrWhiteSpace(prompt))
-                builder.WithPrompt(prompt);
-
-            if (translate)
-                builder.WithTranslate();
-
-            await using var processor = builder.Build();
-            await using var audioStream = new MemoryStream(wavAudio, writable: false);
-
-            // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
-            async IAsyncEnumerable<WhisperCppTranscriptionSegment> GetSegmentsAsync()
-            {
-                // AccumulateSegmentsAsync awaits this enumerable to completion before the
-                // await-using scope exits, so processor/audioStream stay alive throughout.
-                // ReSharper disable AccessToDisposedClosure
-                await foreach (var segment in processor.ProcessAsync(audioStream, ct))
-                {
-                    yield return new WhisperCppTranscriptionSegment(
-                        segment.Text,
-                        segment.Language,
-                        segment.End,
-                        segment.NoSpeechProbability
-                    );
-                }
-                // ReSharper restore AccessToDisposedClosure
-            }
-
-            return await AccumulateSegmentsAsync(
-                GetSegmentsAsync(),
-                threshold,
-                CalculateWavDurationSeconds(wavAudio)
+            return await TranscribeWithPromptAsync(
+                whisperPrompt => DecodeAsync(factory, wavAudio, language, translate, whisperPrompt, threshold, ct),
+                prompt,
+                message => _host?.Log(PluginLogLevel.Info, message)
             );
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    // Without speech, Whisper tends to repeat its prompt. A transcript that only resembles it is decoded
+    // again without the terms; the prompted spelling survives only if that pass confidently hears words.
+    // Otherwise the host's silence-artifact filter sees the plain result, as it would without a prompt.
+    internal static async Task<PluginTranscriptionResult> TranscribeWithPromptAsync(
+        Func<string?, Task<PluginTranscriptionResult>> decode,
+        string? prompt,
+        Action<string> log
+    )
+    {
+        var whisperPrompt = WhisperPrompt.Create(prompt);
+        if (whisperPrompt is null)
+            return await decode(null);
+
+        var prompted = await decode(whisperPrompt.Value);
+        if (!whisperPrompt.HasTerms || !DictionaryPromptEcho.IsSuspected(prompted.Text, whisperPrompt.Value))
+            return prompted;
+
+        var plain = await decode(whisperPrompt.Text);
+        if (!DictionaryPromptEcho.HasWords(plain.Text)
+            || plain.NoSpeechProbability >= ConfidentSpeechNoSpeechProbability)
+        {
+            log("Discarded a transcript that the dictionary prompt produced without speech.");
+            return plain;
+        }
+
+        // A marker-only prompted result has no dictionary spelling worth keeping over recovered speech.
+        if (!DictionaryPromptEcho.HasWords(prompted.Text))
+            return plain;
+
+        // The plain pass confirmed speech, so its confidence travels with the kept spelling.
+        return prompted with
+        {
+            NoSpeechProbability = prompted.NoSpeechProbability is { } promptedProbability
+                ? Math.Min(promptedProbability, plain.NoSpeechProbability ?? promptedProbability)
+                : plain.NoSpeechProbability,
+        };
+    }
+
+    private static async Task<PluginTranscriptionResult> DecodeAsync(
+        WhisperFactory factory,
+        byte[] wavAudio,
+        string? language,
+        bool translate,
+        string? prompt,
+        float threshold,
+        CancellationToken ct
+    )
+    {
+        var builder = factory
+            .CreateBuilder()
+            .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language)
+            .WithNoSpeechThreshold(threshold);
+
+        if (prompt is not null)
+            builder.WithPrompt(prompt);
+
+        if (translate)
+            builder.WithTranslate();
+
+        await using var processor = builder.Build();
+        await using var audioStream = new MemoryStream(wavAudio, writable: false);
+
+        // ReSharper disable once MoveLocalFunctionAfterJumpStatement -- local function kept near its point of use for readability.
+        async IAsyncEnumerable<WhisperCppTranscriptionSegment> GetSegmentsAsync()
+        {
+            // AccumulateSegmentsAsync awaits this enumerable to completion before the
+            // await-using scope exits, so processor/audioStream stay alive throughout.
+            // ReSharper disable AccessToDisposedClosure
+            await foreach (var segment in processor.ProcessAsync(audioStream, ct))
+            {
+                yield return new WhisperCppTranscriptionSegment(
+                    segment.Text,
+                    segment.Language,
+                    segment.End,
+                    segment.NoSpeechProbability
+                );
+            }
+            // ReSharper restore AccessToDisposedClosure
+        }
+
+        return await AccumulateSegmentsAsync(
+            GetSegmentsAsync(),
+            threshold,
+            CalculateWavDurationSeconds(wavAudio)
+        );
     }
 
     // The last segment ends where speech ends, not where the audio does, so the measured input
