@@ -99,6 +99,7 @@ public sealed class SupportReportServiceTests : IDisposable
             MemorySourceId = "com.typewhisper.file-memory",
             StylePreset = ProfileStylePreset.Clean,
             CleanupLevelOverride = CleanupLevel.Medium,
+            AutoEnterMode = ProfileAutoEnterMode.Always,
         };
 
         var profiles = SupportReportService.SummarizeProfiles([profile, profile with { IsEnabled = false }], s_trusted);
@@ -114,6 +115,7 @@ public sealed class SupportReportServiceTests : IDisposable
         Assert.Equal("parakeet-tdt-0.6b", metadata.TranscriptionModelId);
         Assert.Equal("de", metadata.InputLanguage);
         Assert.Equal("Clean", metadata.StylePreset);
+        Assert.Equal("Always", metadata.AutoEnterMode);
         Assert.Equal("com.typewhisper.file-memory", metadata.MemorySourceId);
         Assert.DoesNotContain("private", (Empty() with { Profiles = profiles }).ToJson(), StringComparison.OrdinalIgnoreCase);
     }

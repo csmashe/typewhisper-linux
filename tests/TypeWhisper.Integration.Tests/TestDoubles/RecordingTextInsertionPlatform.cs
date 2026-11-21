@@ -15,6 +15,7 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
     private string? _clipboard;
     private bool _lastTypingDeliveredPartialText;
     private int _pasteAttemptCount;
+    private int _enterCount;
     private InsertionFailureReason _lastFailureReason = InsertionFailureReason.None;
 
     public bool IsClipboardSetAvailable => true;
@@ -97,6 +98,17 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
             lock (_gate)
             {
                 return _pasteAttemptCount;
+            }
+        }
+    }
+
+    internal int EnterCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _enterCount;
             }
         }
     }
@@ -208,6 +220,11 @@ internal sealed class RecordingTextInsertionPlatform : ITextInsertionPlatform
 
     public Task<bool> SendEnterAsync()
     {
+        lock (_gate)
+        {
+            _enterCount++;
+        }
+
         return Task.FromResult(true);
     }
 }

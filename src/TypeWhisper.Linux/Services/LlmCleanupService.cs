@@ -45,7 +45,8 @@ public sealed class LlmCleanupService
         TimeSpan? draftTimeout = null,
         CancellationToken ct = default,
         string? referenceContext = null,
-        Action? referenceContextSent = null
+        Action? referenceContextSent = null,
+        Action? fellBackToLight = null
     )
     {
         ct.ThrowIfCancellationRequested();
@@ -66,6 +67,7 @@ public sealed class LlmCleanupService
                 statusCallback,
                 "Cleanup provider unavailable. Using Light cleanup."
             );
+            fellBackToLight?.Invoke();
             return lightText;
         }
 
@@ -91,7 +93,9 @@ public sealed class LlmCleanupService
             ct.ThrowIfCancellationRequested();
             // Cleanup works again, so the same failure recurring later is worth logging afresh.
             if (!isDraft) _lastLoggedFailure = null;
-            return string.IsNullOrWhiteSpace(cleaned) ? lightText : cleaned.Trim();
+            if (!string.IsNullOrWhiteSpace(cleaned)) return cleaned.Trim();
+            fellBackToLight?.Invoke();
+            return lightText;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -123,6 +127,7 @@ public sealed class LlmCleanupService
             }
 
             await NotifyStatusAsync(statusCallback, Loc.Instance["Overlay.CleanupFailedUsingLight"]);
+            fellBackToLight?.Invoke();
             return lightText;
         }
     }

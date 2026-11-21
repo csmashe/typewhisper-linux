@@ -535,6 +535,7 @@ public sealed class SupportReportService
                     profile.WhisperModeOverride,
                     profile.CleanupLevelOverride?.ToString(),
                     profile.DeveloperFormattingOverride,
+                    profile.AutoEnterMode.ToString(),
                     engineId,
                     modelId,
                     !string.IsNullOrWhiteSpace(profile.PromptActionId),
