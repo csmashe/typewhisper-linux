@@ -286,11 +286,18 @@
                     <Border Grid.Row="2"
                             Padding="18,12"
                             IsVisible="{Binding CliBundledAvailable}">
-                        <TextBlock
-                            Text="{loc:Str General.CliInstallHint}"
-                            FontSize="12"
-                            Foreground="{DynamicResource TwTextSecondaryBrush}"
-                            TextWrapping="Wrap" />
+                        <StackPanel Spacing="6">
+                            <TextBlock
+                                Text="{loc:Str General.CliInstallHint}"
+                                FontSize="12"
+                                Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                Text="{loc:Str General.CliCompletionHint}"
+                                FontSize="12"
+                                Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="3"

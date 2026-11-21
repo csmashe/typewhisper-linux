@@ -705,6 +705,7 @@
   "General.BearerToken": "Bearerトークン",
   "General.CliBundledTarget": "同梱: {0}  |  インストール先: {1}",
   "General.CliInstallHint": "同梱のCLIランチャーを~/.local/bin/typewhisper-cliにインストールします。上記のBearerトークンは、TYPEWHISPER_API_TOKENまたは--tokenで指定してください。",
+  "General.CliCompletionHint": "インストールすると、bashとfishのTab補完も設定されます。zshの場合は、~/.zshrcのcompinitの後にsource <(typewhisper-cli completions zsh)を追加してください。.debと.rpmパッケージでは3つすべてが設定されます。",
   "General.CliInstallerTarget": "インストール先: {0}",
   "General.CliStatusNotInstalled": "未インストール",
   "General.CliStatusBinaryMissing": "このビルドにはCLIの実行ファイルがありません",

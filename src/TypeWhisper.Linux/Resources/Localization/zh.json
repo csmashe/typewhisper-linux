@@ -705,6 +705,7 @@
   "General.BearerToken": "Bearer令牌",
   "General.CliBundledTarget": "内置：{0}  |  目标：{1}",
   "General.CliInstallHint": "将内置的CLI启动器安装到~/.local/bin/typewhisper-cli。可通过TYPEWHISPER_API_TOKEN或--token使用上面的Bearer令牌。",
+  "General.CliCompletionHint": "安装时还会为bash和fish设置Tab补全。对于zsh，请在~/.zshrc中的compinit之后添加source <(typewhisper-cli completions zsh)。.deb和.rpm软件包会设置全部三种。",
   "General.CliInstallerTarget": "安装目标：{0}",
   "General.CliStatusNotInstalled": "未安装",
   "General.CliStatusBinaryMissing": "此版本中未找到CLI可执行文件",

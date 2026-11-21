@@ -282,7 +282,8 @@ internal sealed record CliOptions
                     || command == "models" && action is "load" or "delete",
                 _ => command == "transcribe",
             };
-            if (!allowed && command is "status" or "models" or "transcribe" or "history" or "last" or "dictation")
+            if (!allowed && command is "status" or "models" or "transcribe" or "history" or "last" or "dictation"
+                    or "completions")
             {
                 return parsed with { ErrorMessage = $"Option '{option}' is not valid for '{command}'." };
             }
@@ -319,6 +320,8 @@ internal sealed record CliOptions
                 $"Unexpected operand '{positionals[1]}' for 'transcribe'.",
             "transcribe" when json && parsed.IsRawResponse =>
                 "--json cannot be combined with a non-JSON --response-format.",
+            "completions" when positionals.Count != 1 || !CliCompletions.Shells.Contains(positionals[0]) =>
+                $"Usage: typewhisper-cli completions <{string.Join('|', CliCompletions.Shells)}>",
             _ => null,
         };
 

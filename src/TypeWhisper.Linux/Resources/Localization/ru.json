@@ -705,6 +705,7 @@
   "General.BearerToken": "Bearer-токен",
   "General.CliBundledTarget": "Встроенный: {0}  |  Цель: {1}",
   "General.CliInstallHint": "Устанавливает встроенный CLI-лаунчер в ~/.local/bin/typewhisper-cli. Используйте bearer-токен выше через TYPEWHISPER_API_TOKEN или --token.",
+  "General.CliCompletionHint": "Установка также настраивает автодополнение по Tab для bash и fish. Для zsh добавьте source <(typewhisper-cli completions zsh) в ~/.zshrc после compinit. Пакеты .deb и .rpm настраивают все три.",
   "General.CliInstallerTarget": "Цель установки: {0}",
   "General.CliStatusNotInstalled": "Не установлен",
   "General.CliStatusBinaryMissing": "Исполняемый файл CLI отсутствует в этой сборке",

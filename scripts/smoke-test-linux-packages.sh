@@ -144,6 +144,30 @@ assert_removed() {
   fi
 }
 
+# Prints the packaged completion paths for one zsh directory (Debian and Fedora differ).
+cli_completion_paths() {
+  printf '%s\n' \
+    /usr/share/bash-completion/completions/typewhisper-cli \
+    "$1/_typewhisper-cli" \
+    /usr/share/fish/vendor_completions.d/typewhisper-cli.fish
+}
+
+# The packaged scripts must be what the installed CLI generates.
+require_cli_completions() {
+  local zsh_dir="$1" shell path
+  for shell in bash zsh fish; do
+    case "$shell" in
+      bash) path=/usr/share/bash-completion/completions/typewhisper-cli ;;
+      zsh) path="$zsh_dir/_typewhisper-cli" ;;
+      fish) path=/usr/share/fish/vendor_completions.d/typewhisper-cli.fish ;;
+    esac
+    require_file "$path"
+    # Plain bash: the minimal containers ship no cmp or diff.
+    [ "$(/usr/bin/typewhisper-cli completions "$shell")" = "$(<"$path")" ] \
+      || fail "packaged $shell completion differs from 'typewhisper-cli completions $shell': $path"
+  done
+}
+
 prepare_isolated_profile() {
   SMOKE_HOME_ROOT=/tmp/typewhisper-smoke-home
   SMOKE_DATA_ROOT=/tmp/typewhisper-smoke-data
@@ -521,6 +545,7 @@ container_smoke_deb() {
   require_file /usr/share/applications/typewhisper.desktop
   require_file /usr/share/icons/hicolor/128x128/apps/typewhisper.png
   [ -d /opt/typewhisper ] || fail "deb application directory was not installed."
+  require_cli_completions /usr/share/zsh/vendor-completions
   package_files=$(dpkg-query --listfiles typewhisper)
   for owned_path in \
     /usr/bin/typewhisper \
@@ -532,6 +557,10 @@ container_smoke_deb() {
     grep -Fxq "$owned_path" <<<"$package_files" \
       || fail "deb database does not own expected path: $owned_path"
   done
+  while IFS= read -r owned_path; do
+    grep -Fxq "$owned_path" <<<"$package_files" \
+      || fail "deb database does not own expected path: $owned_path"
+  done < <(cli_completion_paths /usr/share/zsh/vendor-completions)
 
   run_cli_probe /opt/typewhisper/Cli/typewhisper-cli
   run_cli_probe /usr/bin/typewhisper-cli
@@ -547,6 +576,9 @@ container_smoke_deb() {
   assert_removed /usr/share/icons/hicolor/128x128/apps/typewhisper.png
   assert_removed /opt/typewhisper/Cli/typewhisper-cli
   assert_removed /opt/typewhisper
+  while IFS= read -r owned_path; do
+    assert_removed "$owned_path"
+  done < <(cli_completion_paths /usr/share/zsh/vendor-completions)
 }
 
 container_smoke_rpm() {
@@ -567,6 +599,7 @@ container_smoke_rpm() {
   require_file /usr/share/applications/typewhisper.desktop
   require_file /usr/share/icons/hicolor/128x128/apps/typewhisper.png
   [ -d /opt/typewhisper ] || fail "rpm application directory was not installed."
+  require_cli_completions /usr/share/zsh/site-functions
   package_files=$(rpm -ql typewhisper)
   for owned_path in \
     /usr/bin/typewhisper \
@@ -578,6 +611,10 @@ container_smoke_rpm() {
     grep -Fxq "$owned_path" <<<"$package_files" \
       || fail "rpm database does not own expected path: $owned_path"
   done
+  while IFS= read -r owned_path; do
+    grep -Fxq "$owned_path" <<<"$package_files" \
+      || fail "rpm database does not own expected path: $owned_path"
+  done < <(cli_completion_paths /usr/share/zsh/site-functions)
 
   run_cli_probe /opt/typewhisper/Cli/typewhisper-cli
   run_cli_probe /usr/bin/typewhisper-cli
@@ -593,6 +630,9 @@ container_smoke_rpm() {
   assert_removed /usr/share/icons/hicolor/128x128/apps/typewhisper.png
   assert_removed /opt/typewhisper/Cli/typewhisper-cli
   assert_removed /opt/typewhisper
+  while IFS= read -r owned_path; do
+    assert_removed "$owned_path"
+  done < <(cli_completion_paths /usr/share/zsh/site-functions)
 }
 
 # Runs inside `docker build`, so the dependency download happens once per smoke
