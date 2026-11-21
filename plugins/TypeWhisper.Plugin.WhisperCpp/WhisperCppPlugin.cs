@@ -930,12 +930,7 @@ public sealed class WhisperCppPlugin
             return plain;
 
         // The plain pass confirmed speech, so its confidence travels with the kept spelling.
-        return prompted with
-        {
-            NoSpeechProbability = prompted.NoSpeechProbability is { } promptedProbability
-                ? Math.Min(promptedProbability, plain.NoSpeechProbability ?? promptedProbability)
-                : plain.NoSpeechProbability,
-        };
+        return prompted with { NoSpeechProbability = plain.NoSpeechProbability };
     }
 
     private static async Task<PluginTranscriptionResult> DecodeAsync(

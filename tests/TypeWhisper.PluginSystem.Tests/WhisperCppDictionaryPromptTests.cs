@@ -93,8 +93,14 @@ public partial class WhisperCppPluginTests
     [InlineData("(wind blowing)", false)]
     [InlineData("Hilger", true)]
     [InlineData("東京", true)]
+    [InlineData("𠮷", true)]
+    [InlineData("नमस्ते", true)]
     public void PunctuationAloneHasNoWords(string? text, bool words) =>
         Assert.Equal(words, DictionaryPromptEcho.HasWords(text));
+
+    [Fact]
+    public void ASupplementaryLetterTermIsRecognizedAsAnEcho() =>
+        Assert.True(DictionaryPromptEcho.IsSuspected("𠮷", "𠮷"));
 
     [Fact]
     public async Task EchoedTermsOverSilenceAreDiscarded()
@@ -158,6 +164,19 @@ public partial class WhisperCppPluginTests
 
         Assert.Equal("Thank you", result.Text);
         Assert.Equal(0.1f, result.NoSpeechProbability);
+    }
+
+    [Fact]
+    public async Task AKeptSpellingNeverReportsMoreConfidenceThanThePlainPass()
+    {
+        var (decode, _) = FakeDecoder(
+            withPrompt: "Hillger", withoutPrompt: "Hilger", withoutPromptNoSpeechProbability: 0.2f, withPromptNoSpeechProbability: 0f);
+
+        var result = await WhisperCppPlugin.TranscribeWithPromptAsync(
+            decode, PluginTranscriptionPrompt.Encode(null, ["Hillger"]), _ => { });
+
+        Assert.Equal("Hillger", result.Text);
+        Assert.Equal(0.2f, result.NoSpeechProbability);
     }
 
     [Fact]
