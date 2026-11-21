@@ -58,6 +58,7 @@ public sealed partial class DiagnosticLogFile
             ["debug"] = Flag,
             ["profile.used"] = Flag,
             ["startup.minimized"] = Flag,
+            ["streaming.preview_only"] = Flag,
             ["audio.duration_s"] = Number,
             ["duration-ms"] = Number,
             ["http.status"] = Number,

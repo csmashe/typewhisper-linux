@@ -170,6 +170,37 @@ public sealed class AssemblyAiPluginTests
         Assert.DoesNotContain("keyterms_prompt", options.Uri.Query);
     }
 
+    [Theory]
+    // 150 two-word terms fit the recorded-audio budget, but a stream takes only 100 terms.
+    [InlineData("universal-3-5-pro", 150, true, false, true)]
+    // Universal-2's 200-word budget keeps the same 100 terms a stream would send.
+    [InlineData("universal-2", 150, true, true, false)]
+    [InlineData("universal-3-5-pro", 10, true, true, false)]
+    [InlineData("universal-3-5-pro", 150, false, true, false)]
+    public async Task StreamingForPrompt_PreviewsWhenTheStreamWouldDropTerms(
+        string model, int termCount, bool useDictionaryTerms, bool streams, bool previews)
+    {
+        using var sut = new AssemblyAiPlugin();
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+        sut.SelectModel(model);
+        await sut.SetSettingValueAsync("useDictionaryTerms", useDictionaryTerms ? "true" : "false");
+        var prompt = PluginTranscriptionPrompt.Encode(null, Enumerable.Range(0, termCount).Select(i => $"Term {i}"));
+
+        Assert.Equal(streams, sut.SupportsStreamingForPrompt(prompt));
+        Assert.Equal(previews, sut.SupportsStreamingPreviewForPrompt(prompt));
+    }
+
+    [Fact]
+    public async Task StreamingForPrompt_IsFalseWithSpeakerLabels()
+    {
+        using var sut = new AssemblyAiPlugin();
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+        await sut.SetSettingValueAsync("speakerLabels", "true");
+
+        Assert.False(sut.SupportsStreamingForPrompt(null));
+        Assert.False(sut.SupportsStreamingPreviewForPrompt(null));
+    }
+
     [Fact]
     public void StreamingKeytermsFor_LimitsCountAndEncodedLength()
     {

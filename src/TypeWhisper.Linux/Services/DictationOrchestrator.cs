@@ -1008,8 +1008,11 @@ public sealed partial class DictationOrchestrator : IDisposable
                 }
                 _streamingLanguageSelection = startupLanguageSelection;
                 _streamingLanguageHints = languageHints;
+                var startupPrompt = startupPlugin is null
+                    ? null
+                    : TranscriptionPromptComposer.ForDictation(startupPlugin, _dictionary.GetEnabledTerms());
                 var startupMode = LinuxLiveTranscriptionStartupPolicy.Select(
-                    startupSettings, startupPlugin);
+                    startupSettings, startupPlugin, startupPrompt);
                 // Streaming doesn't support translation; skip the WebSocket when
                 // `translate` is selected to avoid burning provider bandwidth on
                 // a session we'd discard.
@@ -1022,18 +1025,21 @@ public sealed partial class DictationOrchestrator : IDisposable
                 // The stop-time load replaces a changed engine selection, so a stream on it
                 // would be dropped and the audio sent again.
                 if (
-                    startupMode == LiveTranscriptionMode.Streaming
+                    startupMode is LiveTranscriptionMode.Streaming or LiveTranscriptionMode.StreamingPreview
                     && startupPlugin is not null
                     && !startupIsTranslate
                     && _models.ActiveEngineSelectionIsCurrent
                 )
                 {
+                    var isPreviewOnly = startupMode == LiveTranscriptionMode.StreamingPreview;
                     StartStreamingTranscriptionSession(
                         startupPlugin,
                         startupLanguageSelection,
                         languageHints,
                         sessionVersion,
-                        captureSession
+                        captureSession,
+                        isPreviewOnly ? null : startupPrompt,
+                        isPreviewOnly
                     );
                 }
 
@@ -1928,7 +1934,18 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // flush captures any trailing partials. Read fault state from the
                     // just-torn-down coordinator, never from a shared field a racing
                     // StartAsync could have reset.
-                    if (stoppedStreamingCoordinator is not null)
+                    if (stoppedStreamingCoordinator is { IsPreviewOnly: true })
+                    {
+                        // The preview ran without the dictionary; the recording is transcribed with it below.
+                        _telemetry.Tag(recordingContext.SessionId, "streaming.preview_only", "true");
+                        _ = await TeardownStreamingSessionAsync(
+                            stoppedStreamingCoordinator,
+                            stoppedStreamingStartupCts,
+                            false,
+                            CancellationToken.None
+                        );
+                    }
+                    else if (stoppedStreamingCoordinator is not null)
                     {
                         var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
                         var streamingFinalizeOperation =
@@ -5464,7 +5481,9 @@ public sealed partial class DictationOrchestrator : IDisposable
         LanguageSelection languageSelection,
         IReadOnlyList<string> languageHints,
         int sessionVersion,
-        AudioRecordingService.AudioCaptureSession captureSession
+        AudioRecordingService.AudioCaptureSession captureSession,
+        string? prompt,
+        bool isPreviewOnly
     )
     {
         var coordinator = new StreamingTranscriptionCoordinator(
@@ -5483,7 +5502,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                     $"[Dictation] Streaming fault: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}"
                 );
             },
-            prompt: TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms())
+            prompt: prompt,
+            isPreviewOnly: isPreviewOnly
         );
 
         // Wire the audio tap BEFORE StartAsync resolves so frames captured
@@ -5770,7 +5790,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                             lease is not null
                             && LinuxLiveTranscriptionStartupPolicy.Select(
                                 _settings.Current,
-                                lease.Plugin
+                                lease.Plugin,
+                                TranscriptionPromptComposer.ForDictation(lease.Plugin, _dictionary.GetEnabledTerms())
                             ) == LiveTranscriptionMode.Polling
                         )
                         {

@@ -8,6 +8,9 @@ internal enum LiveTranscriptionMode
     None,
     Polling,
     Streaming,
+
+    // Streams without the dictation prompt for live text only; the complete recording supplies the final text.
+    StreamingPreview,
 }
 
 // Selects the live-transcription mode for the recording loop. Ported from
@@ -17,7 +20,8 @@ internal static class LinuxLiveTranscriptionStartupPolicy
 {
     public static LiveTranscriptionMode Select(
         AppSettings settings,
-        ITranscriptionEngineRole? plugin)
+        ITranscriptionEngineRole? plugin,
+        string? prompt)
     {
         if (!settings.LiveTranscriptionEnabled || plugin is null)
         {
@@ -29,7 +33,15 @@ internal static class LinuxLiveTranscriptionStartupPolicy
         // re-sent every 3 s poll cycle.
         if (plugin.SupportsStreaming && settings.LiveTranscriptionStreamingEnabled)
         {
-            return LiveTranscriptionMode.Streaming;
+            if (plugin.SupportsStreamingForPrompt(prompt))
+            {
+                return LiveTranscriptionMode.Streaming;
+            }
+
+            if (plugin.SupportsStreamingPreviewForPrompt(prompt))
+            {
+                return LiveTranscriptionMode.StreamingPreview;
+            }
         }
 
         // Local/on-device models: polling the partial preview is cheap.

@@ -84,9 +84,11 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
         Action<Exception> onFault,
         TimeSpan? finalizeSenderTimeout = null,
         TimeSpan? finalizeSessionTimeout = null,
-        string? prompt = null)
+        string? prompt = null,
+        bool isPreviewOnly = false)
     {
         _plugin = plugin;
+        IsPreviewOnly = isPreviewOnly;
         _languageSelection = languageSelection;
         _languageHints = languageHints;
         _prompt = prompt;
@@ -100,6 +102,9 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
     }
 
     public bool Faulted { get; private set; }
+
+    /// <summary>A preview only shows live text, so its session closes without asking the provider for finals.</summary>
+    public bool IsPreviewOnly { get; }
 
     // A final segment that reported no language may itself have been multilingual — Deepgram
     // collapses `languages: ["de","en"]` to none — so one unlabelled segment leaves the whole
@@ -203,7 +208,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
             }
             else
             {
-                await CleanupSessionAsync(session, _finalizeSessionTimeout);
+                await CloseSessionAsync(session);
             }
         }
 
@@ -256,7 +261,7 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
             if (!published)
             {
-                await CleanupSessionAsync(session, _finalizeSessionTimeout);
+                await CloseSessionAsync(session);
             }
         }
         catch (OperationCanceledException) when (_disposed || _finalizing || ct.IsCancellationRequested)
@@ -673,9 +678,14 @@ internal sealed class StreamingTranscriptionCoordinator : IAsyncDisposable
 
         if (session is not null)
         {
-            _ = CleanupSessionAsync(session, _finalizeSessionTimeout);
+            _ = CloseSessionAsync(session);
         }
     }
+
+    private Task CloseSessionAsync(IStreamingSession session) =>
+        IsPreviewOnly
+            ? DisposeSessionAsync(session, _finalizeSessionTimeout)
+            : CleanupSessionAsync(session, _finalizeSessionTimeout);
 
     private static async Task CleanupSessionAsync(
         IStreamingSession session,

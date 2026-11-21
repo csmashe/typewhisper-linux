@@ -56,6 +56,23 @@ public interface ITranscriptionEngineRole
     /// <summary>Whether this engine supports real-time streaming transcription via <see cref="IStreamingSession" />.</summary>
     bool SupportsStreaming => false;
 
+    /// <summary>
+    ///     Whether a streaming session opened with this dictation <paramref name="prompt" /> keeps everything in it, so
+    ///     the stream may supply the final text. The host asks at recording start, only when
+    ///     <see cref="SupportsStreaming" /> is true. Default: <see cref="SupportsStreaming" />.
+    /// </summary>
+    // ReSharper disable once UnusedParameter.Global
+    bool SupportsStreamingForPrompt(string? prompt) => SupportsStreaming;
+
+    /// <summary>
+    ///     Whether the host may stream a dictation whose prompt <see cref="SupportsStreamingForPrompt" /> rejects, only
+    ///     for live preview text. The host then opens the stream without the prompt and transcribes the complete
+    ///     recording with the prompt for the final text. Default false: such a dictation gets no streaming
+    ///     session. Hosts that predate this member never call it.
+    /// </summary>
+    // ReSharper disable once UnusedParameter.Global
+    bool SupportsStreamingPreviewForPrompt(string? prompt) => false;
+
     /// <summary>Limits for dictionary terms added by the host; null uses the SDK default budget.</summary>
     DictionaryTermsBudget? DictionaryTermsBudget => null;
 
