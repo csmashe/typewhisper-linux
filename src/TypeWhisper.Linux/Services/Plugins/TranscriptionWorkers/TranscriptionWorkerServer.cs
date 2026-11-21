@@ -96,12 +96,13 @@ internal static partial class TranscriptionWorkerServer
             })
         );
 
+        LoadedPlugin plugin;
         ITranscriptionEngineRole engine;
         try
         {
             // The plugin stays loaded until the process ends. Exiting releases native memory
             // more reliably than unloading a context that native code may still reference.
-            engine = await LoadEngineAsync(options, services).ConfigureAwait(false);
+            (plugin, engine) = await LoadEngineAsync(options, services).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -127,10 +128,14 @@ internal static partial class TranscriptionWorkerServer
             State = session.State(),
             HeartbeatInterval = options.HeartbeatInterval,
         }).ConfigureAwait(false);
-        return await session.RunAsync().ConfigureAwait(false);
+        var exitCode = await session.RunAsync().ConfigureAwait(false);
+        // Live plugin objects don't keep their collectible load context alive. Once collected, its
+        // finalizer starts the unload, and the plugin's next lazy assembly load fails.
+        GC.KeepAlive(plugin);
+        return exitCode;
     }
 
-    private static async Task<ITranscriptionEngineRole> LoadEngineAsync(
+    private static async Task<(LoadedPlugin Plugin, ITranscriptionEngineRole Engine)> LoadEngineAsync(
         TranscriptionWorkerArguments options,
         TranscriptionWorkerHostServices services
     )
@@ -164,7 +169,7 @@ internal static partial class TranscriptionWorkerServer
             await engine.ConfigureComputeBackendAsync(backend).ConfigureAwait(false);
         }
 
-        return engine;
+        return (loaded, engine);
     }
 
     private static ITranscriptionEngineRole? FindEngine(ITypeWhisperPlugin plugin, string selectionId)
