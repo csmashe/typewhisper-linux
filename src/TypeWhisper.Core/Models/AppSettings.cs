@@ -59,6 +59,7 @@ public record AppSettings
     } = [];
     public bool AutoPaste { get; init; } = true;
     public bool LockPasteToFocusedField { get; init; }
+    public bool PreserveClipboard { get; init; } = true;
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
     {

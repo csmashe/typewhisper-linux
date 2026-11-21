@@ -115,6 +115,7 @@ public sealed class TextInsertionService
     private readonly Func<bool> _isRecording;
     private readonly Func<bool> _learningConsent;
     private readonly IPasteConfirmationSource? _pasteConfirmation;
+    private readonly Func<bool> _preserveClipboard;
 
     private readonly ITextInsertionPlatform _platform;
 
@@ -134,7 +135,8 @@ public sealed class TextInsertionService
         Func<bool>? isAnotherSessionRecording = null,
         IAtSpiEventClient? atSpiClient = null,
         Func<bool>? learningConsent = null,
-        Func<bool>? inputAllowed = null
+        Func<bool>? inputAllowed = null,
+        Func<bool>? preserveClipboard = null
     )
         : this(
             new LinuxTextInsertionPlatform(commands, processRunner),
@@ -143,7 +145,8 @@ public sealed class TextInsertionService
             isAnotherSessionRecording,
             atSpiClient,
             learningConsent,
-            inputAllowed
+            inputAllowed,
+            preserveClipboard
         )
     {
     }
@@ -155,7 +158,8 @@ public sealed class TextInsertionService
         Func<bool>? isAnotherSessionRecording = null,
         IAtSpiEventClient? atSpiClient = null,
         Func<bool>? learningConsent = null,
-        Func<bool>? inputAllowed = null
+        Func<bool>? inputAllowed = null,
+        Func<bool>? preserveClipboard = null
     )
     {
         _platform = platform;
@@ -165,6 +169,7 @@ public sealed class TextInsertionService
         _isRecording = isAnotherSessionRecording ?? (static () => false);
         _learningConsent = learningConsent ?? (static () => true);
         _inputAllowed = inputAllowed ?? (static () => true);
+        _preserveClipboard = preserveClipboard ?? (static () => true);
     }
 
     /// <summary>
@@ -952,7 +957,7 @@ public sealed class TextInsertionService
     {
         if (previousClipboard is null)
         {
-            if (previousClipboardHasNonTextFormats)
+            if (previousClipboardHasNonTextFormats && _preserveClipboard())
             {
                 LogInsertionFallback(ClipboardNonTextCouldNotRestoreMessage);
             }
@@ -986,6 +991,13 @@ public sealed class TextInsertionService
                 PasteDiag(
                     $"restore gate: {(deliveryConfirmed.Value ? "confirmed" : "floor")} reused from enter gate"
                 );
+            }
+
+            // Read after the gate so a toggle flipped while the paste was in flight still decides.
+            if (!_preserveClipboard())
+            {
+                PasteDiag("restore skipped: Preserve clipboard content is off");
+                return;
             }
 
             // Ownership check: only restore when the clipboard still holds OUR text —

@@ -125,6 +125,30 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public void PreserveClipboard_LoadsFromSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { PreserveClipboard = false },
+            new FakeAudioDeviceEnumerator()
+        );
+        Assert.False(context.Sut.PreserveClipboard);
+    }
+
+    [Fact]
+    public void PreserveClipboard_Change_PersistsToSettings()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator()
+        );
+        context.Sut.PreserveClipboard = false;
+        context.Settings.Verify(
+            service => service.Update(It.Is<Func<AppSettings, AppSettings>>(
+                mutation => !mutation(AppSettings.Default).PreserveClipboard)),
+            Times.Once
+        );
+    }
+
+    [Fact]
     public void LockPasteToFocusedField_Change_PersistsToSettings()
     {
         using var context = new ViewModelTestContext(

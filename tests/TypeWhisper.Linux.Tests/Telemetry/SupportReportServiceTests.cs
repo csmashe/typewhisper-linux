@@ -308,6 +308,7 @@ public sealed class SupportReportServiceTests : IDisposable
             ApiServerBearerToken = "private-token",
             LocalModelStoragePath = "/home/private/models",
             DefaultLlmProvider = "plugin:com.typewhisper.claude:claude-sonnet-5",
+            PreserveClipboard = false,
         };
         var service = new SupportReportService(new SupportReportService.Sources(
             () => settings,
@@ -341,6 +342,7 @@ public sealed class SupportReportServiceTests : IDisposable
         Assert.NotNull(report.Api);
         Assert.NotNull(report.Settings);
         Assert.True(report.Settings!.CustomModelStorage);
+        Assert.False(report.Settings.PreserveClipboard);
         Assert.Equal(1, report.Prompts!.Total);
         Assert.Equal((12, 1, 1, 1, null, 3),
             (report.Counts!.HistoryRecords, report.Counts.DictionaryTerms, report.Counts.DictionaryCorrections,

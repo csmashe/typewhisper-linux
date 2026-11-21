@@ -422,6 +422,8 @@
   "Dictation.LocalModelAcceleration": "本地模型加速",
   "Dictation.LockPasteToFocusedField": "将粘贴锁定到初始文本字段",
   "Dictation.LockPasteToFocusedFieldHint": "粘贴前将焦点返回到听写开始时处于活动状态的字段。如果该字段不可用，文本将保留在剪贴板中。需要启用目标应用纠正学习时开启的无障碍监听器。",
+  "Dictation.PreserveClipboard": "保留剪贴板内容",
+  "Dictation.PreserveClipboardHint": "粘贴后恢复剪贴板原来的内容。关闭后，听写的文本会留在剪贴板中，剪贴板历史记录也能看到它。",
   "Dictation.LockedFieldGone": "听写开始时处于活动状态的文本字段已不存在。文本已复制到剪贴板。",
   "Dictation.Microphone": "麦克风",
   "Dictation.MicTest": "麦克风测试",
