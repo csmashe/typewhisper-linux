@@ -3,9 +3,12 @@ using TypeWhisper.PluginSDK.Models;
 
 namespace TypeWhisper.Plugin.FillerWords;
 
-/// <summary>Removes filler words such as "um" and "uh" from transcribed text.</summary>
+/// <summary>Removes filler words such as "um" and "uh" from transcribed text and collapses stutters such as "I I I".</summary>
 public sealed class FillerWordsPlugin : IPostProcessorPlugin, IPluginSettingsProvider, IPluginLocalizationAware
 {
+    private const string WordsKey = "words";
+    private const string CollapseRepeatedWordsKey = "collapseRepeatedWords";
+
     private IPluginHostServices? _host;
     private IPluginLocalization? _injectedLocalization;
 
@@ -51,14 +54,38 @@ public sealed class FillerWordsPlugin : IPostProcessorPlugin, IPluginSettingsPro
     }
 
     public IReadOnlyList<PluginSettingDefinition> GetSettingDefinitions() =>
-        [new("words", Loc.L("Settings.Title"), Description: Loc.L("Settings.Hint"), Kind: PluginSettingKind.Multiline)];
+    [
+        new(WordsKey, Loc.L("Settings.Title"), Description: Loc.L("Settings.Hint"), Kind: PluginSettingKind.Multiline),
+        new(
+            CollapseRepeatedWordsKey,
+            Loc.L("Settings.CollapseRepeatedWords"),
+            Description: Loc.L("Settings.CollapseRepeatedWordsHint"),
+            Kind: PluginSettingKind.Boolean),
+    ];
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
-        Task.FromResult(key == "words" ? Settings?.WordsText ?? FillerWordsSettingsStore.DefaultWordsText : null);
+        Task.FromResult(key switch
+        {
+            WordsKey => Settings?.WordsText ?? FillerWordsSettingsStore.DefaultWordsText,
+            CollapseRepeatedWordsKey => Settings?.CollapseRepeatedWords ?? true ? "true" : "false",
+            _ => null,
+        });
 
     public Task SetSettingValueAsync(string key, string? value, CancellationToken ct = default)
     {
-        if (key != "words" || Settings is null)
+        if (Settings is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (key == CollapseRepeatedWordsKey)
+        {
+            // Null resets to the default (on).
+            Settings.CollapseRepeatedWords = value is null || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+            return Task.CompletedTask;
+        }
+
+        if (key != WordsKey)
         {
             return Task.CompletedTask;
         }
@@ -82,12 +109,17 @@ public sealed class FillerWordsPlugin : IPostProcessorPlugin, IPluginSettingsPro
             new PluginSettingsValidationResult(true, Loc.L("Settings.WordCount", count)));
     }
 
-    /// <summary>Removes the configured filler words from the transcription.</summary>
-    public Task<string> ProcessAsync(string text, PostProcessingContext context, CancellationToken ct) =>
-        Task.FromResult(
-            FillerWordFilter.Remove(
-                text,
-                Settings?.WordsFor(context.SourceLanguage) ?? FillerWordFilter.DefaultWordsFor(context.SourceLanguage)));
+    /// <summary>Removes the configured filler words and, unless turned off, collapses stutters.</summary>
+    public Task<string> ProcessAsync(string text, PostProcessingContext context, CancellationToken ct)
+    {
+        var settings = Settings;
+        var language = FillerWordFilter.ResolveLanguage(context.SourceLanguage, text);
+        var result = FillerWordFilter.Remove(
+            text,
+            settings?.WordsFor(language) ?? FillerWordFilter.DefaultWordsFor(language));
+
+        return Task.FromResult(settings?.CollapseRepeatedWords ?? true ? RepeatedWordCollapser.Collapse(result) : result);
+    }
 
     /// <summary>Releases plugin resources.</summary>
     public void Dispose()

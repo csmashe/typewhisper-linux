@@ -39,7 +39,7 @@ internal sealed class FillerWordMatcher
         const string answerGuard = @"(?<!(?<![\p{L}\p{N}_‐‑-])uh[ \t　]+)uh(?![ \t　]+(?:huh|oh|uh)" + after + ")";
         var alternation = string.Join('|', words.Select(static word =>
             word == "uh" ? answerGuard : Regex.Escape(word)));
-        var pattern = @"(?<lead>[ \t　]*)" + before + "(?:" + alternation + ")" + after + @"(?<gap>[ \t　]*)(?<trail>[,.!?…;:]*)(?<after>[ \t　]*)";
+        var pattern = @"(?<lead>[ \t　]*)" + before + "(?<word>" + alternation + ")" + after + @"(?<gap>[ \t　]*)(?<trail>[,.!?…;:]*)(?<after>[ \t　]*)";
 
         return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     }
@@ -76,11 +76,18 @@ internal sealed class FillerWordMatcher
 
         var output = new StringBuilder(text.Length);
         var position = 0;
+        var capitalOwed = false;
         foreach (Match match in matches)
         {
-            output.Append(text, position, match.Index - position);
+            AppendRestoringCapital(output, text, position, match.Index, ref capitalOwed);
             position = match.Index + match.Length;
             var contentFollows = ContentFollowsOnLine(text, position);
+            if (!contentFollows)
+            {
+                // A capital never carries over to the next line.
+                capitalOwed = false;
+            }
+
             if (LineIsBlank(output) && !contentFollows)
             {
                 // The line held nothing but fillers: drop the whole line, not just the words.
@@ -89,11 +96,124 @@ internal sealed class FillerWordMatcher
                 continue;
             }
 
+            // A capitalized filler that opened a sentence hands its capital to the next word:
+            // "Um, hello" becomes "Hello", "Gut. Äh, ich komme" becomes "Gut. Ich komme".
+            var word = match.Groups["word"];
+            capitalOwed |= contentFollows && word.Success && char.IsUpper(text, word.Index) && OpensSentence(output);
             output.Append(Replacement(output, match, contentFollows, text, position));
         }
 
-        output.Append(text, position, text.Length - position);
+        AppendRestoringCapital(output, text, position, text.Length, ref capitalOwed);
         return output.ToString();
+    }
+
+    // Only a plain lower-case word takes the owed capital; "@jdoe", "example.com" and "iPhone"
+    // keep their casing.
+    private static void AppendRestoringCapital(StringBuilder output, string text, int start, int end, ref bool capitalOwed)
+    {
+        if (capitalOwed)
+        {
+            var index = start;
+            while (index < end && char.IsWhiteSpace(text[index]))
+            {
+                index++;
+            }
+
+            if (index < end)
+            {
+                capitalOwed = false;
+                if (IsPlainLowerCaseWord(text, index, end) && Rune.TryGetRuneAt(text, index, out var first))
+                {
+                    Span<char> upper = stackalloc char[2];
+                    var length = Rune.ToUpperInvariant(first).EncodeToUtf16(upper);
+                    output.Append(text, start, index - start);
+                    output.Append(upper[..length]);
+                    start = index + first.Utf16SequenceLength;
+                }
+            }
+        }
+
+        output.Append(text, start, end - start);
+    }
+
+    // Letters with inner apostrophes or hyphens, optionally followed by punctuation.
+    private static bool IsPlainLowerCaseWord(string text, int index, int end)
+    {
+        if (!char.IsLower(text, index))
+        {
+            return false;
+        }
+
+        var tokenEnd = index;
+        while (tokenEnd < end && !char.IsWhiteSpace(text[tokenEnd]))
+        {
+            tokenEnd++;
+        }
+
+        while (tokenEnd > index && text[tokenEnd - 1] is ',' or '.' or '!' or '?' or '…' or ';' or ':'
+                   or ')' or ']' or '"' or '\'' or '”' or '’' or '»' or '«')
+        {
+            tokenEnd--;
+        }
+
+        for (var position = index; position < tokenEnd; position++)
+        {
+            var character = text[position];
+            if (char.IsUpper(character)
+                || !(char.IsLetter(character) || char.IsSurrogate(character) || character is '\'' or '’' or '-' or '‐' or '‑'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Whether a word appended to the output would open a sentence: it starts the text or a line,
+    // follows sentence-ending punctuation (also inside closing quotes: “Yes.” Um, …), or follows an
+    // opening quote or bracket.
+    private static bool OpensSentence(StringBuilder output)
+    {
+        var index = output.Length - 1;
+        while (index >= 0 && output[index] != '\n' && char.IsWhiteSpace(output[index]))
+        {
+            index--;
+        }
+
+        if (index < 0 || output[index] == '\n')
+        {
+            return true;
+        }
+
+        // Guillemets face either way (« … » in French, » … « in German), so whether one closes a
+        // quote comes from pairing: after an odd number of them it closes (« bonjour » Euh, puis …).
+        var isGuillemet = output[index] is '»' or '«';
+        if (isGuillemet ? !ClosesGuillemetPair(output, index) : IsOpeningDelimiter(output, index))
+        {
+            return true;
+        }
+
+        // French sets a space inside the closing guillemet: « Bonjour. » Euh, …
+        while (index > 0 && (IsClosingDelimiter(output[index]) || (isGuillemet && output[index] != '\n' && char.IsWhiteSpace(output[index]))))
+        {
+            index--;
+        }
+
+        return output[index] is '.' or '!' or '?' or '…' or '。' or '！' or '？';
+    }
+
+    private static bool ClosesGuillemetPair(StringBuilder output, int index)
+    {
+        var count = 0;
+        for (var position = 0; position < index; position++)
+        {
+            if (output[position] is '»' or '«')
+            {
+                count++;
+            }
+        }
+
+        return count % 2 == 1;
     }
 
     private static string Replacement(StringBuilder output, Match match, bool contentFollows, string text, int position)

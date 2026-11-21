@@ -2,6 +2,8 @@
   "Settings.Title": "フィラー",
   "Settings.Hint": "1行に1語です。カンマとセミコロンでも区切れます。行の先頭に言語コードとコロンを付けると（de: äh, ähm）、その話す言語にのみ適用されます。それ以外の行はすべての言語に適用されます。",
   "Settings.WordCount": "リスト内の語数: {0}",
+  "Settings.CollapseRepeatedWords": "繰り返された単語をまとめる",
+  "Settings.CollapseRepeatedWordsHint": "「I I I」のように3回以上続けて言った単語を1つにまとめます。",
   "Manifest.Name": "フィラー除去",
   "Manifest.Description": "文字起こしから「えー」「あの」などのフィラーを除去します"
 }
