@@ -45,6 +45,9 @@ internal sealed record RecordingContext(
 
     /// <summary>Shared across <c>with</c> copies, so cleanup can mark the references as sent.</summary>
     public ReferenceContextUse ReferenceContextUse { get; } = new();
+
+    /// <summary>Shared across <c>with</c> copies, so cleanup can report a fallback to Light.</summary>
+    public CleanupFallback CleanupFallback { get; } = new();
     public LockedFocusTarget? LockedFocusField { get; init; }
 
     /// <summary>The window focused at recording start, used to catch a focus move when there is no xdotool <see cref="WindowId" />.</summary>
@@ -2800,8 +2803,14 @@ public sealed partial class DictationOrchestrator : IDisposable
                     "millisecond"
                 );
             }
-            var commandResult = VoiceCommandParser.Parse(pipelineResult.Text);
+            var commandResult = ParseVoiceCommands(context, pipelineResult.Text);
             finalText = ApplyProfileStyleFormatting(context, commandResult.Text);
+            var pressEnter = ProfileAutoEnterPolicy.ShouldPressEnter(
+                context.Profile?.AutoEnterMode ?? ProfileAutoEnterMode.SpokenCommand,
+                commandResult.AutoEnter,
+                finalText,
+                pipelineResult.Steps.Any(step => !step.Succeeded) || context.CleanupFallback.Occurred
+            );
             _telemetry.Measure(context.SessionId, "transcript.chars", finalText.Length, "none");
 
             TranscriptionCompleted?.Invoke(this, finalText);
@@ -2951,7 +2960,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                 else
                 {
                     var autoPaste = _settings.Current.AutoPaste;
-                    var autoEnter = commandResult.AutoEnter;
+                    var autoEnter = pressEnter;
                     if ((autoPaste || autoEnter) && !await IsDeliveryTargetStillFocusedAsync(context))
                     {
                         enterSuppressed = autoEnter;
@@ -4331,6 +4340,9 @@ public sealed partial class DictationOrchestrator : IDisposable
 
         return $"{label}\n{text}";
     }
+
+    private static VoiceCommandParseResult ParseVoiceCommands(RecordingContext context, string text) =>
+        VoiceCommandParser.Parse(text, context.Profile?.AutoEnterMode != ProfileAutoEnterMode.Never);
 
     private string ApplyProfileStyleFormatting(RecordingContext context, string text)
     {

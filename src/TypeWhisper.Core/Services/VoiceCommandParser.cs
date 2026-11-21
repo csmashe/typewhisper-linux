@@ -16,7 +16,9 @@ public static partial class VoiceCommandParser
     private static readonly Regex s_newLineSuffix = BuildSuffixRegex("new line");
     private static readonly Regex s_cancelSuffix = BuildSuffixRegex("cancel");
 
-    public static VoiceCommandParseResult Parse(string text)
+    /// <param name="text">The transcribed text.</param>
+    /// <param name="recognizePressEnter">False keeps a trailing "press enter" as words.</param>
+    public static VoiceCommandParseResult Parse(string text, bool recognizePressEnter = true)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -40,7 +42,7 @@ public static partial class VoiceCommandParser
                 continue;
             }
 
-            if (TryRemoveSuffix(current, s_pressEnterSuffix, out var withoutEnter))
+            if (recognizePressEnter && TryRemoveSuffix(current, s_pressEnterSuffix, out var withoutEnter))
             {
                 autoEnter = true;
                 current = TrimTrailingNoise(withoutEnter);

@@ -42,6 +42,7 @@ public sealed record Profile
     public ProfileStylePreset StylePreset { get; init; } = ProfileStylePreset.Raw;
     public CleanupLevel? CleanupLevelOverride { get; init; }
     public bool? DeveloperFormattingOverride { get; init; }
+    public ProfileAutoEnterMode AutoEnterMode { get; init; } = ProfileAutoEnterMode.SpokenCommand;
 
     // Per-profile overrides for the two global reference-context toggles. Null =
     // inherit the global AppSettings value (same shape as WhisperModeOverride).

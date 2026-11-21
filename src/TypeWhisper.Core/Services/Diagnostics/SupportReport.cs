@@ -186,6 +186,7 @@ public sealed record SupportReport(
         bool? WhisperModeOverride,
         string? CleanupLevelOverride,
         bool? DeveloperFormattingOverride,
+        string AutoEnterMode,
         string? TranscriptionEngineId,
         string? TranscriptionModelId,
         bool HasPrompt,

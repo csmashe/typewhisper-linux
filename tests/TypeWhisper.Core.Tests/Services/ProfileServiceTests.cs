@@ -77,6 +77,25 @@ public sealed class ProfileServiceTests : IDisposable
     }
 
     [Fact]
+    public void AddProfile_AutoEnterMode_PersistsAsStringAndReloads()
+    {
+        _sut.AddProfile(new Profile { Id = "chat", Name = "Chat", AutoEnterMode = ProfileAutoEnterMode.Always });
+
+        Assert.Contains("\"AutoEnterMode\": \"Always\"", File.ReadAllText(_filePath));
+        Assert.Equal(ProfileAutoEnterMode.Always, Assert.Single(new ProfileService(_filePath).Profiles).AutoEnterMode);
+    }
+
+    [Fact]
+    public void LegacyProfileWithoutAutoEnterMode_KeepsTheSpokenCommand()
+    {
+        File.WriteAllText(_filePath, """
+            [{"Id":"legacy","Name":"Legacy","IsEnabled":true,"ProcessNames":["chrome"]}]
+            """);
+
+        Assert.Equal(ProfileAutoEnterMode.SpokenCommand, Assert.Single(new ProfileService(_filePath).Profiles).AutoEnterMode);
+    }
+
+    [Fact]
     public void ToggleProfileEnabled_MissingId_DoesNotWriteOrNotify()
     {
         var original = new Profile

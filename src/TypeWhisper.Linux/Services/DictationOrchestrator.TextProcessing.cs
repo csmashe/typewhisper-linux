@@ -1,5 +1,4 @@
 using TypeWhisper.Core.Models;
-using TypeWhisper.Core.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.Linux.Services.Localization;
 
@@ -112,7 +111,7 @@ public sealed partial class DictationOrchestrator
         var processed = await _pipeline.ProcessAsync(rawText,
             BuildPipelineOptions(context, 0, language, configuredLanguage, languageHints, translate, supportsTranslation,
                 false, false, engineProviderId, engineModelId, timings, recordUsage: false), ct);
-        var finalText = ApplyProfileStyleFormatting(context, VoiceCommandParser.Parse(processed.Text).Text);
+        var finalText = ApplyProfileStyleFormatting(context, ParseVoiceCommands(context, processed.Text).Text);
 
         var stepTimingsQueue = new Queue<(string Name, TimeSpan Elapsed)>(timings);
         var steps = processed.Steps

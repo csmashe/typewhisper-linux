@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -92,6 +93,50 @@ public sealed class ProfilesSmallWindowTests(UiSession ui)
         }, CancellationToken.None);
 
         Assert.True(overflow.Count == 0, string.Join("\n", overflow));
+    }
+
+    [Theory]
+    [MemberData(nameof(MainWindowRenderTests.Languages), MemberType = typeof(MainWindowRenderTests))]
+    public async Task AutoEnterModeShowsTheProfileChoiceInTheEditor(string language)
+    {
+        var findings = await ui.Session.Dispatch(() =>
+        {
+            Loc.Instance.CurrentLanguage = language;
+            var viewModel = ui.Services.GetRequiredService<MainWindowViewModel>();
+            var profiles = (ProfilesSectionViewModel)viewModel.NavItems.First(item => item.Content is ProfilesSectionViewModel).Content!;
+            var window = new MainWindow(viewModel) { Width = 800, Height = 600 };
+            window.Show();
+            try
+            {
+                viewModel.SelectedItem = viewModel.NavItems.First(item => ReferenceEquals(item.Content, profiles));
+                if (!profiles.HasSelectedProfile)
+                    profiles.AddProfileCommand.Execute(null);
+                MainWindowRenderTests.Settle();
+
+                var name = Loc.Instance["Profiles.AutoEnterMode"];
+                var combo = Assert.Single(window.GetVisualDescendants().OfType<ComboBox>(),
+                    box => AutomationProperties.GetName(box) == name);
+                combo.BringIntoView();
+                MainWindowRenderTests.Settle();
+                window.CaptureRenderedFrame()?.Save(
+                    Path.Join(UiEnvironment.SnapshotDir, $"Profiles-auto-enter-{language}-800x600.png"), PngBitmapEncoderOptions.Default);
+
+                Assert.True(combo.IsEffectivelyVisible);
+                Assert.Equal(Loc.Instance["Profiles.AutoEnterSpokenCommand"],
+                    Assert.IsType<ProfileAutoEnterModeOption>(combo.SelectedItem).Label);
+                return UiInspector.Inspect(combo, new HashSet<string>())
+                    .Where(finding => finding.Kind == UiInspector.ClippedText)
+                    .Select(finding => $"{finding.Kind}: {finding.Detail}")
+                    .ToList();
+            }
+            finally
+            {
+                window.Close();
+                Loc.Instance.CurrentLanguage = "en";
+            }
+        }, CancellationToken.None);
+
+        Assert.True(findings.Count == 0, string.Join("\n", findings));
     }
 
     private static string? Label(Button button) => button.Content switch
