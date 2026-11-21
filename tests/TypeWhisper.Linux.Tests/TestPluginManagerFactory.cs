@@ -3,6 +3,7 @@ using System.Reflection;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 using TypeWhisper.Tests;
@@ -17,7 +18,8 @@ internal static class TestPluginManagerFactory
         IReadOnlyList<ITtsProviderPlugin>? ttsProviders = null,
         IReadOnlyList<LoadedPlugin>? loadedPlugins = null,
         IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null,
-        IEnumerable<string>? activatedPluginIds = null
+        IEnumerable<string>? activatedPluginIds = null,
+        IDiagnosticsReporter? diagnostics = null
     )
     {
         var activeWindow = new Mock<IActiveWindowService>();
@@ -31,7 +33,8 @@ internal static class TestPluginManagerFactory
             activeWindow.Object,
             profiles.Object,
             settings.Object,
-            []
+            [],
+            diagnostics: diagnostics
         );
 
         if (transcriptionEngines is not null)

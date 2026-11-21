@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.Net.Sockets;
 
@@ -14,6 +15,7 @@ internal static class TelemetryErrorFacts
 
         string? httpStatus = null;
         string? socketError = null;
+        string? nativeError = null;
         Exception? innermost = null;
         var innermostDepth = -1;
         Walk(outermost, 0);
@@ -29,12 +31,19 @@ internal static class TelemetryErrorFacts
             e.SetTag("socket.error", socketError);
         }
 
-        if (innermost is not null && innermost.GetType() != outermost.GetType()
-            && innermost.GetType().FullName is { } innerType)
+        if (nativeError is not null)
         {
-            e.SetTag("error.inner_type", innerType);
+            e.SetTag("error.native_code", nativeError);
         }
 
+        if (innermost is null || innermost.GetType() == outermost.GetType()
+            || innermost.GetType().FullName is not { } innerType)
+        {
+            return;
+        }
+
+        e.SetTag("error.inner_type", innerType);
+        e.SetTag("error.inner_hresult", $"0x{innermost.HResult:X8}");
         return;
 
         void Walk(Exception? exception, int depth)
@@ -46,9 +55,13 @@ internal static class TelemetryErrorFacts
                     httpStatus = ((int)status).ToString(CultureInfo.InvariantCulture);
                 }
 
-                if (socketError is null && exception is SocketException socket)
+                if (exception is SocketException socket)
                 {
-                    socketError = socket.SocketErrorCode.ToString();
+                    socketError ??= socket.SocketErrorCode.ToString();
+                }
+                else if (nativeError is null && exception is Win32Exception { NativeErrorCode: >= 0 } native)
+                {
+                    nativeError = native.NativeErrorCode.ToString(CultureInfo.InvariantCulture);
                 }
 
                 if (exception is AggregateException aggregate)

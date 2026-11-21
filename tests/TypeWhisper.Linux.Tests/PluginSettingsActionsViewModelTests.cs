@@ -1,7 +1,10 @@
+using System.ComponentModel;
 using System.Reflection;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Telemetry;
+using TypeWhisper.Linux.Tests.Telemetry;
 using TypeWhisper.Linux.ViewModels.Sections;
 using TypeWhisper.PluginSDK;
 using Xunit;
@@ -250,6 +253,60 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task FailingAction_ReachesDiagnosticsWithoutItsMessageOrItemId()
+    {
+        var reporter = new RecordingReporter();
+        var plugin = new FakeActionsPlugin
+        {
+            ActionPrefix = "profile-7/",
+            Failure = new InvalidOperationException("secret response body",
+                new Win32Exception(2)),
+        };
+        var (vm, row) = await CreateExpandedAsync(plugin, diagnostics: reporter);
+
+        await vm.RunSettingsActionCommand.ExecuteAsync(row.Actions[0]);
+
+        var capture = Assert.Single(reporter.Captures);
+        Assert.Same(plugin.Failure, capture.Exception);
+        Assert.Equal("plugin.settings", capture.Operation);
+        Assert.Equal(new Dictionary<string, string>
+        {
+            ["plugin.id"] = TestPluginId,
+            ["plugin.stage"] = "run-settings-action",
+            ["plugin.action"] = "download",
+        }, capture.Tags);
+    }
+
+    [Fact]
+    public async Task TimedOutBoundary_ReachesDiagnosticsAsATimeout()
+    {
+        var reporter = new RecordingReporter();
+        var plugin = new FakeActionsPlugin { HangValidation = true };
+        var (vm, row) = await CreateExpandedAsync(
+            plugin, validationTimeout: TimeSpan.FromMilliseconds(40), diagnostics: reporter);
+
+        await vm.ValidateSettingsCommand.ExecuteAsync(row);
+
+        var capture = Assert.Single(reporter.Captures);
+        Assert.IsType<TimeoutException>(capture.Exception);
+        Assert.Equal("validate-settings", capture.Tags!["plugin.stage"]);
+        Assert.Equal("timed_out", capture.Tags["outcome"]);
+        Assert.False(capture.Tags.ContainsKey("plugin.action"));
+    }
+
+    [Theory]
+    [InlineData("download", "download")]
+    [InlineData("<profile>/refresh", "refresh")]
+    [InlineData("test:0f8fad5b", "test")]
+    [InlineData("a/b/remove-runtime", "remove-runtime")]
+    [InlineData("test:private/customer-name", "other")]
+    [InlineData("customer-name", "other")]
+    [InlineData("Refresh", "other")]
+    [InlineData("", "other")]
+    public void ActionIds_AreReducedToTheirActionName(string actionId, string expected) =>
+        Assert.Equal(expected, PluginsSectionViewModel.DiagnosticActionName(actionId));
+
+    [Fact]
     public async Task RowsRebuiltDuringAnAction_KeepShowingItAsRunning()
     {
         var plugin = new FakeActionsPlugin { HoldUntilCancelled = true };
@@ -388,7 +445,8 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         ITypeWhisperPlugin plugin,
         TimeSpan? validationTimeout = null,
         ErrorLogService? errorLog = null,
-        bool enabled = true)
+        bool enabled = true,
+        IDiagnosticsReporter? diagnostics = null)
     {
         var loaded = TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, TestPluginId, plugin);
         var manager = TestPluginManagerFactory.Create(
@@ -401,7 +459,8 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
             validationTimeout,
             // Synchronous post: mirrors the real Dispatcher.UIThread serialization
             // without a headless dispatcher to pump.
-            action => action());
+            action => action(),
+            diagnostics);
         var row = CurrentRow(vm);
         await vm.ToggleExpandedCommand.ExecuteAsync(row);
         return (vm, row);
@@ -491,6 +550,8 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
         public Task? SaveGate { get; init; }
         public Func<string, string>? NormalizeValue { get; init; }
         public bool HoldUntilCancelled { get; init; }
+        public bool HangValidation { get; init; }
+        public string ActionPrefix { get; init; } = "";
         public TimeSpan Delay { get; init; }
         public Exception? Failure { get; init; }
         public List<string> Calls { get; } = [];
@@ -524,9 +585,16 @@ public sealed class PluginSettingsActionsViewModelTests : IDisposable
             ActionReads++;
             return
             [
-                new PluginSettingsAction("download", "Download files", "Fetches the files."),
-                new PluginSettingsAction("remove", "Remove files", IsEnabled: RemoveEnabled, ConfirmationMessage: "Really remove?"),
+                new PluginSettingsAction(ActionPrefix + "download", "Download files", "Fetches the files."),
+                new PluginSettingsAction(ActionPrefix + "remove", "Remove files", IsEnabled: RemoveEnabled, ConfirmationMessage: "Really remove?"),
             ];
+        }
+
+        public async Task<PluginSettingsValidationResult?> ValidateAsync(CancellationToken ct = default)
+        {
+            if (HangValidation)
+                await Task.Delay(Timeout.Infinite, ct);
+            return null;
         }
 
         public async Task<PluginSettingsValidationResult> ExecuteSettingsActionAsync(string actionId, CancellationToken ct)

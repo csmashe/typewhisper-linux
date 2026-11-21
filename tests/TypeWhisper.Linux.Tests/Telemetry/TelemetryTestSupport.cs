@@ -78,10 +78,15 @@ internal sealed class FakeSettingsService(AppSettings? initial = null) : ISettin
 internal sealed class RecordingReporter : IDiagnosticsReporter
 {
     public List<(string Name, string Operation, RecordingOperation Value)> Operations { get; } = [];
+    public List<(Exception Exception, string Operation, IReadOnlyDictionary<string, string>? Tags)> Captures { get; } = [];
 
     public void CaptureException(
         Exception exception, string operation, IReadOnlyDictionary<string, string>? tags = null)
     {
+        lock (Captures)
+        {
+            Captures.Add((exception, operation, tags));
+        }
     }
 
     public IDiagnosticsOperation BeginOperation(string name, string operation)
