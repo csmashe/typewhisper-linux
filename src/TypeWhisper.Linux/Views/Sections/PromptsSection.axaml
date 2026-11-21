@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:TypeWhisper.Linux.Controls"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
@@ -72,16 +73,16 @@
                     <TextBlock Text="{loc:Str Prompts.CleanupProvider}"
                                FontSize="16"
                                FontWeight="SemiBold" />
-                    <ComboBox ItemsSource="{Binding DefaultProviderOptions}"
-                              AutomationProperties.Name="{loc:Str Prompts.CleanupProvider}"
-                              SelectedItem="{Binding SelectedDefaultLlmProvider}"
-                              DropDownOpened="OnProviderDropDownOpened">
-                        <ComboBox.ItemTemplate>
+                    <controls:SearchableComboBox ItemsSource="{Binding DefaultProviderOptions}"
+                                                 AutomationProperties.Name="{loc:Str Prompts.CleanupProvider}"
+                                                 SelectedItem="{Binding SelectedDefaultLlmProvider}"
+                                                 DropDownOpened="OnProviderDropDownOpened">
+                        <controls:SearchableComboBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:ProviderOption">
                                 <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
                             </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
+                        </controls:SearchableComboBox.ItemTemplate>
+                    </controls:SearchableComboBox>
                     <TextBlock Text="{loc:Str Prompts.CleanupProviderHelp}"
                                FontSize="12"
                                Foreground="{DynamicResource TwTextSecondaryBrush}"
@@ -127,18 +128,18 @@
 
                         <TextBlock Text="{loc:Str Prompts.CommandModel}"
                                    Margin="0,8,0,0" />
-                        <ComboBox ItemsSource="{Binding SpokenCommandProviderOptions}"
-                                  AutomationProperties.Name="{loc:Str Prompts.CommandModel}"
-                                  SelectedItem="{Binding SelectedSpokenCommandProvider}"
-                                  HorizontalAlignment="Stretch"
-                                  DropDownOpened="OnProviderDropDownOpened">
-                            <ComboBox.ItemTemplate>
+                        <controls:SearchableComboBox ItemsSource="{Binding SpokenCommandProviderOptions}"
+                                                     AutomationProperties.Name="{loc:Str Prompts.CommandModel}"
+                                                     SelectedItem="{Binding SelectedSpokenCommandProvider}"
+                                                     HorizontalAlignment="Stretch"
+                                                     DropDownOpened="OnProviderDropDownOpened">
+                            <controls:SearchableComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ProviderOption">
                                     <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"
                                                ToolTip.Tip="{Binding Label}" />
                                 </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
+                            </controls:SearchableComboBox.ItemTemplate>
+                        </controls:SearchableComboBox>
                         <TextBlock Text="{loc:Str Prompts.CommandModelHelp}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TwTextSecondaryBrush}"
@@ -297,16 +298,16 @@
                                 Margin="0,14,0,0">
                         <TextBlock Text="{loc:Str Prompts.Provider}"
                                    Margin="0,0,0,6" />
-                        <ComboBox ItemsSource="{Binding AvailableProviders}"
-                                  AutomationProperties.Name="{loc:Str Prompts.Provider}"
-                                  SelectedItem="{Binding SelectedEditProvider}"
-                                  DropDownOpened="OnProviderDropDownOpened">
-                            <ComboBox.ItemTemplate>
+                        <controls:SearchableComboBox ItemsSource="{Binding AvailableProviders}"
+                                                     AutomationProperties.Name="{loc:Str Prompts.Provider}"
+                                                     SelectedItem="{Binding SelectedEditProvider}"
+                                                     DropDownOpened="OnProviderDropDownOpened">
+                            <controls:SearchableComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ProviderOption">
                                     <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Label}" />
                                 </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
+                            </controls:SearchableComboBox.ItemTemplate>
+                        </controls:SearchableComboBox>
                     </StackPanel>
 
                     <StackPanel Grid.Row="3"

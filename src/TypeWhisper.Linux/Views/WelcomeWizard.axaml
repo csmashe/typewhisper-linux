@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:TypeWhisper.Linux.Controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:TypeWhisper.Linux.ViewModels"
@@ -78,11 +79,11 @@
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                Text="{loc:Str Wizard.ChooseModelDescription}" />
                     <TextBlock Text="{loc:Str Wizard.AllModels}" FontWeight="SemiBold" />
-                    <ComboBox ItemsSource="{Binding AvailableModels}"
-                              SelectedItem="{Binding SelectedModel}"
-                              IsEnabled="{Binding !NextCommand.IsRunning}"
-                              HorizontalAlignment="Stretch">
-                        <ComboBox.ItemTemplate>
+                    <controls:SearchableComboBox ItemsSource="{Binding AvailableModels}"
+                                                 SelectedItem="{Binding SelectedModel}"
+                                                 IsEnabled="{Binding !NextCommand.IsRunning}"
+                                                 HorizontalAlignment="Stretch">
+                        <controls:SearchableComboBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:WizardModelRow">
                                 <!-- Explicit Tw* colors: the dropdown popup resolves them against the
                                      application theme, which windows no longer override, so the popup
@@ -98,8 +99,8 @@
                                                IsVisible="{Binding IsRecommended}" />
                                 </StackPanel>
                             </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
+                        </controls:SearchableComboBox.ItemTemplate>
+                    </controls:SearchableComboBox>
                     <TextBlock Text="{Binding ModelStatus}" FontSize="11"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8"

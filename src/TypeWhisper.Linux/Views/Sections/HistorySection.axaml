@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:TypeWhisper.Linux.Controls"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              xmlns:local="using:TypeWhisper.Linux"
@@ -111,13 +112,13 @@
                          PlaceholderText="{loc:Str History.SearchPlaceholder}"
                          Margin="0,0,4,0" />
 
-                <ComboBox Grid.Row="1"
-                          Grid.Column="1"
-                          AutomationProperties.Name="{loc:Str History.App}"
-                          ItemsSource="{Binding AvailableApps}"
-                          SelectedItem="{Binding SelectedAppFilter}"
-                          Width="160"
-                          Margin="0,0,8,0" />
+                <controls:SearchableComboBox Grid.Row="1"
+                                             Grid.Column="1"
+                                             AutomationProperties.Name="{loc:Str History.App}"
+                                             ItemsSource="{Binding AvailableApps}"
+                                             SelectedItem="{Binding SelectedAppFilter}"
+                                             Width="160"
+                                             Margin="0,0,8,0" />
 
                 <Button Grid.Row="1"
                         Grid.Column="2"

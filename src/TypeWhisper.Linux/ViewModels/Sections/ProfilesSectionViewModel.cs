@@ -10,6 +10,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Controls;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
@@ -1894,9 +1895,13 @@ public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, st
     public override string ToString() => Label;
 }
 
-public sealed record ProfileLanguageOption(string? Code, string Label)
+public sealed record ProfileLanguageOption(string? Code, string Label) : ISearchableChoice
 {
     public override string ToString() => Label;
+
+    string ISearchableChoice.SearchLabel => Label;
+    string? ISearchableChoice.SearchCode => Code;
+    IEnumerable<string> ISearchableChoice.SearchAliases => ChoiceSearch.LanguageAliases(Code);
 }
 
 public sealed record ProfileTaskOption(string? Value, string Label)
