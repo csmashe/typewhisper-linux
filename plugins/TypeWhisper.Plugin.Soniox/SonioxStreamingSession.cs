@@ -32,11 +32,12 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
         Uri realtimeUri,
         string model,
         IReadOnlyList<string> languageHints,
+        IReadOnlyDictionary<string, object>? context,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new SonioxWebSocketAdapter(apiKey, realtimeUri, model, languageHints),
+            new SonioxWebSocketAdapter(apiKey, realtimeUri, model, languageHints, context),
             ct
         );
         return new SonioxStreamingSession(pump);
@@ -52,7 +53,8 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
     // The key goes in the Authorization header: from 2027-01-15 Soniox refuses keys sent only here.
     internal static string BuildConfigMessage(
         string model,
-        IReadOnlyList<string> languageHints
+        IReadOnlyList<string> languageHints,
+        IReadOnlyDictionary<string, object>? context = null
     )
     {
         var config = new Dictionary<string, object>
@@ -70,6 +72,9 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
         {
             config["language_hints"] = languageHints;
         }
+
+        if (context is not null)
+            config["context"] = context;
 
         return JsonSerializer.Serialize(config);
     }
@@ -216,7 +221,8 @@ internal sealed class SonioxWebSocketAdapter(
     string apiKey,
     Uri realtimeUri,
     string model,
-    IReadOnlyList<string> languageHints
+    IReadOnlyList<string> languageHints,
+    IReadOnlyDictionary<string, object>? context = null
 ) : IWebSocketSessionAdapter
 {
     private readonly SonioxTranscriptAggregator _aggregator = new();
@@ -249,7 +255,8 @@ internal sealed class SonioxWebSocketAdapter(
                     Encoding.UTF8.GetBytes(
                         SonioxStreamingSession.BuildConfigMessage(
                             model,
-                            languageHints
+                            languageHints,
+                            context
                         )
                     ),
                     WebSocketMessageType.Text

@@ -20,6 +20,9 @@
   "Settings.ModelsRefreshed": "Модели обновлены. «Автоматически» использует {0} для текста в реальном времени и {1} для записей.",
   "Settings.ModelListInvalid": "Soniox не вернул пригодный список моделей.",
   "Settings.ModelListTimeout": "Soniox не вернул список моделей вовремя.",
+  "Settings.TranscriptionContext": "Контекст транскрипции",
+  "Settings.TranscriptionContextPlaceholder": "Тема, имена или обстановка, например: еженедельная продуктовая встреча с Анной и Йоргом о выпуске TypeWhisper для Linux.",
+  "Settings.TranscriptionContextDescription": "Необязательные сведения, которые Soniox использует для текста в реальном времени и записей. Термины из вашего словаря отправляются вместе с ними автоматически. До {0} символов.",
   "Settings.NotConfiguredApiKeyRequired": "Плагин не настроен. Требуется API-ключ.",
   "Manifest.Name": "Soniox",
   "Manifest.Description": "Движок распознавания речи Soniox"

@@ -20,6 +20,9 @@
   "Settings.ModelsRefreshed": "モデルを更新しました。自動では、ライブテキストに {0}、録音に {1} を使用します。",
   "Settings.ModelListInvalid": "Soniox から使用可能なモデル一覧が返されませんでした。",
   "Settings.ModelListTimeout": "Soniox から時間内にモデル一覧が返されませんでした。",
+  "Settings.TranscriptionContext": "文字起こしのコンテキスト",
+  "Settings.TranscriptionContextPlaceholder": "話題、名前、状況など。例: TypeWhisper Linux 版リリースに関する Anna と Jörg との週次プロダクト会議。",
+  "Settings.TranscriptionContextDescription": "Soniox がライブテキストと録音に使用する任意の背景情報です。辞書の用語は自動的に一緒に送信されます。最大 {0} 文字。",
   "Settings.NotConfiguredApiKeyRequired": "プラグインが設定されていません。APIキーが必要です。",
   "Manifest.Name": "Soniox",
   "Manifest.Description": "Sonioxの音声認識による文字起こしエンジン"
