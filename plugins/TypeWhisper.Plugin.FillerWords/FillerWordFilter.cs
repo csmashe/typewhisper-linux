@@ -57,6 +57,16 @@ public static partial class FillerWordFilter
     public static IReadOnlyList<string> DefaultWordsFor(string? language) =>
         ParseWordList(DefaultWordsText).WordsFor(language);
 
+    /// <summary>
+    ///     The spoken language to pick filler words for: the reported one, else a strict guess from
+    ///     <paramref name="text"/>. A reported language wins because after engine translation the host
+    ///     already reports the output language, and a few words of text should not overrule it.
+    /// </summary>
+    public static string? ResolveLanguage(string? reportedLanguage, string text) =>
+        string.IsNullOrWhiteSpace(reportedLanguage) || PrimarySubtag(reportedLanguage) == "auto"
+            ? TextLanguageDetector.Detect(text)
+            : reportedLanguage;
+
     /// <summary>Removes the default filler words from <paramref name="text"/>.</summary>
     public static string Remove(string text) => Remove(text, DefaultFillerWords);
 

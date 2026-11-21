@@ -2,6 +2,8 @@
   "Settings.Title": "Filler words",
   "Settings.Hint": "One word per line; commas and semicolons also separate words. Start a line with a language code and a colon (de: äh, ähm) to apply it to that spoken language only; other lines apply to every language.",
   "Settings.WordCount": "Words in the list: {0}",
+  "Settings.CollapseRepeatedWords": "Collapse repeated words",
+  "Settings.CollapseRepeatedWordsHint": "Shortens a word said three or more times in a row, such as \"I I I\", to one.",
   "Manifest.Name": "Filler Words",
   "Manifest.Description": "Remove filler words such as um and uh from transcriptions"
 }
