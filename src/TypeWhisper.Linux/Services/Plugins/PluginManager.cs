@@ -19,6 +19,10 @@ public sealed class PluginManager : IDisposable
 {
     private static readonly TimeSpan s_defaultPluginShutdownTimeout = TimeSpan.FromSeconds(5);
 
+    // After a hung plugin spends the shared budget, later plugins still get this long, so a
+    // well-behaved one isn't unloaded mid-shutdown.
+    private static readonly TimeSpan s_minimumPluginShutdownGrace = TimeSpan.FromMilliseconds(250);
+
     private readonly HashSet<string> _activatedPlugins = [];
     private readonly ConcurrentDictionary<string, Task<bool>> _activationTasks = new();
     private readonly IActiveWindowService _activeWindow;
@@ -222,10 +226,11 @@ public sealed class PluginManager : IDisposable
                 TaskScheduler.Default
             );
 
+            var remaining = _pluginShutdownTimeout - shutdownBudget.Elapsed;
             AwaitPluginShutdown(
                 shutdownTask,
                 plugin.Manifest.Id,
-                _pluginShutdownTimeout - shutdownBudget.Elapsed
+                remaining > s_minimumPluginShutdownGrace ? remaining : s_minimumPluginShutdownGrace
             );
 
             try
@@ -257,21 +262,6 @@ public sealed class PluginManager : IDisposable
 
     private void AwaitPluginShutdown(Task shutdownTask, string pluginId, TimeSpan remaining)
     {
-        if (remaining <= TimeSpan.Zero)
-        {
-            Trace.WriteLine(
-                "[PluginManager] Shutdown budget of "
-                    + $"{_pluginShutdownTimeout.TotalSeconds:0.###} seconds is spent; "
-                    + $"not waiting for plugin {pluginId}"
-            );
-
-            // The stranded worker still owns ShutdownPlugin's cleanup, so retire the
-            // scope here too — otherwise the plugin's children outlive the host.
-            RetirePluginProcesses(pluginId);
-            ObserveLateShutdown(shutdownTask, pluginId);
-            return;
-        }
-
         var completedTask = Task.WhenAny(shutdownTask, Task.Delay(remaining))
             .GetAwaiter()
             .GetResult();

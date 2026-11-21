@@ -17,6 +17,7 @@ public partial class GeneralSectionViewModel : ObservableObject
     private readonly LinuxPreferencesService _linuxPrefs;
     private readonly ISettingsService _settings;
     private readonly TrayIconService _tray;
+    private readonly UrlLauncher _urlLauncher;
     private bool _updatingStartWithSystem;
     private bool _autostartStatusIsHint = true;
 
@@ -38,7 +39,16 @@ public partial class GeneralSectionViewModel : ObservableObject
     private string _apiStatusText = "";
 
     [ObservableProperty]
+    private string _browserExtensionStatusText = "";
+
+    [ObservableProperty]
     private bool _cliBundledAvailable;
+
+    [ObservableProperty]
+    private string _cliCopyStatusText = "";
+
+    [ObservableProperty]
+    private string _curlCopyStatusText = "";
 
     [ObservableProperty]
     private string _cliBundledPathText = "";
@@ -75,7 +85,8 @@ public partial class GeneralSectionViewModel : ObservableObject
         CliInstallService cliInstall,
         CudaLibraryPathSetupService cudaLibraryPathSetup,
         LinuxPreferencesService linuxPrefs,
-        TrayIconService tray
+        TrayIconService tray,
+        UrlLauncher urlLauncher
     )
     {
         _settings = settings;
@@ -84,6 +95,7 @@ public partial class GeneralSectionViewModel : ObservableObject
         _cudaLibraryPathSetup = cudaLibraryPathSetup;
         _linuxPrefs = linuxPrefs;
         _tray = tray;
+        _urlLauncher = urlLauncher;
         Refresh(settings.Current);
         _startWithSystem = StartupService.IsEnabled;
         CloseToTray = _linuxPrefs.Current.CloseToTray;
@@ -103,6 +115,10 @@ public partial class GeneralSectionViewModel : ObservableObject
             // State text computed from the catalog follows the new language; an install error
             // keeps its wording.
             ApiStatusText = _api.StatusText;
+            RefreshExamples(ApiServerPort);
+            CliCopyStatusText = "";
+            CurlCopyStatusText = "";
+            BrowserExtensionStatusText = "";
             // Re-read the last state rather than probing: a probe waits on a running install.
             if (_cliState is not { } cliState)
             {
@@ -132,6 +148,10 @@ public partial class GeneralSectionViewModel : ObservableObject
                 CudaPathRemovalAvailable = _cudaLibraryPathSetup.HasInstalledChanges()
             );
     }
+
+    internal const string ChromeExtensionUrl =
+        "https://chromewebstore.google.com/detail/typewhisper/gamnkdngnfamiajnbeglodoaoaifbheh";
+    internal const string FirefoxExtensionUrl = "https://addons.mozilla.org/firefox/addon/typewhisper/";
 
     public ObservableCollection<CommandExample> CurlExamples { get; } = [];
     public ObservableCollection<CommandExample> CliExamples { get; } = [];
@@ -280,14 +300,51 @@ public partial class GeneralSectionViewModel : ObservableObject
         CurlExamples.Clear();
         foreach (var command in CliInstallService.BuildCurlExamples(port))
         {
-            CurlExamples.Add(new CommandExample(command));
+            CurlExamples.Add(new CommandExample(null, command, Loc.Instance["General.CopyCommand"]));
         }
 
         CliExamples.Clear();
-        foreach (var command in CliInstallService.BuildCliExamples(port))
+        foreach (var example in CliInstallService.BuildCliExamples())
         {
-            CliExamples.Add(new CommandExample(command));
+            var label = Loc.Instance[example.LabelKey];
+            CliExamples.Add(
+                new CommandExample(
+                    label,
+                    example.Command,
+                    Loc.Instance.GetString("General.CopyCommandNamed", label)
+                )
+            );
         }
+    }
+
+    /// <summary>The view copies through its TopLevel clipboard and reports the outcome here.</summary>
+    public void ReportExampleCopied(CommandExample example, bool copied)
+    {
+        var text = copied
+            ? Loc.Instance["General.CommandCopied"]
+            : Loc.Instance["General.CommandCopyFailed"];
+        // Only CLI examples carry a caption; a language switch mid-copy replaces the records.
+        if (example.HasLabel)
+        {
+            CliCopyStatusText = text;
+        }
+        else
+        {
+            CurlCopyStatusText = text;
+        }
+    }
+
+    [RelayCommand]
+    private void OpenChromeExtension() => OpenBrowserExtensionPage(ChromeExtensionUrl);
+
+    [RelayCommand]
+    private void OpenFirefoxExtension() => OpenBrowserExtensionPage(FirefoxExtensionUrl);
+
+    private void OpenBrowserExtensionPage(string url)
+    {
+        BrowserExtensionStatusText = _urlLauncher.Open(url)
+            ? ""
+            : Loc.Instance["General.BrowserExtensionOpenFailed"];
     }
 
     partial void OnUiLanguageChanged(string? value)
@@ -380,4 +437,7 @@ public partial class GeneralSectionViewModel : ObservableObject
     }
 }
 
-public sealed record CommandExample(string Command);
+public sealed record CommandExample(string? Label, string Command, string CopyName)
+{
+    public bool HasLabel => Label is not null;
+}

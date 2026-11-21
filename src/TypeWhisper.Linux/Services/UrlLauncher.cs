@@ -5,7 +5,6 @@ namespace TypeWhisper.Linux.Services;
 /// <summary>Validated HTTP(S) handoff through the host process supervisor.</summary>
 public sealed class UrlLauncher(IProcessRunner processRunner)
 {
-    // ReSharper disable once UnusedMethodReturnValue.Global -- current callers ignore the success flag.
     public bool Open(string? url)
     {
         // Only well-formed http(s) URLs reach the desktop handler — never a raw string that
