@@ -2,11 +2,11 @@
   "Settings.ApiKey": "API密钥",
   "Settings.ApiKeyDescription": "ElevenLabs Scribe转录所必需。",
   "Settings.TranscriptionModel": "转录模型",
-  "Settings.ModelDescription": "文件转录使用Scribe v2；实时听写使用Scribe v2 Realtime。",
+  "Settings.ModelDescription": "文件转录使用Scribe v2；实时听写使用Scribe v2 Realtime。Scribe v2 Medical针对临床词汇优化，没有实时模式，因此听写会等待完整录音。",
   "Settings.TranscriptionMode": "转录模式",
   "Settings.ModeAutomatic": "自动（实时，失败时回退到REST）",
   "Settings.ModeRestOnly": "仅REST（批量Scribe v2）",
-  "Settings.TranscriptionModeDescription": "“自动”会在实时转录允许时进行实时流式传输。“仅REST”始终上传整段录音，可避免实时并发限制。启用音频事件或说话人数量不为1时，将使用完整录音。",
+  "Settings.TranscriptionModeDescription": "“自动”会在实时转录允许时进行实时流式传输。“仅REST”始终上传整段录音，可避免实时并发限制。使用Scribe v2 Medical、启用音频事件或说话人数量不为1时，将使用完整录音。",
   "Settings.NoVerbatim": "清理填充词和口误",
   "Settings.NoVerbatimDescription": "适用于实时转录和REST转录。与音频事件同时使用时，由ElevenLabs决定保留哪些标注。",
   "Settings.TagAudioEvents": "包含音频事件，例如[coughs]和[mouse clicks]",
@@ -20,6 +20,9 @@
   "Settings.ApiKeyUnverified": "API密钥已保存，但无法验证语音访问权限：该密钥缺少user_read权限。请尝试一次听写以确认Speech-to-Text访问权限。",
   "Settings.ApiKeyInvalid": "API密钥无效。",
   "Settings.ApiKeyUnavailable": "无法连接到ElevenLabs以验证API密钥。请检查网络连接后重试。",
+  "Errors.QuotaExceeded": "此ElevenLabs API密钥的额度已用完。请在ElevenLabs账户中提高该密钥的限额或充值额度。",
+  "Errors.MissingSpeechToTextPermission": "此ElevenLabs API密钥缺少Speech to Text权限。请在ElevenLabs账户中为该密钥启用此权限。",
+  "Errors.ApiKeyRejected": "ElevenLabs拒绝了此API密钥。",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "通过ElevenLabs Scribe进行云端转录，支持实时WebSocket流式传输"
 }

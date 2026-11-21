@@ -2,11 +2,11 @@
   "Settings.ApiKey": "API key",
   "Settings.ApiKeyDescription": "Required for ElevenLabs Scribe transcription.",
   "Settings.TranscriptionModel": "Transcription model",
-  "Settings.ModelDescription": "Scribe v2 is used for file transcription; live dictation uses Scribe v2 Realtime.",
+  "Settings.ModelDescription": "Scribe v2 is used for file transcription; live dictation uses Scribe v2 Realtime. Scribe v2 Medical is tuned for clinical vocabulary and has no live mode, so dictation waits for the complete recording.",
   "Settings.TranscriptionMode": "Transcription mode",
   "Settings.ModeAutomatic": "Automatic (real-time with REST fallback)",
   "Settings.ModeRestOnly": "REST only (batch Scribe v2)",
-  "Settings.TranscriptionModeDescription": "Automatic streams in real time when live transcription allows it. REST only always uploads the whole recording, which avoids real-time concurrency limits. Audio events or a speaker count other than 1 use the complete recording.",
+  "Settings.TranscriptionModeDescription": "Automatic streams in real time when live transcription allows it. REST only always uploads the whole recording, which avoids real-time concurrency limits. Scribe v2 Medical, audio events or a speaker count other than 1 use the complete recording.",
   "Settings.NoVerbatim": "Clean up filler words and verbal stumbles",
   "Settings.NoVerbatimDescription": "Applies to real-time and REST transcription. Combined with audio events, ElevenLabs decides which annotations remain.",
   "Settings.TagAudioEvents": "Include audio events such as [coughs] and [mouse clicks]",
@@ -20,6 +20,9 @@
   "Settings.ApiKeyUnverified": "API key saved, but speech access could not be verified: the key lacks the user_read permission. Try a dictation to confirm Speech-to-Text access.",
   "Settings.ApiKeyInvalid": "API key is invalid.",
   "Settings.ApiKeyUnavailable": "Could not reach ElevenLabs to verify the API key. Check your connection and try again.",
+  "Errors.QuotaExceeded": "This ElevenLabs API key has used up its credit quota. Raise the key's limit or add credits in your ElevenLabs account.",
+  "Errors.MissingSpeechToTextPermission": "This ElevenLabs API key lacks the Speech to Text permission. Enable it for the key in your ElevenLabs account.",
+  "Errors.ApiKeyRejected": "ElevenLabs rejected the API key.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Cloud transcription via ElevenLabs Scribe with real-time WebSocket streaming"
 }

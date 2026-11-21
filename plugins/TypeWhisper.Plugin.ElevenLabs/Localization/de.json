@@ -2,11 +2,11 @@
   "Settings.ApiKey": "API-Schlüssel",
   "Settings.ApiKeyDescription": "Erforderlich für ElevenLabs-Scribe-Transkription.",
   "Settings.TranscriptionModel": "Transkriptionsmodell",
-  "Settings.ModelDescription": "Scribe v2 wird für die Datei-Transkription verwendet; Live-Diktat nutzt Scribe v2 Realtime.",
+  "Settings.ModelDescription": "Scribe v2 wird für die Datei-Transkription verwendet; Live-Diktat nutzt Scribe v2 Realtime. Scribe v2 Medical ist auf klinisches Vokabular abgestimmt und hat keinen Live-Modus, daher wartet das Diktat auf die vollständige Aufnahme.",
   "Settings.TranscriptionMode": "Transkriptionsmodus",
   "Settings.ModeAutomatic": "Automatisch (Echtzeit mit REST-Fallback)",
   "Settings.ModeRestOnly": "Nur REST (Batch Scribe v2)",
-  "Settings.TranscriptionModeDescription": "Automatisch streamt in Echtzeit, wenn die Live-Transkription es zulässt. Nur REST lädt immer die ganze Aufnahme hoch und umgeht so Echtzeit-Limits. Audioereignisse oder eine Sprecherzahl ungleich 1 verwenden die vollständige Aufnahme.",
+  "Settings.TranscriptionModeDescription": "Automatisch streamt in Echtzeit, wenn die Live-Transkription es zulässt. Nur REST lädt immer die ganze Aufnahme hoch und umgeht so Echtzeit-Limits. Scribe v2 Medical, Audioereignisse oder eine Sprecherzahl ungleich 1 verwenden die vollständige Aufnahme.",
   "Settings.NoVerbatim": "Füllwörter und Versprecher bereinigen",
   "Settings.NoVerbatimDescription": "Gilt für Echtzeit- und REST-Transkription. Zusammen mit Audio-Ereignissen entscheidet ElevenLabs, welche Markierungen bleiben.",
   "Settings.TagAudioEvents": "Audio-Ereignisse wie [Husten] und [Mausklicks] einfügen",
@@ -20,6 +20,9 @@
   "Settings.ApiKeyUnverified": "API-Schlüssel gespeichert, aber der Sprachzugriff konnte nicht geprüft werden: dem Schlüssel fehlt die Berechtigung user_read. Starte eine Diktierung, um den Speech-to-Text-Zugriff zu bestätigen.",
   "Settings.ApiKeyInvalid": "API-Schlüssel ist ungültig.",
   "Settings.ApiKeyUnavailable": "ElevenLabs war zur Prüfung des API-Schlüssels nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+  "Errors.QuotaExceeded": "Dieser ElevenLabs-API-Schlüssel hat sein Guthabenlimit aufgebraucht. Erhöhen Sie das Limit des Schlüssels oder laden Sie in Ihrem ElevenLabs-Konto Guthaben auf.",
+  "Errors.MissingSpeechToTextPermission": "Diesem ElevenLabs-API-Schlüssel fehlt die Berechtigung „Speech to Text“. Aktivieren Sie sie für den Schlüssel in Ihrem ElevenLabs-Konto.",
+  "Errors.ApiKeyRejected": "ElevenLabs hat den API-Schlüssel abgelehnt.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Cloud-Transkription über ElevenLabs Scribe mit Echtzeit-WebSocket-Streaming"
 }
