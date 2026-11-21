@@ -421,7 +421,7 @@
   "Dictation.LoadingModel": "Cargando {0}...",
   "Dictation.LocalModelAcceleration": "Aceleración de modelos locales",
   "Dictation.LockPasteToFocusedField": "Fijar el pegado en el campo de texto inicial",
-  "Dictation.LockPasteToFocusedFieldHint": "Devuelve el foco al campo activo al iniciar el dictado antes de pegar. Si no está disponible, el texto se queda en el portapapeles. Requiere el receptor de accesibilidad que activa el aprendizaje de correcciones por aplicación.",
+  "Dictation.LockPasteToFocusedFieldHint": "Devuelve el foco al campo activo al iniciar el dictado antes de pegar. Si una aplicación no expone ningún campo de texto, solo pega mientras la ventana donde empezó el dictado siga teniendo el foco. Si ninguna de las dos cosas funciona, o un campo de contraseña tiene el foco, el texto se queda en el portapapeles. Requiere el receptor de accesibilidad que activa el aprendizaje de correcciones por aplicación.",
   "Dictation.LockedFieldGone": "El campo de texto activo al iniciar el dictado ya no existe. El texto se copió al portapapeles.",
   "Dictation.Microphone": "Micrófono",
   "Dictation.MicTest": "Prueba del micrófono",
