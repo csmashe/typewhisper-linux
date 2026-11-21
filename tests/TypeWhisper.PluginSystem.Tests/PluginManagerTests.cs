@@ -559,6 +559,95 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
     }
 
     [Fact]
+    public async Task InitializeAsync_DiscoversAndActivatesOffTheCallersContext()
+    {
+        var plugin = new StartupProbePlugin("com.test.startup-probe");
+        SynchronizationContext? discoveryContext = null;
+        var manager = CreateStartupManager(() =>
+        {
+            discoveryContext = SynchronizationContext.Current;
+            return [CreateLoadedPlugin(plugin, PluginNetworkAccess.Local)];
+        });
+        var callerContext = new SynchronizationContext();
+
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(callerContext);
+        Task initialization;
+        try
+        {
+            initialization = manager.InitializeAsync();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        await initialization.WaitAsync(s_outerTimeout);
+
+        Assert.True(manager.IsEnabled(plugin.PluginId));
+        Assert.Null(discoveryContext);
+        Assert.Equal(1, plugin.ActivationCount);
+        Assert.Null(plugin.ActivationContext);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_CapabilityNotificationsDuringThePassRaiseOneStateChange()
+    {
+        var first = new StartupProbePlugin("com.test.startup-first", notifyOnActivate: true);
+        var second = new StartupProbePlugin("com.test.startup-second", notifyOnActivate: true);
+        var manager = CreateStartupManager(() =>
+        [
+            CreateLoadedPlugin(first, PluginNetworkAccess.Local),
+            CreateLoadedPlugin(second, PluginNetworkAccess.Local),
+        ]);
+        var stateChanges = 0;
+        // ReSharper disable once AccessToModifiedClosure -- the counter is deliberately shared with the outer scope: Interlocked-written by the handler, Volatile-read by the assertions.
+        manager.PluginStateChanged += (_, _) => Interlocked.Increment(ref stateChanges);
+
+        await manager.InitializeAsync().WaitAsync(s_outerTimeout);
+
+        Assert.Equal(1, Volatile.Read(ref stateChanges));
+
+        first.NotifyCapabilitiesChanged();
+
+        Assert.Equal(2, Volatile.Read(ref stateChanges));
+    }
+
+    [Fact]
+    public async Task EnablePluginAsync_DuringTheStartupPass_SharesItsActivation()
+    {
+        var plugin = new StartupProbePlugin("com.test.startup-shared", holdActivation: true);
+        var manager = CreateStartupManager(() => [CreateLoadedPlugin(plugin, PluginNetworkAccess.Local)]);
+
+        var initialization = manager.InitializeAsync();
+        await plugin.ActivationStarted.WaitAsync(s_outerTimeout);
+        var enable = manager.EnablePluginAsync(plugin.PluginId);
+        plugin.ReleaseActivation();
+        await Task.WhenAll(initialization, enable).WaitAsync(s_outerTimeout);
+
+        Assert.True(manager.IsEnabled(plugin.PluginId));
+        Assert.Equal(1, plugin.ActivationCount);
+    }
+
+    private PluginManager CreateStartupManager(Func<List<LoadedPlugin>> discover)
+    {
+        _manager = new PluginManager(
+            new PluginLoader(TestPaths.NewTempPath("TypeWhisper.PluginManagerData")),
+            _eventBus,
+            _activeWindow.Object,
+            _profiles.Object,
+            _settings.Object,
+            [],
+            errorLog: _errorLog.Object,
+            pluginShutdownTimeout: s_shutdownTimeout
+        )
+        {
+            DiscoverPlugins = discover,
+        };
+        return _manager;
+    }
+
+    [Fact]
     public async Task Dispose_HangingDeactivation_ReturnsAndShutsDownLaterPlugin()
     {
         var hangingPlugin = new HangingDeactivationPlugin("com.test.hanging");
@@ -746,6 +835,47 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         {
             _host?.NotifyCapabilitiesChanged();
         }
+    }
+
+    private sealed class StartupProbePlugin(
+        string pluginId,
+        bool notifyOnActivate = false,
+        bool holdActivation = false
+    ) : FakeCapabilityPlugin(pluginId)
+    {
+        private readonly TaskCompletionSource _activationStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly TaskCompletionSource _activationRelease = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private IPluginHostServices? _host;
+        private int _activationCount;
+
+        public int ActivationCount => Volatile.Read(ref _activationCount);
+        public SynchronizationContext? ActivationContext { get; private set; }
+        public Task ActivationStarted => _activationStarted.Task;
+
+        public override async Task ActivateAsync(IPluginHostServices host)
+        {
+            Interlocked.Increment(ref _activationCount);
+            ActivationContext = SynchronizationContext.Current;
+            _host = host;
+            _activationStarted.TrySetResult();
+            if (holdActivation)
+            {
+                await _activationRelease.Task;
+            }
+
+            if (notifyOnActivate)
+            {
+                host.NotifyCapabilitiesChanged();
+            }
+        }
+
+        public void ReleaseActivation() => _activationRelease.TrySetResult();
+
+        public void NotifyCapabilitiesChanged() => _host?.NotifyCapabilitiesChanged();
     }
 
     private sealed class FakeAdditionalRole(string ownerPluginId)
