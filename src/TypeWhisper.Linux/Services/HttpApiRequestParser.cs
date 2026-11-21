@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using TypeWhisper.Core.Models;
 
@@ -72,6 +73,8 @@ internal sealed record CorrectionDeleteRequest(string Original);
 
 internal sealed record DictionaryTermDeleteRequest(string Term);
 
+internal sealed record BrowserContextApiRequest(string ClientId, bool Focused, string? Url, string? Title);
+
 /// <summary>
 ///     Hand-rolled multipart/form-data parser for the local HTTP API. Custom
 ///     so the transport-neutral request shape and exact parsing behavior stay
@@ -117,6 +120,80 @@ internal static class HttpApiRequestParser
             headers,
             body
         );
+    }
+
+    private static readonly string[] s_browserContextFields = ["client_id", "focused", "url", "title"];
+
+    /// <summary>
+    ///     Parses a <c>PUT /v1/browser/context</c> body, rejecting unknown or repeated fields so a misspelt
+    ///     field can't silently drop a report.
+    /// </summary>
+    public static BrowserContextApiRequest ParseBrowserContext(ReadOnlyMemory<byte> body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new HttpApiRequestException(400, "Invalid JSON body");
+            }
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator -- the loop throws at the first bad field; a query would hide that early exit.
+            foreach (var field in root.EnumerateObject())
+            {
+                if (!names.Add(field.Name) || !s_browserContextFields.Contains(field.Name, StringComparer.Ordinal))
+                {
+                    throw new HttpApiRequestException(400, "Unknown or duplicate JSON field");
+                }
+            }
+
+            if (
+                !root.TryGetProperty("client_id", out var client)
+                || client.ValueKind != JsonValueKind.String
+                || client.GetString()!.Trim() is not { Length: >= 1 and <= 128 } clientId
+            )
+            {
+                throw new HttpApiRequestException(400, "Missing or invalid client_id");
+            }
+
+            if (
+                !root.TryGetProperty("focused", out var focused)
+                || focused.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+            )
+            {
+                throw new HttpApiRequestException(400, "focused must be a boolean");
+            }
+
+            if (!TryReadOptionalString(root, "url", out var url) || !TryReadOptionalString(root, "title", out var title))
+            {
+                throw new HttpApiRequestException(400, "url and title must be strings or null");
+            }
+
+            return new BrowserContextApiRequest(clientId, focused.GetBoolean(), url, title);
+        }
+        catch (JsonException)
+        {
+            throw new HttpApiRequestException(400, "Invalid JSON body");
+        }
+    }
+
+    private static bool TryReadOptionalString(JsonElement root, string name, out string? value)
+    {
+        value = null;
+        if (!root.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = element.GetString();
+        return true;
     }
 
     internal static async Task<ReadOnlyMemory<byte>> ReadBodyAsync(
