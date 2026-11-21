@@ -1,3 +1,4 @@
+using TypeWhisper.Core.Audio;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
@@ -158,6 +159,74 @@ public sealed class TranscriptionLanguageSelectionInvokerTests
         Assert.Equal("de-DE", TranscriptionLanguageSelectionInvoker.ResolveSupportedTag(null, "de-DE"));
     }
 
+    [Fact]
+    public async Task TranscribeAsync_TransientFailure_RetriesTheUpload()
+    {
+        var role = new FakeRole
+        {
+            Reject = (call, _) => call == 1
+                ? new PluginRequestException("busy", PluginRequestFailureKind.RateLimit, 429, TimeSpan.Zero)
+                : null,
+        };
+
+        var result = await role.TranscribeAsync([], LanguageSelection.Explicit("de"), false, "terms", CancellationToken.None);
+
+        Assert.Equal("text1", result.Text);
+        Assert.Equal(2, role.SingleCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_JobBasedEngine_IsNotReplayed()
+    {
+        var role = new FakeRole
+        {
+            SupportsHostRetry = false,
+            Reject = (_, _) => new PluginRequestException("busy", PluginRequestFailureKind.ServerError, 503, TimeSpan.Zero),
+        };
+
+        await Assert.ThrowsAsync<PluginRequestException>(() =>
+            role.TranscribeAsync([], LanguageSelection.Explicit("de"), false, null, CancellationToken.None));
+
+        Assert.Equal(1, role.SingleCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_TooLarge_WithoutSplittingSupport_SurfacesTheRejection()
+    {
+        var wav = WavEncoder.Encode(new float[16_000 * 4]);
+        var role = new FakeRole
+        {
+            SupportsHostSplitting = false,
+            Reject = (_, _) => new PluginRequestException("too large", PluginRequestFailureKind.RequestTooLarge, 413),
+        };
+
+        await Assert.ThrowsAsync<PluginRequestException>(() =>
+            role.TranscribeAsync(wav, LanguageSelection.Explicit("de"), false, null, CancellationToken.None));
+
+        Assert.Equal(1, role.SingleCalls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_TooLarge_SendsHalvesWithTheSameLanguageAndPrompt()
+    {
+        var wav = WavEncoder.Encode(
+            Enumerable.Range(0, 16_000 * 4).Select(i => 0.5f * MathF.Sin(i * 0.1f)).ToArray());
+        var role = new FakeRole
+        {
+            Reject = (_, upload) => upload.Length == wav.Length
+                ? new PluginRequestException("too large", PluginRequestFailureKind.RequestTooLarge, 413)
+                : null,
+        };
+
+        var result = await role.TranscribeAsync(wav, LanguageSelection.Explicit("de"), ["de"], false, "terms", CancellationToken.None);
+
+        Assert.Equal("text1 text2", result.Text);
+        Assert.Equal(2, role.Uploads.Count);
+        Assert.All(role.Uploads, upload => Assert.Equal("terms", upload.Prompt));
+        Assert.Equal("de", role.LastLanguage);
+        Assert.Equal(wav[44..], role.Uploads.SelectMany(upload => upload.Wav[44..]).ToArray());
+    }
+
     private sealed class FakeRole : ITranscriptionEngineRole
     {
         public string PluginId => "test";
@@ -169,6 +238,8 @@ public sealed class TranscriptionLanguageSelectionInvokerTests
         public bool SupportsTranslation => false;
         public IReadOnlyList<string> SupportedLanguages { get; init; } = [];
         public bool SupportsLanguageHints { get; init; }
+        public bool SupportsHostRetry { get; init; } = true;
+        public bool SupportsHostSplitting { get; init; } = true;
         public IReadOnlyList<string>? LastHints { get; private set; }
         public int SingleCalls { get; private set; }
         public Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
@@ -181,12 +252,18 @@ public sealed class TranscriptionLanguageSelectionInvokerTests
         public string? LastLanguage { get; private set; }
         public void SelectModel(string modelId) { }
 
+        public Func<int, byte[], Exception?>? Reject { get; init; }
+        public List<(byte[] Wav, string? Prompt)> Uploads { get; } = [];
+
         public Task<PluginTranscriptionResult> TranscribeAsync(
             byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
         {
             SingleCalls++;
             LastLanguage = language;
-            return Task.FromResult(new PluginTranscriptionResult("text", language, 0, null));
+            if (Reject?.Invoke(SingleCalls, wavAudio) is { } failure)
+                throw failure;
+            Uploads.Add((wavAudio, prompt));
+            return Task.FromResult(new PluginTranscriptionResult($"text{Uploads.Count}", language, 0, null));
         }
 
         public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)

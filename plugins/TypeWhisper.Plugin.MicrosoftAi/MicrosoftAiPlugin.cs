@@ -145,6 +145,8 @@ public sealed class MicrosoftAiPlugin : ITranscriptionEnginePlugin,
     public string? SelectedModelId => _selectedModelId;
 
     public bool SupportsTranslation => false;
+    // Speaker numbers restart in every request, so joined chunks would mix up the speakers.
+    public bool SupportsHostSplitting => !_speakerDiarizationEnabled;
 
     public bool SupportsStreaming => false;
 

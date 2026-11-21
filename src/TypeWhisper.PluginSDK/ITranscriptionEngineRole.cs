@@ -73,6 +73,22 @@ public interface ITranscriptionEngineRole
     // ReSharper disable once UnusedMember.Global
     bool SupportsLanguageHints => false;
 
+    /// <summary>
+    ///     Whether the host may send a whole batch transcription again after a transient failure (a rate limit,
+    ///     server error or network blip). Engines that create a remote job and then poll it return false: replaying
+    ///     the call would create, and bill, a second job. Default true.
+    /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    bool SupportsHostRetry => true;
+
+    /// <summary>
+    ///     Whether the host may split a recording the provider rejected as too large into chunks, transcribe each
+    ///     separately and join their text. Return false while the output depends on the whole recording, for
+    ///     example speaker labels that each request numbers afresh. Default true.
+    /// </summary>
+    // ReSharper disable once UnusedMember.Global
+    bool SupportsHostSplitting => true;
+
     /// <summary>ISO language codes supported by this engine, or empty for all.</summary>
     IReadOnlyList<string> SupportedLanguages => [];
 

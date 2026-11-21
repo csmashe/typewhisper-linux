@@ -1059,25 +1059,27 @@ public sealed class HttpApiUnixSocketTests
     }
 
     [Theory]
-    [InlineData(PluginRequestFailureKind.Network, HttpStatusCode.ServiceUnavailable, "provider_unavailable")]
-    [InlineData(PluginRequestFailureKind.Timeout, HttpStatusCode.ServiceUnavailable, "provider_unavailable")]
-    [InlineData(PluginRequestFailureKind.ServerError, HttpStatusCode.ServiceUnavailable, "provider_unavailable")]
-    [InlineData(PluginRequestFailureKind.RateLimit, HttpStatusCode.ServiceUnavailable, "provider_rate_limited")]
-    [InlineData(PluginRequestFailureKind.Configuration, HttpStatusCode.ServiceUnavailable, "provider_not_configured")]
-    [InlineData(PluginRequestFailureKind.Authentication, HttpStatusCode.BadGateway, "provider_authentication_failed")]
-    [InlineData(PluginRequestFailureKind.Permission, HttpStatusCode.BadGateway, "provider_authentication_failed")]
-    [InlineData(PluginRequestFailureKind.InvalidRequest, HttpStatusCode.BadGateway, "provider_rejected_request")]
-    [InlineData(PluginRequestFailureKind.RequestTooLarge, HttpStatusCode.BadGateway, "provider_rejected_request")]
-    [InlineData(PluginRequestFailureKind.EmptyResponse, HttpStatusCode.BadGateway, "provider_failed")]
-    [InlineData(PluginRequestFailureKind.Unknown, HttpStatusCode.BadGateway, "provider_failed")]
+    [InlineData(PluginRequestFailureKind.Network, HttpStatusCode.ServiceUnavailable, "provider_unavailable", 3)]
+    [InlineData(PluginRequestFailureKind.Timeout, HttpStatusCode.ServiceUnavailable, "provider_unavailable", 3)]
+    [InlineData(PluginRequestFailureKind.ServerError, HttpStatusCode.ServiceUnavailable, "provider_unavailable", 3)]
+    [InlineData(PluginRequestFailureKind.RateLimit, HttpStatusCode.ServiceUnavailable, "provider_rate_limited", 3)]
+    [InlineData(PluginRequestFailureKind.Configuration, HttpStatusCode.ServiceUnavailable, "provider_not_configured", 1)]
+    [InlineData(PluginRequestFailureKind.Authentication, HttpStatusCode.BadGateway, "provider_authentication_failed", 1)]
+    [InlineData(PluginRequestFailureKind.Permission, HttpStatusCode.BadGateway, "provider_authentication_failed", 1)]
+    [InlineData(PluginRequestFailureKind.InvalidRequest, HttpStatusCode.BadGateway, "provider_rejected_request", 1)]
+    [InlineData(PluginRequestFailureKind.RequestTooLarge, HttpStatusCode.BadGateway, "provider_rejected_request", 1)]
+    [InlineData(PluginRequestFailureKind.EmptyResponse, HttpStatusCode.BadGateway, "provider_failed", 1)]
+    [InlineData(PluginRequestFailureKind.Unknown, HttpStatusCode.BadGateway, "provider_failed", 1)]
     public async Task LocalFileEndpointReportsProviderFailureInsteadOfInternalError(
-        PluginRequestFailureKind kind, HttpStatusCode expectedStatus, string expectedReason)
+        PluginRequestFailureKind kind, HttpStatusCode expectedStatus, string expectedReason, int expectedAttempts)
     {
         var dictionary = new Mock<IDictionaryService>();
         dictionary.Setup(service => service.GetEnabledTerms()).Returns([]);
+        // A zero Retry-After keeps the transient kinds' two retries instant.
+        var engine = new FailingTranscriptionEngine(
+            new PluginRequestException("Network error: Connection refused (127.0.0.1:19991)", kind, retryAfter: TimeSpan.Zero));
         using var fixture = new ApiFixture(
-            transcriptionEngine: new FailingTranscriptionEngine(
-                new PluginRequestException("Network error: Connection refused (127.0.0.1:19991)", kind)),
+            transcriptionEngine: engine,
             dictionary: dictionary.Object,
             audioProbeResult: new ProcessRunOutcome(
                 ProcessRunStatus.Exited, 0, [0, 1, 2, 3], [], ProcessOutputStatus.Complete, null));
@@ -1096,10 +1098,12 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(
             "Network error: Connection refused (127.0.0.1:19991)",
             json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(expectedAttempts, engine.Calls);
     }
 
     private sealed class FailingTranscriptionEngine(Exception failure) : ITranscriptionEngineRole
     {
+        public int Calls { get; private set; }
         public string PluginId => "test-failing";
         public string ProviderId => "test-failing";
         public string ProviderDisplayName => "Test failing";
@@ -1110,8 +1114,11 @@ public sealed class HttpApiUnixSocketTests
 
         public void SelectModel(string modelId) { }
         public Task<PluginTranscriptionResult> TranscribeAsync(
-            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct) =>
-            Task.FromException<PluginTranscriptionResult>(failure);
+            byte[] wavAudio, string? language, bool translate, string? prompt, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromException<PluginTranscriptionResult>(failure);
+        }
     }
 
     [Fact]
