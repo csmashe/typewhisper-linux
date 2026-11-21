@@ -38,7 +38,8 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
     internal OrchestratorCompositionFixture(
         bool soundFeedbackEnabled = false,
         (string Process, string Title)? focusedApp = null,
-        IPostProcessingPipeline? pipeline = null
+        IPostProcessingPipeline? pipeline = null,
+        string? focusedWindowId = null
     )
     {
         IntegrationEnvironment.ResetApplicationState();
@@ -114,7 +115,7 @@ internal sealed class OrchestratorCompositionFixture : IAsyncDisposable
             services.Insert(
                 0,
                 ServiceDescriptor.Singleton<IActiveWindowProvider>(
-                    new ScriptedActiveWindowProvider(focused.Process, focused.Title)
+                    new ScriptedActiveWindowProvider(focused.Process, focused.Title, focusedWindowId)
                 )
             );
         }

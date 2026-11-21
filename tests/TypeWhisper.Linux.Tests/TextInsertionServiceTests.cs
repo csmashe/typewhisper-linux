@@ -249,6 +249,235 @@ public sealed class TextInsertionServiceTests
         Assert.Equal(0, client.GrabFocusCount);
     }
 
+    [Theory]
+    [InlineData(false, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(false, TextInsertionStrategy.DirectTyping)]
+    [InlineData(true, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(true, TextInsertionStrategy.DirectTyping)]
+    public async Task WindowOnlyLock_TargetWindowFocused_Inserts(bool hasFocusedElement, TextInsertionStrategy strategy)
+    {
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = hasFocusedElement ? new AtSpiElementRef("app", "/frame") : null,
+        };
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = "target" };
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", TargetWindowId: "target", Strategy: strategy,
+            LockedFocusTarget: LockedFocusTarget.Window
+        ));
+
+        Assert.Equal(strategy == TextInsertionStrategy.DirectTyping
+            ? InsertionResult.Typed : InsertionResult.Pasted, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+        Assert.Equal(hasFocusedElement ? 1 : 0, client.EligibilityReadCount);
+        Assert.Equal(0, client.FocusReadCount);
+        Assert.Equal(0, client.GrabFocusCount);
+    }
+
+    [Theory]
+    [InlineData(TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(TextInsertionStrategy.DirectTyping)]
+    public async Task WindowOnlyLock_FocusLeftTheTargetWindow_LeavesTextOnClipboard(TextInsertionStrategy strategy)
+    {
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = "target" };
+        platform.OnDelay = _ => platform.ActiveWindowId = "other";
+        var sut = new TextInsertionService(platform, atSpiClient: new FakeAtSpiEventClient());
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", TargetWindowId: "target", Strategy: strategy,
+            LockedFocusTarget: LockedFocusTarget.Window
+        ));
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+        Assert.Equal("dictated", platform.Clipboard);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+    }
+
+    [Theory]
+    [InlineData(true, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(true, TextInsertionStrategy.DirectTyping)]
+    [InlineData(null, TextInsertionStrategy.ClipboardPaste)]
+    [InlineData(null, TextInsertionStrategy.DirectTyping)]
+    public async Task WindowOnlyLock_PasswordFieldFocused_LeavesTextOnClipboard(
+        bool? password, TextInsertionStrategy strategy)
+    {
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = new AtSpiElementRef("app", "/password"),
+            PasswordResult = password,
+        };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: strategy, LockedFocusTarget: LockedFocusTarget.Window
+        ));
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+        Assert.Equal("dictated", platform.Clipboard);
+        Assert.False(platform.PasteSent);
+        Assert.Null(platform.TypedText);
+    }
+
+    [Fact]
+    public async Task WindowOnlyLock_WaylandReportsNoActiveId_LeavesTheWindowCheckToTheCaller()
+    {
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = null };
+        var sut = new TextInsertionService(platform, atSpiClient: new FakeAtSpiEventClient());
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", TargetWindowId: "xwayland-id", Strategy: TextInsertionStrategy.ClipboardPaste,
+            LockedFocusTarget: LockedFocusTarget.Window
+        ));
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+    }
+
+    public enum WindowOnlyCheckRace
+    {
+        ListenerAlreadyStopped,
+        ListenerStopsDuringRoleRead,
+        FieldFocusMovesDuringRoleRead,
+        WindowFocusMovesDuringRoleRead,
+        FieldGainsFocusDuringWindowProbe,
+    }
+
+    [Theory]
+    [InlineData(WindowOnlyCheckRace.ListenerAlreadyStopped)]
+    [InlineData(WindowOnlyCheckRace.ListenerStopsDuringRoleRead)]
+    [InlineData(WindowOnlyCheckRace.FieldFocusMovesDuringRoleRead)]
+    [InlineData(WindowOnlyCheckRace.WindowFocusMovesDuringRoleRead)]
+    [InlineData(WindowOnlyCheckRace.FieldGainsFocusDuringWindowProbe)]
+    public async Task WindowOnlyLock_StateChangesAroundTheCheck_LeaveTextOnClipboard(WindowOnlyCheckRace race)
+    {
+        var platform = new FakeTextInsertionPlatform { ActiveWindowId = "target" };
+        var client = new FakeAtSpiEventClient
+        {
+            IsRunning = race is not WindowOnlyCheckRace.ListenerAlreadyStopped,
+            CurrentFocusedElement = race is WindowOnlyCheckRace.FieldGainsFocusDuringWindowProbe
+                ? null
+                : new AtSpiElementRef("app", "/frame"),
+        };
+        var windowProbes = 0;
+        // The first probe is the window focus step; the second is the lock's final window check.
+        platform.OnGetActiveWindowId = () =>
+        {
+            if (++windowProbes == 2 && race is WindowOnlyCheckRace.FieldGainsFocusDuringWindowProbe)
+            {
+                client.CurrentFocusedElement = new AtSpiElementRef("app", "/password");
+            }
+        };
+        client.OnPasswordRead = () =>
+        {
+            switch (race)
+            {
+                case WindowOnlyCheckRace.ListenerStopsDuringRoleRead:
+                    client.IsRunning = false;
+                    break;
+                case WindowOnlyCheckRace.FieldFocusMovesDuringRoleRead:
+                    client.CurrentFocusedElement = new AtSpiElementRef("app", "/password");
+                    break;
+                case WindowOnlyCheckRace.WindowFocusMovesDuringRoleRead:
+                    platform.ActiveWindowId = "other";
+                    break;
+                case WindowOnlyCheckRace.ListenerAlreadyStopped:
+                case WindowOnlyCheckRace.FieldGainsFocusDuringWindowProbe:
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(race), race, null);
+            }
+        };
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", TargetWindowId: "target", Strategy: TextInsertionStrategy.ClipboardPaste,
+            LockedFocusTarget: LockedFocusTarget.Window
+        ));
+
+        Assert.Equal(InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, sut.LastFailureReason);
+        Assert.False(platform.PasteSent);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task WindowOnlyLock_RechecksCompositorFocusBeforeInput(bool stillFocused)
+    {
+        var checks = 0;
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform, atSpiClient: new FakeAtSpiEventClient());
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: TextInsertionStrategy.ClipboardPaste,
+            LockedFocusTarget: LockedFocusTarget.Window with
+            {
+                IsWindowStillFocused = () =>
+                {
+                    checks++;
+                    return Task.FromResult(stillFocused);
+                },
+            }
+        ));
+
+        Assert.Equal(1, checks);
+        Assert.Equal(stillFocused ? InsertionResult.Pasted : InsertionResult.CopiedToClipboard, result);
+        Assert.Equal(stillFocused, platform.PasteSent);
+        Assert.Equal(stillFocused ? InsertionFailureReason.None : InsertionFailureReason.LockedFieldUnavailable,
+            sut.LastFailureReason);
+    }
+
+    [Fact]
+    public async Task WindowOnlyLock_ConsentWithdrawnDuringPasswordCheck_InsertsAsIfUnlocked()
+    {
+        var consent = true;
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = new AtSpiElementRef("app", "/password"),
+            PasswordResult = true,
+            OnPasswordRead = () => consent = false,
+        };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform, atSpiClient: client, learningConsent: () => consent);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "dictated", Strategy: TextInsertionStrategy.ClipboardPaste, LockedFocusTarget: LockedFocusTarget.Window
+        ));
+
+        Assert.Equal(InsertionResult.Pasted, result);
+        Assert.Equal(InsertionFailureReason.None, sut.LastFailureReason);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(null, false)]
+    public async Task WindowOnlyLock_EnterOnly_SendsEnterOnlyOutsidePasswordFields(bool? password, bool expectEnter)
+    {
+        var client = new FakeAtSpiEventClient
+        {
+            CurrentFocusedElement = new AtSpiElementRef("app", "/field"),
+            PasswordResult = password,
+        };
+        var platform = new FakeTextInsertionPlatform();
+        var sut = new TextInsertionService(platform, atSpiClient: client);
+
+        var result = await sut.InsertTextAsync(new TextInsertionRequest(
+            "", AutoEnter: true, LockedFocusTarget: LockedFocusTarget.Window
+        ));
+
+        Assert.Equal(expectEnter ? InsertionResult.ActionHandled : InsertionResult.NoText, result);
+        Assert.Equal(expectEnter, platform.EnterSent);
+        Assert.Equal(expectEnter ? InsertionFailureReason.None : InsertionFailureReason.LockedFieldUnavailable,
+            sut.LastFailureReason);
+    }
+
     [Fact]
     public async Task EnterOnly_ConsentWithdrawnDuringRestore_StillSendsEnter()
     {
@@ -4725,7 +4954,7 @@ public sealed class TextInsertionServiceTests
         // Every DelayAsync is recorded so tests can assert which waits ran
         // (e.g. the 500 ms restore floor must be skipped on a confirmed paste).
         public List<TimeSpan> Delays { get; } = [];
-        public Action<TimeSpan>? OnDelay { get; init; }
+        public Action<TimeSpan>? OnDelay { get; set; }
         public Func<TimeSpan, Task>? DelayOverride { get; init; }
         public Action? OnEnterSent { get; init; }
         public Action? OnActivateWindow { get; init; }
@@ -4798,8 +5027,11 @@ public sealed class TextInsertionServiceTests
             return DelayOverride?.Invoke(delay) ?? Task.CompletedTask;
         }
 
+        public Action? OnGetActiveWindowId { get; set; }
+
         public string? GetActiveWindowId()
         {
+            OnGetActiveWindowId?.Invoke();
             return ActiveWindowId;
         }
 
@@ -4972,9 +5204,9 @@ public sealed class TextInsertionServiceTests
 
         public event Action<AtSpiElementRef>? TextChanged;
 
-        public AtSpiElementRef? CurrentFocusedElement { get; init; }
+        public AtSpiElementRef? CurrentFocusedElement { get; set; }
 
-        public bool IsRunning => true;
+        public bool IsRunning { get; set; } = true;
 
         public Dictionary<AtSpiElementRef, string?> TextByElement { get; } = [];
         public List<(AtSpiElementRef Element, int MaxLength)> TextReadRequests { get; } = [];
@@ -5044,7 +5276,7 @@ public sealed class TextInsertionServiceTests
         public int EligibilityReadCount { get; private set; }
         public Action? OnGrabFocus { get; set; }
         public Action? OnFocusRead { get; init; }
-        public Action? OnPasswordRead { get; init; }
+        public Action? OnPasswordRead { get; set; }
 
         public Task<bool?> IsElementFocusedAsync(AtSpiElementRef element)
         {

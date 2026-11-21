@@ -421,7 +421,7 @@
   "Dictation.LoadingModel": "{0} wird geladen...",
   "Dictation.LocalModelAcceleration": "Lokale Modellbeschleunigung",
   "Dictation.LockPasteToFocusedField": "Einfügen auf das ursprüngliche Textfeld beschränken",
-  "Dictation.LockPasteToFocusedFieldHint": "Stellt vor dem Einfügen den Fokus des Feldes wieder her, das beim Start des Diktats aktiv war. Ist es nicht mehr verfügbar, bleibt der Text in der Zwischenablage. Benötigt den Bedienungshilfen-Listener, den das Lernen von Korrekturen pro Zielanwendung einschaltet.",
+  "Dictation.LockPasteToFocusedFieldHint": "Stellt vor dem Einfügen den Fokus des Feldes wieder her, das beim Start des Diktats aktiv war. Zeigt eine Anwendung kein Textfeld an, wird nur eingefügt, solange das Fenster, in dem das Diktat begann, noch den Fokus hat. Klappt beides nicht oder hat ein Passwortfeld den Fokus, bleibt der Text in der Zwischenablage. Benötigt den Bedienungshilfen-Listener, den das Lernen von Korrekturen pro Zielanwendung einschaltet.",
   "Dictation.LockedFieldGone": "Das beim Start des Diktats aktive Textfeld ist nicht mehr da. Der Text wurde in die Zwischenablage kopiert.",
   "Dictation.Microphone": "Mikrofon",
   "Dictation.MicTest": "Mikrofontest",

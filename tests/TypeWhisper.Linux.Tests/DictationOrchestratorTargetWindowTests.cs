@@ -108,6 +108,63 @@ public sealed class DictationOrchestratorTargetWindowTests
     [Theory]
     [InlineData("{aaa}", true)]
     [InlineData("{bbb}", false)]
+    public async Task IsTargetWindowStillFocused_WindowOnlyLock_ChecksTheWindow(string currentId, bool expected)
+    {
+        var (sut, _) = Create(s_editor with { WindowId = currentId });
+        var context = Context(null, s_editor) with { LockedFocusField = LockedFocusTarget.Window };
+
+        Assert.Equal(expected, await IsStillFocusedAsync(sut, context));
+    }
+
+    [Fact]
+    public void ResolveLockedFocusForDelivery_UnverifiableWindow_RefusesTheWindowOnlyLock()
+    {
+        var (sut, _) = Create(s_editor);
+        var context = Context(null, s_editor with { Source = "xdotool" }) with
+        {
+            IsWaylandSession = true,
+            LockedFocusField = LockedFocusTarget.Window,
+        };
+
+        Assert.Same(LockedFocusTarget.Refused, sut.ResolveLockedFocusForDelivery(context));
+    }
+
+    [Theory]
+    [InlineData("{aaa}", true)]
+    [InlineData("{bbb}", false)]
+    public async Task ResolveLockedFocusForDelivery_WindowOnlyLock_CarriesTheCompositorCheck(string currentId, bool expected)
+    {
+        var (sut, _) = Create(s_editor with { WindowId = currentId });
+        var context = Context(null, s_editor) with
+        {
+            IsWaylandSession = true,
+            LockedFocusField = LockedFocusTarget.Window,
+        };
+
+        var resolved = sut.ResolveLockedFocusForDelivery(context);
+
+        Assert.NotNull(resolved);
+        Assert.True(resolved.WindowOnly);
+        var isWindowStillFocused = Assert.IsType<Func<Task<bool>>>(resolved.IsWindowStillFocused);
+        Assert.Equal(expected, await isWindowStillFocused());
+    }
+
+    [Fact]
+    public async Task ResolveLockedFocusForDelivery_X11WindowOnlyLock_FailsClosedWhenTheActiveIdIsUnreadable()
+    {
+        var (sut, _) = Create(s_editor);
+        var context = Context("12345", s_editor) with { LockedFocusField = LockedFocusTarget.Window };
+
+        var resolved = sut.ResolveLockedFocusForDelivery(context);
+
+        Assert.NotNull(resolved);
+        var isWindowStillFocused = Assert.IsType<Func<Task<bool>>>(resolved.IsWindowStillFocused);
+        Assert.False(await isWindowStillFocused());
+    }
+
+    [Theory]
+    [InlineData("{aaa}", true)]
+    [InlineData("{bbb}", false)]
     public async Task IsVerifiedTargetFocused_GatesTheInitialSelectionProbe(string currentId, bool expected)
     {
         var (sut, _) = Create(s_editor with { WindowId = currentId });
