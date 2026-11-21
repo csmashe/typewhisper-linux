@@ -21,10 +21,26 @@ public sealed class GroqPlugin
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.groq.com/openai";
+    private const string FetchedLlmModelsSetting = "fetchedLlmModels";
+    private const string FetchedLlmModelsAtSetting = "fetchedLlmModelsAtUtc";
+
+    // Groq's named replacement for the retired Llama models.
+    internal const string DefaultLlmModelId = "openai/gpt-oss-120b";
+
+    internal static readonly TimeSpan s_llmModelRefreshInterval = TimeSpan.FromHours(24);
+
+    internal static readonly TimeSpan s_llmModelRefreshRetryDelay = TimeSpan.FromMinutes(15);
+
     private readonly HttpClient _httpClient;
+    private readonly TimeProvider _clock;
+    private readonly bool _refreshLlmModelsAutomatically;
+    private readonly Lock _llmModelsLock = new();
     private IPluginHostServices? _host;
     private string? _selectedApiModelName;
+    private string? _preferredLlmModelId;
     private List<FetchedLlmModel> _fetchedLlmModels = [];
+    private DateTimeOffset? _lastLlmModelRefreshAttemptAt;
+    private CancellationTokenSource? _llmModelRefreshCts;
     private bool _streamResponses = true;
 
     // Whisper language tokens (openai/whisper tokenizer.py LANGUAGES); both Groq models are Whisper Large V3 builds.
@@ -43,21 +59,27 @@ public sealed class GroqPlugin
         ),
     ];
 
+    // Groq retired Llama 3.3 70B, Llama 3.1 8B and Kimi K2 for free and developer accounts.
+    // The default comes first: the host takes SupportedModels[0] when no model is chosen.
     private static readonly IReadOnlyList<PluginModelInfo> s_fallbackLlmModels =
     [
-        new("llama-3.3-70b-versatile", "Llama 3.3 70B"),
-        new("llama-3.1-8b-instant", "Llama 3.1 8B"),
-        new("openai/gpt-oss-120b", "GPT-OSS 120B"),
+        new(DefaultLlmModelId, "GPT-OSS 120B"),
         new("openai/gpt-oss-20b", "GPT-OSS 20B"),
-        new("moonshotai/kimi-k2-instruct-0905", "Kimi K2"),
+        new("qwen/qwen3.8-27b", "Qwen 3.8 27B"),
     ];
 
     public GroqPlugin()
-        : this(CreateHttpClient()) { }
+        : this(CreateHttpClient(), refreshLlmModelsAutomatically: true) { }
 
-    internal GroqPlugin(HttpClient httpClient)
+    internal GroqPlugin(
+        HttpClient httpClient,
+        bool refreshLlmModelsAutomatically = false,
+        TimeProvider? clock = null
+    )
     {
         _httpClient = httpClient;
+        _refreshLlmModelsAutomatically = refreshLlmModelsAutomatically;
+        _clock = clock ?? TimeProvider.System;
     }
 
     public string PluginId => "com.typewhisper.groq";
@@ -70,10 +92,12 @@ public sealed class GroqPlugin
         ApiKey = await host.LoadSecretAsync("api-key");
         SelectedModelId =
             host.GetSetting<string>("selectedModel") ?? s_transcriptionModelEntries[0].Id;
-        SelectedLlmModelId = host.GetSetting<string>("selectedLlmModel");
+        _preferredLlmModelId = host.GetSetting<string>("selectedLlmModel");
         _fetchedLlmModels = NormalizeFetchedLlmModels(
-            host.GetSetting<List<FetchedLlmModel>>("fetchedLlmModels") ?? []
+            host.GetSetting<List<FetchedLlmModel>>(FetchedLlmModelsSetting) ?? []
         );
+        // A list saved before fetch dates were stored counts as stale and is refreshed below.
+        FetchedLlmModelsAt = LoadFetchedLlmModelsAt(host);
         _streamResponses = host.GetSetting<bool?>(LlmStreamingSettings.StreamResponsesSettingKey) ?? true;
 
         var selectedTranscription =
@@ -84,10 +108,12 @@ public sealed class GroqPlugin
 
         NormalizeSelectedLlmModel();
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
+        StartLlmModelRefreshIfStale(replaceInFlight: true);
     }
 
     public Task DeactivateAsync()
     {
+        CancelLlmModelRefresh();
         _host = null;
         return Task.CompletedTask;
     }
@@ -185,6 +211,7 @@ public sealed class GroqPlugin
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
+        StartLlmModelRefreshIfStale();
         var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
         return await OpenAiChatHelper.SendChatCompletionAsync(
             _httpClient,
@@ -214,6 +241,7 @@ public sealed class GroqPlugin
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.ApiKeyNotConfigured"), PluginRequestFailureKind.Configuration);
 
+        StartLlmModelRefreshIfStale();
         var modelId = ResolveLlmModelId(string.IsNullOrWhiteSpace(model) ? null : model);
         var source = OpenAiChatHelper.SendChatCompletionStreamingAsync(
             _httpClient,
@@ -273,38 +301,139 @@ public sealed class GroqPlugin
 
             if (changed)
             {
-                _fetchedLlmModels = [];
-                SelectedLlmModelId = null;
-                _host.SetSetting("fetchedLlmModels", _fetchedLlmModels);
-                _host.SetSetting("selectedLlmModel", SelectedLlmModelId);
-                NormalizeSelectedLlmModel();
+                // A list fetched with another key can offer models this account cannot use.
+                CancelLlmModelRefresh();
+                lock (_llmModelsLock)
+                {
+                    _fetchedLlmModels = [];
+                    FetchedLlmModelsAt = null;
+                    _preferredLlmModelId = null;
+                    _host.SetSetting(FetchedLlmModelsSetting, _fetchedLlmModels);
+                    _host.SetSetting(FetchedLlmModelsAtSetting, FetchedLlmModelsAt);
+                    _host.SetSetting("selectedLlmModel", _preferredLlmModelId);
+                    NormalizeSelectedLlmModel();
+                }
 
                 if (wasConfigured != IsConfigured)
                     _host.NotifyCapabilitiesChanged();
+                StartLlmModelRefreshIfStale(replaceInFlight: true);
             }
         }
     }
 
     internal void SelectLlmModel(string modelId)
     {
+        _preferredLlmModelId = modelId;
         SelectedLlmModelId = modelId;
         _host?.SetSetting("selectedLlmModel", modelId);
     }
 
+    internal DateTimeOffset? FetchedLlmModelsAt { get; private set; }
+    internal Task LlmModelRefreshTask { get; private set; } = Task.CompletedTask;
+
     internal void SetFetchedLlmModels(List<FetchedLlmModel> models)
     {
-        _fetchedLlmModels = NormalizeFetchedLlmModels(models);
+        lock (_llmModelsLock)
+            ApplyFetchedLlmModels(models);
 
-        _host?.SetSetting("fetchedLlmModels", _fetchedLlmModels);
-        NormalizeSelectedLlmModel();
         _host?.NotifyCapabilitiesChanged();
     }
 
-    internal async Task<List<FetchedLlmModel>?> FetchLlmModelsAsync(CancellationToken ct = default)
+    // Callers hold _llmModelsLock.
+    private void ApplyFetchedLlmModels(List<FetchedLlmModel> models)
+    {
+        _fetchedLlmModels = NormalizeFetchedLlmModels(models);
+        FetchedLlmModelsAt = _clock.GetUtcNow();
+        _host?.SetSetting(FetchedLlmModelsSetting, _fetchedLlmModels);
+        _host?.SetSetting(FetchedLlmModelsAtSetting, FetchedLlmModelsAt);
+        NormalizeSelectedLlmModel();
+    }
+
+    internal bool IsLlmModelListStale(DateTimeOffset now) =>
+        FetchedLlmModelsAt is not { } fetchedAt
+        || fetchedAt > now
+        || now - fetchedAt >= s_llmModelRefreshInterval;
+
+    // Groq retires models at short notice; a daily reload drops them instead of every request
+    // failing with HTTP 404. Requests start a refresh only when none runs and the retry delay passed.
+    private void StartLlmModelRefreshIfStale(bool replaceInFlight = false)
+    {
+        lock (_llmModelsLock)
+        {
+            var now = _clock.GetUtcNow();
+            if (!_refreshLlmModelsAutomatically || _host is null || ApiKey is not { } apiKey
+                || !IsLlmModelListStale(now))
+                return;
+
+            if (!replaceInFlight
+                && (!LlmModelRefreshTask.IsCompleted
+                    || _lastLlmModelRefreshAttemptAt is { } lastAttempt
+                    && lastAttempt <= now
+                    && now - lastAttempt < s_llmModelRefreshRetryDelay))
+                return;
+
+            CancelLlmModelRefresh();
+            var cts = new CancellationTokenSource();
+            // Read the token before publishing the source: a cancellation disposes it.
+            var token = cts.Token;
+            _llmModelRefreshCts = cts;
+            _lastLlmModelRefreshAttemptAt = now;
+            LlmModelRefreshTask = Task.Run(() => RefreshLlmModelsInBackgroundAsync(apiKey, token), token);
+        }
+    }
+
+    private async Task RefreshLlmModelsInBackgroundAsync(string apiKey, CancellationToken ct)
+    {
+        try
+        {
+            var models = await FetchLlmModelsAsync(apiKey, ct);
+            if (models is not { Count: > 0 })
+            {
+                _host?.Log(PluginLogLevel.Warning, "Groq returned no usable model list. Keeping the current list.");
+                return;
+            }
+
+            IPluginHostServices? host;
+            lock (_llmModelsLock)
+            {
+                // Drop a result that arrives after deactivation or a key change.
+                host = _host;
+                if (ct.IsCancellationRequested || host is null
+                    || !string.Equals(ApiKey, apiKey, StringComparison.Ordinal))
+                    return;
+
+                ApplyFetchedLlmModels(models);
+            }
+
+            host.NotifyCapabilitiesChanged();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _host?.Log(PluginLogLevel.Warning, $"Groq model refresh failed: {ex.GetType().Name}");
+        }
+    }
+
+    private void CancelLlmModelRefresh()
+    {
+        var cts = Interlocked.Exchange(ref _llmModelRefreshCts, null);
+        if (cts is null)
+            return;
+
+        cts.Cancel();
+        cts.Dispose();
+    }
+
+    internal Task<List<FetchedLlmModel>?> FetchLlmModelsAsync(CancellationToken ct = default) =>
+        FetchLlmModelsAsync(ApiKey, ct);
+
+    private async Task<List<FetchedLlmModel>?> FetchLlmModelsAsync(string? apiKey, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/v1/models");
-        if (!string.IsNullOrEmpty(ApiKey))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+        if (!string.IsNullOrEmpty(apiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         try
         {
@@ -383,33 +512,45 @@ public sealed class GroqPlugin
             ? requestedModel
             : SelectedLlmModelId ?? SupportedModels[0].Id;
 
+    // A saved model the list no longer offers falls back to the default, but stays saved
+    // so a later list that offers it applies it again.
     private void NormalizeSelectedLlmModel()
     {
-        var availableIds = new HashSet<string>(
-            SupportedModels.Select(m => m.Id),
-            StringComparer.OrdinalIgnoreCase
-        );
-        if (SelectedLlmModelId is not null && availableIds.Contains(SelectedLlmModelId))
-            return;
-
-        SelectedLlmModelId = (SupportedModels.Count > 0 ? SupportedModels[0] : null)?.Id;
-        if (SelectedLlmModelId is not null)
-            _host?.SetSetting("selectedLlmModel", SelectedLlmModelId);
+        var models = SupportedModels;
+        SelectedLlmModelId = models
+            .FirstOrDefault(m => string.Equals(m.Id, _preferredLlmModelId, StringComparison.OrdinalIgnoreCase))?.Id
+            ?? (models.Count > 0 ? models[0].Id : null);
     }
 
+    // Default first: the host takes SupportedModels[0] when no model is chosen.
     private static List<FetchedLlmModel> NormalizeFetchedLlmModels(
         IEnumerable<FetchedLlmModel> models
     ) =>
         models
             .Where(m => !string.IsNullOrWhiteSpace(m.Id) && IsLlmModel(m.Id))
             .DistinctBy(m => m.Id)
-            .OrderBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(m => !string.Equals(m.Id, DefaultLlmModelId, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private static DateTimeOffset? LoadFetchedLlmModelsAt(IPluginHostServices host)
+    {
+        try
+        {
+            var value = host.GetSetting<DateTimeOffset?>(FetchedLlmModelsAtSetting);
+            return value == default(DateTimeOffset) ? null : value?.ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            return null;
+        }
+    }
 
     private static HttpClient CreateHttpClient() => new() { Timeout = TimeSpan.FromSeconds(30) };
 
     public void Dispose()
     {
+        CancelLlmModelRefresh();
         _httpClient.Dispose();
     }
 
@@ -504,6 +645,7 @@ public sealed class GroqPlugin
         if (!valid)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
+        CancelLlmModelRefresh();
         var models = await FetchLlmModelsAsync(ct);
         // ReSharper disable once InvertIf -- subjective nesting-style suggestion; kept as-is.
         if (models is not null)
