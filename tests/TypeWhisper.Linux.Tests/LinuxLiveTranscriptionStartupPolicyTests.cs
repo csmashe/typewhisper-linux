@@ -15,7 +15,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
             settings,
-            new FakeTranscriptionEnginePlugin { SupportsModelDownload = true });
+            new FakeTranscriptionEnginePlugin { SupportsModelDownload = true }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.None, mode);
     }
@@ -25,7 +25,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
     {
         var settings = AppSettings.Default with { LiveTranscriptionEnabled = true };
 
-        var mode = LinuxLiveTranscriptionStartupPolicy.Select(settings, plugin: null);
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(settings, plugin: null, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.None, mode);
     }
@@ -37,7 +37,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
 
         var mode = LinuxLiveTranscriptionStartupPolicy.Select(
             settings,
-            new FakeTranscriptionEnginePlugin { SupportsModelDownload = true });
+            new FakeTranscriptionEnginePlugin { SupportsModelDownload = true }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.Polling, mode);
     }
@@ -57,7 +57,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = false,
                 SupportsStreaming = false,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.None, mode);
     }
@@ -77,7 +77,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = false,
                 SupportsStreaming = false,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.Polling, mode);
     }
@@ -100,7 +100,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = false,
                 SupportsStreaming = true,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.None, mode);
     }
@@ -120,7 +120,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = false,
                 SupportsStreaming = true,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.Streaming, mode);
     }
@@ -140,7 +140,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = true,
                 SupportsStreaming = true,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.Polling, mode);
     }
@@ -161,7 +161,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = false,
                 SupportsStreaming = false,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.Polling, mode);
     }
@@ -184,7 +184,7 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = true,
                 SupportsStreaming = true,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.Streaming, mode);
     }
@@ -205,15 +205,80 @@ public sealed class LinuxLiveTranscriptionStartupPolicyTests
             {
                 SupportsModelDownload = true,
                 SupportsStreaming = true,
-            });
+            }, prompt: null);
 
         Assert.Equal(LiveTranscriptionMode.None, mode);
+    }
+
+    [Theory]
+    [InlineData(true, false, nameof(LiveTranscriptionMode.Streaming))]
+    [InlineData(true, true, nameof(LiveTranscriptionMode.Streaming))]
+    [InlineData(false, true, nameof(LiveTranscriptionMode.StreamingPreview))]
+    // A prompt the stream can neither carry nor preview leaves the cloud engine without live text.
+    [InlineData(false, false, nameof(LiveTranscriptionMode.None))]
+    public void Select_AsksThePluginAboutTheDictationPrompt(
+        bool streamsPrompt,
+        bool previewsPrompt,
+        string expected)
+    {
+        var settings = AppSettings.Default with
+        {
+            LiveTranscriptionEnabled = true,
+            LiveTranscriptionStreamingEnabled = true,
+        };
+        var plugin = new FakeTranscriptionEnginePlugin
+        {
+            SupportsStreaming = true,
+            StreamsPrompt = streamsPrompt,
+            PreviewsPrompt = previewsPrompt,
+        };
+
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(settings, plugin, "terms");
+
+        Assert.Equal(expected, mode.ToString());
+        Assert.Equal(["terms"], plugin.AskedPrompts.Distinct());
+    }
+
+    [Fact]
+    public void Select_WhenPreviewOnlyStreamingIsOptedOut_FallsThroughToPolling()
+    {
+        var settings = AppSettings.Default with
+        {
+            LiveTranscriptionEnabled = true,
+            LiveTranscriptionStreamingEnabled = false,
+        };
+        var plugin = new FakeTranscriptionEnginePlugin
+        {
+            SupportsModelDownload = true,
+            SupportsStreaming = true,
+            StreamsPrompt = false,
+            PreviewsPrompt = true,
+        };
+
+        var mode = LinuxLiveTranscriptionStartupPolicy.Select(settings, plugin, "terms");
+
+        Assert.Equal(LiveTranscriptionMode.Polling, mode);
     }
 
     private sealed class FakeTranscriptionEnginePlugin : ITranscriptionEnginePlugin
     {
         public bool SupportsModelDownload { get; init; }
         public bool SupportsStreaming { get; init; }
+        public bool StreamsPrompt { get; init; } = true;
+        public bool PreviewsPrompt { get; init; }
+        public List<string?> AskedPrompts { get; } = [];
+
+        public bool SupportsStreamingForPrompt(string? prompt)
+        {
+            AskedPrompts.Add(prompt);
+            return SupportsStreaming && StreamsPrompt;
+        }
+
+        public bool SupportsStreamingPreviewForPrompt(string? prompt)
+        {
+            AskedPrompts.Add(prompt);
+            return PreviewsPrompt;
+        }
 
         public string PluginId => "com.test.fake";
         public string PluginName => "Fake";

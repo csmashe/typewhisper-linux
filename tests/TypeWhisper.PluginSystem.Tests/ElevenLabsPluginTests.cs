@@ -137,6 +137,25 @@ public class ElevenLabsPluginTests
         Assert.Equal(expected, sut.SupportsStreaming);
     }
 
+    // Realtime ignores the prompt, so keyterms the REST request would send make the stream a preview.
+    [Theory]
+    [InlineData("automatic", true, true, false, true)]
+    [InlineData("automatic", true, false, true, false)]
+    [InlineData("automatic", false, true, true, false)]
+    [InlineData("restOnly", true, true, false, false)]
+    public async Task StreamingForPrompt_PreviewsWhenTheRestRequestWouldSendKeyterms(
+        string mode, bool useDictionaryTerms, bool withTerms, bool streams, bool previews)
+    {
+        using var sut = new ElevenLabsPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+        await sut.SetSettingValueAsync("transcriptionMode", mode);
+        await sut.SetSettingValueAsync("useDictionaryTerms", useDictionaryTerms ? "true" : "false");
+        var prompt = withTerms ? PluginTranscriptionPrompt.Encode(null, ["Kubernetes"]) : null;
+
+        Assert.Equal(streams, sut.SupportsStreamingForPrompt(prompt));
+        Assert.Equal(previews, sut.SupportsStreamingPreviewForPrompt(prompt));
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized,
         """{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission user_read to execute this operation."}}""",

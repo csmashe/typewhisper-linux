@@ -205,6 +205,11 @@ public sealed class ElevenLabsPlugin
     public bool SupportsStructuredDictionaryTerms => UseDictionaryTerms;
     // Audio events and speaker hints are REST-only, so automatic mode uses the complete recording when set; the host reads this live at recording start.
     public bool SupportsStreaming => TranscriptionMode == ElevenLabsTranscriptionMode.Automatic && !TagAudioEvents && SpeakerCount == DefaultSpeakerCount;
+    // A stream would drop the keyterms the REST request sends, so it then only previews.
+    public bool SupportsStreamingForPrompt(string? prompt) =>
+        SupportsStreaming && ExtractKeyterms(prompt, UseDictionaryTerms).Count == 0;
+    public bool SupportsStreamingPreviewForPrompt(string? prompt) =>
+        SupportsStreaming && !SupportsStreamingForPrompt(prompt);
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
     public IReadOnlyList<string> SupportedLanguages => s_languages;
