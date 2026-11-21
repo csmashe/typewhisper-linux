@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Helpers;
 using TypeWhisper.PluginSDK.Models;
@@ -18,31 +17,21 @@ public sealed partial class VoxtralPlugin
     private const string ProviderDefaultTemperatureMode = "provider-default";
     private const string CustomTemperatureMode = "custom";
     private const double DefaultCustomTemperature = 0.3;
+    private const string ReasoningEffortSettingKey = "reasoningEffort";
+    private const string FastestReasoningEffort = "fastest";
+    private const string HighReasoningEffort = "high";
 
     private const int MaxCatalogModels = 1000;
-    private const int MaxModelIdLength = 256;
-
-    private const string DefaultTextModelId = "mistral-small-latest";
-
-    private static readonly IReadOnlyList<PluginModelInfo> s_fallbackTextModels =
-    [
-        new(DefaultTextModelId, "Mistral Small"),
-        new("mistral-medium-latest", "Mistral Medium"),
-        new("mistral-large-latest", "Mistral Large"),
-    ];
-
-    private static readonly Dictionary<string, string> s_knownTextDisplayNames = s_fallbackTextModels
-        .ToDictionary(m => m.Id, m => m.DisplayName, StringComparer.Ordinal);
-
-    private static readonly Dictionary<string, int> s_knownTextModelRanks = s_fallbackTextModels
-        .Select((m, rank) => (m.Id, rank))
-        .ToDictionary(m => m.Id, m => m.rank, StringComparer.Ordinal);
 
     private readonly Lock _catalogLock = new();
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
     private bool _streamResponses = true;
     private string _temperatureMode = ProviderDefaultTemperatureMode;
     private double _temperature = DefaultCustomTemperature;
+    private string _reasoningEffort = FastestReasoningEffort;
+    private IReadOnlyDictionary<string, string> _textAliases = MistralCatalog.DefaultTextAliases;
+    // Whether the account's catalog, not the default lineup, supplied the aliases.
+    private bool _textCatalogValidated;
 
     // Bumped on key change or deactivation so an in-flight refresh cannot commit.
     private long _catalogGeneration;
@@ -50,7 +39,7 @@ public sealed partial class VoxtralPlugin
     public string ProviderName => "Mistral";
     public bool IsAvailable => IsConfigured;
 
-    public IReadOnlyList<PluginModelInfo> SupportedModels { get; private set; } = s_fallbackTextModels;
+    public IReadOnlyList<PluginModelInfo> SupportedModels { get; private set; } = FallbackTextModels();
 
     // Discovery is bounded as a whole, not only by the HTTP client timeout.
     internal TimeSpan ModelDiscoveryDeadline { get; init; } = TimeSpan.FromSeconds(60);
@@ -62,6 +51,7 @@ public sealed partial class VoxtralPlugin
         _temperature = host.GetSetting<double?>(TemperatureSettingKey) is { } saved && IsTemperature(saved)
             ? saved
             : DefaultCustomTemperature;
+        _reasoningEffort = NormalizeReasoningEffort(host.GetSetting<string>(ReasoningEffortSettingKey));
         lock (_catalogLock)
             SetTextCatalog(LoadSavedTextCatalog(host, ApiKey));
     }
@@ -121,26 +111,72 @@ public sealed partial class VoxtralPlugin
             yield return delta;
     }
 
-    private string ResolveTextModelId(string? model) =>
-        string.IsNullOrWhiteSpace(model) ? SupportedModels[0].Id : model.Trim();
+    // A workflow or saved selection may name an alias or a retired model; send the listed one.
+    // An unknown model goes as given, so Mistral decides whether the account can use it.
+    private string ResolveTextModelId(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return SupportedModels[0].Id;
+        var (listed, aliases, _) = TextCatalogSnapshot();
+        return MistralCatalog.Resolve(model, listed, aliases) ?? model.Trim();
+    }
 
-    // Mistral rejects prompt + max_tokens beyond the context, so only Magistral gets the reasoning reserve.
-    private OpenAiChatRequestOptions CreateChatRequestOptions(string modelId, string systemPrompt, string userText) =>
-        new()
+    /// <summary>
+    ///     The listed model a saved selection now names, or null. The host may save the answer, so
+    ///     until the account's catalog is validated only this plugin's former default IDs move.
+    /// </summary>
+    public string? ResolveSavedModelId(string modelId)
+    {
+        var (listed, aliases, validated) = TextCatalogSnapshot();
+        if (validated)
+            return MistralCatalog.Resolve(modelId, listed, aliases);
+
+        var raw = modelId.Trim();
+        if (listed.Contains(raw))
+            return raw;
+        return MistralCatalog.FormerDefaultTextModels.TryGetValue(raw, out var id) && listed.Contains(id) ? id : null;
+    }
+
+    // One consistent view of the fields SetTextCatalog replaces together.
+    private (string[] Listed, IReadOnlyDictionary<string, string> Aliases, bool Validated) TextCatalogSnapshot()
+    {
+        lock (_catalogLock)
+            return (SupportedModels.Select(m => m.Id).ToArray(), _textAliases, _textCatalogValidated);
+    }
+
+    /// <summary>The level for the resolved <paramref name="modelId" />; null for models that reject it or unvalidated aliases.</summary>
+    internal string? ReasoningEffortFor(string modelId)
+    {
+        var efforts = MistralCatalog.ReasoningEfforts(modelId);
+        if (efforts.Length == 0)
+            return null;
+        return _reasoningEffort == HighReasoningEffort && efforts.Contains(HighReasoningEffort)
+            ? HighReasoningEffort
+            : efforts[0];
+    }
+
+    // Mistral rejects prompt + max_tokens beyond the context, so only models that reason get the reserve.
+    private OpenAiChatRequestOptions CreateChatRequestOptions(string modelId, string systemPrompt, string userText)
+    {
+        var effort = ReasoningEffortFor(modelId);
+        var reasons = effort is not (null or "none") || modelId.StartsWith("magistral-", StringComparison.Ordinal);
+        return new OpenAiChatRequestOptions
         {
             ProviderName = ProviderName,
-            MaxOutputTokens = modelId.StartsWith("magistral-", StringComparison.Ordinal)
+            MaxOutputTokens = reasons
                 ? LlmOutputTokenBudget.CalculateWithReasoningReserve(systemPrompt, userText)
                 : LlmOutputTokenBudget.Calculate(systemPrompt, userText),
             ScaleOutputTokens = false,
+            ReasoningEffort = effort,
             Temperature = _temperatureMode == CustomTemperatureMode ? _temperature : null,
         };
+    }
 
     // A catalog saved for a different key is ignored.
-    private static List<string> LoadSavedTextCatalog(IPluginHostServices host, string? apiKey) =>
+    private static MistralTextModelCatalog? LoadSavedTextCatalog(IPluginHostServices host, string? apiKey) =>
         host.GetSetting<MistralTextModelCatalog>(TextModelsSettingKey) is { } saved && saved.Owner == Fingerprint(apiKey)
-            ? NormalizeModels(saved.Models ?? [])
-            : [];
+            ? saved
+            : null;
 
     internal static string Fingerprint(string? apiKey) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"TypeWhisper.Mistral.textCatalog/1\n{apiKey}")));
@@ -149,7 +185,7 @@ public sealed partial class VoxtralPlugin
     ///     Lists the chat-completion models available to the key. An empty, malformed or oversized
     ///     catalog is rejected whole, so a partial list is never saved.
     /// </summary>
-    internal async Task<List<string>> FetchTextModelsAsync(string apiKey, CancellationToken ct)
+    internal async Task<MistralTextModelCatalog> FetchTextModelsAsync(string apiKey, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(ModelDiscoveryDeadline);
@@ -159,9 +195,9 @@ public sealed partial class VoxtralPlugin
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
                 _httpClient, request, HttpCompletionOption.ResponseContentRead, deadline.Token,
-                (errorResponse, errorBody) => $"Mistral API error {(int)errorResponse.StatusCode}: {errorBody}");
+                MistralErrorHandler.Describe);
             var body = await response.Content.ReadAsStringAsync(deadline.Token);
-            return ParseTextModelCatalog(body) ?? throw InvalidTextCatalog();
+            return MistralCatalog.ParseText(body, Fingerprint(apiKey), MaxCatalogModels) ?? throw InvalidTextCatalog();
         }
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
@@ -170,61 +206,12 @@ public sealed partial class VoxtralPlugin
         }
     }
 
-    // Transcription, embedding, OCR and moderation models lack completion_chat.
-    private static List<string>? ParseTextModelCatalog(string body)
-    {
-        JsonDocument doc;
-        try
-        {
-            doc = JsonDocument.Parse(body);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-
-        using (doc)
-        {
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("data", out var data)
-                || data.ValueKind != JsonValueKind.Array
-                || data.GetArrayLength() is 0 or > MaxCatalogModels)
-            {
-                return null;
-            }
-
-            var ids = new List<string>();
-            foreach (var item in data.EnumerateArray())
-            {
-                if (item.ValueKind != JsonValueKind.Object
-                    || !item.TryGetProperty("id", out var id)
-                    || id.ValueKind != JsonValueKind.String
-                    || !IsModelId(id.GetString())
-                    || !item.TryGetProperty("capabilities", out var capabilities)
-                    || capabilities.ValueKind != JsonValueKind.Object)
-                {
-                    return null;
-                }
-
-                if (IsTrue(capabilities, "completion_chat") && !IsTrue(item, "archived"))
-                    ids.Add(id.GetString()!);
-            }
-
-            var models = NormalizeModels(ids);
-            return models.Count == 0 ? null : models;
-        }
-    }
-
-    private static bool IsTrue(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.True;
-
     private PluginRequestException InvalidTextCatalog() =>
         new(Loc.L("Errors.ModelCatalogInvalid"),
             PluginRequestFailureKind.OutputIncomplete, isTransient: false);
 
     // Commits only when no key change or deactivation happened since the refresh began.
-    private bool TryCommitTextCatalog(List<string> models, long generation, string apiKey)
+    private bool TryCommitTextCatalog(MistralTextModelCatalog catalog, long generation, string apiKey)
     {
         IPluginHostServices host;
         lock (_catalogLock)
@@ -238,8 +225,8 @@ public sealed partial class VoxtralPlugin
 
             host = _host;
             // Persist first so a failed write leaves the live catalog untouched.
-            host.SetSetting(TextModelsSettingKey, new MistralTextModelCatalog(Fingerprint(apiKey), models));
-            SetTextCatalog(models);
+            host.SetSetting(TextModelsSettingKey, catalog);
+            SetTextCatalog(catalog);
         }
 
         host.NotifyCapabilitiesChanged();
@@ -247,28 +234,62 @@ public sealed partial class VoxtralPlugin
     }
 
     // Caller holds _catalogLock. Known general models lead, default first, for blank-model requests.
-    private void SetTextCatalog(List<string> models)
+    private void SetTextCatalog(MistralTextModelCatalog? catalog)
     {
-        SupportedModels = models.Count == 0
-            ? s_fallbackTextModels
-            : models
-                .OrderBy(id => s_knownTextModelRanks.GetValueOrDefault(id, s_knownTextModelRanks.Count))
-                .ThenBy(id => id, StringComparer.Ordinal)
-                .Select(id => new PluginModelInfo(id, s_knownTextDisplayNames.GetValueOrDefault(id, id)))
+        var models = NormalizeModels(catalog?.Models ?? []);
+        _textCatalogValidated = models.Count > 0 && catalog!.Version == MistralCatalog.CurrentVersion;
+        if (models.Count == 0)
+        {
+            _textAliases = MistralCatalog.DefaultTextAliases;
+            SupportedModels = FallbackTextModels();
+            return;
+        }
+
+        if (catalog!.Version == MistralCatalog.CurrentVersion)
+        {
+            // Only the account's own aliases: a "-latest" key may point elsewhere for this account.
+            var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (alias, id) in catalog.Aliases ?? [])
+            {
+                if (MistralCatalog.IsModelId(alias) && MistralCatalog.IsModelId(id))
+                    aliases[alias] = id;
+            }
+
+            _textAliases = aliases;
+            SupportedModels = models
+                .Select(id => new PluginModelInfo(id, MistralCatalog.DisplayName(id, catalog.Names)))
                 .ToList();
+            return;
+        }
+
+        // A list saved by an earlier version holds the raw account IDs; it stays until the next validation.
+        _textAliases = MistralCatalog.DefaultTextAliases;
+        SupportedModels = models
+            .OrderBy(id => MistralCatalog.Rank(id, _textAliases))
+            .ThenBy(id => id, StringComparer.Ordinal)
+            .Select(id => new PluginModelInfo(id, MistralCatalog.DisplayName(_textAliases.GetValueOrDefault(id, id), null)))
+            .ToList();
     }
+
+    private static List<PluginModelInfo> FallbackTextModels() =>
+        MistralCatalog.DefaultTextModels.Select(id => new PluginModelInfo(id, MistralCatalog.DisplayName(id, null))).ToList();
 
     private static List<string> NormalizeModels(IEnumerable<string?> models) =>
         models
-            .Where(IsModelId)
+            .Where(MistralCatalog.IsModelId)
             .Select(id => id!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-    private static bool IsModelId(string? id) =>
-        !string.IsNullOrWhiteSpace(id)
-        && id.Length <= MaxModelIdLength
-        && !id.Any(c => char.IsWhiteSpace(c) || char.IsControl(c));
+    private void SetReasoningEffort(string? value)
+    {
+        var effort = NormalizeReasoningEffort(value);
+        _host?.SetSetting(ReasoningEffortSettingKey, effort);
+        _reasoningEffort = effort;
+    }
+
+    private static string NormalizeReasoningEffort(string? value) =>
+        value == HighReasoningEffort ? HighReasoningEffort : FastestReasoningEffort;
 
     private void SetTemperatureMode(string? value)
     {
@@ -304,5 +325,3 @@ public sealed partial class VoxtralPlugin
     private static bool ParseBool(string? value) =>
         string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 }
-
-internal sealed record MistralTextModelCatalog(string? Owner, List<string>? Models);

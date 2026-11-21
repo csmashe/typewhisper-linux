@@ -1642,6 +1642,27 @@ public class App : Application
                     var pluginManager = services.GetRequiredService<PluginManager>();
                     await pluginManager.InitializeAsync();
                     BootTrace.Stage("PluginManager.InitializeAsync");
+                    MigrateLlmSelections();
+                    // Again after a provider's catalog changes, e.g. when validating a key replaces its
+                    // models. On the UI thread, where settings edits commit.
+                    pluginManager.PluginStateChanged += (_, _) => Dispatcher.UIThread.Post(MigrateLlmSelections);
+                    return;
+
+                    void MigrateLlmSelections()
+                    {
+                        try
+                        {
+                            LlmSelectionMigration.Apply(
+                                pluginManager.LlmProviders,
+                                services.GetRequiredService<ISettingsService>()
+                            );
+                        }
+                        catch (Exception ex)
+                        {
+                            // A failed rewrite leaves the saved selections, which still resolve per request.
+                            Debug.WriteLine($"[App] LLM selection migration failed: {ex.Message}");
+                        }
+                    }
                 },
                 Required: false
             ),
@@ -1666,6 +1687,7 @@ public class App : Application
                 {
                     var modelManager = services.GetRequiredService<ModelManagerService>();
                     modelManager.MigrateSettings();
+                    ModelManagerService.MigrateProfiles(services.GetRequiredService<IProfileService>());
                     return Task.CompletedTask;
                 },
                 Required: false

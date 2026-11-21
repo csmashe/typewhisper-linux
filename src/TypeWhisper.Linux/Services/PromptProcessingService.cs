@@ -481,18 +481,26 @@ public sealed partial class PromptProcessingService
             candidate.GetLlmSelectionId() == pluginId
         );
 
-        // An unknown model is a configuration problem for the guards to surface, not a request
-        // the provider should reject later. An empty catalog may simply not have been fetched.
-        if (string.IsNullOrWhiteSpace(modelId)
-            || provider is not null && provider.SupportedModels.Count > 0
-            && !provider.SupportedModels.Any(model =>
-                string.Equals(model.Id, modelId, StringComparison.Ordinal)))
+        if (string.IsNullOrWhiteSpace(modelId) || provider is null)
         {
             return (null, string.Empty);
         }
 
-        return provider is null ? (null, string.Empty) : (provider, modelId);
+        // An unknown model is a configuration problem for the guards to surface, not a request
+        // the provider should reject later. An empty catalog may simply not have been fetched.
+        if (provider.SupportedModels.Count == 0 || IsListed(provider, modelId))
+        {
+            return (provider, modelId);
+        }
+
+        // A saved alias or retired model the provider now lists under another ID still resolves.
+        return provider.ResolveSavedModelId(modelId) is { } resolved && IsListed(provider, resolved)
+            ? (provider, resolved)
+            : (null, string.Empty);
     }
+
+    private static bool IsListed(ILlmProviderRole provider, string modelId) =>
+        provider.SupportedModels.Any(model => string.Equals(model.Id, modelId, StringComparison.Ordinal));
 
     private (ILlmProviderRole Provider, string ModelId)? FindInstalledProviderWithoutModel(string selection)
     {
