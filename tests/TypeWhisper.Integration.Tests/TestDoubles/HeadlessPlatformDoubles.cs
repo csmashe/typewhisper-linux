@@ -8,6 +8,7 @@
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 // ReSharper disable UnusedMember.Global
 using TypeWhisper.Core.Interfaces;
+using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Hotkey;
@@ -267,6 +268,18 @@ internal sealed class HeadlessAtSpiClient : IAtSpiEventClient
     public Task StopAsync()
     {
         return Task.CompletedTask;
+    }
+
+    public DictationInsertionContext? CaretContext { get; set; }
+    public int CaretContextReadCount { get; private set; }
+    public Action? OnCaretContextRead { get; set; }
+
+    public Task<DictationInsertionContext?> TryReadTextAroundCaretAsync(
+        AtSpiElementRef element, int contextLength, CancellationToken cancellationToken)
+    {
+        CaretContextReadCount++;
+        OnCaretContextRead?.Invoke();
+        return Task.FromResult(CaretContext);
     }
 
     public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)

@@ -892,6 +892,40 @@
                                        Foreground="{DynamicResource TwTextSecondaryBrush}"
                                        TextWrapping="Wrap"
                                        IsVisible="{Binding AccessibilityBridgeStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                            <!-- Reads the field through the same accessibility listener. -->
+                            <StackPanel Spacing="12"
+                                        IsVisible="{Binding IsCursorContextFormattingAvailable}">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="{loc:Str Dictation.FitDictationToCursorContext}"
+                                                   Classes="row-label" />
+                                        <TextBlock Text="{loc:Str Dictation.FitDictationToCursorContextHint}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Dictation.FitDictationToCursorContext}"
+                                                  IsChecked="{Binding FitDictationToCursorContext}"
+                                                  HorizontalAlignment="Right" />
+                                </Grid>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="{loc:Str Dictation.StripFinalPeriodFromStandaloneValues}"
+                                                   Classes="row-label" />
+                                        <TextBlock Text="{loc:Str Dictation.StripFinalPeriodFromStandaloneValuesHint}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1"
+                                                  AutomationProperties.Name="{loc:Str Dictation.StripFinalPeriodFromStandaloneValues}"
+                                                  IsChecked="{Binding StripFinalPeriodFromStandaloneValues}"
+                                                  IsEnabled="{Binding FitDictationToCursorContext}"
+                                                  HorizontalAlignment="Right" />
+                                </Grid>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

@@ -103,6 +103,9 @@ public sealed partial class DictationOrchestrator : IDisposable
     // (the read is killed on timeout). Mirrors the screen harvest's ~1 s wall-clock budget.
     private static readonly TimeSpan s_clipboardContextBudget = TimeSpan.FromMilliseconds(1000);
 
+    // A slow accessibility provider must not hold up the paste; past this the plain trailing space is used.
+    private static readonly TimeSpan s_insertionContextReadLimit = TimeSpan.FromMilliseconds(500);
+
     private readonly ActiveWindowService _activeWindow;
     private readonly ActionPluginExecutionHost _actionPluginExecutionHost;
     private readonly AudioRecordingService _audio;
@@ -2823,6 +2826,14 @@ public sealed partial class DictationOrchestrator : IDisposable
                     false
                 )
             );
+            var pasteLanguage = LinuxDictationReadbackLanguagePolicy.Resolve(
+                postProcessingLanguage,
+                configuredLanguage,
+                translate && engineSupportsTranslation,
+                translationTarget,
+                pipelineResult.Steps,
+                rewritesKeepLanguage: true
+            );
             _models.PluginManager.EventBus.Publish(
                 new TranscriptionCompletedEvent
                 {
@@ -2894,10 +2905,9 @@ public sealed partial class DictationOrchestrator : IDisposable
                 await YieldFocusForInsertionAsync().ConfigureAwait(false);
             }
 
-            // Pad with a trailing space so back-to-back dictations don't run
-            // together. Only the insertion and TextInsertedEvent use this;
-            // history, recent transcriptions, and completion events keep the
-            // unpadded finalText.
+            // Pad with a trailing space so back-to-back dictations don't run together (an auto
+            // paste below may fit the text to the cursor instead). Only the insertion and
+            // TextInsertedEvent use this; history and completion events keep finalText.
             var insertionText = DictationInsertionTextFormatter.TextForInsertion(finalText);
 
             var insertionOperation = _telemetry.Child(context.SessionId, "insert");
@@ -2957,6 +2967,37 @@ public sealed partial class DictationOrchestrator : IDisposable
                         enterSuppressed = autoEnter;
                         autoPaste = false;
                         autoEnter = false;
+                    }
+
+                    // A locked field is refocused (which can change its selection) only inside the
+                    // insertion, and Copy Only never pastes, so both keep the plain trailing space.
+                    if (autoPaste
+                        && insertionText.Length > 0
+                        && context.LockedFocusField is null
+                        && insertionStrategy is not TextInsertionStrategy.CopyOnly
+                        && CanReadInsertionContext(context, out var field))
+                    {
+                        var insertionContext = await ReadInsertionContextAsync(field, cancelToken)
+                            .ConfigureAwait(false);
+                        // After a focus move or client stop during the read, the keystrokes could land elsewhere.
+                        if (!await IsDeliveryTargetStillFocusedAsync(context)
+                            || _atSpiClient?.IsRunning != true
+                            || _atSpiClient.CurrentFocusedElement != field)
+                        {
+                            enterSuppressed = autoEnter;
+                            autoPaste = false;
+                            autoEnter = false;
+                        }
+                        else
+                        {
+                            // Consent withdrawn since the read: the field's text must not be used.
+                            insertionText = DictationInsertionTextFormatter.TextForInsertion(
+                                finalText,
+                                IsInsertionContextAllowed() ? insertionContext : null,
+                                _settings.Current.StripFinalPeriodFromStandaloneValues,
+                                pasteLanguage
+                            );
+                        }
                     }
 
                     insertion = await _textInsertion.InsertTextAsync(
@@ -4943,6 +4984,84 @@ public sealed partial class DictationOrchestrator : IDisposable
 
         Trace.WriteLine("[Dictation] Auto paste fell back to clipboard: focus moved off the dictation's field.");
         return false;
+    }
+
+    // Reads around the cursor of the recording's field only with the correction-learning opt-in, a running
+    // client (never started here) and that field still focused.
+    private bool CanReadInsertionContext(RecordingContext context, out AtSpiElementRef field)
+    {
+        field = context.TargetField.GetValueOrDefault();
+        return IsInsertionContextAllowed()
+               && context.TargetField is not null
+               && _atSpiClient!.CurrentFocusedElement == field;
+    }
+
+    private async Task<DictationInsertionContext?> ReadInsertionContextAsync(
+        AtSpiElementRef field,
+        CancellationToken cancelToken
+    )
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancelToken);
+        limit.CancelAfter(s_insertionContextReadLimit);
+
+        // An opt-out mid-read must stop the next AT-SPI request, not only discard the result.
+        void OnSettingsChanged(AppSettings settings)
+        {
+            if (settings is { TargetAppCorrectionLearningEnabled: true, FitDictationToCursorContext: true })
+            {
+                return;
+            }
+
+            try
+            {
+                // ReSharper disable once AccessToDisposedClosure -- unsubscribed in the finally below before the dispose; a notification already in flight is caught.
+                limit.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The read already finished.
+            }
+        }
+
+        _settings.SettingsChanged += OnSettingsChanged;
+        try
+        {
+            // A withdrawal just before subscribing raised no event. The tracked focus can outlive a switch to an
+            // app without an accessibility tree, so the field must confirm it too.
+            if (!IsInsertionContextAllowed()
+                || await _atSpiClient!.IsElementFocusedAsync(field).WaitAsync(limit.Token).ConfigureAwait(false) != true)
+            {
+                return null;
+            }
+
+            var read = await _atSpiClient
+                .TryReadTextAroundCaretAsync(field, DictationInsertionText.ContextLength, limit.Token)
+                .WaitAsync(limit.Token)
+                .ConfigureAwait(false);
+            Trace.WriteLine($"[Dictation] Cursor context available={read is not null}.");
+            return read;
+        }
+        catch (OperationCanceledException) when (!cancelToken.IsCancellationRequested)
+        {
+            Trace.WriteLine("[Dictation] Cursor context read timed out or was opted out of.");
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Trace.WriteLine($"[Dictation] Cursor context read failed: {ex.GetType().Name}");
+            return null;
+        }
+        finally
+        {
+            _settings.SettingsChanged -= OnSettingsChanged;
+        }
+    }
+
+    private bool IsInsertionContextAllowed()
+    {
+        var settings = _settings.Current;
+        return settings is { FitDictationToCursorContext: true, TargetAppCorrectionLearningEnabled: true }
+               && _atSpiClient?.IsRunning == true;
     }
 
     // Re-activates the recording's window where xdotool can, then confirms it holds focus.

@@ -27,12 +27,17 @@ internal static class LinuxDictationReadbackLanguagePolicy
     /// </param>
     /// <param name="translationTarget">Post-processing translation target language, if configured.</param>
     /// <param name="postProcessingSteps">Pipeline step results in execution order.</param>
+    /// <param name="rewritesKeepLanguage">
+    ///     Assumes plugin and LLM rewrites keep the language instead of making it unknown. Paste casing
+    ///     uses this: a filler removal must not drop the German noun-capitalization guard.
+    /// </param>
     public static string? Resolve(
         string? effectiveSourceLanguage,
         string? configuredSourceLanguage,
         bool engineTranslatedToEnglish,
         string? translationTarget,
-        IReadOnlyList<PostProcessingStepResult> postProcessingSteps
+        IReadOnlyList<PostProcessingStepResult> postProcessingSteps,
+        bool rewritesKeepLanguage = false
     )
     {
         var sourceLanguage =
@@ -61,7 +66,7 @@ internal static class LinuxDictationReadbackLanguagePolicy
                     finalLanguage = FinalLanguage.TranslatedToTarget;
                 }
             }
-            else if (IsArbitraryTransform(step))
+            else if (!rewritesKeepLanguage && IsArbitraryTransform(step))
             {
                 finalLanguage = FinalLanguage.Rewritten;
             }

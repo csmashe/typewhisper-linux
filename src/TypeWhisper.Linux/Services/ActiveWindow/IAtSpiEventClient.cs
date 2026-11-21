@@ -1,3 +1,5 @@
+using TypeWhisper.Core.Services;
+
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
 /// <summary>
@@ -95,6 +97,15 @@ public interface IAtSpiEventClient
     ///     read fails.
     /// </summary>
     Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength);
+
+    /// <summary>
+    ///     Reads up to <paramref name="contextLength" /> characters either side of the element's
+    ///     selection, or of its caret when nothing is selected, via org.a11y.atspi.Text. Returns
+    ///     <c>null</c> when the element is a password field or has no known role, exposes no
+    ///     readable text or caret, holds several selections, or the read fails or is canceled.
+    /// </summary>
+    Task<DictationInsertionContext?> TryReadTextAroundCaretAsync(
+        AtSpiElementRef element, int contextLength, CancellationToken cancellationToken);
 
     /// <summary>
     ///     Returns <c>true</c> when focused, <c>false</c> when not focused, or <c>null</c>
