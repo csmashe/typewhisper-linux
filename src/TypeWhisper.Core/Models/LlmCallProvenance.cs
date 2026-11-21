@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 namespace TypeWhisper.Core.Models;
 
@@ -43,4 +45,21 @@ public sealed record LlmCallProvenance
 
     /// <summary>Memory context injected into the system prompt (prompt-action stage only); null otherwise.</summary>
     public string? InjectedMemoryContext { get; init; }
+
+    /// <summary>
+    ///     Seconds from sending the request to a non-empty reply, retries included. Null when the
+    ///     call failed, came back empty, or was recorded before this field existed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? DurationSeconds { get; set; }
+
+    /// <summary>Stores the reply, and its duration when the reply is non-empty (an empty one counts as a failure).</summary>
+    public void Complete(string? response, TimeSpan elapsed)
+    {
+        ResponseReceived = response;
+        if (!string.IsNullOrWhiteSpace(response))
+        {
+            DurationSeconds = elapsed.TotalSeconds;
+        }
+    }
 }

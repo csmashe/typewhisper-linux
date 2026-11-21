@@ -1,5 +1,6 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
@@ -84,8 +85,9 @@ public sealed class TranslationService : ITranslationService, IDisposable
         var model = llmProvider.SupportedModels[0].Id;
         var userText = $"Translate from {sourceLang} to {targetLang}:\n\n{text}";
         var provenance = RecordProvenance(capture, llmProvider, model, userText, TranslationSystemPrompt);
+        var started = Stopwatch.GetTimestamp();
         var translated = await llmProvider.ProcessAsync(TranslationSystemPrompt, userText, model, ct);
-        provenance?.ResponseReceived = translated;
+        provenance?.Complete(translated, Stopwatch.GetElapsedTime(started));
 
         return translated;
     }

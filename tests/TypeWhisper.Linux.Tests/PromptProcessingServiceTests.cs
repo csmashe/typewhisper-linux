@@ -521,6 +521,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
             call.ResponseReceived
         );
+        Assert.True(call.DurationSeconds >= 0);
     }
 
     [Fact]
@@ -663,6 +664,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
             call.ResponseReceived
         );
+        Assert.True(call.DurationSeconds >= 0);
     }
 
     [Fact]
@@ -771,6 +773,36 @@ public sealed class PromptProcessingServiceTests : IDisposable
 
         Assert.Single(capture.Calls);
         Assert.Equal("PromptAction", capture.Calls[0].Stage);
+        // A faulted stream answered nothing, so it gets no LLM time.
+        Assert.Null(capture.Calls[0].DurationSeconds);
+    }
+
+    [Fact]
+    public async Task ProcessStreamingAsync_LlmTimeLeavesOutTheCallersWorkOnEachDelta()
+    {
+        var provider = new FakeLlmProviderPlugin("com.test.default", "Default Provider", "model-a");
+        using var pluginManager = CreatePluginManager(
+            [provider],
+            [CreateLoadedPlugin(provider.PluginId, provider)]
+        );
+        var settings = CreateSettings(
+            new AppSettings { DefaultLlmProvider = "plugin:com.test.default:model-a" }
+        );
+        var sut = new PromptProcessingService(
+            pluginManager,
+            settings.Object,
+            new MemoryService(pluginManager)
+        );
+        var action = new PromptAction { Id = "prompt", Name = "Rewrite", SystemPrompt = "Rewrite this" };
+        var capture = new LlmCallCapture();
+
+        await foreach (var _ in sut.ProcessStreamingAsync(action, "hello", capture, CancellationToken.None))
+        {
+            // Stands in for typing the delta into the target app.
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+        }
+
+        Assert.True(Assert.Single(capture.Calls).DurationSeconds < 0.4);
     }
 
     [Fact]
@@ -805,6 +837,7 @@ public sealed class PromptProcessingServiceTests : IDisposable
             $"processed:Default Provider:model-a:{PromptProcessingService.FormatPromptActionInput("hello")}",
             call.ResponseReceived
         );
+        Assert.True(call.DurationSeconds >= 0);
     }
 
     [Theory]

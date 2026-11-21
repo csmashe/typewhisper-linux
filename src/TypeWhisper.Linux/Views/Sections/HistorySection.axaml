@@ -346,6 +346,23 @@
                                                                 </TextBlock>
                                                             </StackPanel>
 
+                                                            <ItemsControl ItemsSource="{Binding ProcessingDetails}"
+                                                                          Margin="0,0,0,4"
+                                                                          IsVisible="{Binding ShowExpandedMeta}">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate x:DataType="vm:HistoryDetailRow">
+                                                                        <TextBlock Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                                                   FontSize="11"
+                                                                                   TextWrapping="Wrap">
+                                                                            <Run Text="{Binding Label}"
+                                                                                 FontWeight="SemiBold" />
+                                                                            <Run Text="  " />
+                                                                            <Run Text="{Binding Value}" />
+                                                                        </TextBlock>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+
                                                             <Border Classes="suggestion-panel"
                                                                     IsVisible="{Binding HasCorrectionSuggestions}">
                                                                 <StackPanel Spacing="8">

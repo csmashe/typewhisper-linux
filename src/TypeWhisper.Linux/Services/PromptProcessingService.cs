@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -145,10 +146,11 @@ public sealed partial class PromptProcessingService
             injectedMemoryContext
         );
 
+        var started = Stopwatch.GetTimestamp();
         var response = await LlmRequestRetryPolicy.ExecuteAsync(
             token => provider.ProcessAsync(systemPrompt, userPrompt, modelId, token), ct,
             budget: retryBudget);
-        provenance?.ResponseReceived = response;
+        provenance?.Complete(response, Stopwatch.GetElapsedTime(started));
 
         return response;
     }
@@ -196,6 +198,7 @@ public sealed partial class PromptProcessingService
             injectedMemoryContext
         );
 
+        var started = Stopwatch.GetTimestamp();
         var source = LlmRequestRetryPolicy.ExecuteStreamingAsync(
             token => provider.ProcessStreamingAsync(systemPrompt, userPrompt, modelId, token), ct, retryBudget);
 
@@ -203,19 +206,33 @@ public sealed partial class PromptProcessingService
         // response. A mid-stream fault or cancel still records whatever arrived
         // (set in finally) alongside the already-recorded prompt.
         var responseBuilder = provenance is null ? null : new StringBuilder();
+        var completed = false;
+        // Time the caller spends on each delta (typing it, for a spoken command) is not LLM time.
+        var callerTime = TimeSpan.Zero;
         try
         {
             // ReSharper disable once RedundantWithCancellation -- provider is a plugin; it may implement IAsyncEnumerable manually and observe only the GetAsyncEnumerator token, so forwarding ct here is not redundant across the plugin boundary.
             await foreach (var delta in source.WithCancellation(ct))
             {
                 responseBuilder?.Append(delta);
+                var yielded = Stopwatch.GetTimestamp();
                 yield return delta;
+                callerTime += Stopwatch.GetElapsedTime(yielded);
             }
+            completed = true;
         }
         finally
         {
-            // responseBuilder is non-null whenever provenance is (same capture gate)
-            provenance?.ResponseReceived = responseBuilder!.ToString();
+            // responseBuilder is non-null whenever provenance is (same capture gate).
+            // A faulted or canceled stream gets its partial text but no duration.
+            if (completed)
+            {
+                provenance?.Complete(responseBuilder!.ToString(), Stopwatch.GetElapsedTime(started) - callerTime);
+            }
+            else
+            {
+                provenance?.ResponseReceived = responseBuilder!.ToString();
+            }
         }
     }
 
@@ -257,6 +274,7 @@ public sealed partial class PromptProcessingService
             injectedMemoryContext: null
         );
 
+        var started = Stopwatch.GetTimestamp();
         var response = await LlmRequestRetryPolicy.ExecuteAsync(async token =>
         {
             try
@@ -278,7 +296,7 @@ public sealed partial class PromptProcessingService
         // A timed-out optional cleanup may have already inserted Light output. Its late
         // response must not be attached to that recording as the cleanup that was used.
         ct.ThrowIfCancellationRequested();
-        provenance?.ResponseReceived = response;
+        provenance?.Complete(response, Stopwatch.GetElapsedTime(started));
 
         return response;
     }
