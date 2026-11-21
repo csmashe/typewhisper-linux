@@ -292,6 +292,8 @@ public sealed partial class SherpaOnnxPlugin
     private Func<string, string, OfflineRecognizer> _parakeetRecognizerFactory =
         CreateParakeetRecognizer;
     private Func<string, string, OfflineRecognizer> _qwenRecognizerFactory = CreateQwenRecognizer;
+    private Func<string, string, string, string, OfflineRecognizer> _canaryRecognizerFactory =
+        CreateCanaryRecognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
     private CudaRuntimeProvisioner? _cudaProvisioner;
     private string? _loadedModelId;
@@ -1171,6 +1173,15 @@ public sealed partial class SherpaOnnxPlugin
         _qwenRecognizerFactory = factory;
     }
 
+    // Test seam: fail or observe a Canary recognizer creation without a native runtime.
+    internal void SetCanaryRecognizerFactoryForTests(
+        Func<string, string, string, string, OfflineRecognizer> factory
+    )
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        _canaryRecognizerFactory = factory;
+    }
+
     // Avoid ActivateAsync's one-shot migration probe in filesystem-isolated load tests.
     internal void SetHostForTests(IPluginHostServices host)
     {
@@ -1573,7 +1584,7 @@ public sealed partial class SherpaOnnxPlugin
     private OfflineRecognizer CreateRecognizer(ModelDefinition model, string modelDir, string provider) =>
         model.Family switch
         {
-            SherpaModelFamily.Canary => CreateCanaryRecognizer(modelDir, "en", "en", provider),
+            SherpaModelFamily.Canary => _canaryRecognizerFactory(modelDir, "en", "en", provider),
             SherpaModelFamily.Qwen3Asr => _qwenRecognizerFactory(modelDir, provider),
             _ => _parakeetRecognizerFactory(modelDir, provider),
         };
@@ -1727,13 +1738,15 @@ public sealed partial class SherpaOnnxPlugin
         // provider the recognizer actually runs on (_computeBackend), NOT the wired
         // runtime (_loadedNativeProvider): a CUDA-wired runtime whose recognizer fell back
         // to CPU must rebuild on CPU, or this would re-trigger the same CUDA failure.
-        _recognizer?.Dispose();
-        _recognizer = CreateCanaryRecognizer(
+        // Create first so a failed recreate (e.g. CUDA out of memory) keeps the working recognizer.
+        var replacement = _canaryRecognizerFactory(
             _loadedModelDir,
             srcLang,
             tgtLang,
             _computeBackend
         );
+        _recognizer?.Dispose();
+        _recognizer = replacement;
         _canarySrcLang = srcLang;
         _canaryTgtLang = tgtLang;
     }
