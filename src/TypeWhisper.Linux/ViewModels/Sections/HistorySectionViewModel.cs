@@ -45,6 +45,7 @@ public partial class HistorySectionViewModel : ObservableObject
     private readonly ISettingsService _settings;
     private readonly SpeechFeedbackService? _speech;
     private HistoryRecordRow? _readingRow;
+    private HistoryRecordRow? _revealedRow;
     private IManualReadback? _readback;
     private readonly TimeZoneInfo _timeZone;
     private readonly Func<DateTime> _utcNow;
@@ -131,6 +132,9 @@ public partial class HistorySectionViewModel : ObservableObject
         Loc.Instance.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(Refresh);
         _ = LoadAsync();
     }
+
+    /// <summary>An entry was opened from the Dashboard; see <see cref="TakeRevealedRecord" />.</summary>
+    public event Action? RecordRevealed;
 
     public ObservableCollection<HistoryGroupViewModel> Groups { get; } = [];
     public ObservableCollection<string> AvailableApps { get; } = [Loc.Instance["History.AllApps"]];
@@ -321,6 +325,60 @@ public partial class HistorySectionViewModel : ObservableObject
 
         AppendNextPage();
         OnPropertyChanged(nameof(HasMore));
+    }
+
+    /// <summary>
+    ///     Opens one entry for the Dashboard: clears only the search or app filter that hides it,
+    ///     loads pages down to it and expands it. An entry that is already open keeps its unsaved edit.
+    /// </summary>
+    internal bool RevealRecord(string id)
+    {
+        if (_history.Records.FirstOrDefault(candidate => candidate.Id == id) is not { } record)
+        {
+            return false;
+        }
+
+        if (!MatchesSearch(record))
+        {
+            SearchQuery = "";
+        }
+
+        if (!MatchesAppFilter(record))
+        {
+            SelectedAppFilter = Loc.Instance["History.AllApps"];
+        }
+
+        var index = _filtered.FindIndex(candidate => candidate.Id == id);
+        if (index < 0)
+        {
+            // The record arrived after the last refresh, whose posted rebuild hasn't run yet.
+            Refresh();
+            index = _filtered.FindIndex(candidate => candidate.Id == id);
+            if (index < 0)
+            {
+                return false;
+            }
+        }
+
+        while (_shownCount <= index)
+        {
+            AppendNextPage();
+        }
+
+        OnPropertyChanged(nameof(HasMore));
+        var row = _rows[id];
+        row.IsExpanded = true;
+        _revealedRow = row;
+        RecordRevealed?.Invoke();
+        return true;
+    }
+
+    /// <summary>Hands the row from the last <see cref="RevealRecord" /> to the view once.</summary>
+    public HistoryRecordRow? TakeRevealedRecord()
+    {
+        var row = _revealedRow;
+        _revealedRow = null;
+        return row;
     }
 
     internal void SaveEdit(HistoryRecordRow record, string newText)
@@ -605,43 +663,26 @@ public partial class HistorySectionViewModel : ObservableObject
         }
     }
 
-    private IEnumerable<TranscriptionRecord> GetVisibleRecords()
+    private IEnumerable<TranscriptionRecord> GetVisibleRecords() => _history.Records
+        .Where(record => MatchesAppFilter(record) && MatchesSearch(record))
+        .OrderByDescending(record => record.Timestamp);
+
+    private bool MatchesAppFilter(TranscriptionRecord record) =>
+        string.IsNullOrWhiteSpace(SelectedAppFilter)
+        || string.Equals(SelectedAppFilter, Loc.Instance["History.AllApps"], StringComparison.Ordinal)
+        || string.Equals(record.AppProcessName, SelectedAppFilter, StringComparison.OrdinalIgnoreCase);
+
+    private bool MatchesSearch(TranscriptionRecord record)
     {
-        IEnumerable<TranscriptionRecord> records = _history.Records;
-
-        if (
-            !string.IsNullOrWhiteSpace(SelectedAppFilter)
-            && !string.Equals(
-                SelectedAppFilter,
-                Loc.Instance["History.AllApps"],
-                StringComparison.Ordinal
-            )
-        )
-        {
-            records = records.Where(record =>
-                string.Equals(
-                    record.AppProcessName,
-                    SelectedAppFilter,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            );
-        }
-
         if (string.IsNullOrWhiteSpace(SearchQuery))
         {
-            return records.OrderByDescending(record => record.Timestamp);
+            return true;
         }
 
-        {
-            var query = SearchQuery;
-            records = records.Where(record =>
-                record.FinalText.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || record.RawText.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || (record.AppName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-            );
-        }
-
-        return records.OrderByDescending(record => record.Timestamp);
+        var query = SearchQuery;
+        return record.FinalText.Contains(query, StringComparison.OrdinalIgnoreCase)
+               || record.RawText.Contains(query, StringComparison.OrdinalIgnoreCase)
+               || (record.AppName?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
     }
 
     private void Refresh()

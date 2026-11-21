@@ -473,6 +473,7 @@ public sealed class DashboardRecentActivityRow
     public DateTime LocalTimestamp { get; }
     public string Preview => Record.Preview;
     public string? AppName => Record.AppName;
+    public bool HasText => !string.IsNullOrWhiteSpace(Record.FinalText);
 }
 
 public sealed class AppUsageInsightRow

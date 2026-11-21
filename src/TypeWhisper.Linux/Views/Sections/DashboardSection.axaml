@@ -6,6 +6,17 @@
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              x:Class="TypeWhisper.Linux.Views.Sections.DashboardSection"
              x:DataType="vm:DashboardSectionViewModel">
+    <UserControl.Styles>
+        <Style Selector="Button.recent-row">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TwBorderBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Padding" Value="8,10" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+    </UserControl.Styles>
     <ScrollViewer VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled">
         <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
@@ -555,12 +566,20 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Grid.Row="9"
-                       Text="{loc:Str Dashboard.Activity}"
-                       MaxWidth="860"
-                       Margin="28,0,28,12"
-                       FontSize="16"
-                       FontWeight="SemiBold" />
+            <Grid Grid.Row="9"
+                  MaxWidth="860"
+                  Margin="28,0,28,12"
+                  ColumnDefinitions="*,Auto">
+                <TextBlock Text="{loc:Str Dashboard.Activity}"
+                           FontSize="16"
+                           FontWeight="SemiBold" />
+                <TextBlock Grid.Column="1"
+                           x:Name="RecentCopyStatus"
+                           AutomationProperties.LiveSetting="Polite"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="{DynamicResource TwTextMutedBrush}" />
+            </Grid>
 
             <Border Grid.Row="10"
                     MaxWidth="860"
@@ -583,9 +602,24 @@
                                   IsVisible="{Binding HasRecentActivity}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:DashboardRecentActivityRow">
-                                <Border Padding="8,10"
-                                        BorderThickness="0,0,0,1"
-                                        BorderBrush="{DynamicResource TwBorderBrush}">
+                                <Button Classes="recent-row"
+                                        Click="OnOpenRecentInHistory"
+                                        ToolTip.Tip="{loc:Str Dashboard.OpenInHistory}">
+                                    <AutomationProperties.Name>
+                                        <MultiBinding StringFormat="{}{0:HH:mm} {1}">
+                                            <Binding Path="LocalTimestamp" />
+                                            <Binding Path="Preview" />
+                                        </MultiBinding>
+                                    </AutomationProperties.Name>
+                                    <Button.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="{loc:Str Common.Copy}"
+                                                      Click="OnCopyRecent"
+                                                      IsEnabled="{Binding HasText}" />
+                                            <MenuItem Header="{loc:Str Dashboard.OpenInHistory}"
+                                                      Click="OnOpenRecentInHistory" />
+                                        </ContextMenu>
+                                    </Button.ContextMenu>
                                     <StackPanel Spacing="4">
                                         <TextBlock Text="{Binding Preview}"
                                                    FontSize="13"
@@ -602,7 +636,7 @@
                                                        TextWrapping="Wrap" />
                                         </StackPanel>
                                     </StackPanel>
-                                </Border>
+                                </Button>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
