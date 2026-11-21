@@ -122,6 +122,8 @@ public sealed class GladiaPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    // A batch call uploads, creates a remote job and polls it, so a host replay would bill a second job.
+    public bool SupportsHostRetry => false;
 
     public bool SupportsStreaming => true;
     public bool SupportsStructuredDictionaryTerms => true;

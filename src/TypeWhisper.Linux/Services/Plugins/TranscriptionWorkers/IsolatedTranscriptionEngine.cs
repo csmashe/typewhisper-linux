@@ -119,6 +119,8 @@ internal sealed class IsolatedTranscriptionEngine
     public DictionaryTermsBudget? DictionaryTermsBudget => _inner.DictionaryTermsBudget;
     public bool SupportsStructuredDictionaryTerms => _inner.SupportsStructuredDictionaryTerms;
     public bool SupportsLanguageHints => _inner.SupportsLanguageHints;
+    public bool SupportsHostRetry => _inner.SupportsHostRetry;
+    public bool SupportsHostSplitting => _inner.SupportsHostSplitting;
     public IReadOnlyList<string> SupportedLanguages => _inner.SupportedLanguages;
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends => _inner.SupportedAccelerationBackends;
     public bool ProvisionsCudaRuntimeOnDemand => _inner.ProvisionsCudaRuntimeOnDemand;
