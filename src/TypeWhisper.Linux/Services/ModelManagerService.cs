@@ -1071,6 +1071,20 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
         );
     }
 
+    /// <summary>
+    ///     Rewrites profile transcription overrides that name a retired model ID; the profile
+    ///     editor clears an override its picker cannot list, so a later save would drop it.
+    /// </summary>
+    public static void MigrateProfiles(IProfileService profiles)
+    {
+        foreach (var profile in profiles.Profiles)
+        {
+            var migrated = MigrateOverrideModelId(profile.TranscriptionModelOverride);
+            if (!string.Equals(migrated, profile.TranscriptionModelOverride, StringComparison.Ordinal))
+                profiles.UpdateProfile(profile with { TranscriptionModelOverride = migrated });
+        }
+    }
+
     private static string? MigrateModelId(string? modelId)
     {
         return modelId switch
@@ -1083,8 +1097,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
                 "com.typewhisper.sherpa-onnx",
                 "canary-180m-flash"
             ),
-            "plugin:com.typewhisper.voxtral:mistral-whisper" =>
-                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
+            "plugin:com.typewhisper.voxtral:mistral-whisper"
+                or "plugin:com.typewhisper.voxtral:voxtral-mini-latest" =>
+                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-transcribe-3-0"),
             "plugin:com.typewhisper.assemblyai:universal-3-pro" =>
                 GetPluginModelId("com.typewhisper.assemblyai", "universal-3-5-pro"),
             _ => modelId,
@@ -1100,8 +1115,9 @@ public sealed class ModelManagerService : INotifyPropertyChanged, IDisposable
     {
         return modelId switch
         {
-            "plugin:com.typewhisper.voxtral:mistral-whisper" =>
-                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-latest"),
+            "plugin:com.typewhisper.voxtral:mistral-whisper"
+                or "plugin:com.typewhisper.voxtral:voxtral-mini-latest" =>
+                GetPluginModelId("com.typewhisper.voxtral", "voxtral-mini-transcribe-3-0"),
             "plugin:com.typewhisper.assemblyai:universal-3-pro" =>
                 GetPluginModelId("com.typewhisper.assemblyai", "universal-3-5-pro"),
             _ => modelId,

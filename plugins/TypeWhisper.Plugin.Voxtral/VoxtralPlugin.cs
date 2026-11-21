@@ -20,14 +20,17 @@ public sealed partial class VoxtralPlugin
         IPluginLocalizationAware
 {
     private const string BaseUrl = "https://api.mistral.ai";
-    private const string ModelId = "voxtral-mini-latest";
-    private const string LegacyModelId = "mistral-whisper";
+
+    // Mistral sets no fixed limit for context_bias; terms count against the model's context window.
+    // Upstream passed 400 terms in a live test (2026-11-06), so this leaves headroom.
+    private static readonly DictionaryTermsBudget s_dictionaryBudget =
+        new(MaxTerms: 200, MaxCharsPerTerm: 200, MaxTotalChars: 8000);
 
     private readonly HttpClient _httpClient;
     private IPluginHostServices? _host;
 
     public VoxtralPlugin()
-        : this(new HttpClient { Timeout = TimeSpan.FromSeconds(60) })
+        : this(new HttpClient(new MistralErrorHandler(new HttpClientHandler())) { Timeout = TimeSpan.FromSeconds(60) })
     {
     }
 
@@ -46,13 +49,13 @@ public sealed partial class VoxtralPlugin
         _host = host;
         ApiKey = await host.LoadSecretAsync("api-key");
         var selectedModelId = host.GetSetting<string>("selectedModel");
-        SelectedModelId = selectedModelId == LegacyModelId ? ModelId : selectedModelId ?? ModelId;
-        if (selectedModelId == LegacyModelId)
+        SelectedModelId = ResolveTranscriptionModel(selectedModelId) ?? MistralCatalog.MiniTranscribe;
+        if (selectedModelId is not null && selectedModelId != SelectedModelId)
         {
             // A persistence failure must not fail activation; the in-memory migration suffices.
             try
             {
-                host.SetSetting("selectedModel", ModelId);
+                host.SetSetting("selectedModel", SelectedModelId);
             }
             catch (Exception ex)
             {
@@ -79,7 +82,10 @@ public sealed partial class VoxtralPlugin
     public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
 
     public IReadOnlyList<PluginModelInfo> TranscriptionModels { get; } =
-    [new(ModelId, "Voxtral Mini (Mistral)")];
+    [
+        new(MistralCatalog.MiniTranscribe, "Voxtral Mini Transcribe 3"),
+        new(MistralCatalog.SmallTranscribe, "Voxtral Small Transcribe 3"),
+    ];
 
     public string? SelectedModelId { get; private set; }
 
@@ -87,16 +93,25 @@ public sealed partial class VoxtralPlugin
     public bool SupportsTranslation => false;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
+    public IReadOnlyList<string> SupportedLanguages => MistralCatalog.Voxtral3Languages;
+    public bool SupportsStructuredDictionaryTerms => true;
+    public DictionaryTermsBudget DictionaryTermsBudget => s_dictionaryBudget;
 
     public void SelectModel(string modelId)
     {
-        // Persisted host selections may still carry the legacy id; accept it instead of throwing.
-        if (modelId == LegacyModelId)
-            modelId = ModelId;
-        if (modelId != ModelId)
-            throw new ArgumentException($"Unknown model: {modelId}");
-        SelectedModelId = modelId;
-        _host?.SetSetting("selectedModel", modelId);
+        // Persisted host selections may still carry an earlier id; accept it instead of throwing.
+        var resolved = ResolveTranscriptionModel(modelId)
+            ?? throw new ArgumentException($"Unknown model: {modelId}");
+        SelectedModelId = resolved;
+        _host?.SetSetting("selectedModel", resolved);
+    }
+
+    private string? ResolveTranscriptionModel(string? modelId)
+    {
+        if (string.IsNullOrWhiteSpace(modelId))
+            return null;
+        var id = MistralCatalog.TranscriptionReplacements.GetValueOrDefault(modelId, modelId);
+        return TranscriptionModels.Any(m => m.Id == id) ? id : null;
     }
 
     public async Task<PluginTranscriptionResult> TranscribeAsync(
@@ -117,21 +132,28 @@ public sealed partial class VoxtralPlugin
         if (!IsConfigured)
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredMistralApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
+        var contextBias = ContextBias(prompt);
         using var content = new MultipartFormDataContent();
         using var fileContent = new ByteArrayContent(wavAudio);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
         content.Add(fileContent, "file", "audio.wav");
-        content.Add(new StringContent(ModelId), "model");
+        content.Add(new StringContent(SelectedModelId ?? MistralCatalog.MiniTranscribe), "model");
 
-        // Mistral documents timestamp_granularities as incompatible with language, so an explicit
-        // language gets no segments; otherwise ask for them (none are returned unrequested).
-        if (!string.IsNullOrWhiteSpace(language))
-            content.Add(new StringContent(language), "language");
+        // Voxtral 2 rejected timestamps next to a language, so only detection asks for segments.
+        // Transcribe 3 reports a detected language only with return_language, and 422s it next to a pinned one.
+        if (LanguageCode(language) is { } code)
+        {
+            content.Add(new StringContent(code), "language");
+        }
         else
+        {
             content.Add(new StringContent("segment"), "timestamp_granularities");
+            content.Add(new StringContent("true"), "return_language");
+        }
 
-        // Mistral exposes context_bias as an array; do not guess how a single prompt maps to it.
-        _ = prompt;
+        // One field per entry keeps multi-word names and phrases such as "Washington, D.C." whole.
+        foreach (var term in contextBias)
+            content.Add(new StringContent(term), "context_bias");
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -141,11 +163,28 @@ public sealed partial class VoxtralPlugin
         request.Content = content;
 
         using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
-            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
-            (errorResponse, errorBody) => $"Mistral API error {(int)errorResponse.StatusCode}: {errorBody}");
+            _httpClient, request, HttpCompletionOption.ResponseContentRead, ct, MistralErrorHandler.Describe);
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
         return ParseTranscriptionResponse(responseBody);
+    }
+
+    // The host folds regional tags to the listed base codes; a direct caller's code outside
+    // the list is detected instead, since Mistral rejects it.
+    private static string? LanguageCode(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+            return null;
+        var code = language.Trim().Split('-', '_')[0].ToLowerInvariant();
+        return MistralCatalog.Voxtral3Languages.Contains(code, StringComparer.Ordinal) ? code : null;
+    }
+
+    // context_bias takes terms and free-form context, so an API caller's prompt text goes as one entry.
+    private static IReadOnlyList<string> ContextBias(string? prompt)
+    {
+        var parsed = PluginTranscriptionPrompt.Parse(prompt);
+        var terms = PluginDictionaryTerms.Clip(parsed.DictionaryTerms, s_dictionaryBudget);
+        return parsed.Text is { } text ? [.. terms, text] : terms;
     }
 
     internal static PluginTranscriptionResult ParseTranscriptionResponse(string json)
@@ -280,7 +319,7 @@ public sealed partial class VoxtralPlugin
                 {
                     _catalogGeneration++;
                     ApiKey = normalized;
-                    SetTextCatalog(host is null ? [] : LoadSavedTextCatalog(host, normalized));
+                    SetTextCatalog(host is null ? null : LoadSavedTextCatalog(host, normalized));
                 }
             }
         }
@@ -316,6 +355,17 @@ public sealed partial class VoxtralPlugin
                 Kind: PluginSettingKind.Boolean
             ),
             new(
+                Key: ReasoningEffortSettingKey,
+                Label: Loc.L("Settings.ReasoningEffort"),
+                Description: Loc.L("Settings.ReasoningEffortDescription"),
+                Kind: PluginSettingKind.Dropdown,
+                Options:
+                [
+                    new PluginSettingOption(FastestReasoningEffort, Loc.L("Settings.ReasoningEffortFastest")),
+                    new PluginSettingOption(HighReasoningEffort, Loc.L("Settings.ReasoningEffortHigh")),
+                ]
+            ),
+            new(
                 Key: TemperatureModeSettingKey,
                 Label: Loc.L("Settings.TemperatureMode"),
                 Description: Loc.L("Settings.TemperatureModeDescription"),
@@ -343,6 +393,7 @@ public sealed partial class VoxtralPlugin
                 "selectedModel" => SelectedModelId,
                 LlmStreamingSettings.StreamResponsesSettingKey
                     => _streamResponses ? "true" : "false",
+                ReasoningEffortSettingKey => _reasoningEffort,
                 TemperatureModeSettingKey => _temperatureMode,
                 TemperatureSettingKey => _temperature.ToString(CultureInfo.InvariantCulture),
                 _ => null,
@@ -367,6 +418,9 @@ public sealed partial class VoxtralPlugin
             case LlmStreamingSettings.StreamResponsesSettingKey:
                 SetStreamResponses(ParseBool(value));
                 break;
+            case ReasoningEffortSettingKey:
+                SetReasoningEffort(value);
+                break;
             case TemperatureModeSettingKey:
                 SetTemperatureMode(value);
                 break;
@@ -387,10 +441,10 @@ public sealed partial class VoxtralPlugin
         lock (_catalogLock)
             generation = _catalogGeneration;
 
-        List<string> models;
+        MistralTextModelCatalog catalog;
         try
         {
-            models = await FetchTextModelsAsync(apiKey, ct);
+            catalog = await FetchTextModelsAsync(apiKey, ct);
         }
         catch (PluginRequestException ex) when (ex.FailureKind is PluginRequestFailureKind.Authentication
                                                     or PluginRequestFailureKind.Permission)
@@ -402,8 +456,8 @@ public sealed partial class VoxtralPlugin
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ModelRefreshFailed", ex.Message));
         }
 
-        return TryCommitTextCatalog(models, generation, apiKey)
-            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidFetchedTextModels", models.Count))
+        return TryCommitTextCatalog(catalog, generation, apiKey)
+            ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidFetchedTextModels", catalog.Models!.Count))
             : new PluginSettingsValidationResult(false, Loc.L("Settings.ModelRefreshStale"));
     }
 

@@ -17,7 +17,10 @@ public sealed class VoxtralTextProcessingTests
     private const string Key = "mistral-account-a";
 
     private static readonly string[] s_fallbackIds =
-        ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"];
+    [
+        "mistral-small-2603", "mistral-medium-2604", "mistral-large-4",
+        "ministral-14b-2512", "ministral-8b-2512", "ministral-3b-2512",
+    ];
 
     private const string Answer =
         """{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}""";
@@ -34,6 +37,24 @@ public sealed class VoxtralTextProcessingTests
         ]}
         """;
 
+    // Shaped like Mistral's listing: aliases appear as their own entries, successors next to retired models.
+    private const string AliasCatalog = """
+        {"object":"list","data":[
+          {"id":"mistral-large-2512","name":"mistral-large-2512","capabilities":{"completion_chat":true},"aliases":["mistral-large-latest"]},
+          {"id":"mistral-large-latest","capabilities":{"completion_chat":true},"aliases":["mistral-large-2512"]},
+          {"id":"mistral-large-4","capabilities":{"completion_chat":true},"aliases":["mistral-large-4-0"]},
+          {"id":"mistral-small-latest","capabilities":{"completion_chat":true},"aliases":["mistral-small-2603"]},
+          {"id":"mistral-small-2603","capabilities":{"completion_chat":true},"aliases":["mistral-small-latest"]},
+          {"id":"magistral-medium-2509","name":"Magistral Medium 1.2","capabilities":{"completion_chat":true},"aliases":["magistral-medium-latest"]},
+          {"id":"magistral-medium-latest","capabilities":{"completion_chat":true},"aliases":["magistral-medium-2509"]},
+          {"id":"labs-devstral-small-2512","capabilities":{"completion_chat":true}},
+          {"id":"voxtral-small-2507","capabilities":{"completion_chat":true,"audio":true}},
+          {"id":"voxtral-mini-tts-2603","capabilities":{"completion_chat":true,"audio_speech":true}},
+          {"id":"codestral-2508","capabilities":{"completion_chat":true,"completion_fim":true},"aliases":["codestral-latest"]},
+          {"id":"mistral-embed","capabilities":{"completion_chat":false}}
+        ]}
+        """;
+
     [Fact]
     public async Task TextRole_KeepsTheVoxtralIdentityAndSharesItsKey()
     {
@@ -46,7 +67,9 @@ public sealed class VoxtralTextProcessingTests
         Assert.Equal("Mistral", sut.ProviderName);
         Assert.True(sut.IsAvailable);
         Assert.Equal(s_fallbackIds, Ids(sut));
-        Assert.Equal(["voxtral-mini-latest"], sut.TranscriptionModels.Select(m => m.Id));
+        Assert.Equal(
+            ["Mistral Small 4", "Mistral Medium 3.5", "Mistral Large 4", "Ministral 3 14B", "Ministral 3 8B", "Ministral 3 3B"],
+            sut.SupportedModels.Select(m => m.DisplayName));
 
         await sut.SetSettingValueAsync("api-key", " ");
 
@@ -69,10 +92,14 @@ public sealed class VoxtralTextProcessingTests
     }
 
     [Theory]
-    [InlineData("", "mistral-small-latest")]
-    [InlineData("  ", "mistral-small-latest")]
-    [InlineData(" ministral-8b-latest ", "ministral-8b-latest")]
-    public async Task ProcessAsync_SendsChatCompletionWithSharedKeyAndProviderDefaults(string model, string expected)
+    [InlineData("", "mistral-small-2603", "none")]
+    [InlineData("  ", "mistral-small-2603", "none")]
+    [InlineData("mistral-small-latest", "mistral-small-2603", "none")]
+    [InlineData(" ministral-8b-latest ", "ministral-8b-2512", null)]
+    [InlineData("ministral-8b-2410", "ministral-8b-2512", null)]
+    [InlineData("open-mistral-nemo", "open-mistral-nemo", null)]
+    public async Task ProcessAsync_SendsChatCompletionWithSharedKeyAndProviderDefaults(
+        string model, string expected, string? effort)
     {
         using var sut = await ActivatedAsync(new CapturingHandler((request, body) =>
         {
@@ -87,6 +114,7 @@ public sealed class VoxtralTextProcessingTests
                 ["system", "user"],
                 root.GetProperty("messages").EnumerateArray().Select(m => m.GetProperty("role").GetString()));
             Assert.Equal(LlmOutputTokenBudget.Calculate("system", "user"), root.GetProperty("max_tokens").GetInt32());
+            Assert.Equal(effort, root.TryGetProperty("reasoning_effort", out var sentEffort) ? sentEffort.GetString() : null);
             Assert.False(root.TryGetProperty("temperature", out _));
             Assert.False(root.TryGetProperty("stream", out _));
             return Json(Answer);
@@ -98,8 +126,9 @@ public sealed class VoxtralTextProcessingTests
     [Theory]
     [InlineData("magistral-medium-2509", true)]
     [InlineData("mistral-small-latest", false)]
+    [InlineData("mistral-large-latest", true)]
     [InlineData("open-mistral-7b", false)]
-    public async Task ProcessAsync_ReservesReasoningOutputOnlyForMagistral(string model, bool reasoning)
+    public async Task ProcessAsync_ReservesReasoningOutputOnlyForModelsThatReason(string model, bool reasoning)
     {
         JsonElement sent = default;
         using var sut = await ActivatedAsync(new CapturingHandler((_, body) =>
@@ -115,6 +144,42 @@ public sealed class VoxtralTextProcessingTests
                 ? LlmOutputTokenBudget.CalculateWithReasoningReserve("system", "user")
                 : LlmOutputTokenBudget.Calculate("system", "user"),
             sent.GetProperty("max_tokens").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Requests_SendEachModelsFastestReasoningLevelUnlessHighIsChosen(bool streaming)
+    {
+        var sent = new List<(string Model, string? Effort)>();
+        var host = new TestPluginHostServices();
+        using var sut = await ActivatedAsync(new CapturingHandler((_, body) =>
+        {
+            var root = JsonDocument.Parse(body!).RootElement;
+            sent.Add((root.GetProperty("model").GetString()!,
+                root.TryGetProperty("reasoning_effort", out var effort) ? effort.GetString() : null));
+            return streaming ? Sse("ok") : Json(Answer);
+        }), host);
+        string[] models = ["mistral-large-4", "mistral-medium-2604", "mistral-small-2603", "ministral-3b-2512"];
+
+        Assert.Equal("fastest", await sut.GetSettingValueAsync("reasoningEffort"));
+        foreach (var model in models)
+            await RunAsync(sut, streaming, model);
+        await sut.SetSettingValueAsync("reasoningEffort", "high");
+        foreach (var model in models)
+            await RunAsync(sut, streaming, model);
+
+        Assert.Equal(
+            [
+                ("mistral-large-4", "low"), ("mistral-medium-2604", "none"), ("mistral-small-2603", "none"), ("ministral-3b-2512", null),
+                ("mistral-large-4", "high"), ("mistral-medium-2604", "high"), ("mistral-small-2603", "high"), ("ministral-3b-2512", null),
+            ],
+            sent);
+        using (var restarted = await RestartedAsync(host))
+            Assert.Equal("high", await restarted.GetSettingValueAsync("reasoningEffort"));
+
+        await sut.SetSettingValueAsync("reasoningEffort", "maximum");
+        Assert.Equal("fastest", await sut.GetSettingValueAsync("reasoningEffort"));
     }
 
     [Theory]
@@ -233,7 +298,7 @@ public sealed class VoxtralTextProcessingTests
         using var sut = await ActivatedAsync(new CapturingHandler((_, _) => Json(Answer)));
 
         Assert.Equal(
-            ["api-key", "selectedModel", "streamResponses", "temperatureMode", "temperature"],
+            ["api-key", "selectedModel", "streamResponses", "reasoningEffort", "temperatureMode", "temperature"],
             sut.GetSettingDefinitions().Select(d => d.Key));
     }
 
@@ -254,13 +319,120 @@ public sealed class VoxtralTextProcessingTests
 
         Assert.True(result!.IsSuccess);
         Assert.Equal("Settings.ApiKeyValidFetchedTextModels", result.Message);
-        Assert.Equal(["mistral-small-latest", "codestral-latest", "mistral-large-2512"], Ids(sut));
-        Assert.Equal("Mistral Small", sut.SupportedModels[0].DisplayName);
+        // The alias group takes the known dated ID; code completion and archived models are not offered.
+        Assert.Equal(["mistral-small-2603", "mistral-large-2512"], Ids(sut));
+        Assert.Equal("Mistral Small 4", sut.SupportedModels[0].DisplayName);
+        Assert.Equal("mistral-small-2603", sut.ResolveSavedModelId("mistral-small-latest"));
         Assert.Equal(capabilityChanges + 1, host.CapabilityChanges);
-        Assert.Equal(["voxtral-mini-latest"], sut.TranscriptionModels.Select(m => m.Id));
 
         using var restarted = await RestartedAsync(host);
         Assert.Equal(Ids(sut), Ids(restarted));
+        Assert.Equal("mistral-small-2603", restarted.ResolveSavedModelId("mistral-small-latest"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_GroupsAliasesHidesReplacedAndNonTextModels()
+    {
+        var bodies = new List<string>();
+        using var sut = await ActivatedAsync(new CapturingHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return Json(AliasCatalog);
+            bodies.Add(JsonDocument.Parse(body!).RootElement.GetProperty("model").GetString()!);
+            return Json(Answer);
+        }));
+
+        Assert.True((await sut.ValidateAsync())!.IsSuccess);
+
+        Assert.Equal(["mistral-small-2603", "mistral-large-4", "magistral-medium-2509"], Ids(sut));
+        Assert.Equal(
+            ["Mistral Small 4", "Mistral Large 4", "Magistral Medium 1.2"],
+            sut.SupportedModels.Select(m => m.DisplayName));
+        foreach (var saved in new[] { "mistral-large-latest", "mistral-large-2512", "mistral-large-4-0" })
+            Assert.Equal("mistral-large-4", sut.ResolveSavedModelId(saved));
+        Assert.Equal("magistral-medium-2509", sut.ResolveSavedModelId("magistral-medium-latest"));
+        Assert.Null(sut.ResolveSavedModelId("codestral-latest"));
+        Assert.Null(sut.ResolveSavedModelId("labs-devstral-small-2512"));
+
+        await sut.ProcessAsync("system", "user", "mistral-large-latest", CancellationToken.None);
+        Assert.Equal(["mistral-large-4"], bodies);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_AliasesOfAHiddenModelResolveToItsSuccessor()
+    {
+        using var sut = await ActivatedAsync(new CapturingHandler((_, _) => Json("""
+            {"data":[
+              {"id":"mistral-small-3-2-25-06","name":"mistral-small-3-2-25-06","capabilities":{"completion_chat":true},
+               "aliases":["mistral-small-2506","mistral-small-latest"]},
+              {"id":"mistral-small-2603","capabilities":{"completion_chat":true}}
+            ]}
+            """)));
+
+        Assert.True((await sut.ValidateAsync())!.IsSuccess);
+
+        Assert.Equal(["mistral-small-2603"], Ids(sut));
+        foreach (var saved in new[] { "mistral-small-latest", "mistral-small-2506", "mistral-small-3-2-25-06" })
+            Assert.Equal("mistral-small-2603", sut.ResolveSavedModelId(saved));
+    }
+
+    [Fact]
+    public async Task ResolveModelId_MovesOnlyFormerDefaultsUntilTheAccountCatalogIsValidated()
+    {
+        var bodies = new List<string>();
+        var host = new TestPluginHostServices();
+        using var sut = await ActivatedAsync(new CapturingHandler((request, body) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                return Json("""{"data":[{"id":"mistral-large-2512","capabilities":{"completion_chat":true}}]}""");
+            bodies.Add(JsonDocument.Parse(body!).RootElement.GetProperty("model").GetString()!);
+            return Json(Answer);
+        }), host);
+
+        Assert.Equal("mistral-small-2603", sut.ResolveSavedModelId("mistral-small-latest"));
+        Assert.Equal("mistral-large-4", sut.ResolveSavedModelId("mistral-large-latest"));
+        // An account model is not renamed from the default lineup, though a request still uses the successor.
+        Assert.Null(sut.ResolveSavedModelId("mistral-large-2512"));
+        Assert.Null(sut.ResolveSavedModelId("ministral-8b-latest"));
+        await sut.ProcessAsync("system", "user", "mistral-large-2512", CancellationToken.None);
+        Assert.Equal(["mistral-large-4"], bodies);
+
+        Assert.True((await sut.ValidateAsync())!.IsSuccess);
+        Assert.Equal("mistral-large-2512", sut.ResolveSavedModelId("mistral-large-2512"));
+
+        // Removing the key falls back to the default lineup without renaming the account's model.
+        await sut.SetSettingValueAsync("api-key", "");
+        Assert.Null(sut.ResolveSavedModelId("mistral-large-2512"));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_AnAccountWithOnlyNonTextModelsIsRejected()
+    {
+        using var sut = await ActivatedAsync(new CapturingHandler((_, _) => Json("""
+            {"data":[
+              {"id":"codestral-latest","capabilities":{"completion_chat":true,"completion_fim":true}},
+              {"id":"labs-mistral-small-creative","capabilities":{"completion_chat":true}}
+            ]}
+            """)));
+
+        Assert.False((await sut.ValidateAsync())!.IsSuccess);
+        Assert.Equal(s_fallbackIds, Ids(sut));
+    }
+
+    [Fact]
+    public async Task Activate_KeepsACatalogSavedByAnEarlierVersionUntilTheNextValidation()
+    {
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = Key } };
+        host.SetSetting("fetchedTextModels", new MistralTextModelCatalog(
+            VoxtralPlugin.Fingerprint(Key), ["open-mistral-nemo", "mistral-large-latest", "mistral-small-latest"]));
+        using var sut = await RestartedAsync(host);
+
+        Assert.Equal(["mistral-small-latest", "mistral-large-latest", "open-mistral-nemo"], Ids(sut));
+        Assert.Equal("Mistral Small 4", sut.SupportedModels[0].DisplayName);
+        Assert.Equal("mistral-small-latest", sut.ResolveSavedModelId("mistral-small-latest"));
+        Assert.Null(sut.ResolveSavedModelId("mistral-medium-latest"));
+        // The account never confirmed which model its "-latest" key names, so no level is assumed.
+        Assert.Null(sut.ReasoningEffortFor("mistral-small-latest"));
     }
 
     [Fact]
@@ -276,6 +448,8 @@ public sealed class VoxtralTextProcessingTests
 
         Assert.True((await sut.ValidateAsync())!.IsSuccess);
         Assert.Equal(["mistral-medium-latest", "mistral-large-latest", "codestral-latest"], Ids(sut));
+        // Without aliases in the listing, no reasoning level is assumed for a "-latest" key.
+        Assert.Null(sut.ReasoningEffortFor("mistral-medium-latest"));
     }
 
     [Theory]
@@ -493,15 +667,15 @@ public sealed class VoxtralTextProcessingTests
         Assert.Equal(["kept-model"], Ids(sut));
     }
 
-    private static async Task RunAsync(VoxtralPlugin sut, bool streaming)
+    private static async Task RunAsync(VoxtralPlugin sut, bool streaming, string model = "")
     {
         if (!streaming)
         {
-            await sut.ProcessAsync("system", "user", "", CancellationToken.None);
+            await sut.ProcessAsync("system", "user", model, CancellationToken.None);
             return;
         }
 
-        await foreach (var _ in sut.ProcessStreamingAsync("system", "user", "", CancellationToken.None))
+        await foreach (var _ in sut.ProcessStreamingAsync("system", "user", model, CancellationToken.None))
         {
             // Drain the stream so the request is sent.
         }

@@ -219,7 +219,7 @@ public partial class PromptsSectionViewModel : ObservableObject
     public ProviderOption? SelectedEditProvider
     {
         get =>
-            AvailableProviders.FirstOrDefault(option => option.Value == EditProviderOverride)
+            AvailableProviders.FirstOrDefault(option => option.Value == ResolveSelection(EditProviderOverride))
             ?? AvailableProviders.FirstOrDefault();
         set
         {
@@ -228,7 +228,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 return;
             }
 
-            if (string.Equals(EditProviderOverride, value?.Value, StringComparison.Ordinal))
+            if (string.Equals(ResolveSelection(EditProviderOverride), value?.Value, StringComparison.Ordinal))
             {
                 return;
             }
@@ -461,7 +461,7 @@ public partial class PromptsSectionViewModel : ObservableObject
 
         if (!string.IsNullOrWhiteSpace(value)
             && AvailableProviders.All(option =>
-                !string.Equals(option.Value, value, StringComparison.Ordinal)))
+                !string.Equals(option.Value, ResolveSelection(value), StringComparison.Ordinal)))
         {
             _synthesizedProviderOption = MissingSelectionOption(value);
             AvailableProviders.Add(_synthesizedProviderOption);
@@ -905,7 +905,7 @@ public partial class PromptsSectionViewModel : ObservableObject
                 _settings.Current.SpokenCommandLlmProvider);
             ReplaceProviderOptions(AvailableProviders, resolvedOptions, defaultLabel, null);
             if (!string.IsNullOrWhiteSpace(selectedProvider)
-                && AvailableProviders.All(option => option.Value != selectedProvider))
+                && AvailableProviders.All(option => option.Value != ResolveSelection(selectedProvider)))
             {
                 _synthesizedProviderOption = MissingSelectionOption(selectedProvider);
                 AvailableProviders.Add(_synthesizedProviderOption);
@@ -944,6 +944,11 @@ public partial class PromptsSectionViewModel : ObservableObject
 
         options.Add(MissingSelectionOption(value));
     }
+
+    // A saved override the provider now lists under another ID (an alias or a retired model)
+    // shows as that model; the action keeps its saved value, so an open draft is never reloaded.
+    private string? ResolveSelection(string? value) =>
+        LlmSelectionMigration.Migrate(value, _pluginManager.LlmProviders);
 
     private static ProviderOption MissingSelectionOption(string value)
     {

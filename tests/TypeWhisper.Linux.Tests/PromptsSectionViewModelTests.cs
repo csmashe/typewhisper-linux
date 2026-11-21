@@ -637,6 +637,49 @@ public sealed class PromptsSectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SelectingAction_WithAnOverrideTheProviderRenamed_ShowsTheListedModelAndKeepsTheSavedValue()
+    {
+        var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
+        prompts.AddAction(
+            new PromptAction
+            {
+                Id = "existing",
+                Name = "Existing",
+                SystemPrompt = "x",
+                ProviderOverride = "plugin:com.typewhisper.voxtral:mistral-small-latest",
+            }
+        );
+        var provider = new FakeLlmProviderPlugin(
+            "com.typewhisper.voxtral",
+            "Mistral",
+            "mistral-small-2603",
+            "Mistral Small 4"
+        )
+        {
+            Resolver = model => model == "mistral-small-latest" ? "mistral-small-2603" : null,
+        };
+        using var pluginManager = TestPluginManagerFactory.Create(
+            [provider],
+            loadedPlugins:
+            [
+                TestPluginManagerFactory.CreateLoadedPlugin(_tempDir, provider.PluginId, provider),
+            ]
+        );
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+
+        var sut = new PromptsSectionViewModel(prompts, _profiles, _hotkeys, pluginManager, settings.Object);
+        sut.SelectedAction = sut.Actions.Single(action => action.Id == "existing");
+
+        var selected = Assert.IsType<ProviderOption>(sut.SelectedEditProvider);
+        Assert.Equal("plugin:com.typewhisper.voxtral:mistral-small-2603", selected.Value);
+        Assert.False(selected.IsUnavailable);
+        Assert.DoesNotContain(sut.AvailableProviders, option => option.IsUnavailable);
+        // Re-selecting the shown model is not an edit of the draft.
+        sut.SelectedEditProvider = selected;
+        Assert.Equal("plugin:com.typewhisper.voxtral:mistral-small-latest", sut.EditProviderOverride);
+    }
+
+    [Fact]
     public void SelectingAnotherAction_DropsThePreviousStaleOverridePlaceholder()
     {
         var prompts = new PromptActionService(Path.Join(_tempDir, "prompt-actions.json"));
@@ -1001,6 +1044,9 @@ public sealed class PromptsSectionViewModelTests : IDisposable
         public string ProviderName { get; }
         public bool IsAvailable { get; init; } = true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; }
+        public Func<string, string?>? Resolver { get; init; }
+
+        public string? ResolveSavedModelId(string modelId) => Resolver?.Invoke(modelId);
 
         public Task ActivateAsync(IPluginHostServices host)
         {

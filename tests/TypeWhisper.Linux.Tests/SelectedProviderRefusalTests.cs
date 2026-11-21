@@ -76,6 +76,43 @@ public sealed class SelectedProviderRefusalTests : IDisposable
     }
 
     [Fact]
+    public async Task SelectedModel_ThatTheProviderResolvesToAListedModelServesTheRequest()
+    {
+        var ready = new FakeProvider("com.test.ready", "Ready Provider", "model-r")
+        {
+            Resolver = model => model switch
+            {
+                "model-r-latest" => "model-r",
+                "retired" => "not-listed",
+                _ => null,
+            },
+        };
+        using var pluginManager = CreatePluginManager(ready);
+        var settings = TestPluginManagerFactory.CreateSettings(new AppSettings());
+        var processing = new PromptProcessingService(
+            pluginManager, settings.Object, new MemoryService(pluginManager)
+        );
+        var action = new PromptAction
+        {
+            Id = "rewrite",
+            Name = "Rewrite",
+            SystemPrompt = "Rewrite this",
+            ProviderOverride = "plugin:com.test.ready:model-r-latest",
+        };
+
+        Assert.Null(processing.TryDescribeSelectedProviderProblem("plugin:com.test.ready:model-r-latest"));
+        Assert.Equal(
+            "processed:Ready Provider:model-r:hello",
+            await processing.ProcessAsync(action, "hello", ct: CancellationToken.None, wrapInput: false)
+        );
+        // A resolution outside the listed models is still a missing model.
+        Assert.Equal(
+            Loc.Instance.GetString("Prompts.SelectedModelMissing", "retired", "Ready Provider"),
+            processing.TryDescribeSelectedProviderProblem("plugin:com.test.ready:retired")
+        );
+    }
+
+    [Fact]
     public void SelectedModel_OnUnavailableProvider_ReportsUnavailabilityFirst()
     {
         var signedOut = new FakeProvider("com.test.cli", "CLI Provider", "model-c") { IsAvailable = false };
@@ -448,6 +485,9 @@ public sealed class SelectedProviderRefusalTests : IDisposable
         public string ProviderName { get; }
         public bool IsAvailable { get; init; } = true;
         public IReadOnlyList<PluginModelInfo> SupportedModels { get; set; }
+        public Func<string, string?>? Resolver { get; init; }
+
+        public string? ResolveSavedModelId(string modelId) => Resolver?.Invoke(modelId);
 
         public Task ActivateAsync(IPluginHostServices host)
         {
