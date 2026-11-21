@@ -20,14 +20,15 @@ internal static class TranscriptionLanguageSelectionInvoker
         bool translate,
         string? prompt,
         CancellationToken ct
-    ) =>
-        role.TranscribeAsync(
+    )
+    {
+        var language = role.ToLegacyLanguage(languageSelection);
+        return role.SendBatchAsync(
             wavAudio,
-            role.ToLegacyLanguage(languageSelection),
-            translate,
-            prompt,
+            (wav, token) => role.TranscribeAsync(wav, language, translate, prompt, token),
             ct
         );
+    }
 
     // The hints overloads below hand a plugin every usable hint when there is more than one and
     // otherwise make exactly the single-language call the plugin has always received.
@@ -43,8 +44,39 @@ internal static class TranscriptionLanguageSelectionInvoker
     {
         var hints = role.ToLanguageHints(languageSelection, languageHints);
         return UseSingleLanguageCall(languageSelection, hints)
-            ? role.TranscribeAsync(wavAudio, hints.Count == 0 ? null : hints[0], translate, prompt, ct)
-            : role.TranscribeWithLanguageHintsAsync(wavAudio, hints, translate, prompt, ct);
+            ? role.SendBatchAsync(
+                wavAudio,
+                (wav, token) => role.TranscribeAsync(wav, hints.Count == 0 ? null : hints[0], translate, prompt, token),
+                ct
+            )
+            : role.SendBatchAsync(
+                wavAudio,
+                (wav, token) => role.TranscribeWithLanguageHintsAsync(wav, hints, translate, prompt, token),
+                ct
+            );
+    }
+
+    // Where the engine allows it, batch uploads are retried after transient failures and split when
+    // rejected as too large; every chunk keeps the language arguments and full prompt.
+    // ReSharper disable once ConvertToExtensionBlock -- see the note on the first method above.
+    private static Task<PluginTranscriptionResult> SendBatchAsync(
+        this ITranscriptionEngineRole role,
+        byte[] wavAudio,
+        Func<byte[], CancellationToken, Task<PluginTranscriptionResult>> send,
+        CancellationToken ct
+    )
+    {
+        var upload = role.SupportsHostRetry
+            ? (wav, token) => TranscriptionRequestRetry.Default.RunAsync(
+                role.ProviderId,
+                wav.Length,
+                attempt => send(wav, attempt),
+                token
+            )
+            : send;
+        return role.SupportsHostSplitting
+            ? TranscriptionUploadSplitter.TranscribeAsync(wavAudio, upload, ct)
+            : upload(wavAudio, ct);
     }
 
     public static Task<PluginTranscriptionResult> TranscribeStreamingAsync(

@@ -144,6 +144,8 @@ public sealed class SonioxPlugin
     public string? SelectedModelId => _selectedModelId;
 
     public bool SupportsTranslation => false;
+    // A batch call uploads, creates a remote job and polls it, so a host replay would bill a second job.
+    public bool SupportsHostRetry => false;
 
     public bool SupportsStreaming => true;
     public bool SupportsLanguageHints => true;

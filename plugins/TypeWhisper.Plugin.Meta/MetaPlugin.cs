@@ -168,6 +168,8 @@ public sealed class MetaPlugin : ITranscriptionEnginePlugin, ILlmProviderPlugin,
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    // Speaker numbers restart in every request, so joined chunks would mix up the speakers.
+    public bool SupportsHostSplitting => !SpeakerDiarizationEnabled;
 
     public bool SupportsStreaming => IsConfigured && SelectedModelId is not null;
 

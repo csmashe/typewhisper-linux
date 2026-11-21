@@ -28,9 +28,9 @@ internal static class LlmRequestRetryPolicy
             {
                 throw new OperationCanceledException(ct);
             }
-            catch (PluginRequestException ex) when (retry < maxAttempts && ex.IsTransient && IsTransient(ex) && !ct.IsCancellationRequested)
+            catch (PluginRequestException ex) when (retry < maxAttempts && ex.IsTransient && IsTransient(ex)
+                && !ct.IsCancellationRequested && GetDelay(ex, retry) is { } delay)
             {
-                var delay = GetDelay(ex, retry);
                 Trace.WriteLine($"[LlmRequestRetryPolicy] Retry {retry}: {ex.FailureKind}, delay {delay.TotalMilliseconds} ms");
                 onRetry?.Invoke(ex, retry, delay);
                 await Task.Delay(delay, ct);
@@ -88,12 +88,11 @@ internal static class LlmRequestRetryPolicy
         }
     }
 
-    internal static TimeSpan GetDelay(PluginRequestException failure, int retry)
-    {
-        var delay = failure.RetryAfter ?? TimeSpan.FromMilliseconds(250 * retry);
-        return delay < TimeSpan.Zero ? TimeSpan.Zero
-            : delay > TimeSpan.FromSeconds(5) ? TimeSpan.FromSeconds(5) : delay;
-    }
+    /// <summary>The wait before the next attempt, or null when the provider asked for too long a wait.</summary>
+    internal static TimeSpan? GetDelay(PluginRequestException failure, int retry) =>
+        failure.RetryAfter is { } retryAfter
+            ? ProviderRetryAfter.Honour(retryAfter)
+            : TimeSpan.FromMilliseconds(250 * retry);
 
     private static bool IsTransient(PluginRequestException failure) => failure.FailureKind is
         PluginRequestFailureKind.Network or PluginRequestFailureKind.Timeout
