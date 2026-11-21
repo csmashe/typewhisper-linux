@@ -483,7 +483,7 @@
                     <Border Grid.Row="0"
                             Classes="row">
                         <Grid ColumnDefinitions="*,240"
-                              RowDefinitions="Auto,Auto">
+                              RowDefinitions="Auto,Auto,Auto">
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
                             <ComboBox Grid.Column="1"
@@ -505,6 +505,15 @@
                                        IsVisible="{Binding LanguageSelectionRequired}"
                                        FontSize="12"
                                        Foreground="{DynamicResource TwWarningTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Grid.Row="2"
+                                       Grid.Column="0"
+                                       Grid.ColumnSpan="2"
+                                       Text="{loc:Str Dictation.LanguageTextOnlyHint}"
+                                       IsVisible="{Binding LanguageIsTextOnly}"
+                                       FontSize="11"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,8,0,0" />
                         </Grid>

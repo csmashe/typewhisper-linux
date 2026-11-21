@@ -416,6 +416,7 @@
   "Dictation.LanguageAutoDetect": "自動検出",
   "Dictation.LanguageSelectionRequired": "保存された言語は選択したモデルでは利用できません。言語を明示的に選択してください。",
   "Dictation.LanguageSelectionRequiredAuto": "このモデルは言語を自動検出するため、保存された言語は使用されません。この注意を消すには「自動」を選択してください。",
+  "Dictation.LanguageTextOnlyHint": "音声コマンドと書式設定に使用されます。言語は引き続きモデルが検出します。",
   "Dictation.LiveTranscriptionPreview": "ライブ文字起こしのプレビュー",
   "Dictation.LiveTranscriptionPreviewHint": "話している間、録音オーバーレイに途中のテキストを表示します。",
   "Dictation.LoadingModel": "{0}を読み込んでいます...",

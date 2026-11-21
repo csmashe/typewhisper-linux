@@ -224,11 +224,12 @@ public sealed class LanguageSelectionInvokerTests
     }
 
     [Fact]
-    public void ResolveEffectiveLanguage_Degraded_DropsTheIgnoredTagFromHints()
+    public void ResolveEffectiveLanguage_DegradedWithLanguageList_DropsTheIgnoredTagFromHints()
     {
         var role = new RecordingRole(
             LanguageSelectionSupport.Supported,
-            LanguageSelectionSupport.Unsupported
+            LanguageSelectionSupport.Unsupported,
+            ["en", "fr"]
         );
 
         var (selection, hints) = role.ResolveEffectiveLanguage(
@@ -238,6 +239,38 @@ public sealed class LanguageSelectionInvokerTests
 
         Assert.True(selection.IsAutomatic);
         Assert.Equal(["en"], hints);
+    }
+
+    [Fact]
+    public async Task ResolveEffectiveLanguage_DegradedWithoutLanguageList_KeepsTheChoiceForTextProcessingOnly()
+    {
+        var role = new RecordingRole(
+            LanguageSelectionSupport.Supported,
+            LanguageSelectionSupport.Unsupported
+        );
+        var selection = LanguageSelection.Explicit("de");
+        IReadOnlyList<string> hints = ["de", "en"];
+
+        var effective = role.ResolveEffectiveLanguage(selection, hints);
+        await role.TranscribeAsync([], effective.Selection, effective.Hints, false, null, CancellationToken.None);
+
+        Assert.Same(selection, effective.Selection);
+        Assert.Same(hints, effective.Hints);
+        Assert.Equal(1, role.CallCount);
+        Assert.Null(role.ReceivedLanguage);
+    }
+
+    [Fact]
+    public async Task KeptTextLanguage_ReachesAHintEngineOnlyAsTheOtherAdvisoryHints()
+    {
+        var role = new HintRecordingRole();
+        var effective = role.ResolveEffectiveLanguage(LanguageSelection.Explicit("de"), ["de", "en"]);
+
+        await role.TranscribeAsync([], effective.Selection, effective.Hints, false, null, CancellationToken.None);
+        await using var session = await role.StartStreamingAsync(effective.Selection, effective.Hints, null, CancellationToken.None);
+
+        Assert.Equal(0, role.CallCount);
+        Assert.Equal<IReadOnlyList<string>>([["en"], ["en"]], role.ReceivedHints);
     }
 
     [Fact]
@@ -363,6 +396,44 @@ public sealed class LanguageSelectionInvokerTests
             ReceivedLanguage = language;
             return Task.FromResult(new PluginTranscriptionResult("", null, 0, null));
         }
+    }
+
+    private sealed class HintRecordingRole
+        : LegacyRecordingRole, ITranscriptionEngineRole, ITranscriptionLanguageSelectionCapabilities
+    {
+        public List<IReadOnlyList<string>> ReceivedHints { get; } = [];
+        public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
+        public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Unsupported;
+        public bool SupportsLanguageHints => true;
+
+        public Task<PluginTranscriptionResult> TranscribeWithLanguageHintsAsync(
+            byte[] wavAudio,
+            IReadOnlyList<string> languageHints,
+            bool translate,
+            string? prompt,
+            CancellationToken ct
+        )
+        {
+            ReceivedHints.Add([.. languageHints]);
+            return Task.FromResult(new PluginTranscriptionResult("", null, 0, null));
+        }
+
+        public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+            IReadOnlyList<string> languageHints,
+            CancellationToken ct
+        )
+        {
+            ReceivedHints.Add([.. languageHints]);
+            return Task.FromResult<IStreamingSession>(new NullStreamingSession());
+        }
+    }
+
+    private sealed class NullStreamingSession : IStreamingSession
+    {
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct) => Task.CompletedTask;
+        public Task FinalizeAsync(CancellationToken ct) => Task.CompletedTask;
+        public event Action<StreamingTranscriptEvent>? TranscriptReceived { add { } remove { } }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingRole(
