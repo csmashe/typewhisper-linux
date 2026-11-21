@@ -1390,6 +1390,16 @@ public class App : Application
 
         try
         {
+            // Ducking watches for new streams with its own pactl subscribe child.
+            (services.GetService<IAudioDuckingService>() as IDisposable)?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[App] Audio ducking dispose failed: {ex.Message}");
+        }
+
+        try
+        {
             var playback = services.GetService<AudioPlaybackService>();
             playback?.Dispose();
         }
