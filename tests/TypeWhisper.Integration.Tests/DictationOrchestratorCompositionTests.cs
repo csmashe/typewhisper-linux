@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Linux.Models;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.PluginSDK;
@@ -480,7 +481,42 @@ public sealed class DictationOrchestratorCompositionTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public Task AutoOnlyEngine_IgnoredSavedLanguage_DoesNotReachPostProcessing()
+    public Task AutoOnlyEngineWithoutLanguageList_SavedLanguageDrivesSpokenCommandsButNotTheEngine()
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("language-app", "Language app — integration")
+            );
+            // Parakeet-style: auto-detects only, lists no languages, reports none back.
+            var autoOnly = new LanguageConstrainedRole(
+                fixture.Plugin,
+                LanguageSelectionSupport.Unsupported,
+                supportedLanguages: []
+            );
+            PluginManagerTestAccess.SetTranscriptionEngines(fixture.PluginManager, [autoOnly]);
+            AddSavedGermanProfile(fixture);
+            // The localized spoken-command rules run under this strategy.
+            fixture.Settings.Save(fixture.Settings.Current with
+            {
+                SpokenFormattingStrategy = SpokenFormattingStrategy.FallbackOnly,
+            });
+            fixture.Plugin.EnqueueResult(_ =>
+                Task.FromResult(new PluginTranscriptionResult("Hallo, neue Zeile, Welt.", null, 1, null))
+            );
+
+            var result = await DictateOnceAsync(fixture);
+
+            Assert.Equal("ready", result.Status);
+            Assert.Equal<string?>([null], fixture.Plugin.ReceivedLanguages);
+            Assert.Equal("Hallo\nWelt.", result.Text);
+            Assert.Equal("de", Assert.Single(fixture.History.Records).Language);
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public Task AutoOnlyEngineWithLanguageList_IgnoredSavedLanguage_DoesNotReachPostProcessing()
     {
         return BoundedTest.RunAsync(async () =>
         {
@@ -489,33 +525,19 @@ public sealed class DictationOrchestratorCompositionTests
                 focusedApp: ("language-app", "Language app — integration"),
                 pipeline: pipeline
             );
-            // Parakeet-style: auto-detects only, and reports no detected language back.
+            // Lists languages but cannot be told one, so the picker never offers "de" for it.
             var autoOnly = new LanguageConstrainedRole(
                 fixture.Plugin,
                 LanguageSelectionSupport.Unsupported,
-                supportedLanguages: []
+                supportedLanguages: ["en", "fr"]
             );
             PluginManagerTestAccess.SetTranscriptionEngines(fixture.PluginManager, [autoOnly]);
-            var profiles = fixture.Provider.GetRequiredService<IProfileService>();
-            profiles.AddProfile(
-                new Profile
-                {
-                    Id = "integration-auto-only",
-                    Name = "Saved German",
-                    ProcessNames = ["language-app"],
-                    InputLanguage = "de",
-                }
-            );
+            AddSavedGermanProfile(fixture);
             fixture.Plugin.EnqueueResult(_ =>
                 Task.FromResult(new PluginTranscriptionResult("hallo", null, 1, null))
             );
 
-            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
-            await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
-            fixture.FeedNonSilentAudio();
-            var resultTask = fixture.WaitForResultAsync(sessionId);
-            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
-            var result = await BoundedTest.WaitAsync(resultTask);
+            var result = await DictateOnceAsync(fixture);
 
             Assert.Equal("ready", result.Status);
             // The ignored "de" must not resurface as the source language translation trusts.
@@ -525,6 +547,27 @@ public sealed class DictationOrchestratorCompositionTests
             Assert.Null(pipeline.Options.EffectiveSourceLanguage);
             Assert.Empty(pipeline.Options.ConfiguredLanguageCandidates);
         });
+    }
+
+    private static void AddSavedGermanProfile(OrchestratorCompositionFixture fixture) =>
+        fixture.Provider.GetRequiredService<IProfileService>().AddProfile(
+            new Profile
+            {
+                Id = "integration-auto-only",
+                Name = "Saved German",
+                ProcessNames = ["language-app"],
+                InputLanguage = "de",
+            }
+        );
+
+    private static async Task<DictationSessionResult> DictateOnceAsync(OrchestratorCompositionFixture fixture)
+    {
+        var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+        await BoundedTest.WaitAsync(fixture.RecordingStarted.Task);
+        fixture.FeedNonSilentAudio();
+        var resultTask = fixture.WaitForResultAsync(sessionId);
+        await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+        return await BoundedTest.WaitAsync(resultTask);
     }
 
     [Fact]

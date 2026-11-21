@@ -188,6 +188,10 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _languageSelectionRequired;
 
+    // The active model detects the language itself, so the choice only drives text processing.
+    [ObservableProperty]
+    private bool _languageIsTextOnly;
+
     [ObservableProperty]
     private string? _lastCapturePath;
 
@@ -1225,6 +1229,13 @@ public partial class DictationSectionViewModel : ObservableObject
     private static readonly string[] s_defaultLanguageCodes =
         ["de", "en", "fr", "es", "it", "pt", "nl", "pl", "cs", "sv", "da", "fi", "el", "ar", "ja", "ko", "zh", "vi"];
 
+    // Offered when the choice only drives text processing (see LanguageIsTextOnly).
+    private static readonly string[] s_allLanguageCodes = CultureInfo.GetCultures(CultureTypes.NeutralCultures)
+        .Select(culture => culture.TwoLetterISOLanguageName)
+        .Where(code => code != "iv" && code.Length is 2 or 3 && code.All(c => c is >= 'a' and <= 'z'))
+        .Distinct()
+        .ToArray();
+
     // Tags engines use that .NET has no culture for, on every ICU or only on older ones
     // (ba before ICU 78, oc before 74).
     private static readonly Dictionary<string, string> s_uncataloguedLanguageNames =
@@ -1298,8 +1309,9 @@ public partial class DictationSectionViewModel : ObservableObject
             );
         if (!selectedModelIsActive || _models.ActiveTranscriptionPlugin is not { } engine)
         {
-            ReplaceCollection(LanguageChoices, CreateUnrestrictedLanguageChoices());
+            ReplaceCollection(LanguageChoices, CreateUnrestrictedLanguageChoices(s_defaultLanguageCodes));
             LanguageSelectionRequired = false;
+            LanguageIsTextOnly = false;
             OnPropertyChanged(nameof(SelectedLanguageOption));
             RefreshAvailableAdditionalLanguages();
             return;
@@ -1308,11 +1320,13 @@ public partial class DictationSectionViewModel : ObservableObject
         var capabilities = engine as ITranscriptionLanguageSelectionCapabilities;
         var automaticSupported =
             capabilities?.AutomaticDetectionSupport != LanguageSelectionSupport.Unsupported;
+        LanguageIsTextOnly = TranscriptionLanguageSelectionInvoker.KeepsTextLanguage(engine);
         var explicitSupported =
-            capabilities?.ExplicitSelectionSupport != LanguageSelectionSupport.Unsupported;
+            LanguageIsTextOnly
+            || capabilities?.ExplicitSelectionSupport != LanguageSelectionSupport.Unsupported;
         var supportedLanguages = engine.SupportedLanguages;
         var choices = supportedLanguages.Count == 0
-            ? CreateUnrestrictedLanguageChoices()
+            ? CreateUnrestrictedLanguageChoices(LanguageIsTextOnly ? s_allLanguageCodes : s_defaultLanguageCodes)
             : CreateLanguageChoices(supportedLanguages);
 
         ReplaceCollection(
@@ -1320,9 +1334,8 @@ public partial class DictationSectionViewModel : ObservableObject
             choices.Where(option => option.Code == "auto" ? automaticSupported : explicitSupported)
         );
         OnPropertyChanged(nameof(SelectedLanguageOption));
-        // Parakeet-style engines reject every explicit language: telling the user to
-        // "choose a language explicitly" would contradict the only selectable option,
-        // so the warning switches to a switch-to-Auto instruction.
+        // An engine that lists languages but rejects every explicit one offers only Auto,
+        // so the warning says to switch to Auto rather than pick a language.
         _autoIsOnlyLanguageChoice = LanguageChoices is [{ Code: "auto" }];
         LanguageSelectionRequired = SelectedLanguageOption is null;
         OnPropertyChanged(nameof(LanguageSelectionWarning));
@@ -1331,9 +1344,9 @@ public partial class DictationSectionViewModel : ObservableObject
 
     // With no engine, or one accepting any language, the saved choice stays selectable, by its
     // code when it has no name.
-    private IReadOnlyList<SpokenLanguageOption> CreateUnrestrictedLanguageChoices()
+    private IReadOnlyList<SpokenLanguageOption> CreateUnrestrictedLanguageChoices(IEnumerable<string> codes)
     {
-        var choices = CreateLanguageChoices([.. s_defaultLanguageCodes, Language]);
+        var choices = CreateLanguageChoices([.. codes, Language]);
         return string.IsNullOrWhiteSpace(Language)
             || choices.Any(option => string.Equals(option.Code, Language, StringComparison.OrdinalIgnoreCase))
                 ? choices

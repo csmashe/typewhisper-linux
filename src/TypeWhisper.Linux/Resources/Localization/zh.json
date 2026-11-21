@@ -416,6 +416,7 @@
   "Dictation.LanguageAutoDetect": "自动检测",
   "Dictation.LanguageSelectionRequired": "所选模型不支持已保存的语言。请明确选择一种语言。",
   "Dictation.LanguageSelectionRequiredAuto": "此模型会自动检测语言，因此不会使用已保存的语言。选择“自动”即可清除此提示。",
+  "Dictation.LanguageTextOnlyHint": "用于语音命令和格式设置；语言仍由模型自行检测。",
   "Dictation.LiveTranscriptionPreview": "实时转录预览",
   "Dictation.LiveTranscriptionPreviewHint": "在你说话时，在录音浮层中显示部分文本。",
   "Dictation.LoadingModel": "正在加载{0}...",

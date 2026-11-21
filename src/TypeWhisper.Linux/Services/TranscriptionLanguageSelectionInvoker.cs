@@ -41,6 +41,7 @@ internal static class TranscriptionLanguageSelectionInvoker
         CancellationToken ct
     )
     {
+        (languageSelection, languageHints) = role.ResolveEngineLanguage(languageSelection, languageHints);
         var hints = role.ToLanguageHints(languageSelection, languageHints);
         return UseSingleLanguageCall(languageSelection, hints)
             ? role.TranscribeAsync(wavAudio, hints.Count == 0 ? null : hints[0], translate, prompt, ct)
@@ -58,6 +59,7 @@ internal static class TranscriptionLanguageSelectionInvoker
         CancellationToken ct
     )
     {
+        (languageSelection, languageHints) = role.ResolveEngineLanguage(languageSelection, languageHints);
         var hints = role.ToLanguageHints(languageSelection, languageHints);
         return UseSingleLanguageCall(languageSelection, hints)
             ? role.TranscribeStreamingAsync(
@@ -81,6 +83,7 @@ internal static class TranscriptionLanguageSelectionInvoker
         CancellationToken ct
     )
     {
+        (languageSelection, languageHints) = role.ResolveEngineLanguage(languageSelection, languageHints);
         var hints = role.ToLanguageHints(languageSelection, languageHints);
         if (prompt is not null)
         {
@@ -135,8 +138,7 @@ internal static class TranscriptionLanguageSelectionInvoker
     ///     The selection the engine actually runs with: a model that can only auto-detect
     ///     (Parakeet TDT v3, Cloudflare ASR) cannot be told a language but detects the saved
     ///     one anyway, so an explicit selection degrades to automatic instead of failing every
-    ///     run after a model switch. Callers derive the configured language from the result,
-    ///     so the ignored tag never doubles as the downstream source-language fallback.
+    ///     run after a model switch.
     /// </summary>
     // ReSharper disable once ConvertToExtensionBlock -- see the note on the first method above.
     public static LanguageSelection ResolveEffectiveSelection(
@@ -168,9 +170,10 @@ internal static class TranscriptionLanguageSelectionInvoker
     }
 
     /// <summary>
-    ///     <see cref="ResolveEffectiveSelection" /> with its hint list: when the selection
-    ///     degrades to automatic, the ignored tag leaves the hints too, so post-processing
-    ///     sees the same candidates as under a saved Auto.
+    ///     The selection and hints text processing uses. A model that detects the language and
+    ///     lists none (Parakeet) keeps an explicit choice for spoken commands and number words,
+    ///     while its engine calls still run automatic (<see cref="ResolveEngineLanguage" />).
+    ///     Any other model that ignores the choice drops it, as under a saved Auto.
     /// </summary>
     // ReSharper disable once ConvertToExtensionBlock -- see the note on the first method above.
     public static (LanguageSelection Selection, IReadOnlyList<string> Hints) ResolveEffectiveLanguage(
@@ -179,8 +182,36 @@ internal static class TranscriptionLanguageSelectionInvoker
         IReadOnlyList<string> languageHints
     )
     {
+        ArgumentNullException.ThrowIfNull(role);
+        ArgumentNullException.ThrowIfNull(languageSelection);
         ArgumentNullException.ThrowIfNull(languageHints);
 
+        return KeepsTextLanguage(role)
+            ? (languageSelection, languageHints)
+            : role.ResolveEngineLanguage(languageSelection, languageHints);
+    }
+
+    /// <summary>Whether a model that ignores an explicit language still takes it for text processing.</summary>
+    // A null list (older plugin builds, loose mocks) means "any language", like the SDK's empty default.
+    internal static bool KeepsTextLanguage(ITranscriptionEngineRole role) =>
+        role is ITranscriptionLanguageSelectionCapabilities
+        {
+            ExplicitSelectionSupport: LanguageSelectionSupport.Unsupported,
+            AutomaticDetectionSupport: not LanguageSelectionSupport.Unsupported,
+        }
+        && role.SupportedLanguages is not { Count: > 0 };
+
+    /// <summary>
+    ///     <see cref="ResolveEffectiveSelection" /> with its hint list: when the selection
+    ///     degrades to automatic, the ignored tag leaves the hints too.
+    /// </summary>
+    // ReSharper disable once ConvertToExtensionBlock -- see the note on the first method above.
+    private static (LanguageSelection Selection, IReadOnlyList<string> Hints) ResolveEngineLanguage(
+        this ITranscriptionEngineRole role,
+        LanguageSelection languageSelection,
+        IReadOnlyList<string> languageHints
+    )
+    {
         var effective = role.ResolveEffectiveSelection(languageSelection);
         if (ReferenceEquals(effective, languageSelection))
         {

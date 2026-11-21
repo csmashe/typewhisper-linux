@@ -416,6 +416,7 @@
   "Dictation.LanguageAutoDetect": "Automatisch erkennen",
   "Dictation.LanguageSelectionRequired": "Die gespeicherte Sprache ist für das ausgewählte Modell nicht verfügbar. Wählen Sie ausdrücklich eine Sprache aus.",
   "Dictation.LanguageSelectionRequiredAuto": "Dieses Modell erkennt die Sprache automatisch, die gespeicherte Sprache wird daher nicht verwendet. Wählen Sie Auto aus, um diesen Hinweis auszublenden.",
+  "Dictation.LanguageTextOnlyHint": "Für Sprachbefehle und Formatierung; das Modell erkennt die Sprache weiterhin selbst.",
   "Dictation.LiveTranscriptionPreview": "Echtzeit-Transkriptionsvorschau",
   "Dictation.LiveTranscriptionPreviewHint": "Während des Sprechens Teiltext im Aufnahme-Overlay anzeigen.",
   "Dictation.LoadingModel": "{0} wird geladen...",
