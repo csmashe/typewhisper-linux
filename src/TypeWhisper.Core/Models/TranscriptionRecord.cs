@@ -57,6 +57,26 @@ public sealed record TranscriptionRecord
     /// </summary>
     public IReadOnlyList<LlmCallProvenance> LlmCalls { get; init; } = [];
 
+    /// <summary>Seconds speech-to-text took after the recording ended. Null on older entries.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? TranscriptionSeconds { get; init; }
+
+    /// <summary>
+    ///     The LLM provider the entry's cleanup, prompt action or translation used. When several
+    ///     provider/model pairs ran, a comma-separated list of "provider · model" labels and
+    ///     <see cref="LlmModel" /> is null. Null when no LLM ran.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LlmProvider { get; init; }
+
+    /// <summary>The model ID of the single LLM that ran; see <see cref="LlmProvider" />.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LlmModel { get; init; }
+
+    /// <summary>Seconds the LLM calls took until they answered, summed across calls; null when none answered.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? LlmSeconds { get; init; }
+
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
     [JsonIgnore]

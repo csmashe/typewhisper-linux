@@ -887,6 +887,60 @@ public sealed class HistorySectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ProcessingDetails_OlderEntryShowsOnlyTheEngine()
+    {
+        var record = CreateRecord("text") with { EngineUsed = "whisper", ModelUsed = "base" };
+
+        var row = Assert.Single(HistoryRecordRow.BuildProcessingDetails(record));
+
+        Assert.Equal(new HistoryDetailRow(Loc.Instance["Dictation.Engine"], "whisper · base"), row);
+    }
+
+    [Fact]
+    public void ProcessingDetails_ShowTranscriptionAndLlmRows()
+    {
+        var record = CreateRecord("text") with
+        {
+            EngineUsed = "whisper",
+            ModelUsed = null,
+            TranscriptionSeconds = 1.24,
+            LlmProvider = "OpenAI",
+            LlmModel = "gpt-4o",
+            LlmSeconds = 125.4,
+        };
+
+        Assert.Equal(
+            [
+                new HistoryDetailRow(Loc.Instance["Dictation.Engine"], "whisper"),
+                new HistoryDetailRow(Loc.Instance["History.Details.TranscriptionTime"],
+                    Loc.Instance.GetString("History.Details.Seconds", 1.24)),
+                new HistoryDetailRow(Loc.Instance["History.Details.Llm"], "OpenAI · gpt-4o"),
+                new HistoryDetailRow(Loc.Instance["History.Details.LlmTime"],
+                    Loc.Instance.GetString("History.Details.MinutesSeconds", 2L, 5L)),
+            ],
+            HistoryRecordRow.BuildProcessingDetails(record)
+        );
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(-1.0)]
+    [InlineData(double.NaN)]
+    public void FormatProcessingTime_MissingOrInvalid_IsNull(double? seconds)
+    {
+        Assert.Null(HistoryRecordRow.FormatProcessingTime(seconds));
+    }
+
+    [Fact]
+    public void FormatProcessingTime_SwitchesToMinutesBeforeShowingSixtySeconds()
+    {
+        Assert.Equal(Loc.Instance.GetString("History.Details.Seconds", 59.9),
+            HistoryRecordRow.FormatProcessingTime(59.9));
+        Assert.Equal(Loc.Instance.GetString("History.Details.MinutesSeconds", 1L, 0L),
+            HistoryRecordRow.FormatProcessingTime(59.96));
+    }
+
+    [Fact]
     public void InspectorCalls_ProjectsProvenanceWithLabels()
     {
         var history = CreateHistoryService();

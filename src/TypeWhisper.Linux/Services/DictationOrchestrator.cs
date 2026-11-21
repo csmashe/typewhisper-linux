@@ -61,11 +61,19 @@ internal sealed record RecordingContext(
     public string? StreamingDetectedLanguage { get; init; }
 
     /// <summary>
-    ///     Per-run sink for LLM prompt provenance. Null when capture is disabled
-    ///     for this run (history saving or the provenance setting is off), so the
-    ///     pipeline records nothing and pays no cost.
+    ///     Per-run sink for the LLM calls, which History summarizes into the provider, model and
+    ///     LLM time. Null when history saving is off, so the pipeline records nothing.
     /// </summary>
     public LlmCallCapture? Capture { get; init; }
+
+    /// <summary>Whether the prompts and replies in <see cref="Capture" /> are saved with the entry (the provenance setting).</summary>
+    public bool PersistLlmCalls { get; init; }
+
+    /// <summary>How long the streaming session took to finalize after the recording stopped.</summary>
+    public double? StreamingFinalizeSeconds { get; init; }
+
+    /// <summary>How long speech-to-text took after the recording stopped, set once transcription succeeds.</summary>
+    public double? TranscriptionSeconds { get; init; }
     public LiveCleanupDraft? LiveCleanup { get; init; }
 
     /// <summary>Keeps a run that is not a live dictation (text API) out of the Dictation status.</summary>
@@ -1933,7 +1941,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
                         var streamingFinalizeOperation =
                             _telemetry.Child(recordingContext.SessionId, "streaming.finalize");
-                        var (streamingFinalText, streamingFaulted, streamingDetectedLanguage) =
+                        var (streamingFinalText, streamingFaulted, streamingDetectedLanguage, streamingFinalizeSeconds) =
                             await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
                                 stoppedStreamingStartupCts,
@@ -1948,6 +1956,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                             StreamingFinalText = streamingFinalText,
                             StreamingFaulted = streamingFaulted,
                             StreamingDetectedLanguage = streamingDetectedLanguage,
+                            StreamingFinalizeSeconds = streamingFinalizeSeconds,
                         };
                     }
 
@@ -2353,12 +2362,15 @@ public sealed partial class DictationOrchestrator : IDisposable
         string? finalText = null;
         string? failurePrompt = null;
 
-        // Attach an LLM-provenance sink only when it will actually be persisted:
-        // capture piggybacks history storage, so both toggles must be on. Left
-        // null otherwise, so the prompt chokepoint records (and costs) nothing.
-        if (_settings.Current is { SaveToHistoryEnabled: true, CaptureLlmProvenance: true })
+        // The calls feed the History entry's LLM details, so they are only recorded when
+        // history is saved; their prompts and replies are kept only with the provenance setting.
+        if (_settings.Current.SaveToHistoryEnabled)
         {
-            context = context with { Capture = new LlmCallCapture() };
+            context = context with
+            {
+                Capture = new LlmCallCapture(),
+                PersistLlmCalls = _settings.Current.CaptureLlmProvenance,
+            };
         }
 
         var effectiveModelId =
@@ -2458,6 +2470,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             );
 
             PluginTranscriptionResult? result;
+            var batchTranscriptionSeconds = 0d;
             var transcribeOperation = _telemetry.Child(context.SessionId, "transcribe");
             try
             {
@@ -2521,6 +2534,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // back to batch on the captured WAV. The audio tap is
                     // non-destructive so the WAV is complete regardless of
                     // streaming state.
+                    var batchStarted = Stopwatch.GetTimestamp();
                     result = await plugin.TranscribeAsync(
                         wav,
                         languageSelection,
@@ -2529,6 +2543,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
                         cancelToken
                     );
+                    batchTranscriptionSeconds = Stopwatch.GetElapsedTime(batchStarted).TotalSeconds;
                     // Trim before the preview fallback and gates so they see the remaining text.
                     // Honor the aggressive short-clip setting like the two gates below.
                     if (!_settings.Current.TranscribeShortQuietClipsAggressively)
@@ -2587,6 +2602,12 @@ public sealed partial class DictationOrchestrator : IDisposable
                 // ReSharper disable once DisposeOnUsingVariable -- intentional early dispose to release the lock; the using re-dispose at scope end is idempotent.
                 await leaseScope.DisposeAsync();
             }
+
+            // A faulted or mismatched stream still kept the user waiting before the batch decode.
+            context = context with
+            {
+                TranscriptionSeconds = (context.StreamingFinalizeSeconds ?? 0) + batchTranscriptionSeconds,
+            };
 
             // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- result comes from a plugin transcription call whose non-null annotation may not hold.
             _telemetry.Tag(context.SessionId, "language", result?.DetectedLanguage
@@ -3102,7 +3123,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             if (_settings.Current.MemoryEnabled && !insertionThrew
                 && _promptProcessing.TryResolveDefaultProvider() is var (memoryLlm, memoryModel))
             {
-                if (context.Capture is not null)
+                if (context is { Capture: not null, PersistLlmCalls: true })
                 {
                     try
                     {
@@ -4628,6 +4649,7 @@ public sealed partial class DictationOrchestrator : IDisposable
             ?? LanguageSelectionResolver
                 .ResolveOrAutomatic(context.Profile?.InputLanguage, _settings.Current.Language)
                 .LanguageTag;
+        var llm = LlmUsageSummary.From(context.Capture?.Calls ?? []);
 
         return new TranscriptionRecord
         {
@@ -4646,8 +4668,15 @@ public sealed partial class DictationOrchestrator : IDisposable
             ModelUsed = modelUsed,
             AudioFileName = Path.GetFileName(wavPath),
             TranscriptionTaskUsed = ResolveTranscriptionTask(context),
+            TranscriptionSeconds = context.TranscriptionSeconds,
+            LlmProvider = llm.Provider,
+            LlmModel = llm.Model,
+            LlmSeconds = llm.Seconds,
         };
     }
+
+    private static IReadOnlyList<LlmCallProvenance> PersistedLlmCalls(RecordingContext context) =>
+        context.PersistLlmCalls ? context.Capture?.Calls ?? [] : [];
 
     // Records statistics for a completed spoken command and saves its history entry
     // when history saving is enabled. RawText is the source text the command acted on
@@ -4691,7 +4720,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     CleanupLevelUsed = CleanupLevel.None,
                     PromptActionApplied = true,
                     IsSpokenCommand = true,
-                    LlmCalls = context.Capture?.Calls ?? [],
+                    LlmCalls = PersistedLlmCalls(context),
                 };
             // Statistics before history: RecordTranscription may still be catching up from history, and a
             // record persisted first would be imported by that backfill and then counted a second time.
@@ -4779,7 +4808,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         && !string.IsNullOrWhiteSpace(context.ScreenContext),
                     ClipboardContextApplied = referenceContextSent
                         && !string.IsNullOrWhiteSpace(context.ClipboardContext),
-                    LlmCalls = context.Capture?.Calls ?? [],
+                    LlmCalls = PersistedLlmCalls(context),
                 };
             // Statistics before history: RecordTranscription may still be catching up from history, and a
             // record persisted first would be imported by that backfill and then counted a second time.
@@ -5542,7 +5571,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         });
     }
 
-    private static async Task<(string? FinalText, bool Faulted, string? DetectedLanguage)> TeardownStreamingSessionAsync(
+    private static async Task<(string? FinalText, bool Faulted, string? DetectedLanguage, double? FinalizeSeconds)> TeardownStreamingSessionAsync(
         StreamingTranscriptionCoordinator? coordinator,
         CancellationTokenSource? startupCts,
         bool finalize,
@@ -5571,13 +5600,15 @@ public sealed partial class DictationOrchestrator : IDisposable
         if (coordinator is null)
         {
             startupCts?.Dispose();
-            return (null, false, null);
+            return (null, false, null, null);
         }
 
         string? finalText = null;
         var finalizeThrew = false;
+        double? finalizeSeconds = null;
         if (finalize)
         {
+            var finalizeStarted = Stopwatch.GetTimestamp();
             try
             {
                 finalText = await coordinator.FinalizeAsync(ct);
@@ -5595,12 +5626,13 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Trace.WriteLine($"[Dictation] Streaming finalize error: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 finalizeThrew = true;
             }
+            finalizeSeconds = Stopwatch.GetElapsedTime(finalizeStarted).TotalSeconds;
         }
 
         var detectedLanguage = coordinator.DetectedLanguage;
         await coordinator.DisposeAsync();
         startupCts?.Dispose();
-        return (finalText, coordinator.Faulted || finalizeThrew, detectedLanguage);
+        return (finalText, coordinator.Faulted || finalizeThrew, detectedLanguage, finalizeSeconds);
     }
 
     private async Task<string> StopPartialTranscriptionSessionAsync()
