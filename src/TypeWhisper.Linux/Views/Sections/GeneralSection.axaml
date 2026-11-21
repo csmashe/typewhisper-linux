@@ -206,16 +206,22 @@
 
                     <Border Grid.Row="4"
                             Padding="18,14">
-                        <Grid ColumnDefinitions="*,320"
-                              ColumnSpacing="16">
-                            <TextBlock Text="{loc:Str General.BearerToken}"
-                                       FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1"
-                                     AutomationProperties.Name="{loc:Str General.BearerToken}"
-                                     IsReadOnly="True"
-                                     Text="{Binding ApiBearerToken}" />
-                        </Grid>
+                        <StackPanel Spacing="8">
+                            <Grid ColumnDefinitions="*,320"
+                                  ColumnSpacing="16">
+                                <TextBlock Text="{loc:Str General.BearerToken}"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center" />
+                                <TextBox Grid.Column="1"
+                                         AutomationProperties.Name="{loc:Str General.BearerToken}"
+                                         IsReadOnly="True"
+                                         Text="{Binding ApiBearerToken}" />
+                            </Grid>
+                            <TextBlock Text="{loc:Str General.BrowserExtensionHint}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="5"

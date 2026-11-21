@@ -1210,7 +1210,11 @@ public sealed partial class DictationOrchestrator : IDisposable
                 //     opt-out, not just dropping the data afterward).
                 // Either way the task is awaited before the snapshot task returns, so the stop
                 // ceiling covers it. Zero cost when both toggles are off (the common case).
-                var isBrowserWindow = ActiveWindowService.IsSupportedBrowserWindow(initialSnap);
+                // Read once: a report arriving later must not turn a window already captured as a
+                // non-browser into one whose URL rematch could have disabled that capture.
+                var extensionReport = _activeWindow.GetBrowserExtensionReport(initialSnap);
+                var isBrowserWindow = ActiveWindowService.IsSupportedBrowserWindow(initialSnap)
+                    || extensionReport is not null;
                 Task? contextCaptureTask = null;
                 if (!isBrowserWindow)
                 {
@@ -1242,11 +1246,13 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // come from a window focused later.
                     var deferredUrl = initialSnap is null
                         ? null
-                        : await Task.Run(
-                                () => _activeWindow.GetBrowserUrlForSnapshot(initialSnap),
-                                deferredCts.Token
-                            )
-                            .ConfigureAwait(false);
+                        : extensionReport is not null
+                            ? extensionReport.Url
+                            : await Task.Run(
+                                    () => _activeWindow.ReadAddressBarUrl(initialSnap),
+                                    deferredCts.Token
+                                )
+                                .ConfigureAwait(false);
 
                     if (initialSnap is not null && !string.IsNullOrWhiteSpace(deferredUrl))
                     {

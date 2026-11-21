@@ -151,6 +151,7 @@ internal static class ServiceRegistrations
         // off by default. Surfaced as a button in the Dictation settings when target-app
         // correction learning is enabled and the flag reads as off.
         services.AddSingleton<IAccessibilityBusActivation, AccessibilityBusActivationService>();
+        services.AddSingleton<BrowserExtensionContextStore>();
         services.AddSingleton<ActiveWindowService>();
         services.AddSingleton<IActiveWindowService>(sp =>
             sp.GetRequiredService<ActiveWindowService>()

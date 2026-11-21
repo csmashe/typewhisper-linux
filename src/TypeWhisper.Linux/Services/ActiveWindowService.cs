@@ -27,6 +27,7 @@ public sealed class ActiveWindowService : IActiveWindowService
     private static readonly TimeSpan s_providerSyncBudget = TimeSpan.FromMilliseconds(150);
 
     private readonly AtSpiUrlExtractor _atSpiUrlExtractor;
+    private readonly BrowserExtensionContextStore? _browserContext;
     private readonly bool _isXclipAvailable;
     private readonly bool _isXdotoolAvailable;
     private readonly IProcessRunner _processRunner;
@@ -36,11 +37,13 @@ public sealed class ActiveWindowService : IActiveWindowService
     public ActiveWindowService(
         IEnumerable<IActiveWindowProvider> providers,
         AtSpiUrlExtractor atSpiUrlExtractor,
-        IProcessRunner? processRunner = null
+        IProcessRunner? processRunner = null,
+        BrowserExtensionContextStore? browserContext = null
     )
     {
         _providers = providers.ToList();
         _atSpiUrlExtractor = atSpiUrlExtractor;
+        _browserContext = browserContext;
         _processRunner = processRunner ?? new ProcessRunner();
         _isXdotoolAvailable = CheckXdotoolAvailable();
         _isXclipAvailable = CheckCommandAvailable("xclip", ["-version"]);
@@ -85,7 +88,7 @@ public sealed class ActiveWindowService : IActiveWindowService
     {
         var snapshot = GetActiveWindowSnapshotSync();
         var nonInteractiveUrl = GetBrowserUrlForSnapshot(snapshot);
-        if (nonInteractiveUrl is not null)
+        if (nonInteractiveUrl is not null || GetBrowserExtensionReport(snapshot) is not null)
         {
             return nonInteractiveUrl;
         }
@@ -115,6 +118,16 @@ public sealed class ActiveWindowService : IActiveWindowService
         ActiveWindowSnapshot? snapshot,
         bool isPolling = false
     )
+    {
+        // A browser extension's report decides alone, also for browsers the address-bar walk doesn't
+        // know; a report without a URL means the tab shows no website.
+        return GetBrowserExtensionReport(snapshot) is { } report
+            ? report.Url
+            : ReadAddressBarUrl(snapshot, isPolling);
+    }
+
+    /// <summary>The address-bar read behind <see cref="GetBrowserUrlForSnapshot" />, ignoring extension reports.</summary>
+    internal string? ReadAddressBarUrl(ActiveWindowSnapshot? snapshot, bool isPolling = false)
     {
         // Without the owner's PID the AT-SPI walk could only match by name and title, which can
         // read another instance's address bar. Unknown or rejected ownership leaves the
@@ -151,6 +164,15 @@ public sealed class ActiveWindowService : IActiveWindowService
                 SelfAtSpiAppName,
                 processId
             );
+    }
+
+    /// <summary>
+    ///     The current browser extension report for <paramref name="snapshot" />, whose URL (or "no website")
+    ///     replaces the address-bar read; null when none covers that window.
+    /// </summary>
+    public BrowserExtensionReport? GetBrowserExtensionReport(ActiveWindowSnapshot? snapshot)
+    {
+        return _browserContext?.Current(snapshot);
     }
 
     /// <summary>

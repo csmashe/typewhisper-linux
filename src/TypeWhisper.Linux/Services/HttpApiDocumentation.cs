@@ -44,6 +44,18 @@ internal static class HttpApiDocumentation
         {{ENDPOINTS}}
         </tbody></table>
         <p>OPTIONS is available for CORS preflight. A known path with an unsupported method returns 405 with an Allow header.</p>
+        <h2>Browser extension</h2>
+        <p>The TypeWhisper browser extension for Chrome and Firefox can start and stop dictation and tell website profiles which
+        site is open, also where TypeWhisper cannot read the address bar. In its settings, set the port to {{PORT}} (it defaults to
+        8978) and paste the token. Requests from browser extensions are allowed and still need the token; requests from web pages
+        stay blocked.</p>
+        <p>PUT /v1/browser/context takes JSON <code>client_id</code> (1 to 128 characters), <code>focused</code> (boolean) and
+        optional <code>url</code> and <code>title</code>; other or repeated fields return 400. A focused report belongs to the window
+        in front when it arrives, and website profiles then use its URL instead of reading the address bar. Reports expire after
+        three minutes, so repeat them every minute. <code>focused: false</code> clears only that client's report. Only http, https
+        and file URLs count; new tabs and browser pages mean no website. The response has <code>status</code> active, ignored
+        (TypeWhisper or no identifiable window in front) or cleared, with <code>process_name</code> and <code>url</code>.
+        GET /v1/status reports <code>supports_browser_context</code>.</p>
         <h2>Transcription options</h2>
         <p>Upload audio as multipart field <code>file</code>, send raw audio, or POST JSON with a <code>path</code> to /v1/transcribe/local-file.
         Multipart uses the option names below; raw audio uses corresponding x- headers with hyphens (for example x-response-format).
@@ -78,7 +90,7 @@ internal static class HttpApiDocumentation
         <table><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody>
         <tr><td>400</td><td>Invalid request, options, or JSON.</td></tr>
         <tr><td>401</td><td>Missing or invalid bearer token.</td></tr>
-        <tr><td>403</td><td>Forbidden origin or host.</td></tr>
+        <tr><td>403</td><td>Forbidden origin or host. Web page origins are blocked; browser extension origins are allowed.</td></tr>
         <tr><td>404</td><td>Unknown route or requested resource.</td></tr>
         <tr><td>405</td><td>Unsupported method for a known path; see Allow.</td></tr>
         <tr><td>409</td><td>Conflicting profile shortcut, dictation or recorder state.</td></tr>

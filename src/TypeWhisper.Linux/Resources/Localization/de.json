@@ -703,6 +703,7 @@
   "General.AutostartEntryPreserved": "TypeWhisper hat den fremden oder angepassten Autostart-Eintrag unter {0} unangetastet gelassen und wird ihn weder überschreiben noch löschen.",
   "General.AutostartHint": "TypeWhisper startet automatisch, wenn Sie sich anmelden.",
   "General.BearerToken": "Bearer-Token",
+  "General.BrowserExtensionHint": "Die TypeWhisper-Browsererweiterung kann über diese API das Diktat starten und Website-Profilen mitteilen, welche Seite geöffnet ist. Gib in den Einstellungen der Erweiterung diesen Port ein und füge das Token ein.",
   "General.CliBundledTarget": "Mitgeliefert: {0}  |  Ziel: {1}",
   "General.CliInstallHint": "Installiert den mitgelieferten CLI-Starter nach ~/.local/bin/typewhisper-cli. Verwenden Sie das obige Bearer-Token über TYPEWHISPER_API_TOKEN oder --token.",
   "General.CliInstallerTarget": "Installationsziel: {0}",

@@ -703,6 +703,7 @@
   "General.AutostartEntryPreserved": "TypeWhisper left the foreign or customized autostart entry at {0} untouched and will not overwrite or delete it.",
   "General.AutostartHint": "TypeWhisper starts automatically when you log in.",
   "General.BearerToken": "Bearer token",
+  "General.BrowserExtensionHint": "The TypeWhisper browser extension can use this API to start dictation and tell website profiles which site is open. In the extension's settings, enter this port and paste the token.",
   "General.CliBundledTarget": "Bundled: {0}  |  Target: {1}",
   "General.CliInstallHint": "Installs the bundled CLI launcher to ~/.local/bin/typewhisper-cli. Use the bearer token above through TYPEWHISPER_API_TOKEN or --token.",
   "General.CliInstallerTarget": "Installer target: {0}",

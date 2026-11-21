@@ -703,6 +703,7 @@
   "General.AutostartEntryPreserved": "TypeWhisper未改动位于{0}的外部或自定义自启动项，也不会覆盖或删除它。",
   "General.AutostartHint": "登录时自动启动TypeWhisper。",
   "General.BearerToken": "Bearer令牌",
+  "General.BrowserExtensionHint": "TypeWhisper浏览器扩展可以通过此API开始听写，并告知网站配置文件当前打开的是哪个网站。请在扩展的设置中输入此端口并粘贴令牌。",
   "General.CliBundledTarget": "内置：{0}  |  目标：{1}",
   "General.CliInstallHint": "将内置的CLI启动器安装到~/.local/bin/typewhisper-cli。可通过TYPEWHISPER_API_TOKEN或--token使用上面的Bearer令牌。",
   "General.CliInstallerTarget": "安装目标：{0}",
