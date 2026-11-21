@@ -2,11 +2,11 @@
   "Settings.ApiKey": "Clave de API",
   "Settings.ApiKeyDescription": "Necesaria para la transcripción con ElevenLabs Scribe.",
   "Settings.TranscriptionModel": "Modelo de transcripción",
-  "Settings.ModelDescription": "Scribe v2 se usa para la transcripción de archivos; el dictado en directo usa Scribe v2 Realtime.",
+  "Settings.ModelDescription": "Scribe v2 se usa para la transcripción de archivos; el dictado en directo usa Scribe v2 Realtime. Scribe v2 Medical está ajustado al vocabulario clínico y no tiene modo en directo, así que el dictado espera a la grabación completa.",
   "Settings.TranscriptionMode": "Modo de transcripción",
   "Settings.ModeAutomatic": "Automático (tiempo real con respaldo REST)",
   "Settings.ModeRestOnly": "Solo REST (Scribe v2 por lotes)",
-  "Settings.TranscriptionModeDescription": "Automático transmite en tiempo real cuando la transcripción en directo lo permite. Solo REST siempre sube la grabación completa y evita los límites de concurrencia en tiempo real. Los eventos de audio o un número de hablantes distinto de 1 usan la grabación completa.",
+  "Settings.TranscriptionModeDescription": "Automático transmite en tiempo real cuando la transcripción en directo lo permite. Solo REST siempre sube la grabación completa y evita los límites de concurrencia en tiempo real. Scribe v2 Medical, los eventos de audio o un número de hablantes distinto de 1 usan la grabación completa.",
   "Settings.NoVerbatim": "Limpiar muletillas y titubeos",
   "Settings.NoVerbatimDescription": "Se aplica a la transcripción en tiempo real y REST. Combinado con eventos de audio, ElevenLabs decide qué anotaciones se conservan.",
   "Settings.TagAudioEvents": "Incluir eventos de audio como [tos] y [clics de ratón]",
@@ -20,6 +20,9 @@
   "Settings.ApiKeyUnverified": "Clave de API guardada, pero no se pudo verificar el acceso de voz: a la clave le falta el permiso user_read. Prueba un dictado para confirmar el acceso a Speech-to-Text.",
   "Settings.ApiKeyInvalid": "La clave de API no es válida.",
   "Settings.ApiKeyUnavailable": "No se pudo conectar con ElevenLabs para verificar la clave de API. Comprueba tu conexión e inténtalo de nuevo.",
+  "Errors.QuotaExceeded": "Esta clave de API de ElevenLabs ha agotado su cuota de créditos. Aumenta el límite de la clave o añade créditos en tu cuenta de ElevenLabs.",
+  "Errors.MissingSpeechToTextPermission": "A esta clave de API de ElevenLabs le falta el permiso Speech to Text. Actívalo para la clave en tu cuenta de ElevenLabs.",
+  "Errors.ApiKeyRejected": "ElevenLabs rechazó la clave de API.",
   "Manifest.Name": "ElevenLabs",
   "Manifest.Description": "Transcripción en la nube mediante ElevenLabs Scribe con streaming por WebSocket en tiempo real"
 }

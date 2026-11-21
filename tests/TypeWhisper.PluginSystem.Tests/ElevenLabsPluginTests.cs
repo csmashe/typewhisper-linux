@@ -65,8 +65,12 @@ public class ElevenLabsPluginTests
         Assert.Equal("elevenlabs", sut.ProviderId);
         Assert.Equal(ElevenLabsPlugin.DefaultModelId, sut.SelectedModelId);
         Assert.Equal(
-            [ElevenLabsPlugin.DefaultModelId],
+            [ElevenLabsPlugin.DefaultModelId, ElevenLabsPlugin.MedicalModelId],
             sut.TranscriptionModels.Select(m => m.Id).ToArray()
+        );
+        Assert.Equal(
+            [ElevenLabsPlugin.DefaultModelId],
+            sut.TranscriptionModels.Where(m => m.IsRecommended).Select(m => m.Id).ToArray()
         );
         Assert.True(sut.IsConfigured);
         Assert.True(sut.SupportsStreaming);
@@ -256,6 +260,7 @@ public class ElevenLabsPluginTests
                 Assert.Contains("language_code", body);
                 Assert.Contains("de", body);
                 Assert.Contains("keyterms", body);
+                AssertMultipartPart(body, "timestamps_granularity", "word");
                 Assert.Contains("TypeWhisper", body);
                 Assert.Contains("ElevenLabs", body);
                 Assert.DoesNotContain("bad<term", body);
@@ -293,7 +298,147 @@ public class ElevenLabsPluginTests
         Assert.Equal("Hallo Welt", result.Text);
         Assert.Equal("de", result.DetectedLanguage);
         Assert.Equal(1.0, result.DurationSeconds);
-        Assert.Equal(["Hallo", "Welt"], result.Segments.Select(s => s.Text).ToArray());
+        var segment = Assert.Single(result.Segments);
+        Assert.Equal(("Hallo Welt", 0.1, 1.0), (segment.Text, segment.Start, segment.End));
+    }
+
+    [Fact]
+    public void ParseRestResponse_GroupsWordsIntoSentencesAndPauses()
+    {
+        var result = ElevenLabsPlugin.ParseRestResponse(
+            """
+            {
+              "text": "Yes. I think so. Then a pause [laughs] and more",
+              "words": [
+                { "text": "Yes.", "start": 0.0, "end": 0.3, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "I", "start": 0.4, "end": 0.5, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "think", "start": 0.5, "end": 0.8, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "so.\"", "start": 0.8, "end": 1.0, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "Then", "start": 1.1, "end": 1.3, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "a", "start": 1.3, "end": 1.4, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "pause", "start": 1.4, "end": 1.8, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "[laughs]", "start": 3.0, "end": 3.5, "type": "audio_event" },
+                { "text": " ", "type": "spacing" },
+                { "text": "and", "start": 3.6, "end": 3.8, "type": "word" },
+                { "text": " ", "type": "spacing" },
+                { "text": "bad", "start": "x", "end": 4.0, "type": "word" },
+                { "text": "more", "start": 3.9, "end": 4.2, "type": "word" },
+                { "text": "noise", "start": 4.2, "end": 4.3, "type": "unknown" }
+              ]
+            }
+            """,
+            fallbackLanguage: null
+        );
+
+        Assert.Equal(
+            [("Yes. I think so.\"", 0.0, 1.0), ("Then a pause", 1.1, 1.8), ("[laughs] and more", 3.0, 4.2)],
+            result.Segments.Select(s => (s.Text, s.Start, s.End)).ToArray()
+        );
+        Assert.Equal(4.2, result.DurationSeconds);
+    }
+
+    [Fact]
+    public void ParseRestResponse_SplitsSegmentsWithoutSentenceEndAfterThirtySeconds()
+    {
+        var words = Enumerable.Range(0, 40)
+            .Select(i => $$"""{ "text": "w{{i}}", "start": {{i}}, "end": {{i}}.9, "type": "word" }""");
+        var result = ElevenLabsPlugin.ParseRestResponse(
+            $$"""{ "text": "", "words": [{{string.Join(",", words)}}] }""", fallbackLanguage: null);
+
+        Assert.Equal([(0.0, 29.9), (30.0, 39.9)], result.Segments.Select(s => (s.Start, s.End)).ToArray());
+    }
+
+    [Fact]
+    public async Task MedicalModel_IsBatchOnlyAndNotifiesWhenStreamingChanges()
+    {
+        var bodies = new List<string>();
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            bodies.Add(body!);
+            return JsonResponse("""{"text":"Hello"}""");
+        }));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } };
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        Assert.True(sut.SupportsStreaming);
+
+        await sut.SetSettingValueAsync("selectedModel", ElevenLabsPlugin.MedicalModelId);
+
+        Assert.False(sut.SupportsStreaming);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+        Assert.Equal(ElevenLabsPlugin.MedicalModelId, host.GetSetting<string>("selectedModel"));
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.StartStreamingAsync(null, CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.Configuration, ex.FailureKind);
+
+        await sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None);
+        AssertMultipartPart(Assert.Single(bodies), "model_id", "scribe_v2_medical");
+
+        await sut.SetSettingValueAsync("selectedModel", ElevenLabsPlugin.MedicalModelId);
+        Assert.Equal(1, host.NotifyCapabilitiesChangedCount);
+        await sut.SetSettingValueAsync("selectedModel", ElevenLabsPlugin.DefaultModelId);
+        Assert.True(sut.SupportsStreaming);
+        Assert.Equal(2, host.NotifyCapabilitiesChangedCount);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_SavesARetiredModelAsScribeV2()
+    {
+        var host = new TestPluginHostServices();
+        host.SetSetting("selectedModel", "scribe_v1");
+        using var sut = new ElevenLabsPlugin();
+
+        await sut.ActivateAsync(host);
+
+        Assert.Equal(ElevenLabsPlugin.DefaultModelId, sut.SelectedModelId);
+        Assert.Equal(ElevenLabsPlugin.DefaultModelId, host.GetSetting<string>("selectedModel"));
+    }
+
+    [Fact]
+    public void SupportedLanguages_DropCodesTheApiRejects()
+    {
+        using var sut = new ElevenLabsPlugin();
+
+        Assert.DoesNotContain("haw", sut.SupportedLanguages);
+        Assert.DoesNotContain("jw", sut.SupportedLanguages);
+        Assert.DoesNotContain("vo", sut.SupportedLanguages);
+        Assert.DoesNotContain("ln", sut.SupportedLanguages);
+        foreach (var code in new[] { "jv", "ast", "ga", "nso", "zu" })
+            Assert.Contains(code, sut.SupportedLanguages);
+        Assert.Equal(sut.SupportedLanguages.Order(StringComparer.Ordinal), sut.SupportedLanguages);
+        Assert.Equal(sut.SupportedLanguages.Count, sut.SupportedLanguages.Distinct().Count());
+    }
+
+    [Theory]
+    // Bodies as ElevenLabs sends them (request_id dropped).
+    [InlineData("""{"detail":{"type":"invalid_request","code":"quota_exceeded","message":"This request exceeds your API key (qa) quota of 1. You have 1 credits remaining, while 17 credits are required for this request.","status":"quota_exceeded"}}""", PluginRequestFailureKind.Permission, "Errors.QuotaExceeded")]
+    [InlineData("""{"detail":{"type":"authentication_error","code":"unauthorized","message":"The API key you used is missing the permission speech_to_text to execute this operation.","status":"missing_permissions"}}""", PluginRequestFailureKind.Permission, "Errors.MissingSpeechToTextPermission")]
+    [InlineData("""{"detail":{"type":"authentication_error","code":"unauthorized","message":"Invalid API key","status":"invalid_api_key"}}""", PluginRequestFailureKind.Authentication, "Errors.ApiKeyRejected")]
+    [InlineData("not JSON provider text", PluginRequestFailureKind.Authentication, "Errors.ApiKeyRejected")]
+    public async Task TranscribeAsync_NamesTheCauseOfAnUnauthorizedResponse(
+        string body, PluginRequestFailureKind expectedKind, string expectedMessage)
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            var response = JsonResponse(body);
+            response.StatusCode = HttpStatusCode.Unauthorized;
+            return response;
+        }));
+        using var sut = new ElevenLabsPlugin(httpClient);
+        await sut.ActivateAsync(new TestPluginHostServices { Secrets = { ["api-key"] = "eleven-key" } });
+
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(
+            () => sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None));
+
+        Assert.Equal(expectedKind, ex.FailureKind);
+        Assert.Equal(401, ex.HttpStatusCode);
+        Assert.Equal(expectedMessage, ex.Message);
     }
 
     [Fact]
@@ -482,6 +627,11 @@ public class ElevenLabsPluginTests
             out var errorEvent,
             out var error
         );
+        var parsedInvalidRequest = ElevenLabsStreamingSession.TryParseTranscriptEvent(
+            """{"message_type":"invalid_request","error":"Unsupported language code"}""",
+            out var invalidRequestEvent,
+            out var invalidRequestError
+        );
 
         Assert.True(parsedPartial);
         Assert.Equal(new StreamingTranscriptEvent("Hello", false), partial);
@@ -494,6 +644,10 @@ public class ElevenLabsPluginTests
         Assert.False(parsedError);
         Assert.Null(errorEvent);
         Assert.Equal("Invalid API key", error);
+
+        Assert.False(parsedInvalidRequest);
+        Assert.Null(invalidRequestEvent);
+        Assert.Equal("Unsupported language code", invalidRequestError);
     }
 
 
