@@ -1,4 +1,5 @@
 // ReSharper disable MethodHasAsyncOverload -- synchronous File.Read*/Write* is deliberate in these test assertions and fixtures.
+using System.ComponentModel;
 using System.Net;
 using System.Text.Json;
 using TypeWhisper.Core.Models;
@@ -135,11 +136,42 @@ public sealed class LocalDiagnosticLogServiceTests : IDisposable
         Assert.Equal("com.typewhisper.openai", Data(error, "plugin.id"));
         Assert.Equal("401", Data(error, "http.status"));
         Assert.Equal("System.Net.Http.HttpRequestException", Data(error, "inner"));
+        Assert.Equal($"0x{new HttpRequestException().HResult:X8}", Data(error, "inner.hresult"));
         Assert.Contains(error.GetProperty("stack").EnumerateArray(), frame => frame.GetString()!.Contains(nameof(LocalDiagnosticLogServiceTests)));
         var text = File.ReadAllText(LogPath);
         Assert.DoesNotContain("hello", text);
         Assert.DoesNotContain("sk-123", text);
         Assert.DoesNotContain("/home/someone", text);
+    }
+
+    [Fact]
+    public async Task Plugin_settings_failures_keep_the_stage_action_and_native_error_code()
+    {
+        var (log, _) = Start();
+        using (log)
+        {
+            var failure = new InvalidOperationException("could not start /home/someone/copilot",
+                new Win32Exception(13, "Permission denied: /home/someone/copilot"));
+            log.CaptureException(failure, "plugin.settings", new Dictionary<string, string>
+            {
+                ["plugin.id"] = "com.typewhisper.github-copilot",
+                ["plugin.stage"] = "run-settings-action",
+                ["plugin.action"] = "download-runtime",
+                ["outcome"] = "timed_out",
+            });
+            await log.FlushAsync();
+        }
+
+        var error = Assert.Single(Lines(), line => Event(line) == "error.captured");
+        Assert.Equal("plugin.settings", Data(error, "operation"));
+        Assert.Equal("com.typewhisper.github-copilot", Data(error, "plugin.id"));
+        Assert.Equal("run-settings-action", Data(error, "plugin.stage"));
+        Assert.Equal("download-runtime", Data(error, "plugin.action"));
+        Assert.Equal("timed_out", Data(error, "outcome"));
+        Assert.Equal("13", Data(error, "native.error"));
+        Assert.Equal(typeof(Win32Exception).FullName, Data(error, "inner"));
+        Assert.Equal($"0x{new Win32Exception(13).HResult:X8}", Data(error, "inner.hresult"));
+        Assert.DoesNotContain("/home/someone", File.ReadAllText(LogPath));
     }
 
     [Fact]

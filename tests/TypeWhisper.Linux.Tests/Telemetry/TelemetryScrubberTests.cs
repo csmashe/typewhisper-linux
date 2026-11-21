@@ -1,4 +1,5 @@
 using Sentry.Protocol;
+using System.ComponentModel;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -189,9 +190,26 @@ public sealed class TelemetryScrubberTests
 
         TelemetryScrubber.Scrub(e, Scrub);
 
-        Assert.Equal(3, e.Tags.Count);
+        Assert.Equal(4, e.Tags.Count);
         Assert.Equal("401", e.Tags["http.status"]);
         Assert.Equal(typeof(HttpRequestException).FullName, e.Tags["error.inner_type"]);
+        Assert.Equal($"0x{inner.HResult:X8}", e.Tags["error.inner_hresult"]);
+        Assert.Equal($"0x{original.HResult:X8}", e.Tags["error.hresult"]);
+    }
+
+    [Fact]
+    public void Native_failure_reports_its_error_code_but_not_its_message()
+    {
+        var inner = new Win32Exception(2, "No such file: /home/someone/copilot");
+        var original = new InvalidOperationException("could not start /home/someone/copilot", inner);
+        var e = new SentryEvent(original);
+
+        TelemetryScrubber.Scrub(e, Scrub);
+
+        Assert.Equal(4, e.Tags.Count);
+        Assert.Equal("2", e.Tags["error.native_code"]);
+        Assert.Equal(typeof(Win32Exception).FullName, e.Tags["error.inner_type"]);
+        Assert.Equal($"0x{inner.HResult:X8}", e.Tags["error.inner_hresult"]);
         Assert.Equal($"0x{original.HResult:X8}", e.Tags["error.hresult"]);
     }
 
@@ -221,7 +239,7 @@ public sealed class TelemetryScrubberTests
 
         TelemetryScrubber.Scrub(e, Scrub);
 
-        Assert.Equal(4, e.Tags.Count);
+        Assert.Equal(5, e.Tags.Count);
         Assert.Equal("401", e.Tags["http.status"]);
         Assert.Equal("ConnectionRefused", e.Tags["socket.error"]);
         Assert.Equal(typeof(IOException).FullName, e.Tags["error.inner_type"]);

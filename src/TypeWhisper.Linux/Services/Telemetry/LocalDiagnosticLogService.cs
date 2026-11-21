@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
@@ -325,18 +326,21 @@ public sealed class LocalDiagnosticLogService : IDiagnosticsReporter, IDisposabl
         };
     }
 
-    // The same facts the Sentry scrubber tags: innermost type, HTTP status and socket error, never messages.
+    // The same facts the Sentry scrubber tags: innermost type and HResult, HTTP status, socket error and
+    // native error code (errno on Linux), never messages.
     private static void AddErrorFacts(Exception exception, Dictionary<string, string> data)
     {
         Exception? innermost = null;
         var innermostDepth = -1;
         Walk(exception, 0);
-        if (innermost is not null && innermost.GetType() != exception.GetType()
-            && innermost.GetType().FullName is { } innerType)
+        if (innermost is null || innermost.GetType() == exception.GetType()
+            || innermost.GetType().FullName is not { } innerType)
         {
-            data["inner"] = innerType;
+            return;
         }
 
+        data["inner"] = innerType;
+        data["inner.hresult"] = $"0x{innermost.HResult:X8}";
         return;
 
         void Walk(Exception? current, int depth)
@@ -350,6 +354,9 @@ public sealed class LocalDiagnosticLogService : IDiagnosticsReporter, IDisposabl
                         break;
                     case SocketException socket:
                         data.TryAdd("socket.error", socket.SocketErrorCode.ToString());
+                        break;
+                    case Win32Exception { NativeErrorCode: >= 0 } native:
+                        data.TryAdd("native.error", native.NativeErrorCode.ToString(CultureInfo.InvariantCulture));
                         break;
                     case AggregateException aggregate:
                         foreach (var inner in aggregate.InnerExceptions)
