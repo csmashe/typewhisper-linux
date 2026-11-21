@@ -10,9 +10,11 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
     private static readonly TimeSpan s_idleUnload = TimeSpan.FromMinutes(10);
     private readonly TimeSpan _idleUnload;
     private readonly Func<string, NemoCtcModel> _modelFactory;
+    private readonly Func<HttpClient, CtcModelAssets> _assetsFactory;
     private CancellationTokenSource? _idleTimer;
     private string? _modelPath;
     private NemoCtcModel? _model;
+    private string? _managedDirectory;
     private CtcTokenizer? _tokenizer;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private volatile bool _disposed;
@@ -28,12 +30,14 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
     internal ParakeetCtcPlugin(
         HttpClient downloads,
         TimeSpan? idleUnload = null,
-        Func<string, NemoCtcModel>? modelFactory = null
+        Func<string, NemoCtcModel>? modelFactory = null,
+        Func<HttpClient, CtcModelAssets>? assetsFactory = null
     )
     {
         _downloads = downloads;
         _idleUnload = idleUnload ?? s_idleUnload;
         _modelFactory = modelFactory ?? (path => new NemoCtcModel(path));
+        _assetsFactory = assetsFactory ?? (http => new CtcModelAssets(http));
     }
 
     public string PluginId => "com.typewhisper.parakeet-ctc";
@@ -56,11 +60,10 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (IsReady)
                 return;
-            var directory =
-                host.GetSetting<string>("ModelDirectory")
-                ?? Path.Join(host.PluginAssetDirectory, "model");
-            if (host.GetSetting<string>("ModelDirectory") is null)
-                await new CtcModelAssets(_downloads)
+            var custom = host.GetSetting<string>("ModelDirectory");
+            var directory = custom ?? Path.Join(host.PluginAssetDirectory, "model");
+            if (custom is null)
+                await _assetsFactory(_downloads)
                     .EnsureAsync(
                         directory,
                         activation.Token,
@@ -75,6 +78,7 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
             activation.Token.ThrowIfCancellationRequested();
             _tokenizer = tokenizer;
             _modelPath = modelPath;
+            _managedDirectory = custom is null ? directory : null;
             _host = host;
         }
         finally
@@ -167,6 +171,13 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
             // the host falls back to text boosting until the plugin is re-enabled.
             _modelPath = null;
             _host?.Log(PluginLogLevel.Error, "CTC model failed to load: " + ex.Message);
+            // So re-enabling re-hashes the downloaded model and repairs it if it changed.
+            // ReSharper disable once InvertIf -- inverting would need a second rethrow ahead of the one below.
+            if (_managedDirectory is { } managed)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await CtcModelAssets.ForgetStampsAsync(managed, timeout.Token).ConfigureAwait(false);
+            }
             throw;
         }
         _model = model;

@@ -44,11 +44,25 @@ public sealed class CtcModelAssets(
         "tokenizer.json",
     ];
 
+    // A later rewrite is only certain to get a different last write time when the recorded one
+    // is older than the coarsest file-time resolution (2 s on FAT). Younger files keep being
+    // hashed until they qualify for a stamp.
+    private static readonly TimeSpan s_stampSettleTime = TimeSpan.FromSeconds(2);
+
+    // Only the model is worth stamping; the small files are always hashed, so their corruption is
+    // still repaired.
+    private const string StampedFile = "model.int8.onnx";
+
+    // Stamps hold the model's size and write time from its last matching hash. Older receipts have
+    // none and are upgraded after one hash.
     private sealed record Receipt(
         string ArchiveHash,
         string TokenizerHash,
-        Dictionary<string, string> Files
+        Dictionary<string, string> Files,
+        Dictionary<string, FileStamp>? Stamps = null
     );
+
+    private sealed record FileStamp(long Size, long ModifiedTicks);
 
     public async Task EnsureAsync(
         string directory,
@@ -147,22 +161,112 @@ public sealed class CtcModelAssets(
                 || receipt.Files is null
             )
                 return false;
+            var stamps = new Dictionary<string, FileStamp>(StringComparer.Ordinal);
             foreach (var name in s_required)
+            {
+                var path = Path.Join(directory, name);
+                if (!File.Exists(path) || !receipt.Files.TryGetValue(name, out var hash))
+                    return false;
+                var checkedAt = DateTime.UtcNow;
+                var stamp = Stamp(path);
+                if (receipt.Stamps?.GetValueOrDefault(name) == stamp)
+                {
+                    stamps[name] = stamp;
+                    continue;
+                }
                 if (
-                    !File.Exists(Path.Join(directory, name))
-                    || !receipt.Files.TryGetValue(name, out var hash)
-                    || !string.Equals(
+                    !string.Equals(
                         hash,
-                        await HashAsync(Path.Join(directory, name), ct).ConfigureAwait(false),
+                        await HashAsync(path, ct).ConfigureAwait(false),
                         StringComparison.OrdinalIgnoreCase
                     )
                 )
                     return false;
+                if (
+                    name == StampedFile
+                    && stamp.ModifiedTicks < (checkedAt - s_stampSettleTime).Ticks
+                    && Stamp(path) == stamp
+                )
+                    stamps[name] = stamp;
+            }
+            var known = receipt.Stamps ?? [];
+            if (
+                stamps.Count != known.Count
+                || stamps.Any(entry => known.GetValueOrDefault(entry.Key) != entry.Value)
+            )
+                await TryWriteReceiptAsync(receiptPath, receipt with { Stamps = stamps }, ct)
+                    .ConfigureAwait(false);
             return true;
         }
         catch (JsonException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Drops the stamps so the next <see cref="EnsureAsync"/> hashes every file again. A model
+    /// that fails to load may have been corrupted behind an unchanged size and write time.
+    /// </summary>
+    public static async Task ForgetStampsAsync(string directory, CancellationToken ct)
+    {
+        directory = Path.GetFullPath(directory);
+        var receiptPath = Path.Join(directory, "verified-assets.json");
+        try
+        {
+            await using var lease = await InterProcessFileLock
+                .AcquireAsync(Path.Join(Path.GetDirectoryName(directory), ".ctc-assets.lock"), ct)
+                .ConfigureAwait(false);
+            var receipt = JsonSerializer.Deserialize<Receipt>(
+                await File.ReadAllTextAsync(receiptPath, ct).ConfigureAwait(false)
+            );
+            if (receipt?.Stamps is { Count: > 0 })
+                await TryWriteReceiptAsync(receiptPath, receipt with { Stamps = null }, ct)
+                    .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+            when (ex
+                    is JsonException
+                        or IOException
+                        or UnauthorizedAccessException
+                        or OperationCanceledException
+            ) { }
+    }
+
+    private static FileStamp Stamp(string path)
+    {
+        var file = new FileInfo(path);
+        return new FileStamp(file.Length, file.LastWriteTimeUtc.Ticks);
+    }
+
+    // The files are verified either way; a receipt that cannot be rewritten only means they are
+    // hashed again next time.
+    private static async Task TryWriteReceiptAsync(
+        string receiptPath,
+        Receipt receipt,
+        CancellationToken ct
+    )
+    {
+        // Staged beside the model directory, so an interrupted write never leaves a foreign file
+        // inside it.
+        var temporary = Path.Join(
+            Path.GetDirectoryName(Path.GetDirectoryName(receiptPath)),
+            ".ctc-receipt-" + Guid.NewGuid().ToString("N") + ".tmp"
+        );
+        try
+        {
+            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(receipt), ct)
+                .ConfigureAwait(false);
+            File.Move(temporary, receiptPath, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        finally
+        {
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 
