@@ -3,6 +3,7 @@
 // Plugin types are instantiated by the host via reflection and invoked through plugin interfaces
 // and JSON settings binding; the analyzer cannot see those consumers, so these .Global inspections misfire.
 
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -27,6 +28,12 @@ public sealed partial class Reson8Plugin
     private const string SelectedModelSettingName = "selectedModel";
     private const string CustomBaseUrlSettingName = "customBaseURL";
     private const string CustomAuthHeaderSettingName = "customAuthHeader";
+    private const string FillerModeSettingName = "fillerMode";
+    private const string BiasStrengthSettingName = "biasStrength";
+    private const string DefaultBiasChoice = "default";
+
+    // Reson8's bias_strength when none is sent.
+    internal const double DefaultBiasStrength = 0.45;
 
     private static readonly IReadOnlyList<string> s_languages =
     [
@@ -71,6 +78,8 @@ public sealed partial class Reson8Plugin
         CustomAuthHeader = NormalizeAuthHeader(host.GetSetting<string>(CustomAuthHeaderSettingName));
         RestoreCatalog(host);
         _selectedModelId = NormalizeModelId(host.GetSetting<string>(SelectedModelSettingName));
+        FillerMode = Reson8FillerModes.Normalize(host.GetSetting<string>(FillerModeSettingName));
+        BiasStrength = ParseBiasStrength(host.GetSetting<string>(BiasStrengthSettingName));
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured})");
     }
 
@@ -83,18 +92,43 @@ public sealed partial class Reson8Plugin
     public string ProviderId => "reson8";
     public string ProviderDisplayName => "Reson8";
     public bool IsConfigured => !string.IsNullOrEmpty(ApiKey);
-    public IReadOnlyList<PluginModelInfo> TranscriptionModels =>
-        [new(DefaultModelId, Loc.L("Settings.DefaultModel")), .. FetchedCustomModels.Select(m => new PluginModelInfo(m.Id, m.Name))];
+
+    // The default keeps its id so saved selections stay valid; custom models run on it.
+    public IReadOnlyList<PluginModelInfo> TranscriptionModels
+    {
+        get
+        {
+            var listed = FetchedListedModels;
+            var defaultModel = DefaultListedModel(listed);
+            var defaultLanguages = LanguagesOf(defaultModel);
+            return
+            [
+                ModelInfo(DefaultModelId, defaultModel?.DisplayName ?? Loc.L("Settings.DefaultModel"), defaultLanguages),
+                .. NonDefaultListedModels(listed).Select(m => ModelInfo(m.Id, m.DisplayName, LanguagesOf(m))),
+                .. FetchedCustomModels
+                    .Where(m => listed.All(l => l.Id != m.Id))
+                    .Select(m => ModelInfo(m.Id, m.Name, defaultLanguages)),
+            ];
+        }
+    }
+
+    private static PluginModelInfo ModelInfo(string id, string name, IReadOnlyList<string> languages) =>
+        new(id, name) { LanguageCount = languages.Count };
+
     // ReSharper disable once ReturnTypeCanBeNotNullable -- matches the interface contract, which declares this member nullable.
     public string? SelectedModelId => _selectedModelId;
     public bool SupportsTranslation => false;
-    public bool SupportsStreaming => true;
+    // Rumble-2-Flash transcribes recordings only; an unlisted model is assumed to stream.
+    public bool SupportsStreaming => CaptureConnection().Model?.Streams ?? true;
     public bool SupportsLanguageHints => true;
     public bool SupportsStructuredDictionaryTerms => true;
     public DictionaryTermsBudget DictionaryTermsBudget => s_phrasesBudget;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
-    public IReadOnlyList<string> SupportedLanguages => s_languages;
+    public IReadOnlyList<string> SupportedLanguages => LanguagesOf(CaptureConnection().Model);
+
+    private static IReadOnlyList<string> LanguagesOf(Reson8Model? model) =>
+        model?.Languages is { Count: > 0 } languages ? languages : s_languages;
 
     internal string? ApiKey { get; private set; }
 
@@ -121,12 +155,21 @@ public sealed partial class Reson8Plugin
     public void SelectModel(string modelId)
     {
         var normalized = NormalizeModelId(modelId);
+        bool capabilitiesChanged;
         lock (_catalogLock)
         {
+            var before = CapabilitySnapshot();
             _host?.SetSetting(SelectedModelSettingName, normalized);
             _selectedModelId = normalized;
+            capabilitiesChanged = CapabilitySnapshot() != before;
         }
+
+        if (capabilitiesChanged)
+            _host?.NotifyCapabilitiesChanged();
     }
+
+    private (bool Streaming, string Languages) CapabilitySnapshot() =>
+        (SupportsStreaming, string.Join(",", SupportedLanguages));
 
     public Task<PluginTranscriptionResult> TranscribeAsync(
         byte[] wavAudio,
@@ -157,19 +200,19 @@ public sealed partial class Reson8Plugin
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         var connection = EnsureReadyForRequest();
-        var phrases = PhrasesFor(prompt, connection.ModelId);
+        var phrases = PhrasesFor(prompt, connection);
 
         var pcm16 = WavPcm16Extractor.ExtractPcm16(wavAudio);
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            BuildPrerecordedUri(connection.BaseUrl, connection.ModelId, language, phrases));
+            BuildPrerecordedUri(connection.BaseUrl, connection.ModelId, language, phrases, QueryOptionsFor(connection)));
         AddAuthHeader(request, connection.ApiKey, connection.AuthHeader);
         request.Content = new ByteArrayContent(pcm16);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
         using var response = await OpenAiApiHelper.SendWithErrorHandlingAsync(
             _httpClient, request, HttpCompletionOption.ResponseContentRead, ct,
-            (errorResponse, errorBody) => FormatApiError(errorResponse.StatusCode, errorBody));
+            (errorResponse, errorBody) => FormatApiError(errorResponse.StatusCode, errorBody, connection.IsCustomModel));
         var json = await response.Content.ReadAsStringAsync(ct);
 
         return ParseTranscriptionResponse(json, PinnedLanguage(language), pcm16.Length);
@@ -205,7 +248,14 @@ public sealed partial class Reson8Plugin
             throw new InvalidOperationException("Reson8 does not support translation.");
 
         var connection = EnsureReadyForRequest();
-        var streamingRequest = new Reson8StreamingRequest(language, PhrasesFor(prompt, connection.ModelId), connection.ModelId);
+        if (connection.Model?.Streams == false)
+            return await TranscribeCoreAsync(wavAudio, language, translate, prompt, ct);
+
+        var streamingRequest = new Reson8StreamingRequest(
+            language,
+            PhrasesFor(prompt, connection),
+            connection.ModelId,
+            QueryOptionsFor(connection));
 
         return await RunStreamingWithBatchFallbackAsync(
             async markProgressStopped =>
@@ -344,17 +394,22 @@ public sealed partial class Reson8Plugin
         CancellationToken ct)
     {
         var connection = EnsureReadyForRequest();
+        EnsureStreams(connection);
         return ConnectStreamingSessionAsync(
             new Reson8StreamingRequest(
                 LanguageList(languageHints),
-                PhrasesFor(prompt, connection.ModelId),
-                connection.ModelId),
+                PhrasesFor(prompt, connection),
+                connection.ModelId,
+                QueryOptionsFor(connection)),
             ct);
     }
 
     private async Task<IStreamingSession> StartStreamingCoreAsync(Reson8StreamingRequest request, CancellationToken ct)
     {
         var connection = EnsureReadyForRequest();
+        // A request with a model was checked against the selection it was built for.
+        if (request.ModelId is null)
+            EnsureStreams(connection);
 
         return await Reson8StreamingSession.ConnectAsync(
             connection.ApiKey,
@@ -363,7 +418,14 @@ public sealed partial class Reson8Plugin
             request.ModelId ?? connection.ModelId,
             request.Language,
             request.Phrases,
+            request.Options ?? QueryOptionsFor(connection),
             ct);
+    }
+
+    private void EnsureStreams(Reson8Connection connection)
+    {
+        if (connection.Model?.Streams == false)
+            throw new PluginRequestException(Loc.L("Settings.ModelDoesNotStream"), PluginRequestFailureKind.Configuration);
     }
 
     // IPluginSettingsProvider
@@ -382,6 +444,23 @@ public sealed partial class Reson8Plugin
                     ? Loc.L("Settings.CustomModelsLoaded", FetchedCustomModels.Count)
                     : Loc.L("Settings.NoCustomModels"),
                 Options: ModelOptions(),
+                Kind: PluginSettingKind.Dropdown),
+            new(
+                Key: FillerModeSettingName,
+                Label: Loc.L("Settings.FillerMode"),
+                Description: Loc.L("Settings.FillerModeDescription"),
+                Options:
+                [
+                    new PluginSettingOption(Reson8FillerModes.Natural, Loc.L("Settings.FillerModeNatural")),
+                    new PluginSettingOption(Reson8FillerModes.Clean, Loc.L("Settings.FillerModeClean")),
+                    new PluginSettingOption(Reson8FillerModes.Verbatim, Loc.L("Settings.FillerModeVerbatim")),
+                ],
+                Kind: PluginSettingKind.Dropdown),
+            new(
+                Key: BiasStrengthSettingName,
+                Label: Loc.L("Settings.BiasStrength"),
+                Description: Loc.L("Settings.BiasStrengthDescription", FormatBiasStrength(DefaultBiasStrength, CultureInfo.CurrentCulture)),
+                Options: BiasStrengthOptions(),
                 Kind: PluginSettingKind.Dropdown),
             new(
                 Key: CustomBaseUrlSettingName,
@@ -406,6 +485,20 @@ public sealed partial class Reson8Plugin
         return options;
     }
 
+    // Steps of 0.05; the default goes first and sends nothing.
+    private List<PluginSettingOption> BiasStrengthOptions() =>
+    [
+        new(DefaultBiasChoice, Loc.L("Settings.BiasStrengthDefault", FormatBiasStrength(DefaultBiasStrength, CultureInfo.CurrentCulture))),
+        .. Enumerable.Range(0, 21)
+            .Select(step => step * 0.05)
+            .Where(value => Math.Abs(value - DefaultBiasStrength) >= 0.001)
+            .Select(value => new PluginSettingOption(
+                FormatBiasStrength(value, CultureInfo.InvariantCulture),
+                FormatBiasStrength(value, CultureInfo.CurrentCulture))),
+    ];
+
+    private static string FormatBiasStrength(double value, IFormatProvider culture) => value.ToString("0.00", culture);
+
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(
             key switch
@@ -414,6 +507,8 @@ public sealed partial class Reson8Plugin
                 SelectedModelSettingName => _selectedModelId,
                 CustomBaseUrlSettingName => CustomBaseUrl == DefaultBaseUrl ? null : CustomBaseUrl,
                 CustomAuthHeaderSettingName => CustomAuthHeader == DefaultAuthHeader ? null : CustomAuthHeader,
+                FillerModeSettingName => FillerMode,
+                BiasStrengthSettingName => BiasStrength is { } bias ? FormatBiasStrength(bias, CultureInfo.InvariantCulture) : DefaultBiasChoice,
                 _ => null,
             });
 
@@ -434,8 +529,46 @@ public sealed partial class Reson8Plugin
             case CustomAuthHeaderSettingName:
                 SetCustomAuthHeader(value);
                 break;
+            case FillerModeSettingName:
+                SetFillerMode(value);
+                break;
+            case BiasStrengthSettingName:
+                SetBiasStrength(value);
+                break;
         }
     }
+
+    internal string FillerMode { get; private set; } = Reson8FillerModes.Natural;
+
+    internal double? BiasStrength { get; private set; }
+
+    internal void SetFillerMode(string? mode)
+    {
+        var normalized = Reson8FillerModes.Normalize(mode);
+        lock (_catalogLock)
+        {
+            _host?.SetSetting(FillerModeSettingName, normalized);
+            FillerMode = normalized;
+        }
+    }
+
+    internal void SetBiasStrength(string? value)
+    {
+        var normalized = ParseBiasStrength(value);
+        lock (_catalogLock)
+        {
+            _host?.SetSetting(BiasStrengthSettingName, normalized is { } bias ? FormatBiasStrength(bias, CultureInfo.InvariantCulture) : null);
+            BiasStrength = normalized;
+        }
+    }
+
+    // Null (Reson8's default) unless a strength from 0 to 1 other than the default.
+    internal static double? ParseBiasStrength(string? value) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+        && Math.Round(parsed, 2) is var strength and >= 0 and <= 1
+        && Math.Abs(strength - DefaultBiasStrength) >= 0.001
+            ? strength
+            : null;
 
     internal async Task SetApiKeyAsync(string apiKey)
     {
@@ -508,7 +641,20 @@ public sealed partial class Reson8Plugin
         string baseUrl,
         string? modelId,
         string? language,
-        IReadOnlyList<string>? phrases = null)
+        IReadOnlyList<string>? phrases = null,
+        Reson8QueryOptions? options = null)
+    {
+        var query = BuildQuery(modelId, language, phrases, options, includeWords: options?.IncludeWords == true);
+        return new Uri($"{NormalizeBaseUrl(baseUrl)}/v1/speech-to-text/prerecorded?{string.Join("&", query)}");
+    }
+
+    // Parameters both endpoints take. A listed model goes as model, a custom one as custom_model_id.
+    internal static List<string> BuildQuery(
+        string? modelId,
+        string? language,
+        IReadOnlyList<string>? phrases,
+        Reson8QueryOptions? options,
+        bool includeWords)
     {
         var query = new List<string>
         {
@@ -519,18 +665,36 @@ public sealed partial class Reson8Plugin
         };
 
         if (!string.IsNullOrWhiteSpace(language))
-            query.Add($"language={Uri.EscapeDataString(language)}");
+            query.Add($"language={Uri.EscapeDataString(language.Trim())}");
 
-        if (!string.IsNullOrWhiteSpace(modelId)
+        var customModel = false;
+        if (options?.Model is { } listedModel)
+        {
+            query.Add($"model={Uri.EscapeDataString(listedModel)}");
+        }
+        else if (!string.IsNullOrWhiteSpace(modelId)
             && !string.Equals(modelId, DefaultModelId, StringComparison.Ordinal))
         {
-            query.Add($"custom_model_id={Uri.EscapeDataString(modelId)}");
+            query.Add($"custom_model_id={Uri.EscapeDataString(modelId.Trim())}");
+            customModel = true;
         }
 
         if (phrases is { Count: > 0 })
             query.Add($"phrases={EncodePhrases(phrases)}");
 
-        return new Uri($"{NormalizeBaseUrl(baseUrl)}/v1/speech-to-text/prerecorded?{string.Join("&", query)}");
+        if (options?.FillerMode is { } fillerMode && fillerMode != Reson8FillerModes.Natural)
+            query.Add($"filler_mode={fillerMode}");
+
+        // Only phrases and custom models steer recognition, so the strength goes only with them.
+        if (options?.BiasStrength is { } bias && (customModel || phrases is { Count: > 0 }))
+            query.Add($"bias_strength={FormatBiasStrength(bias, CultureInfo.InvariantCulture)}");
+
+        if (!includeWords)
+            return query;
+
+        query.Add("include_timestamps=true");
+        query.Add("include_words=true");
+        return query;
     }
 
     internal static PluginTranscriptionResult ParseTranscriptionResponse(
@@ -545,7 +709,10 @@ public sealed partial class Reson8Plugin
         var language = NonEmpty(GetString(root, "language"))
             ?? NonEmpty(GetString(root, "detected_language"))
             ?? fallbackLanguage;
-        return new PluginTranscriptionResult(text, language, PcmDurationSeconds(pcm16ByteLength), NoSpeechProbability: null);
+        return new PluginTranscriptionResult(text, language, PcmDurationSeconds(pcm16ByteLength), NoSpeechProbability: null)
+        {
+            Segments = Reson8Transcript.SentenceSegments(Reson8Transcript.Words(root), text),
+        };
     }
 
     internal static string ExtractApiError(string json)
@@ -571,13 +738,14 @@ public sealed partial class Reson8Plugin
     internal static string EncodePhrases(IReadOnlyList<string> phrases) =>
         Uri.EscapeDataString(string.Join(",", phrases));
 
-    // Dictionary terms are sent only with the default model: Reson8 does not document combining
-    // phrases with a custom model, which already carries its own phrases.
-    internal static IReadOnlyList<string> PhrasesFor(string? prompt, string modelId)
+    // Dictionary terms aren't sent with a custom model: Reson8 does not document combining phrases
+    // with one, and it already carries its own. Rumble-2-Flash rejects phrases.
+    private static IReadOnlyList<string> PhrasesFor(string? prompt, Reson8Connection connection) =>
+        connection.IsCustomModel || !Reson8Models.TakesParameter(connection.Model, "phrases") ? [] : PhrasesFor(prompt);
+
+    internal static IReadOnlyList<string> PhrasesFor(string? prompt)
     {
         var terms = PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms;
-        if (!string.Equals(modelId, DefaultModelId, StringComparison.Ordinal))
-            return [];
 
         var phrases = new List<string>();
         var queryLength = 0;
@@ -671,13 +839,15 @@ public sealed partial class Reson8Plugin
             ? property.GetString()
             : null;
 
-    private string FormatApiError(HttpStatusCode statusCode, string json)
+    private string FormatApiError(HttpStatusCode statusCode, string json, bool customModel)
     {
         var message = ExtractApiError(json);
         return statusCode switch
         {
+            HttpStatusCode.BadRequest => $"Reson8 rejected the request: {message}",
             HttpStatusCode.Unauthorized => Loc.L("Settings.InvalidApiKey"),
-            HttpStatusCode.NotFound => $"Reson8 custom model not found: {message}",
+            HttpStatusCode.PaymentRequired => $"Reson8 credit limit reached: {message}",
+            HttpStatusCode.NotFound => customModel ? $"Reson8 custom model not found: {message}" : $"Reson8 model not found: {message}",
             HttpStatusCode.RequestEntityTooLarge => $"Reson8 file too large: {message}",
             HttpStatusCode.TooManyRequests => $"Reson8 rate limit exceeded: {message}",
             HttpStatusCode.InternalServerError => $"Reson8 server error: {message}",
