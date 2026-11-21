@@ -246,6 +246,7 @@ internal static class ServiceRegistrations
         services.AddSingleton<HistoryRetentionCoordinator>();
         services.AddSingleton<LinuxPreferencesService>();
         services.AddSingleton<UpdateCheckService>();
+        services.AddSingleton<UpdateNotificationService>();
         services.AddSingleton<SecretProtectionMigrationService>();
         services.AddSingleton(sp =>
             new SettingsBackupService(

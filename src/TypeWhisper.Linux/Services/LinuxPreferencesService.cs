@@ -19,8 +19,9 @@ public sealed record LinuxPreferences
     public bool CloseToTray { get; init; }
 
     /// <summary>
-    ///     When true (default), checks GitHub for a newer release once per day
-    ///     on startup. The manual "Check for Updates" button works regardless.
+    ///     When true (default), checks GitHub for a newer release at startup and
+    ///     then once per day while the app keeps running. The manual "Check for
+    ///     Updates" button works regardless.
     /// </summary>
     public bool CheckForUpdatesOnStartup { get; init; } = true;
 
@@ -46,6 +47,12 @@ public sealed record LinuxPreferences
     /// <summary>Version dismissed from the update banner; banner reappears when
     ///     a newer version is published.</summary>
     public string? DismissedUpdateVersion { get; init; }
+
+    /// <summary>The update banner stays hidden until this UTC time ("Later").</summary>
+    public DateTime? UpdateSnoozedUntilUtc { get; init; }
+
+    /// <summary>Last version announced through a desktop notification, so each release notifies once.</summary>
+    public string? LastNotifiedUpdateVersion { get; init; }
 
     public static LinuxPreferences Default => new();
 }

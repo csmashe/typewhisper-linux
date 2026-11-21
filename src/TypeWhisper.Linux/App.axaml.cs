@@ -1712,22 +1712,30 @@ public class App : Application
     }
 
     /// <summary>
-    ///     Once-per-day GitHub release check. Detached from the bootstrap task so a slow/
-    ///     unreachable network doesn't delay first-run onboarding (which awaits bootstrap).
+    ///     Daily GitHub release check for the app's lifetime. Detached from the bootstrap task so a
+    ///     slow/unreachable network doesn't delay first-run onboarding (which awaits bootstrap).
     ///     Failures are swallowed inside the service; a found update drives the banner via
-    ///     <c>UpdateCheckService.ResultChanged</c>.
+    ///     <c>UpdateCheckService.ResultChanged</c> and a one-time desktop notification.
     /// </summary>
     private static async Task RunStartupUpdateCheckAsync(IServiceProvider services)
     {
         try
         {
             var updateCheck = services.GetRequiredService<UpdateCheckService>();
-            await updateCheck.CheckOnStartupAsync();
-            BootTrace.Stage("UpdateCheckService.CheckOnStartupAsync");
+            var notifier = services.GetRequiredService<UpdateNotificationService>();
+            var dictation = services.GetRequiredService<DictationOrchestrator>();
+            updateCheck.UpdateNoticeDue += result =>
+            {
+                if (result.LatestVersion is { } version)
+                {
+                    _ = notifier.NotifyAsync(version);
+                }
+            };
+            await updateCheck.RunBackgroundChecksAsync(() => dictation.IsRecording);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[App] Startup update check failed: {ex.Message}");
+            Debug.WriteLine($"[App] Background update check failed: {ex.Message}");
         }
     }
 
