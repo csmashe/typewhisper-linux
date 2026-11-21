@@ -770,8 +770,16 @@ public sealed class CliInstallServiceTests : IDisposable
     [Fact]
     public void Examples_include_linux_bearer_token_setup()
     {
-        var cli = CliInstallService.BuildCliExamples(9876);
+        var examples = CliInstallService.BuildCliExamples();
+        var cli = examples.Select(example => example.Command).ToList();
         Assert.Contains("typewhisper-cli last", cli);
+        Assert.Contains("typewhisper-cli transcribe recording.wav | wl-copy", cli);
+        Assert.Contains("typewhisper-cli transcribe recording.wav | xclip -selection clipboard", cli);
+        Assert.Equal(examples.Count, examples.Select(example => example.LabelKey).Distinct().Count());
+        Assert.All(
+            examples,
+            example => Assert.StartsWith("General.CliExample", example.LabelKey, StringComparison.Ordinal)
+        );
         Assert.Contains("typewhisper-cli history --limit 20", cli);
         var curl = CliInstallService.BuildCurlExamples(9876);
 

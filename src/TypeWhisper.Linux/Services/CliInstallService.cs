@@ -28,6 +28,8 @@ public sealed record CliInstallState(
     internal bool BinaryOwned { get; init; }
 }
 
+public sealed record CliExample(string LabelKey, string Command);
+
 public sealed class CliInstallService
 {
     private const string CliFileName = "typewhisper-cli";
@@ -178,19 +180,21 @@ public sealed class CliInstallService
         return GetState();
     }
 
-    public static IReadOnlyList<string> BuildCliExamples(int port)
+    public static IReadOnlyList<CliExample> BuildCliExamples()
     {
-        _ = port;
         return
         [
-            "export TYPEWHISPER_API_TOKEN=\"paste-token-here\"",
-            "typewhisper-cli --help",
-            "typewhisper-cli status",
-            "typewhisper-cli models",
-            "typewhisper-cli last",
-            "typewhisper-cli history --limit 20",
-            "typewhisper-cli transcribe recording.wav",
-            "typewhisper-cli transcribe recording.wav --language de --json",
+            new CliExample("General.CliExampleToken", "export TYPEWHISPER_API_TOKEN=\"paste-token-here\""),
+            new CliExample("General.CliExampleHelp", "typewhisper-cli --help"),
+            new CliExample("General.CliExampleStatus", "typewhisper-cli status"),
+            new CliExample("General.CliExampleTranscribe", "typewhisper-cli transcribe recording.wav"),
+            new CliExample("General.CliExampleLanguage", "typewhisper-cli transcribe recording.wav --language de"),
+            new CliExample("General.CliExampleJson", "typewhisper-cli transcribe recording.wav --json"),
+            new CliExample("General.CliExampleClipboardWayland", "typewhisper-cli transcribe recording.wav | wl-copy"),
+            new CliExample("General.CliExampleClipboardX11", "typewhisper-cli transcribe recording.wav | xclip -selection clipboard"),
+            new CliExample("General.CliExampleLast", "typewhisper-cli last"),
+            new CliExample("General.CliExampleHistory", "typewhisper-cli history --limit 20"),
+            new CliExample("General.CliExampleModels", "typewhisper-cli models"),
         ];
     }
 

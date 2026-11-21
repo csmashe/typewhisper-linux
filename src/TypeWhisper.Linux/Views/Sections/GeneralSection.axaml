@@ -240,18 +240,45 @@
 
             <Border Classes="panel"
                     Padding="18,14">
-                <ItemsControl ItemsSource="{Binding CurlExamples}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:CommandExample">
-                            <TextBlock Text="{Binding Command}"
-                                       FontFamily="monospace"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
-                                       TextWrapping="Wrap"
-                                       Margin="0,0,0,8" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <StackPanel>
+                    <ItemsControl ItemsSource="{Binding CurlExamples}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:CommandExample">
+                                <Grid ColumnDefinitions="*,Auto"
+                                      RowDefinitions="Auto,Auto"
+                                      ColumnSpacing="12"
+                                      Margin="0,0,0,10">
+                                    <TextBlock Grid.ColumnSpan="2"
+                                               Text="{Binding Label}"
+                                               IsVisible="{Binding HasLabel}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,0,0,4" />
+                                    <SelectableTextBlock Grid.Row="1"
+                                                         Grid.Column="0"
+                                                         Text="{Binding Command}"
+                                                         FontFamily="monospace"
+                                                         FontSize="12"
+                                                         TextWrapping="Wrap"
+                                                         VerticalAlignment="Center" />
+                                    <Button Grid.Row="1"
+                                            Grid.Column="1"
+                                            Content="{loc:Str Common.Copy}"
+                                            Click="OnCopyExample"
+                                            AutomationProperties.Name="{Binding CopyName}"
+                                            ToolTip.Tip="{Binding CopyName}"
+                                            Padding="10,4"
+                                            VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{Binding CurlCopyStatusText}"
+                               IsVisible="{Binding CurlCopyStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                </StackPanel>
             </Border>
 
             <TextBlock Text="{loc:Str General.CommandLine}"
@@ -304,19 +331,78 @@
 
                     <Border Grid.Row="4"
                             Padding="18,14">
-                        <ItemsControl ItemsSource="{Binding CliExamples}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:CommandExample">
-                                    <TextBlock Text="{Binding Command}"
-                                               FontFamily="monospace"
-                                               FontSize="12"
-                                               Foreground="{DynamicResource TwTextSecondaryBrush}"
-                                               TextWrapping="Wrap"
-                                               Margin="0,0,0,8" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <StackPanel>
+                            <ItemsControl ItemsSource="{Binding CliExamples}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:CommandExample">
+                                        <Grid ColumnDefinitions="*,Auto"
+                                              RowDefinitions="Auto,Auto"
+                                              ColumnSpacing="12"
+                                              Margin="0,0,0,10">
+                                            <TextBlock Grid.ColumnSpan="2"
+                                                       Text="{Binding Label}"
+                                                       IsVisible="{Binding HasLabel}"
+                                                       FontSize="12"
+                                                       Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,0,0,4" />
+                                            <SelectableTextBlock Grid.Row="1"
+                                                                 Grid.Column="0"
+                                                                 Text="{Binding Command}"
+                                                                 FontFamily="monospace"
+                                                                 FontSize="12"
+                                                                 TextWrapping="Wrap"
+                                                                 VerticalAlignment="Center" />
+                                            <Button Grid.Row="1"
+                                                    Grid.Column="1"
+                                                    Content="{loc:Str Common.Copy}"
+                                                    Click="OnCopyExample"
+                                                    AutomationProperties.Name="{Binding CopyName}"
+                                                    ToolTip.Tip="{Binding CopyName}"
+                                                    Padding="10,4"
+                                                    VerticalAlignment="Center" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{Binding CliCopyStatusText}"
+                                       IsVisible="{Binding CliCopyStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TwTextSecondaryBrush}" />
+                        </StackPanel>
                     </Border>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="{loc:Str General.Integrations}"
+                       Classes="section-title" />
+
+            <Border Classes="panel"
+                    Padding="18,14">
+                <Grid ColumnDefinitions="*,Auto"
+                      ColumnSpacing="16">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="{loc:Str General.BrowserExtension}"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:Str General.BrowserExtensionDescription}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding BrowserExtensionStatusText}"
+                                   IsVisible="{Binding BrowserExtensionStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TwTextSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                Spacing="8"
+                                VerticalAlignment="Center">
+                        <Button Content="{loc:Str General.BrowserExtensionChrome}"
+                                Command="{Binding OpenChromeExtensionCommand}" />
+                        <Button Content="{loc:Str General.BrowserExtensionFirefox}"
+                                Command="{Binding OpenFirefoxExtensionCommand}" />
+                    </StackPanel>
                 </Grid>
             </Border>
         </StackPanel>
