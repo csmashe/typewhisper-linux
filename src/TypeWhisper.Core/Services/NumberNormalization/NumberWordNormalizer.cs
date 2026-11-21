@@ -22,6 +22,7 @@ public static class NumberWordNormalizer
             return text;
 
         var result = new StringBuilder();
+        WordRun? run = null;
         var index = 0;
         while (index < tokens.Count)
         {
@@ -30,7 +31,7 @@ public static class NumberWordNormalizer
             // a standalone number would corrupt already-digit text into "2 1000000".
             if (tokens[index].IsWord &&
                 !FollowsDigit(index, tokens) &&
-                ParseNumber(index, tokens, languageCode) is { } parsed)
+                ParseNumber(index, tokens, languageCode, ref run) is { } parsed)
             {
                 result.Append(parsed.Replacement);
                 index = parsed.EndIndex;
@@ -75,25 +76,33 @@ public static class NumberWordNormalizer
         return builder.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();
     }
 
-    private static ParsedNumber? ParseNumber(int index, IReadOnlyList<Token> tokens, string languageCode)
+    private static ParsedNumber? ParseNumber(
+        int index,
+        IReadOnlyList<Token> tokens,
+        string languageCode,
+        ref WordRun? run)
     {
-        var words = WordCandidates(index, tokens);
-        if (words.Count == 0)
-            return null;
+        // Each word of a run starts a parse; reuse the run's normalized words for later starts,
+        // since re-normalizing the rest of the run per start was quadratic.
+        if (run is null || !run.TryGetOffset(index, out var offset))
+        {
+            run = WordRun.From(index, tokens, languageCode);
+            offset = 0;
+        }
 
-        var wordTexts = words.Select(static word => word.Text).ToArray();
+        var words = new ArraySegment<string>(run.NormalizedWords, offset, run.NormalizedWords.Length - offset);
         var parsed = languageCode switch
         {
-            "en" => EnglishNumberWordParser.Parse(wordTexts),
-            "de" => GermanNumberWordParser.Parse(wordTexts),
-            "es" => SpanishNumberWordParser.Parse(wordTexts),
+            "en" => EnglishNumberWordParser.Parse(words),
+            "de" => GermanNumberWordParser.Parse(words),
+            "es" => SpanishNumberWordParser.Parse(words),
             _ => null,
         };
 
         if (parsed is null || parsed.ConsumedWords <= 0 || parsed.ConsumedWords > words.Count)
             return null;
 
-        var finalTokenIndex = words[parsed.ConsumedWords - 1].TokenIndex;
+        var finalTokenIndex = run.TokenIndices[offset + parsed.ConsumedWords - 1];
         return new ParsedNumber(parsed.Value, finalTokenIndex + 1);
     }
 
@@ -118,29 +127,59 @@ public static class NumberWordNormalizer
         return lastNonWhitespace >= 0 && char.IsDigit(text[lastNonWhitespace]);
     }
 
-    private static List<WordCandidate> WordCandidates(int index, IReadOnlyList<Token> tokens)
+    // Words joined only by connectors (whitespace, hyphens), which a number can span.
+    private sealed class WordRun
     {
-        var words = new List<WordCandidate>();
-        var current = index;
-
-        while (current < tokens.Count && tokens[current].IsWord)
+        private WordRun(int[] tokenIndices, string[] normalizedWords)
         {
-            words.Add(new WordCandidate(current, tokens[current].Text));
-
-            var separatorIndex = current + 1;
-            var nextWordIndex = current + 2;
-            if (separatorIndex >= tokens.Count ||
-                nextWordIndex >= tokens.Count ||
-                !tokens[nextWordIndex].IsWord ||
-                !IsWordConnector(tokens[separatorIndex].Text))
-            {
-                break;
-            }
-
-            current = nextWordIndex;
+            TokenIndices = tokenIndices;
+            NormalizedWords = normalizedWords;
         }
 
-        return words;
+        public int[] TokenIndices { get; }
+        public string[] NormalizedWords { get; }
+
+        public static WordRun From(int index, IReadOnlyList<Token> tokens, string languageCode)
+        {
+            var tokenIndices = new List<int>();
+            var current = index;
+
+            while (current < tokens.Count && tokens[current].IsWord)
+            {
+                tokenIndices.Add(current);
+
+                var separatorIndex = current + 1;
+                var nextWordIndex = current + 2;
+                if (separatorIndex >= tokens.Count ||
+                    nextWordIndex >= tokens.Count ||
+                    !tokens[nextWordIndex].IsWord ||
+                    !IsWordConnector(tokens[separatorIndex].Text))
+                {
+                    break;
+                }
+
+                current = nextWordIndex;
+            }
+
+            var normalizedWords = new string[tokenIndices.Count];
+            for (var i = 0; i < normalizedWords.Length; i++)
+            {
+                var text = tokens[tokenIndices[i]].Text;
+                normalizedWords[i] = languageCode == "de"
+                    ? GermanNumberWordParser.NormalizeWord(text)
+                    : NormalizeWord(text);
+            }
+
+            return new WordRun([.. tokenIndices], normalizedWords);
+        }
+
+        // Run words sit on every other token (word, connector, word, ...).
+        public bool TryGetOffset(int tokenIndex, out int offset)
+        {
+            var distance = tokenIndex - TokenIndices[0];
+            offset = distance / 2;
+            return distance >= 0 && distance % 2 == 0 && offset < TokenIndices.Length;
+        }
     }
 
     private static List<Token> Tokenize(string text)
@@ -190,5 +229,4 @@ public static class NumberWordNormalizer
     }
 
     private sealed record ParsedNumber(string Replacement, int EndIndex);
-    private sealed record WordCandidate(int TokenIndex, string Text);
 }
