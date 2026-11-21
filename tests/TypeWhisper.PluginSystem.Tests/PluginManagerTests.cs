@@ -583,6 +583,29 @@ public sealed class PluginManagerWithFakePluginTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Dispose_AfterAHungPluginSpendsTheBudget_StillWaitsForASlowerLaterPlugin()
+    {
+        var hangingPlugin = new HangingDeactivationPlugin("com.test.hanging");
+        var laterPlugin = new LifecyclePlugin(
+            "com.test.later",
+            () => Task.Delay(TimeSpan.FromMilliseconds(30))
+        );
+        var manager = await CreateManagerAsync(hangingPlugin, laterPlugin);
+
+        try
+        {
+            await Task.Run(manager.Dispose).WaitAsync(s_outerTimeout);
+
+            Assert.Equal(1, laterPlugin.DeactivationCount);
+            Assert.Equal(1, laterPlugin.DisposeCount);
+        }
+        finally
+        {
+            hangingPlugin.CompleteDeactivation();
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
