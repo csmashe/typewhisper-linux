@@ -2,9 +2,12 @@ using System.Formats.Tar;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
+using Moq;
 using SharpCompress.Compressors;
 using SharpCompress.Compressors.BZip2;
 using TypeWhisper.Plugin.ParakeetCtc;
+using TypeWhisper.PluginSDK;
 
 namespace TypeWhisper.PluginSystem.Tests;
 
@@ -246,6 +249,169 @@ public sealed class ParakeetCtcModelAssetsTests : IDisposable
             await File.ReadAllBytesAsync(Path.Join(Model, "model.int8.onnx"))
         );
     }
+
+    [Fact]
+    public async Task UnchangedVerifiedAssetsAreNotHashedAgainUntilTheirStampChanges()
+    {
+        var archive = ValidArchive();
+        var requests = 0;
+        using var client = new HttpClient(
+            new Handler(
+                (request, _) =>
+                {
+                    requests++;
+                    return Task.FromResult(
+                        Response(
+                            request.RequestUri!.AbsolutePath == "/model" ? archive : s_tokenizer
+                        )
+                    );
+                }
+            )
+        );
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        // Files written moments ago get no stamp: a rewrite within the file-time resolution could keep it.
+        Assert.Empty(Stamps());
+        AgeInstalledFiles();
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        Assert.Equal(["model.int8.onnx"], Stamps().Keys);
+        var receipt = Path.Join(Model, "verified-assets.json");
+        var receiptWritten = DateTime.UtcNow.AddMinutes(-5);
+        File.SetLastWriteTimeUtc(receipt, receiptWritten);
+        var model = Path.Join(Model, "model.int8.onnx");
+        var modelWritten = File.GetLastWriteTimeUtc(model);
+        // Different bytes behind the recorded size and last write time: a matching stamp means the file is not read again.
+        await File.WriteAllBytesAsync(model, [3, 2, 1]);
+        File.SetLastWriteTimeUtc(model, modelWritten);
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        Assert.Equal(2, requests);
+        Assert.Equal(new byte[] { 3, 2, 1 }, await File.ReadAllBytesAsync(model));
+        Assert.Equal(receiptWritten, File.GetLastWriteTimeUtc(receipt));
+        // The small files are hashed every time, so their corruption is repaired despite a kept write time.
+        var tokens = Path.Join(Model, "tokens.txt");
+        var tokensWritten = File.GetLastWriteTimeUtc(tokens);
+        var tokensBytes = await File.ReadAllBytesAsync(tokens);
+        await File.WriteAllBytesAsync(tokens, tokensBytes.Select(b => (byte)(b ^ 1)).ToArray());
+        File.SetLastWriteTimeUtc(tokens, tokensWritten);
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        Assert.Equal(4, requests);
+        Assert.Equal(tokensBytes, await File.ReadAllBytesAsync(tokens));
+        Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
+        // A changed model stamp is verified by hashing again, and the mismatch is repaired.
+        AgeInstalledFiles();
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        modelWritten = File.GetLastWriteTimeUtc(model);
+        await File.WriteAllBytesAsync(model, [3, 2, 1]);
+        File.SetLastWriteTimeUtc(model, modelWritten.AddSeconds(2));
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        Assert.Equal(6, requests);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
+    }
+
+    [Fact]
+    public async Task ReceiptWithoutStampsIsVerifiedOnceAndUpgraded()
+    {
+        var archive = ValidArchive();
+        var requests = 0;
+        using var client = new HttpClient(
+            new Handler(
+                (request, _) =>
+                {
+                    requests++;
+                    return Task.FromResult(
+                        Response(
+                            request.RequestUri!.AbsolutePath == "/model" ? archive : s_tokenizer
+                        )
+                    );
+                }
+            )
+        );
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        var receipt = Path.Join(Model, "verified-assets.json");
+        // The receipt format before stamps existed: the pinned source hashes and one hash per file.
+        var legacy = JsonNode.Parse(await File.ReadAllTextAsync(receipt))!.AsObject();
+        legacy.Remove("Stamps");
+        await File.WriteAllTextAsync(receipt, legacy.ToJsonString());
+        AgeInstalledFiles();
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        Assert.Equal(2, requests);
+        Assert.Equal(["model.int8.onnx"], Stamps().Keys);
+        var upgraded = JsonNode.Parse(await File.ReadAllTextAsync(receipt))!;
+        foreach (var field in new[] { "ArchiveHash", "TokenizerHash", "Files" })
+            Assert.Equal(legacy[field]!.ToJsonString(), upgraded[field]!.ToJsonString());
+        Assert.Empty(Directory.GetFiles(_root, ".ctc-receipt-*"));
+    }
+
+    [Fact]
+    public async Task ModelThatFailsToLoadIsHashedAndRepairedOnTheNextActivation()
+    {
+        var archive = ValidArchive();
+        var requests = 0;
+        using var client = new HttpClient(
+            new Handler(
+                (request, _) =>
+                {
+                    requests++;
+                    return Task.FromResult(
+                        Response(
+                            request.RequestUri!.AbsolutePath == "/model" ? archive : s_tokenizer
+                        )
+                    );
+                }
+            )
+        );
+        var host = new Mock<IPluginHostServices>();
+        host.Setup(h => h.GetSetting<string>("ModelDirectory")).Returns((string?)null);
+        host.SetupGet(h => h.PluginAssetDirectory).Returns(_root);
+        var model = Path.Join(Model, "model.int8.onnx");
+        using var plugin = new ParakeetCtcPlugin(
+            client,
+            modelFactory: _ => throw new InvalidDataException("corrupt model"),
+            assetsFactory: http => Create(http, archive)
+        );
+        await plugin.ActivateAsync(host.Object);
+        await plugin.DeactivateAsync();
+        AgeInstalledFiles();
+        await plugin.ActivateAsync(host.Object);
+        Assert.Equal(["model.int8.onnx"], Stamps().Keys);
+        await plugin.DeactivateAsync();
+        // Same-size corruption behind the recorded write time passes the stamp check.
+        var written = File.GetLastWriteTimeUtc(model);
+        await File.WriteAllBytesAsync(model, [3, 2, 1]);
+        File.SetLastWriteTimeUtc(model, written);
+        await plugin.ActivateAsync(host.Object);
+        Assert.Equal(2, requests);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            plugin.RescoreAsync(
+                new VocabularyRescoreRequest(
+                    Guid.NewGuid(),
+                    "a",
+                    ReadOnlyMemory<float>.Empty,
+                    16000,
+                    [],
+                    []
+                ),
+                CancellationToken.None
+            )
+        );
+        Assert.Empty(Stamps());
+        await plugin.ActivateAsync(host.Object);
+        Assert.Equal(4, requests);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
+    }
+
+    // Moves the installed files' last write times back, as they are on every launch after the one that installed them.
+    private void AgeInstalledFiles()
+    {
+        foreach (var path in Directory.GetFiles(Model))
+            File.SetLastWriteTimeUtc(path, File.GetLastWriteTimeUtc(path).AddMinutes(-10));
+    }
+
+    private Dictionary<string, JsonNode?> Stamps() =>
+        JsonNode
+            .Parse(File.ReadAllText(Path.Join(Model, "verified-assets.json")))!["Stamps"]
+            ?.AsObject()
+            .ToDictionary(entry => entry.Key, entry => entry.Value)
+        ?? [];
 
     [Fact]
     public async Task InsufficientSpaceFailsBeforeExtractionAndKeepsPriorAssets()
