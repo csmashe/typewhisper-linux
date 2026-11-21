@@ -98,9 +98,12 @@ public partial class WhisperCppPluginTests
     public void PunctuationAloneHasNoWords(string? text, bool words) =>
         Assert.Equal(words, DictionaryPromptEcho.HasWords(text));
 
-    [Fact]
-    public void ASupplementaryLetterTermIsRecognizedAsAnEcho() =>
-        Assert.True(DictionaryPromptEcho.IsSuspected("𠮷", "𠮷"));
+    [Theory]
+    [InlineData("𠮷", "𠮷", true)]
+    [InlineData("𠮷野村", "𠮷野", true)]
+    [InlineData("𠮷田", "𠮷野", false)]
+    public void SupplementaryLettersCountAsOneLetterEach(string text, string prompt, bool suspected) =>
+        Assert.Equal(suspected, DictionaryPromptEcho.IsSuspected(text, prompt));
 
     [Fact]
     public async Task EchoedTermsOverSilenceAreDiscarded()

@@ -32,9 +32,23 @@ internal static partial class DictionaryPromptEcho
 
     private static bool Resembles(string word, string promptWord) =>
         string.Equals(word, promptWord, StringComparison.OrdinalIgnoreCase)
-        || word.Length >= 2
-        && promptWord.Length >= 2
-        && string.Compare(word, 0, promptWord, 0, 2, StringComparison.OrdinalIgnoreCase) == 0;
+        || TwoLetterPrefix(word) is { } prefix
+        && string.Equals(prefix, TwoLetterPrefix(promptWord), StringComparison.OrdinalIgnoreCase);
+
+    // Two runes, not two UTF-16 units, so a supplementary letter is not a prefix on its own.
+    private static string? TwoLetterPrefix(string word)
+    {
+        var length = 0;
+        var letters = 0;
+        foreach (var rune in word.EnumerateRunes())
+        {
+            length += rune.Utf16SequenceLength;
+            if (++letters == 2)
+                return word[..length];
+        }
+
+        return null;
+    }
 
     // Runes, so supplementary letters such as "𠮷" count; combining marks keep Indic and Thai words whole.
     private static List<string> Words(string? text)
