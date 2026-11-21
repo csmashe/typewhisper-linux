@@ -37,6 +37,7 @@ public sealed class AssemblyAiPluginTests
         using var sut = new AssemblyAiPlugin(httpClient);
         await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
         await sut.SetSettingValueAsync("useDictionaryTerms", enabled ? "true" : "false");
+        await sut.SetSettingValueAsync("transcriptionMode", "async");
 
         var prompt = PluginTranscriptionPrompt.Encode("Prompt text", ["Washington, D.C.", "TypeWhisper"]);
         var result = await sut.TranscribeAsync([1, 2, 3], "de", false, prompt, CancellationToken.None);
@@ -402,6 +403,7 @@ public sealed class AssemblyAiPluginTests
             }));
         using var sut = new AssemblyAiPlugin(httpClient);
         await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+        await sut.SetSettingValueAsync("transcriptionMode", "async");
 
         var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
             sut.TranscribeAsync([1, 2, 3], null, false, null, CancellationToken.None));
@@ -468,14 +470,281 @@ public sealed class AssemblyAiPluginTests
         var directory = Path.GetFullPath(
             Path.Join("..", "..", "..", "..", "..", "plugins", "TypeWhisper.Plugin.AssemblyAi", "Localization"),
             AppContext.BaseDirectory);
-        foreach (var language in new[] { "en", "de", "es", "ru" })
+        string[] keys =
+        [
+            "Settings.UseDictionaryTerms", "Settings.UseDictionaryTermsDescription", "Settings.SpeakerLabels",
+            "Settings.SpeakerLabelsDescription", "Settings.TranscriptionMode", "Settings.TranscriptionModeDescription",
+            "Settings.TranscriptionMode.Live", "Settings.TranscriptionMode.Sync", "Settings.TranscriptionMode.Async",
+        ];
+        foreach (var language in new[] { "en", "de", "es", "ru", "ja", "zh" })
         {
             using var document = JsonDocument.Parse(File.ReadAllText(Path.Join(directory, $"{language}.json")));
-            Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("Settings.UseDictionaryTerms").GetString()));
-            Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("Settings.UseDictionaryTermsDescription").GetString()));
-            Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("Settings.SpeakerLabels").GetString()));
-            Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("Settings.SpeakerLabelsDescription").GetString()));
+            foreach (var key in keys)
+                Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty(key).GetString()), $"{language}: {key}");
         }
+    }
+
+    [Theory]
+    [InlineData("live")]
+    [InlineData("sync")]
+    public async Task TranscribeAsync_SendsProRecordingsToTheSyncApi(string mode)
+    {
+        var paths = new List<string>();
+        HttpRequestMessage? syncRequest = null;
+        string? syncBody = null;
+        using var httpClient = new HttpClient(new CapturingHandler((request, body) =>
+        {
+            paths.Add(request.RequestUri!.Host + request.RequestUri.AbsolutePath);
+            syncRequest = request;
+            syncBody = body;
+            return Json("""
+                {"text":"Hello TypeWhisper.","audio_duration_ms":2000,
+                 "words":[{"text":"Hello","start":100,"end":500},{"text":"TypeWhisper.","start":600,"end":1400}]}
+                """);
+        }));
+        using var sut = new AssemblyAiPlugin(httpClient);
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+        await sut.SetSettingValueAsync("useDictionaryTerms", "true");
+        await sut.SetSettingValueAsync("transcriptionMode", mode);
+
+        var prompt = PluginTranscriptionPrompt.Encode("Prompt text", ["Washington, D.C.", "TypeWhisper"]);
+        var result = await sut.TranscribeAsync(CreateWav(TimeSpan.FromSeconds(2)), "de", false, prompt, CancellationToken.None);
+
+        Assert.Equal(["sync.assemblyai.com/v1/transcribe"], paths);
+        Assert.Equal("aai-key", syncRequest!.Headers.GetValues("Authorization").Single());
+        Assert.Equal("universal-3-6-pro", syncRequest.Headers.GetValues("X-AAI-Model").Single());
+        Assert.Contains("name=audio; filename=audio.wav", syncBody);
+        Assert.Contains("""{"timestamps":true,"language_codes":["de"],"keyterms_prompt":["Washington, D.C.","TypeWhisper"]}""", syncBody);
+        Assert.Equal("Hello TypeWhisper.", result.Text);
+        Assert.Equal("de", result.DetectedLanguage);
+        Assert.Equal(2, result.DurationSeconds, 3);
+        Assert.Equal(["Hello", "TypeWhisper."], result.Segments.Select(static segment => segment.Text));
+        Assert.Equal(0.6, result.Segments[1].Start, 3);
+        Assert.Equal(1.4, result.Segments[1].End, 3);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_LeavesOutTermsTheSyncRequestDoesNotNeed()
+    {
+        string? syncBody = null;
+        using var httpClient = new HttpClient(new CapturingHandler((_, body) =>
+        {
+            syncBody = body;
+            return Json("""{"text":null}""");
+        }));
+        using var sut = new AssemblyAiPlugin(httpClient);
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+
+        var result = await sut.TranscribeAsync(CreateWav(TimeSpan.FromSeconds(3)), "en", false, null, CancellationToken.None);
+
+        Assert.Contains("""{"timestamps":true,"language_codes":["en"]}""", syncBody);
+        Assert.Equal("", result.Text);
+        Assert.Equal("en", result.DetectedLanguage);
+        Assert.Equal(3, result.DurationSeconds, 3);
+        Assert.Empty(result.Segments);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.RequestEntityTooLarge)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task TranscribeAsync_FallsBackToTheAsyncApiWhenTheSyncRequestFails(HttpStatusCode status)
+    {
+        var paths = new List<string>();
+        using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
+        {
+            paths.Add(request.RequestUri!.Host + request.RequestUri.AbsolutePath);
+            return request.RequestUri.AbsolutePath switch
+            {
+                "/v1/transcribe" => new HttpResponseMessage(status) { Content = new StringContent("""{"error":"no"}""") },
+                "/v2/upload" => Json("""{"upload_url":"https://cdn.example/audio"}"""),
+                "/v2/transcript" => Json("""{"id":"t1"}"""),
+                _ => Json("""{"status":"completed","text":"from async","language_code":"en"}"""),
+            };
+        }));
+        using var sut = new AssemblyAiPlugin(httpClient);
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+
+        var result = await sut.TranscribeAsync(CreateWav(TimeSpan.FromSeconds(1)), "en", false, null, CancellationToken.None);
+
+        Assert.Equal("from async", result.Text);
+        Assert.Equal(
+            ["sync.assemblyai.com/v1/transcribe", "api.assemblyai.com/v2/upload", "api.assemblyai.com/v2/transcript", "api.assemblyai.com/v2/transcript/t1"],
+            paths);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_FallsBackWhenTheSyncResponseIsInvalid()
+    {
+        using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
+            request.RequestUri!.AbsolutePath switch
+            {
+                "/v1/transcribe" => Json("""{"words":[]}"""),
+                "/v2/upload" => Json("""{"upload_url":"https://cdn.example/audio"}"""),
+                "/v2/transcript" => Json("""{"id":"t1"}"""),
+                _ => Json("""{"status":"completed","text":"from async"}"""),
+            }));
+        using var sut = new AssemblyAiPlugin(httpClient);
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+
+        var result = await sut.TranscribeAsync(CreateWav(TimeSpan.FromSeconds(1)), "en", false, null, CancellationToken.None);
+
+        Assert.Equal("from async", result.Text);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_DoesNotRetryAnInvalidKeyOnTheAsyncApi()
+    {
+        var calls = 0;
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("{}") };
+        }));
+        using var sut = new AssemblyAiPlugin(httpClient);
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() =>
+            sut.TranscribeAsync(CreateWav(TimeSpan.FromSeconds(1)), "en", false, null, CancellationToken.None));
+
+        Assert.Equal(PluginRequestFailureKind.Authentication, ex.FailureKind);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_StopsWhenCancelledDuringTheSyncRequest()
+    {
+        using var cts = new CancellationTokenSource();
+        var calls = 0;
+        using var httpClient = new HttpClient(new CapturingHandler((_, _) =>
+        {
+            calls++;
+            // ReSharper disable once AccessToDisposedClosure -- runs during TranscribeAsync, before cts is disposed.
+            cts.Cancel();
+            throw new TaskCanceledException();
+        }));
+        using var sut = new AssemblyAiPlugin(httpClient);
+        await sut.ActivateAsync(CreateHost(new Dictionary<string, object?>()).Object);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.TranscribeAsync(CreateWav(TimeSpan.FromSeconds(1)), "en", false, null, cts.Token));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Theory]
+    [InlineData("async", false, "universal-3-5-pro", "en", 0, 60, false)]
+    [InlineData("live", true, "universal-3-5-pro", "en", 0, 60, false)]
+    [InlineData("live", false, "universal-2", "en", 0, 60, false)]
+    [InlineData("live", false, "universal-3-5-pro", "pl", 0, 60, false)]
+    [InlineData("live", false, "universal-3-5-pro", "en", 101, 60, false)]
+    [InlineData("live", false, "universal-3-5-pro", "en", 0, 1201, false)]
+    [InlineData("live", false, "universal-3-5-pro", "en", 100, 1200, true)]
+    // Only the async API reports the language it detected.
+    [InlineData("sync", false, "universal-3-5-pro", null, 0, 60, false)]
+    [InlineData("sync", false, "universal-3-5-pro", "de", 0, 60, true)]
+    public void SyncRequestFor_RoutesWhatTheSyncApiRejectsToTheAsyncApi(
+        string mode, bool speakerLabels, string modelId, string? language, int termCount, int seconds, bool expected)
+    {
+        var terms = Enumerable.Range(0, termCount).Select(i => $"Term{i}").ToArray();
+
+        var sync = AssemblyAiPlugin.SyncRequestFor(
+            AssemblyAiModels.Resolve(modelId), mode, speakerLabels, language, terms, TimeSpan.FromSeconds(seconds), 1000);
+
+        Assert.Equal(expected, sync is not null);
+    }
+
+    [Fact]
+    public void SyncRequestFor_SendsLargeOrUnmeasuredRecordingsOnlyWithinTheSyncLimits()
+    {
+        var model = AssemblyAiModels.Resolve("universal-3-5-pro");
+        string[] longTerms = [new('a', 4000), new('b', 4001)];
+
+        Assert.Null(AssemblyAiPlugin.SyncRequestFor(model, "live", false, "en", [], null, 256L * 1024 * 1024 + 1));
+        Assert.Null(AssemblyAiPlugin.SyncRequestFor(model, "live", false, "en", longTerms, null, 1000));
+        Assert.NotNull(AssemblyAiPlugin.SyncRequestFor(model, "live", false, "en", [], null, 256L * 1024 * 1024));
+    }
+
+    [Fact]
+    public void SyncSegments_KeepWordsTheSyncApiCouldNotAlign()
+    {
+        using var doc = JsonDocument.Parse("""
+            {"words":[
+              {"text":"Well,"},
+              {"text":"hello","start":200,"end":400},
+              {"text":"there"},
+              {"text":"friend","start":100,"end":900},
+              {"text":"uh","start":950,"end":950},
+              {"text":" "},
+              {"text":"again.","start":1000,"end":1200}]}
+            """);
+
+        var segments = AssemblyAiPlugin.SyncSegments(doc.RootElement);
+
+        Assert.Equal(["Well, hello there friend uh", "again."], segments.Select(static segment => segment.Text));
+        Assert.Equal(0.2, segments[0].Start, 3);
+        Assert.Equal(1.0, segments[1].Start, 3);
+    }
+
+    [Fact]
+    public void SyncSegments_AreEmptyWithoutTimedWords()
+    {
+        using var untimed = JsonDocument.Parse("""{"words":[{"text":"hello"}]}""");
+        using var missing = JsonDocument.Parse("""{"text":"hello"}""");
+
+        Assert.Empty(AssemblyAiPlugin.SyncSegments(untimed.RootElement));
+        Assert.Empty(AssemblyAiPlugin.SyncSegments(missing.RootElement));
+    }
+
+    [Fact]
+    public void WavDuration_ReadsTheHeaderAndCountsOnlyBytesPresentForAnOpenDataSize()
+    {
+        Assert.Equal(2.5, AssemblyAiPlugin.WavDuration(CreateWav(TimeSpan.FromSeconds(2.5)))!.Value.TotalSeconds, 3);
+        Assert.Equal(1, AssemblyAiPlugin.WavDuration(CreateWav(TimeSpan.FromSeconds(1), uint.MaxValue))!.Value.TotalSeconds, 3);
+        Assert.Null(AssemblyAiPlugin.WavDuration([1, 2, 3]));
+        Assert.Null(AssemblyAiPlugin.WavDuration("RIFF\0\0\0\0WAVEdata\0\0\0\0"u8.ToArray()));
+    }
+
+    [Fact]
+    public async Task TranscriptionMode_DefaultsToLivePersistsAndOnlyLiveStreams()
+    {
+        var settings = new Dictionary<string, object?>();
+        var host = CreateHost(settings);
+        using var sut = new AssemblyAiPlugin();
+        await sut.ActivateAsync(host.Object);
+
+        Assert.Equal("live", await sut.GetSettingValueAsync("transcriptionMode"));
+        Assert.True(sut.SupportsStreaming);
+
+        await sut.SetSettingValueAsync("transcriptionMode", "sync");
+        Assert.False(sut.SupportsStreaming);
+        Assert.Equal("sync", settings["transcriptionMode"]);
+        await sut.SetSettingValueAsync("transcriptionMode", "sync");
+        host.Verify(h => h.NotifyCapabilitiesChanged(), Times.Once);
+
+        await sut.SetSettingValueAsync("transcriptionMode", "async");
+        Assert.False(sut.SupportsStreaming);
+
+        using var reloaded = new AssemblyAiPlugin();
+        await reloaded.ActivateAsync(CreateHost(settings).Object);
+        Assert.Equal("async", await reloaded.GetSettingValueAsync("transcriptionMode"));
+
+        settings["transcriptionMode"] = "turbo";
+        using var unknown = new AssemblyAiPlugin();
+        await unknown.ActivateAsync(CreateHost(settings).Object);
+        Assert.Equal("live", await unknown.GetSettingValueAsync("transcriptionMode"));
+        Assert.True(unknown.SupportsStreaming);
+    }
+
+    [Fact]
+    public void TranscriptionMode_IsOfferedAsADropdownWithThreeChoices()
+    {
+        using var sut = new AssemblyAiPlugin();
+
+        var definition = sut.GetSettingDefinitions().Single(static setting => setting.Key == "transcriptionMode");
+
+        Assert.Equal(["live", "sync", "async"], definition.Options!.Select(static option => option.Value));
     }
 
     private static Mock<IPluginHostServices> CreateHost(Dictionary<string, object?> settings)
@@ -500,6 +769,27 @@ public sealed class AssemblyAiPluginTests
 
     private static HttpResponseMessage Json(string json) =>
         new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+
+    private static byte[] CreateWav(TimeSpan duration, uint? declaredDataBytes = null)
+    {
+        var dataBytes = (int)(duration.TotalSeconds * 32000);
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write("RIFF"u8);
+        writer.Write(36 + dataBytes);
+        writer.Write("WAVEfmt "u8);
+        writer.Write(16);
+        writer.Write((short)1);
+        writer.Write((short)1);
+        writer.Write(16000);
+        writer.Write(32000);
+        writer.Write((short)2);
+        writer.Write((short)16);
+        writer.Write("data"u8);
+        writer.Write(declaredDataBytes ?? (uint)dataBytes);
+        writer.Write(new byte[dataBytes]);
+        return stream.ToArray();
+    }
 
     private sealed class CapturingHandler(Func<HttpRequestMessage, string?, HttpResponseMessage> responder)
         : HttpMessageHandler

@@ -6,10 +6,36 @@ internal sealed record AssemblyAiModel(
     string Id,
     string DisplayName,
     IReadOnlyList<string> Languages,
-    DictionaryTermsBudget Budget
+    DictionaryTermsBudget Budget,
+    AssemblyAiSyncLimits? Sync = null
 )
 {
     internal bool IsPro => Id == AssemblyAiModels.DefaultId;
+}
+
+// The Sync API rejects anything outside these limits, so such recordings go to the async API.
+internal sealed record AssemblyAiSyncLimits(
+    string ModelId,
+    IReadOnlyList<string> Languages,
+    TimeSpan MaxDuration,
+    long MaxBytes,
+    int MaxTerms,
+    int MaxTermCharacters
+);
+
+// How dictations stream and how recordings are transcribed.
+internal static class AssemblyAiModes
+{
+    // Dictations stream; recordings use the Sync API.
+    internal const string Live = "live";
+    // No streaming; recordings use the Sync API.
+    internal const string Sync = "sync";
+    // No streaming; recordings use the async API: cheapest, a few seconds slower.
+    internal const string Async = "async";
+
+    private static IReadOnlyList<string> All { get; } = [Live, Sync, Async];
+
+    internal static string Normalize(string? mode) => mode is not null && All.Contains(mode) ? mode : Live;
 }
 
 internal static class AssemblyAiModels
@@ -30,7 +56,18 @@ internal static class AssemblyAiModels
             DefaultId,
             "Universal-3.5 Pro",
             ["en", "es", "fr", "de", "it", "pt", "ar", "da", "nl", "fi", "he", "hi", "ja", "zh", "no", "sv", "tr", "vi"],
-            new DictionaryTermsBudget(MaxTerms: 1000, MaxWordsPerTerm: 6)
+            new DictionaryTermsBudget(MaxTerms: 1000, MaxWordsPerTerm: 6),
+            // Sync retired Universal-3.5 Pro in favour of 3.6 Pro.
+            new AssemblyAiSyncLimits(
+                "universal-3-6-pro",
+                [
+                    "en", "es", "de", "fr", "it", "pt", "tr", "nl", "sv", "no", "da", "fi", "hi", "vi", "ar", "he", "ja",
+                    "ur", "zh", "ko", "ca", "gl", "ru", "ro", "et", "fa", "yue", "af", "mr", "zu", "xh", "nn",
+                ],
+                TimeSpan.FromMinutes(20),
+                MaxBytes: 256L * 1024 * 1024,
+                MaxTerms: 100,
+                MaxTermCharacters: 8000)
         ),
         new(
             Universal2Id,
