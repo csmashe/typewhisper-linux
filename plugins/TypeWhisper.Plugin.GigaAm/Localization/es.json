@@ -1,0 +1,6 @@
+{
+  "Provider.DisplayName": "GigaAM",
+  "Model.DisplayName": "GigaAM v3 (ruso, con puntuación)",
+  "Manifest.Name": "GigaAM",
+  "Manifest.Description": "Reconocimiento de voz local en ruso con GigaAM v3 de Sber. Añade puntuación y mayúsculas y se ejecuta en la CPU. Solo ruso."
+}

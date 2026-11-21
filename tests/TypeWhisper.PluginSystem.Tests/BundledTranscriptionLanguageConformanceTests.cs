@@ -1,3 +1,4 @@
+extern alias GigaAm;
 extern alias SherpaOnnx;
 
 using TypeWhisper.Linux.Services;
@@ -22,6 +23,7 @@ using TypeWhisper.Plugin.Speechmatics;
 using TypeWhisper.Plugin.Voxtral;
 using TypeWhisper.Plugin.WhisperCpp;
 using TypeWhisper.Plugin.Xai;
+using GigaAmPlugin = GigaAm::TypeWhisper.Plugin.GigaAm.GigaAmPlugin;
 using SherpaOnnxPlugin = SherpaOnnx::TypeWhisper.Plugin.SherpaOnnx.SherpaOnnxPlugin;
 
 namespace TypeWhisper.PluginSystem.Tests;
@@ -43,10 +45,10 @@ public sealed class BundledTranscriptionLanguageConformanceTests
         var roles = CreateBundledRoles();
         try
         {
-            Assert.Equal(21, roles.Count);
-            Assert.Equal(21, roles.Select(role => role.ProviderId).Distinct().Count());
+            Assert.Equal(22, roles.Count);
+            Assert.Equal(22, roles.Select(role => role.ProviderId).Distinct().Count());
 
-            // Role-independent, so assert once rather than 21 times inside the loop below.
+            // Role-independent, so assert once rather than 22 times inside the loop below.
             Assert.False(LanguageSelection.TryParse("", out _));
             Assert.False(LanguageSelection.TryParse("   ", out _));
             foreach (var raw in s_invalidInputs)
@@ -244,6 +246,7 @@ public sealed class BundledTranscriptionLanguageConformanceTests
             new DeepgramPlugin(),
             new ElevenLabsPlugin(),
             new GeminiPlugin(),
+            new GigaAmPlugin(),
             new GladiaPlugin(),
             new GoogleCloudSttPlugin(),
             new GroqPlugin(),

@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.ML.OnnxRuntime;
 using TypeWhisper.Linux.Services.Plugins;
-using TypeWhisper.Plugin.ParakeetCtc;
+using TypeWhisper.Plugins.Shared.Onnx;
 
 namespace TypeWhisper.PluginSystem.Tests;
 

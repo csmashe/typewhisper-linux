@@ -1,5 +1,6 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using TypeWhisper.Plugins.Shared.Onnx;
 
 namespace TypeWhisper.Plugin.ParakeetCtc;
 

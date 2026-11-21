@@ -1,0 +1,6 @@
+{
+  "Provider.DisplayName": "GigaAM",
+  "Model.DisplayName": "GigaAM v3（ロシア語、句読点付き）",
+  "Manifest.Name": "GigaAM",
+  "Manifest.Description": "SberのGigaAM v3によるロシア語のローカル音声認識です。句読点と大文字を付け、CPUで動作します。ロシア語専用です。"
+}

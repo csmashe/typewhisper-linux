@@ -1,0 +1,6 @@
+{
+  "Provider.DisplayName": "GigaAM",
+  "Model.DisplayName": "GigaAM v3 (Russisch, mit Satzzeichen)",
+  "Manifest.Name": "GigaAM",
+  "Manifest.Description": "Lokale russische Spracherkennung mit GigaAM v3 von Sber. Setzt Satzzeichen und Großschreibung und läuft auf der CPU. Nur Russisch."
+}
