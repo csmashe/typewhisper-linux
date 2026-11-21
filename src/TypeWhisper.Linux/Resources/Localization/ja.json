@@ -1605,6 +1605,7 @@
   "Shortcuts.CapturePrompt": "キーまたはキーの組み合わせを押し、すべてのキーを離すと適用されます。キャンセルするにはEscを押してください。",
   "Shortcuts.PreviewManagedBlock": "{0} — 管理対象ブロック:",
   "Shortcuts.UnsupportedCaptureKey": "このキーはサポートされていません。文字、数字、ファンクションキー、ナビゲーションキー、または単一の修飾キーを使用してください。",
+  "Shortcuts.CaptureKeyNeedsModifier": "このキーは文字入力やカーソル移動に使われるため、Ctrl、Alt、Shift、Meta などの修飾キーと組み合わせてください。ファンクションキーと単一の修飾キーは単独で使用できます。",
   "Window.LearnedCorrectionTitle": "TypeWhisper 学習した修正",
   "Window.LiveTextTitle": "TypeWhisper ライブテキスト",
   "Window.OverlayTitle": "TypeWhisper オーバーレイ"

@@ -68,6 +68,7 @@ public partial class ShortcutsSection : UserControl
         var result = _recorder.Handle(e.Key, e.KeyModifiers, pressed);
         if (result.Cancelled) CancelCapture();
         else if (result.Unsupported) vm.ReportUnsupportedHotkey();
+        else if (result.NeedsModifier) vm.ReportHotkeyNeedsModifier();
         else if (result.Chord is { } chord)
         {
             try { await vm.ApplyCapturedHotkeyAsync(chord); }

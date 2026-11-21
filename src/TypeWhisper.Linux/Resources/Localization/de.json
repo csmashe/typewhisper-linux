@@ -1605,6 +1605,7 @@
   "Shortcuts.CapturePrompt": "Drücken Sie eine Taste oder Tastenkombination und lassen Sie alle Tasten los. Escape bricht ab.",
   "Shortcuts.PreviewManagedBlock": "{0} – verwalteter Block:",
   "Shortcuts.UnsupportedCaptureKey": "Diese Taste wird nicht unterstützt. Verwenden Sie Buchstaben, Ziffern, Funktionstasten, Navigationstasten oder eine einzelne Modifikatortaste.",
+  "Shortcuts.CaptureKeyNeedsModifier": "Diese Taste schreibt Text oder bewegt den Cursor und braucht daher eine Modifikatortaste wie Strg, Alt, Umschalt oder Meta. Funktionstasten und eine einzelne Modifikatortaste funktionieren allein.",
   "Window.LearnedCorrectionTitle": "TypeWhisper – gelernte Korrektur",
   "Window.LiveTextTitle": "TypeWhisper-Live-Text",
   "Window.OverlayTitle": "TypeWhisper-Overlay"

@@ -56,6 +56,60 @@ public sealed class HotkeyChordRecorderTests
         Assert.Null(recorder.Handle(lastRelease, KeyModifiers.None, false).Chord);
     }
 
+    [Theory]
+    [InlineData(Key.A)]
+    [InlineData(Key.D1)]
+    [InlineData(Key.Space)]
+    [InlineData(Key.Enter)]
+    [InlineData(Key.Tab)]
+    [InlineData(Key.Back)]
+    [InlineData(Key.Delete)]
+    [InlineData(Key.Home)]
+    [InlineData(Key.Left)]
+    public void LoneTypingKeyNeedsAModifierAndCaptureContinues(Key key)
+    {
+        var recorder = new HotkeyChordRecorder();
+        Assert.True(recorder.Handle(key, KeyModifiers.None, true).NeedsModifier);
+        Assert.Null(recorder.Handle(key, KeyModifiers.None, false).Chord);
+
+        recorder.Handle(Key.LeftAlt, KeyModifiers.Alt, true);
+        var press = recorder.Handle(key, KeyModifiers.Alt, true);
+        Assert.False(press.NeedsModifier);
+        recorder.Handle(key, KeyModifiers.Alt, false);
+        Assert.NotNull(recorder.Handle(Key.LeftAlt, KeyModifiers.None, false).Chord);
+    }
+
+    [Theory]
+    [InlineData(Key.F1)]
+    [InlineData(Key.F13)]
+    [InlineData(Key.F24)]
+    public void FunctionKeyWorksAlone(Key key)
+    {
+        var recorder = new HotkeyChordRecorder();
+        Assert.False(recorder.Handle(key, KeyModifiers.None, true).NeedsModifier);
+        Assert.Equal(key.ToString(), recorder.Handle(key, KeyModifiers.None, false).Chord);
+    }
+
+    [Fact]
+    public void ExtraKeyAfterTheChordDoesNotReplaceIt()
+    {
+        var recorder = new HotkeyChordRecorder();
+        recorder.Handle(Key.LeftCtrl, KeyModifiers.Control, true);
+        recorder.Handle(Key.K, KeyModifiers.Control, true);
+        recorder.Handle(Key.LeftCtrl, KeyModifiers.None, false);
+        Assert.False(recorder.Handle(Key.J, KeyModifiers.None, true).NeedsModifier);
+        recorder.Handle(Key.J, KeyModifiers.None, false);
+        Assert.Equal("Ctrl+K", recorder.Handle(Key.K, KeyModifiers.None, false).Chord);
+    }
+
+    [Fact]
+    public void SavedLoneTypingKeyStillLoads()
+    {
+        using var hotkey = TestShortcutBackend.CreateHotkeyService();
+        Assert.True(hotkey.TrySetHotkeyFromString("Space"));
+        Assert.Equal("Space", hotkey.CurrentHotkeyString);
+    }
+
     [Fact]
     public void EveryEmittedNameRoundTripsAndUnsupportedKeysAreRejected()
     {

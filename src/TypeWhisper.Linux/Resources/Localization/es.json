@@ -1605,6 +1605,7 @@
   "Shortcuts.CapturePrompt": "Pulsa una tecla o combinación y suelta todas las teclas para aplicarla. Escape cancela.",
   "Shortcuts.PreviewManagedBlock": "{0} — bloque gestionado:",
   "Shortcuts.UnsupportedCaptureKey": "Esta tecla no es compatible. Usa una letra, un dígito, una tecla de función, una tecla de navegación o un solo modificador.",
+  "Shortcuts.CaptureKeyNeedsModifier": "Esta tecla escribe o mueve el cursor, así que necesita un modificador como Ctrl, Alt, Mayús o Meta. Las teclas de función y un solo modificador funcionan solos.",
   "Window.LearnedCorrectionTitle": "Corrección aprendida de TypeWhisper",
   "Window.LiveTextTitle": "Texto en vivo de TypeWhisper",
   "Window.OverlayTitle": "Superposición de TypeWhisper"
