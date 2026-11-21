@@ -23,25 +23,50 @@ public sealed partial class Reson8Plugin
 
     // Custom models belong to the account and server they were loaded from, so a catalog
     // loaded with another key, base URL or auth header is never shown or used.
-    internal IReadOnlyList<Reson8CustomModel> FetchedCustomModels =>
-        _catalog is { } catalog && catalog.Owner == Fingerprint(CustomBaseUrl, CustomAuthHeader, ApiKey)
-            ? catalog.Models
-            : [];
+    internal IReadOnlyList<Reson8CustomModel> FetchedCustomModels => VisibleCatalog?.Models ?? [];
+
+    // Reson8's own models (GET /v1/model), kept with the same owner as the custom models.
+    internal IReadOnlyList<Reson8Model> FetchedListedModels => VisibleCatalog?.ListedModels ?? [];
+
+    private Reson8CustomModelCatalog? VisibleCatalog =>
+        _catalog is { } catalog && catalog.Owner == Fingerprint(CustomBaseUrl, CustomAuthHeader, ApiKey) ? catalog : null;
+
+    private static Reson8Model? DefaultListedModel(IReadOnlyList<Reson8Model> listed) =>
+        listed.FirstOrDefault(m => m.IsDefault == true);
+
+    private static IEnumerable<Reson8Model> NonDefaultListedModels(IReadOnlyList<Reson8Model> listed) =>
+        listed.Where(m => m.IsDefault != true);
 
     // One consistent copy, so a concurrent settings save can't mix two connections.
     private Reson8Connection CaptureConnection()
     {
         lock (_catalogLock)
         {
+            var listed = FetchedListedModels;
+            var listedModel = NonDefaultListedModels(listed).FirstOrDefault(m => m.Id == _selectedModelId);
             return new Reson8Connection(
                 ApiKey ?? "",
                 CustomBaseUrl,
                 CustomAuthHeader,
                 _selectedModelId,
                 Fingerprint(CustomBaseUrl, CustomAuthHeader, ApiKey),
-                FetchedCustomModels.Select(m => m.Id).ToHashSet(StringComparer.Ordinal));
+                FetchedCustomModels.Select(m => m.Id)
+                    .Concat(NonDefaultListedModels(listed).Select(m => m.Id))
+                    .ToHashSet(StringComparer.Ordinal),
+                listedModel,
+                listedModel ?? DefaultListedModel(listed),
+                FillerMode,
+                BiasStrength);
         }
     }
+
+    private static Reson8QueryOptions QueryOptionsFor(Reson8Connection connection) =>
+        new(
+            connection.ListedModel?.Id,
+            Reson8Models.TakesParameter(connection.Model, "filler_mode") ? connection.FillerMode : Reson8FillerModes.Natural,
+            connection.BiasStrength,
+            Reson8Models.TakesParameter(connection.Model, "include_timestamps")
+                && Reson8Models.TakesParameter(connection.Model, "include_words"));
 
     private string? ConnectionProblem(Reson8Connection connection)
     {
@@ -61,7 +86,7 @@ public sealed partial class Reson8Plugin
         if (ConnectionProblem(connection) is { } problem)
             throw new PluginRequestException(problem, PluginRequestFailureKind.Configuration);
 
-        // Never send another account's or server's custom model ID.
+        // Never send another account's or server's model ID.
         if (connection.ModelId != DefaultModelId && !connection.CatalogModelIds.Contains(connection.ModelId))
             throw new PluginRequestException(Loc.L("Settings.SelectedModelUnavailable"), PluginRequestFailureKind.Configuration);
 
@@ -101,7 +126,12 @@ public sealed partial class Reson8Plugin
         {
             var catalog = JsonSerializer.Deserialize<Reson8CustomModelCatalog>(json, s_jsonOptions);
             // ReSharper disable once RedundantAlwaysMatchSubpattern, ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract -- non-nullable only by annotation; JSON null still deserializes to null.
-            return catalog is { Owner.Length: > 0, Models: not null } && IsValidCatalog(catalog.Models) ? catalog : null;
+            if (catalog is not { Owner.Length: > 0, Models: not null } || !IsValidCatalog(catalog.Models))
+                return null;
+
+            // Catalogs saved before the model list have none.
+            // ReSharper disable once NullCoalescingConditionIsAlwaysNotNullAccordingToAPIContract -- JSON null still deserializes to null.
+            return catalog with { ListedModels = Reson8Models.Sanitize(catalog.ListedModels ?? []) };
         }
         catch (JsonException)
         {
@@ -110,20 +140,31 @@ public sealed partial class Reson8Plugin
     }
 
     internal void SetFetchedCustomModels(IReadOnlyList<Reson8CustomModel> models) =>
-        CommitCatalog(CaptureConnection().Owner, models);
+        CommitCatalog(CaptureConnection().Owner, models, listedModels: null);
 
-    // False when the connection changed after the load started; the catalog is then discarded.
-    private bool CommitCatalog(string owner, IReadOnlyList<Reson8CustomModel> models)
+    internal void SetFetchedListedModels(IReadOnlyList<Reson8Model> models) =>
+        CommitCatalog(CaptureConnection().Owner, customModels: null, models);
+
+    // A null list keeps the current one. False when the connection changed after the load started;
+    // the catalog is then discarded.
+    private bool CommitCatalog(string owner, IReadOnlyList<Reson8CustomModel>? customModels, IReadOnlyList<Reson8Model>? listedModels)
     {
         lock (_catalogLock)
         {
             if (owner != Fingerprint(CustomBaseUrl, CustomAuthHeader, ApiKey))
                 return false;
 
-            var catalog = new Reson8CustomModelCatalog { Owner = owner, Models = models.ToList() };
+            var catalog = new Reson8CustomModelCatalog
+            {
+                Owner = owner,
+                Models = (customModels ?? FetchedCustomModels).ToList(),
+                ListedModels = Reson8Models.Sanitize(listedModels ?? FetchedListedModels),
+            };
 
             // Saved first and restored if the catalog write fails, so the two never disagree.
-            var dropSelection = _selectedModelId != DefaultModelId && catalog.Models.All(m => m.Id != _selectedModelId);
+            var dropSelection = _selectedModelId != DefaultModelId
+                && catalog.Models.All(m => m.Id != _selectedModelId)
+                && NonDefaultListedModels(catalog.ListedModels).All(m => m.Id != _selectedModelId);
             if (dropSelection)
                 _host?.SetSetting(SelectedModelSettingName, DefaultModelId);
             try
@@ -150,9 +191,10 @@ public sealed partial class Reson8Plugin
     {
         lock (_catalogLock)
         {
-            var before = FetchedCustomModels.Count > 0;
+            var before = VisibleCatalog is { } shown && (shown.Models.Count > 0 || shown.ListedModels.Count > 0);
             change();
-            return before != FetchedCustomModels.Count > 0;
+            var after = VisibleCatalog is { } visible && (visible.Models.Count > 0 || visible.ListedModels.Count > 0);
+            return before != after;
         }
     }
 
@@ -176,15 +218,21 @@ public sealed partial class Reson8Plugin
             return new PluginSettingsValidationResult(false, Loc.L(keyProblem));
 
         var fetch = await FetchCustomModelsAsync(connection, ct);
-        if (fetch.Models is null)
-            return new PluginSettingsValidationResult(true, Loc.L("Settings.CustomModelsRefreshFailed", fetch.FailureReason!));
+        var listedFetch = await FetchListedModelsAsync(connection, ct);
 
-        if (!CommitCatalog(connection.Owner, fetch.Models))
+        // A list that couldn't be loaded keeps its previous entries.
+        if ((fetch.Models is not null || listedFetch.Models is not null)
+            && !CommitCatalog(connection.Owner, fetch.Models, listedFetch.Models))
+        {
             return new PluginSettingsValidationResult(false, Loc.L("Settings.SettingsChangedDuringValidation"));
+        }
+
+        if ((fetch.FailureReason ?? listedFetch.FailureReason) is { } failure)
+            return new PluginSettingsValidationResult(true, Loc.L("Settings.CustomModelsRefreshFailed", failure));
 
         return new PluginSettingsValidationResult(
             true,
-            fetch.Models.Count > 0
+            fetch.Models!.Count > 0
                 ? Loc.L("Settings.ApiKeyValidWithModels", fetch.Models.Count)
                 : Loc.L("Settings.ApiKeyValidShort"));
     }
@@ -224,13 +272,26 @@ public sealed partial class Reson8Plugin
         }
     }
 
-    internal Task<Reson8CatalogFetch> FetchCustomModelsAsync(CancellationToken ct = default) =>
+    internal Task<Reson8CatalogFetch<Reson8CustomModel>> FetchCustomModelsAsync(CancellationToken ct = default) =>
         FetchCustomModelsAsync(CaptureConnection(), ct);
 
+    private Task<Reson8CatalogFetch<Reson8CustomModel>> FetchCustomModelsAsync(Reson8Connection connection, CancellationToken ct) =>
+        FetchListAsync(connection, "/v1/custom-model", ParseCatalogResponse, missingListIsUnchanged: false, ct);
+
+    // A server without the model list (a proxy, an older deployment) answers 404; whatever list is
+    // cached stays, and with none the default model runs.
+    private Task<Reson8CatalogFetch<Reson8Model>> FetchListedModelsAsync(Reson8Connection connection, CancellationToken ct) =>
+        FetchListAsync(connection, "/v1/model", Reson8Models.ParseModelListResponse, missingListIsUnchanged: true, ct);
+
     // Read-only. Models is null on any failure, so a failed load never replaces the previous list.
-    private async Task<Reson8CatalogFetch> FetchCustomModelsAsync(Reson8Connection connection, CancellationToken ct)
+    private async Task<Reson8CatalogFetch<T>> FetchListAsync<T>(
+        Reson8Connection connection,
+        string path,
+        Func<byte[], List<T>?> parse,
+        bool missingListIsUnchanged,
+        CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{connection.BaseUrl}/v1/custom-model");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{connection.BaseUrl}{path}");
         AddAuthHeader(request, connection.ApiKey, connection.AuthHeader);
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -238,23 +299,25 @@ public sealed partial class Reson8Plugin
         try
         {
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            if (missingListIsUnchanged && response.StatusCode == HttpStatusCode.NotFound)
+                return new Reson8CatalogFetch<T>(null, null);
             if (!response.IsSuccessStatusCode)
-                return Reson8CatalogFetch.Failed(Loc.L("Settings.RefreshReasonStatus", (int)response.StatusCode));
+                return Reson8CatalogFetch<T>.Failed(Loc.L("Settings.RefreshReasonStatus", (int)response.StatusCode));
 
             var body = await ReadBoundedAsync(response.Content, deadline.Token);
-            var models = body is null ? null : ParseCatalogResponse(body);
+            var models = body is null ? null : parse(body);
             return models is null
-                ? Reson8CatalogFetch.Failed(Loc.L("Settings.RefreshReasonInvalid"))
-                : new Reson8CatalogFetch(models, null);
+                ? Reson8CatalogFetch<T>.Failed(Loc.L("Settings.RefreshReasonInvalid"))
+                : new Reson8CatalogFetch<T>(models, null);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return Reson8CatalogFetch.Failed(Loc.L("Settings.RefreshReasonUnreachable"));
+            return Reson8CatalogFetch<T>.Failed(Loc.L("Settings.RefreshReasonUnreachable"));
         }
         // A body cut off mid-read surfaces as an IOException rather than HttpRequestException.
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
-            return Reson8CatalogFetch.Failed(Loc.L("Settings.RefreshReasonUnreachable"));
+            return Reson8CatalogFetch<T>.Failed(Loc.L("Settings.RefreshReasonUnreachable"));
         }
     }
 
@@ -370,21 +433,39 @@ internal enum Reson8KeyCheck
     Redirected,
 }
 
+/// <param name="ListedModel">The selected model from Reson8's list; null for the default or a custom model.</param>
+/// <param name="Model">The listed model the request runs on, or null while the list isn't loaded.</param>
 internal sealed record Reson8Connection(
     string ApiKey,
     string BaseUrl,
     string AuthHeader,
     string ModelId,
     string Owner,
-    IReadOnlySet<string> CatalogModelIds);
-
-internal sealed record Reson8CatalogFetch(IReadOnlyList<Reson8CustomModel>? Models, string? FailureReason)
+    IReadOnlySet<string> CatalogModelIds,
+    Reson8Model? ListedModel,
+    Reson8Model? Model,
+    string FillerMode,
+    double? BiasStrength)
 {
-    public static Reson8CatalogFetch Failed(string reason) => new(null, reason);
+    public bool IsCustomModel => ListedModel is null && ModelId != Reson8Plugin.DefaultModelId;
 }
 
-public sealed class Reson8CustomModelCatalog
+/// <summary>What a request asks for beyond its language, custom model and phrases.</summary>
+/// <param name="Model">A model from Reson8's list, sent as <c>model</c>.</param>
+internal sealed record Reson8QueryOptions(
+    string? Model = null,
+    string FillerMode = Reson8FillerModes.Natural,
+    double? BiasStrength = null,
+    bool IncludeWords = false);
+
+internal sealed record Reson8CatalogFetch<T>(IReadOnlyList<T>? Models, string? FailureReason)
+{
+    public static Reson8CatalogFetch<T> Failed(string reason) => new(null, reason);
+}
+
+public sealed record Reson8CustomModelCatalog
 {
     public string Owner { get; init; } = "";
     public List<Reson8CustomModel> Models { get; init; } = [];
+    public List<Reson8Model> ListedModels { get; init; } = [];
 }

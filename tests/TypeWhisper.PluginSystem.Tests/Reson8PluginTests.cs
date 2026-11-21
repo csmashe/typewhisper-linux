@@ -289,7 +289,7 @@ public partial class Reson8PluginTests
 
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized, PluginRequestFailureKind.Authentication, "Settings.InvalidApiKey")]
-    [InlineData(HttpStatusCode.NotFound, PluginRequestFailureKind.InvalidRequest, "Reson8 custom model not found")]
+    [InlineData(HttpStatusCode.NotFound, PluginRequestFailureKind.InvalidRequest, "Reson8 model not found")]
     [InlineData(HttpStatusCode.RequestEntityTooLarge, PluginRequestFailureKind.RequestTooLarge, "Reson8 file too large")]
     [InlineData(HttpStatusCode.TooManyRequests, PluginRequestFailureKind.RateLimit, "Reson8 rate limit exceeded")]
     [InlineData(HttpStatusCode.InternalServerError, PluginRequestFailureKind.ServerError, "Reson8 server error")]

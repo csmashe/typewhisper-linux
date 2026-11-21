@@ -91,7 +91,7 @@ public partial class Reson8PluginTests
     {
         var terms = Enumerable.Range(0, 250).Select(i => $"Fachbegriff Nummer {i:D3} äöü").ToList();
 
-        var phrases = Reson8Plugin.PhrasesFor(PluginTranscriptionPrompt.Encode(null, terms), Reson8Plugin.DefaultModelId);
+        var phrases = Reson8Plugin.PhrasesFor(PluginTranscriptionPrompt.Encode(null, terms));
 
         Assert.NotEmpty(phrases);
         Assert.Equal(terms.Take(phrases.Count), phrases);
@@ -104,7 +104,7 @@ public partial class Reson8PluginTests
     {
         var terms = Enumerable.Range(0, 300).Select(i => $"t{i}").Append(new string('x', 256)).ToList();
 
-        var phrases = Reson8Plugin.PhrasesFor(PluginTranscriptionPrompt.Encode(null, terms), Reson8Plugin.DefaultModelId);
+        var phrases = Reson8Plugin.PhrasesFor(PluginTranscriptionPrompt.Encode(null, terms));
 
         Assert.Equal(terms.Take(250), phrases);
     }

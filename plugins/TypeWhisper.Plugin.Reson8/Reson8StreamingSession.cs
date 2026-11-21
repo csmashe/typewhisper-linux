@@ -8,12 +8,21 @@ namespace TypeWhisper.Plugin.Reson8;
 
 /// <summary>
 /// What a live session asks Reson8 for: a language or comma-separated list, and phrases to bias toward.
-/// ModelId is the model the phrases were chosen for; null uses the current selection.
+/// ModelId and Options are the selection the phrases were chosen for; null uses the current selection.
 /// </summary>
-internal sealed record Reson8StreamingRequest(string? Language, IReadOnlyList<string> Phrases, string? ModelId = null);
+internal sealed record Reson8StreamingRequest(
+    string? Language,
+    IReadOnlyList<string> Phrases,
+    string? ModelId = null,
+    Reson8QueryOptions? Options = null);
 
 internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSessionHealth
 {
+    // 256 ms of audio; Reson8 closes the connection on frames above 64 KiB.
+    internal const int MaxFrameBytes = 8192;
+
+    private const int MaxRejectionReasonLength = 300;
+
     private readonly WebSocketSessionPump _pump;
 
     private Reson8StreamingSession(WebSocketSessionPump pump)
@@ -36,21 +45,62 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
         string? modelId,
         string? language,
         IReadOnlyList<string> phrases,
+        Reson8QueryOptions? options,
         CancellationToken ct
     )
     {
-        var pump = await WebSocketSessionPump.ConnectAsync(
-            new Reson8WebSocketAdapter(
-                apiKey,
-                baseUrl,
-                authHeader,
-                modelId,
-                language,
-                phrases
-            ),
-            ct
-        );
-        return new Reson8StreamingSession(pump);
+        var adapter = new Reson8WebSocketAdapter(apiKey, baseUrl, authHeader, modelId, language, phrases, options);
+        var connection = await adapter.GetConnectionOptionsAsync(ct);
+
+        // Connected here, not by the pump: only the socket exposes a refused upgrade's X-Error-Message.
+        var ws = new ClientWebSocket();
+        try
+        {
+            foreach (var (name, value) in connection.Headers ?? new Dictionary<string, string>())
+                ws.Options.SetRequestHeader(name, value);
+            ws.Options.CollectHttpResponseDetails = true;
+            await ws.ConnectAsync(connection.Uri, ct);
+        }
+        catch (WebSocketException ex) when (RejectionOf((int)ws.HttpStatusCode, ws.HttpResponseHeaders, ex) is { } rejection)
+        {
+            ws.Dispose();
+            throw rejection;
+        }
+        catch
+        {
+            ws.Dispose();
+            throw;
+        }
+
+        return new Reson8StreamingSession(
+            await WebSocketSessionPump.StartConnectedAsync(adapter, new ClientWebSocketTransport(ws), ct));
+    }
+
+    /// <summary>A refused upgrade with Reson8's status and reason, or null for other connection failures.</summary>
+    internal static PluginRequestException? RejectionOf(
+        int status,
+        IReadOnlyDictionary<string, IEnumerable<string>>? headers,
+        Exception exception)
+    {
+        if (status is < 400 or > 599)
+            return null;
+
+        var reason = headers?.FirstOrDefault(h => h.Key.Equals("X-Error-Message", StringComparison.OrdinalIgnoreCase)).Value?
+            .FirstOrDefault() is { } value
+            ? new string(value.Where(c => !char.IsControl(c)).Take(MaxRejectionReasonLength).ToArray()).Trim()
+            : "";
+        var kind = status switch
+        {
+            401 => PluginRequestFailureKind.Authentication,
+            402 or 403 => PluginRequestFailureKind.Permission,
+            429 => PluginRequestFailureKind.RateLimit,
+            >= 500 => PluginRequestFailureKind.ServerError,
+            _ => PluginRequestFailureKind.InvalidRequest,
+        };
+        var message = reason.Length > 0
+            ? $"Reson8 refused the live connection ({status}): {reason}"
+            : $"Reson8 refused the live connection ({status}).";
+        return new PluginRequestException(message, kind, status, innerException: exception);
     }
 
     internal static async Task<Reson8StreamingSession> CreateConnectedSessionForTests(
@@ -78,7 +128,8 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
         string baseUrl,
         string? modelId,
         string? language,
-        IReadOnlyList<string>? phrases = null
+        IReadOnlyList<string>? phrases = null,
+        Reson8QueryOptions? options = null
     )
     {
         var normalizedBase = baseUrl.Trim().TrimEnd('/');
@@ -97,37 +148,8 @@ internal sealed class Reson8StreamingSession : IStreamingSession, IStreamingSess
             Path = $"{basePath}/v1/speech-to-text/realtime",
         };
 
-        var query = new List<string>
-        {
-            "encoding=pcm_s16le",
-            "sample_rate=16000",
-            "channels=1",
-            "include_interim=true",
-            "include_language=true",
-        };
-
-        if (!string.IsNullOrWhiteSpace(language))
-        {
-            query.Add($"language={Uri.EscapeDataString(language.Trim())}");
-        }
-
-        if (
-            !string.IsNullOrWhiteSpace(modelId)
-            && !string.Equals(
-                modelId,
-                Reson8Plugin.DefaultModelId,
-                StringComparison.Ordinal
-            )
-        )
-        {
-            query.Add($"custom_model_id={Uri.EscapeDataString(modelId.Trim())}");
-        }
-
-        if (phrases is { Count: > 0 })
-        {
-            query.Add($"phrases={Reson8Plugin.EncodePhrases(phrases)}");
-        }
-
+        var query = Reson8Plugin.BuildQuery(modelId, language, phrases, options, includeWords: false);
+        query.Add("include_interim=true");
         builder.Query = string.Join("&", query);
         return builder.Uri;
     }
@@ -159,7 +181,8 @@ internal sealed class Reson8WebSocketAdapter(
     string authHeader,
     string? modelId,
     string? language,
-    IReadOnlyList<string>? phrases = null
+    IReadOnlyList<string>? phrases = null,
+    Reson8QueryOptions? options = null
 ) : IWebSocketSessionAdapter
 {
     private readonly Reson8TranscriptCollector _collector = new();
@@ -181,7 +204,7 @@ internal sealed class Reson8WebSocketAdapter(
     ) =>
         ValueTask.FromResult(
             new WebSocketConnectionOptions(
-                Reson8StreamingSession.BuildRealtimeUri(baseUrl, modelId, language, phrases),
+                Reson8StreamingSession.BuildRealtimeUri(baseUrl, modelId, language, phrases, options),
                 Reson8StreamingSession.CreateStreamingHeaders(apiKey, authHeader)
             )
         );
@@ -194,17 +217,18 @@ internal sealed class Reson8WebSocketAdapter(
     public ValueTask<IReadOnlyList<WebSocketOutboundMessage>> EncodeAudioAsync(
         ReadOnlyMemory<byte> pcm16Audio,
         CancellationToken ct
-    ) =>
-        ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(
-            pcm16Audio.Length == 0
-                ? []
-                : [
-                    new WebSocketOutboundMessage(
-                        pcm16Audio.ToArray(),
-                        WebSocketMessageType.Binary
-                    ),
-                ]
-        );
+    )
+    {
+        // The host may hand over seconds of buffered audio at once.
+        var frames = new List<WebSocketOutboundMessage>();
+        for (var offset = 0; offset < pcm16Audio.Length; offset += Reson8StreamingSession.MaxFrameBytes)
+        {
+            var count = Math.Min(Reson8StreamingSession.MaxFrameBytes, pcm16Audio.Length - offset);
+            frames.Add(new WebSocketOutboundMessage(pcm16Audio.Slice(offset, count).ToArray(), WebSocketMessageType.Binary));
+        }
+
+        return ValueTask.FromResult<IReadOnlyList<WebSocketOutboundMessage>>(frames);
+    }
 
     public ValueTask<WebSocketFinalizePlan> BeginFinalizeAsync(CancellationToken ct)
     {

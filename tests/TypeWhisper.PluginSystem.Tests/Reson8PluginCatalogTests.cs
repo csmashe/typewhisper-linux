@@ -20,9 +20,9 @@ public partial class Reson8PluginTests
     {
         var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
         using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
-            request.Method == HttpMethod.Post
-                ? JsonResponse("{}", HttpStatusCode.BadRequest)
-                : JsonResponse("""[{ "id": "other-model", "name": "Other", "description": null, "phraseCount": 3 }]""")));
+            request.Method == HttpMethod.Post ? JsonResponse("{}", HttpStatusCode.BadRequest)
+            : request.RequestUri!.AbsolutePath.EndsWith("/v1/model", StringComparison.Ordinal) ? JsonResponse("{}", HttpStatusCode.NotFound)
+            : JsonResponse("""[{ "id": "other-model", "name": "Other", "description": null, "phraseCount": 3 }]""")));
         var sut = await ActivateWithCatalogAsync(host, httpClient);
 
         var result = await sut.ValidateAsync();
@@ -351,7 +351,11 @@ public partial class Reson8PluginTests
         await sut.ValidateAsync();
 
         Assert.Equal(
-            ["https://proxy.example.test:8443/reson8/v1/speech-to-text/prerecorded", "https://proxy.example.test:8443/reson8/v1/custom-model"],
+            [
+                "https://proxy.example.test:8443/reson8/v1/speech-to-text/prerecorded",
+                "https://proxy.example.test:8443/reson8/v1/custom-model",
+                "https://proxy.example.test:8443/reson8/v1/model",
+            ],
             paths);
         Assert.Equal("/reson8/v1/speech-to-text/realtime", Reson8StreamingSession.BuildRealtimeUri(sut.CustomBaseUrl, null, null).AbsolutePath);
     }
