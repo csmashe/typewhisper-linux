@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:TypeWhisper.Linux.Controls"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:models="using:TypeWhisper.Core.Models"
              xmlns:local="using:TypeWhisper.Linux"
@@ -31,7 +32,7 @@
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <!-- A long selected value wraps rather than clipping in the narrow editor. -->
-        <Style Selector="ComboBox TextBlock">
+        <Style Selector=":is(ComboBox) TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
         <Style Selector="Border.section-panel">
@@ -352,17 +353,17 @@
                                         <TextBlock Text="{loc:Str Profiles.Language}"
                                                    Classes="row-label"
                                                    VerticalAlignment="Center" />
-                                        <ComboBox Grid.Row="1"
-                                                  HorizontalAlignment="Stretch"
-                                                  AutomationProperties.Name="{loc:Str Profiles.Language}"
-                                                  ItemsSource="{Binding LanguageOptions}"
-                                                  SelectedItem="{Binding SelectedLanguageOption}">
-                                            <ComboBox.ItemTemplate>
+                                        <controls:SearchableComboBox Grid.Row="1"
+                                                                     HorizontalAlignment="Stretch"
+                                                                     AutomationProperties.Name="{loc:Str Profiles.Language}"
+                                                                     ItemsSource="{Binding LanguageOptions}"
+                                                                     SelectedItem="{Binding SelectedLanguageOption}">
+                                            <controls:SearchableComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:ProfileLanguageOption">
                                                     <TextBlock Text="{Binding Label}" />
                                                 </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
+                                            </controls:SearchableComboBox.ItemTemplate>
+                                        </controls:SearchableComboBox>
                                     </Grid>
                                 </Border>
                                 <Border Grid.Row="1" Background="{DynamicResource TwFillSubtleBrush}" />
@@ -405,18 +406,18 @@
                                                 Classes="page-subtitle"
                                                 Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Row="1"
-                                                  HorizontalAlignment="Stretch"
-                                                  AutomationProperties.Name="{loc:Str Profiles.Translation}"
-                                                  ItemsSource="{Binding TranslationTargetOptions}"
-                                                  SelectedItem="{Binding SelectedTranslationTargetOption}"
-                                                  VerticalAlignment="Center">
-                                            <ComboBox.ItemTemplate>
+                                        <controls:SearchableComboBox Grid.Row="1"
+                                                                     HorizontalAlignment="Stretch"
+                                                                     AutomationProperties.Name="{loc:Str Profiles.Translation}"
+                                                                     ItemsSource="{Binding TranslationTargetOptions}"
+                                                                     SelectedItem="{Binding SelectedTranslationTargetOption}"
+                                                                     VerticalAlignment="Center">
+                                            <controls:SearchableComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="models:TranslationTargetOption">
                                                     <TextBlock Text="{Binding DisplayName}" />
                                                 </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
+                                            </controls:SearchableComboBox.ItemTemplate>
+                                        </controls:SearchableComboBox>
                                     </Grid>
                                 </Border>
                                 <Border Grid.Row="5" Background="{DynamicResource TwFillSubtleBrush}" />
@@ -431,18 +432,18 @@
                                                        Classes="page-subtitle"
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
-                                        <ComboBox Grid.Row="1"
-                                                  HorizontalAlignment="Stretch"
-                                                  AutomationProperties.Name="{loc:Str Profiles.Model}"
-                                                  ItemsSource="{Binding ModelOptions}"
-                                                  SelectedItem="{Binding SelectedModelOption}"
-                                                  DropDownOpened="OnModelDropDownOpened">
-                                            <ComboBox.ItemTemplate>
+                                        <controls:SearchableComboBox Grid.Row="1"
+                                                                     HorizontalAlignment="Stretch"
+                                                                     AutomationProperties.Name="{loc:Str Profiles.Model}"
+                                                                     ItemsSource="{Binding ModelOptions}"
+                                                                     SelectedItem="{Binding SelectedModelOption}"
+                                                                     DropDownOpened="OnModelDropDownOpened">
+                                            <controls:SearchableComboBox.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:ProfileModelOption">
                                                     <TextBlock Text="{Binding Label}" />
                                                 </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
+                                            </controls:SearchableComboBox.ItemTemplate>
+                                        </controls:SearchableComboBox>
                                     </Grid>
                                 </Border>
                                 <Border Grid.Row="7" Background="{DynamicResource TwFillSubtleBrush}" />

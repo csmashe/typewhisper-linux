@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:TypeWhisper.Linux.Controls"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:svc="using:TypeWhisper.Linux.Services"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
@@ -178,18 +179,18 @@
                                        FontWeight="SemiBold"
                                        VerticalAlignment="Center"
                                        TextWrapping="Wrap" />
-                            <ComboBox Grid.Column="1"
-                                      AutomationProperties.Name="{loc:Str Advanced.Voice}"
-                                      HorizontalAlignment="Stretch"
-                                      ItemsSource="{Binding SpokenFeedbackVoices}"
-                                      SelectedItem="{Binding SelectedSpokenFeedbackVoiceOption}"
-                                      IsEnabled="{Binding CanUseSpokenFeedback}">
-                                <ComboBox.ItemTemplate>
+                            <controls:SearchableComboBox Grid.Column="1"
+                                                         AutomationProperties.Name="{loc:Str Advanced.Voice}"
+                                                         HorizontalAlignment="Stretch"
+                                                         ItemsSource="{Binding SpokenFeedbackVoices}"
+                                                         SelectedItem="{Binding SelectedSpokenFeedbackVoiceOption}"
+                                                         IsEnabled="{Binding CanUseSpokenFeedback}">
+                                <controls:SearchableComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="svc:TtsVoiceOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
+                                </controls:SearchableComboBox.ItemTemplate>
+                            </controls:SearchableComboBox>
                         </Grid>
                     </Border>
 

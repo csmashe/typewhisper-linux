@@ -8,6 +8,7 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://typewhisper/Resources/ThemeColors.axaml" />
+                <ResourceInclude Source="avares://typewhisper/Controls/SearchableComboBox.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

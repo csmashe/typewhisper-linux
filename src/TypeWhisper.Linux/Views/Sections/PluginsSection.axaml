@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:TypeWhisper.Linux.Controls"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:loc="using:TypeWhisper.Linux.Services.Localization"
              xmlns:local="using:TypeWhisper.Linux"
@@ -25,18 +26,18 @@
                            Foreground="{DynamicResource TwTextSecondaryBrush}"
                            IsVisible="{Binding HasDescription}" />
 
-                <ComboBox ItemsSource="{Binding Options}"
-                          SelectedItem="{Binding SelectedOption}"
-                          AutomationProperties.Name="{Binding Label}"
-                          HorizontalAlignment="Stretch"
-                          IsVisible="{Binding IsDropdownKind}"
-                          DropDownOpened="OnSettingDropDownOpened">
-                    <ComboBox.ItemTemplate>
+                <controls:SearchableComboBox ItemsSource="{Binding Options}"
+                                             SelectedItem="{Binding SelectedOption}"
+                                             AutomationProperties.Name="{Binding Label}"
+                                             HorizontalAlignment="Stretch"
+                                             IsVisible="{Binding IsDropdownKind}"
+                                             DropDownOpened="OnSettingDropDownOpened">
+                    <controls:SearchableComboBox.ItemTemplate>
                         <DataTemplate>
                             <TextBlock Text="{Binding Label}" />
                         </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
+                    </controls:SearchableComboBox.ItemTemplate>
+                </controls:SearchableComboBox>
 
                 <TextBox Text="{Binding Value}"
                          PlaceholderText="{Binding Placeholder}"

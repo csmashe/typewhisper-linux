@@ -9,6 +9,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Core.Services.SpokenFormatting;
+using TypeWhisper.Linux.Controls;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
@@ -2607,9 +2608,13 @@ public sealed record AccelerationOption(string Value, string DisplayName)
     public override string ToString() => DisplayName;
 }
 
-public sealed record SpokenLanguageOption(string Code, string DisplayName)
+public sealed record SpokenLanguageOption(string Code, string DisplayName) : ISearchableChoice
 {
     public override string ToString() => DisplayName;
+
+    string ISearchableChoice.SearchLabel => DisplayName;
+    string? ISearchableChoice.SearchCode => Code == "auto" ? null : Code;
+    IEnumerable<string> ISearchableChoice.SearchAliases => ChoiceSearch.LanguageAliases(Code == "auto" ? null : Code);
 }
 
 public sealed record CleanupLevelOption(CleanupLevel Value, string DisplayName)
