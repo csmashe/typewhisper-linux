@@ -211,6 +211,16 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void OpenHistoryRecord(string? id)
+    {
+        Navigate<HistorySectionViewModel>();
+        if (id is not null)
+        {
+            History.RevealRecord(id);
+        }
+    }
+
+    [RelayCommand]
     private void OpenUpdate()
     {
         // Take the user to About, where the full status and a Download button

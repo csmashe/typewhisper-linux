@@ -3,6 +3,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using System.Diagnostics;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -11,9 +12,50 @@ namespace TypeWhisper.Linux.Views.Sections;
 
 public partial class HistorySection : UserControl
 {
+    private HistorySectionViewModel? _viewModel;
+
     public HistorySection()
     {
         InitializeComponent();
+        // A Dashboard click that switched to this section revealed its entry before the view existed.
+        Loaded += (_, _) => ScrollToRevealedRecord();
+    }
+
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+        if (_viewModel is not null)
+        {
+            _viewModel.RecordRevealed -= ScrollToRevealedRecord;
+        }
+
+        _viewModel = DataContext as HistorySectionViewModel;
+        if (_viewModel is not null)
+        {
+            _viewModel.RecordRevealed += ScrollToRevealedRecord;
+        }
+    }
+
+    // Wait for the new page and the expanded row to lay out.
+    private void ScrollToRevealedRecord()
+    {
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (!IsLoaded || _viewModel?.TakeRevealedRecord() is not { } row)
+                {
+                    return;
+                }
+
+                var card = this.GetVisualDescendants()
+                    .OfType<Border>()
+                    .FirstOrDefault(border => border.Classes.Contains("timeline-card") && ReferenceEquals(border.DataContext, row));
+                card?.BringIntoView();
+                card?.GetVisualDescendants().OfType<Button>().FirstOrDefault(button => button.Classes.Contains("card-toggle"))
+                    ?.Focus();
+            },
+            DispatcherPriority.Loaded
+        );
     }
 
     private void OnHistoryScrollChanged(object? sender, ScrollChangedEventArgs e)

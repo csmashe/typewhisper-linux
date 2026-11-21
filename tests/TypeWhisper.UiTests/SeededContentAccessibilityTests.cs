@@ -20,7 +20,8 @@ namespace TypeWhisper.UiTests;
 
 /// <summary>
 ///     Rows only render when there is something to list, so this seeds a profile, a history entry
-///     and a plugin with an expanded settings card, and checks every control a screen reader reaches.
+///     (on the Dashboard and in History) and a plugin with an expanded settings card, and checks
+///     every control a screen reader reaches.
 ///     It also checks the opened profile editor for clipped text at every window size; clipping
 ///     elsewhere and stale text are left to <see cref="MainWindowRenderTests" />.
 /// </summary>
@@ -111,7 +112,7 @@ public sealed class SeededContentAccessibilityTests(UiSession ui)
                 var findings = new List<string>();
                 var names = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var item in viewModel.NavItems.Where(item =>
-                             item.Content is ProfilesSectionViewModel or HistorySectionViewModel or PluginsSectionViewModel))
+                             item.Content is DashboardSectionViewModel or ProfilesSectionViewModel or HistorySectionViewModel or PluginsSectionViewModel))
                 {
                     viewModel.SelectedItem = item;
                     MainWindowRenderTests.Settle();
