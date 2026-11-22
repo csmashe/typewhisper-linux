@@ -25,6 +25,13 @@ public sealed class SonioxPlugin
     internal const string ModelSettingKey = "model";
     internal const string CatalogSettingKey = "model-catalog";
     internal const string RefreshModelsActionId = "refresh-models";
+    internal const string ContextSettingKey = "transcriptionContext";
+
+    // Soniox rejects a context above 8,000 tokens (about 10,000 English characters). Capping
+    // characters at the token count leaves headroom for scripts that need about a token per
+    // character. The free text leaves half for the terms.
+    internal const int MaximumContextCharacters = 8_000;
+    internal const int MaximumContextTextCharacters = 4_000;
     private const string ApiKeySecretName = "api-key";
     private const int DefaultMaxPollAttempts = 3600;
     private const int MaxSubtitleSegmentCharacters = 84;
@@ -74,6 +81,7 @@ public sealed class SonioxPlugin
     private readonly bool _backgroundCatalogRefresh;
     private long _settingsVersion;
     private string _modelSelection = SonioxModels.Automatic;
+    private string _transcriptionContext = "";
     private SonioxCatalog? _catalog;
     private CancellationTokenSource _backgroundCts = new();
     private Task _catalogRefreshTask = Task.CompletedTask;
@@ -139,6 +147,7 @@ public sealed class SonioxPlugin
         _selectedModelId = DefaultModelId;
         RegionId = NormalizeRegionId(host.GetSetting<string>(RegionSettingKey));
         _modelSelection = SonioxModels.NormalizeSelection(ReadSetting<string>(host, ModelSettingKey));
+        _transcriptionContext = NormalizeContextText(ReadSetting<string>(host, ContextSettingKey)) ?? "";
         Volatile.Write(ref _catalog, SonioxModels.Sanitize(ReadSetting<SonioxCatalog>(host, CatalogSettingKey)));
         host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured}, region={RegionId}, model={_modelSelection})");
     }
@@ -193,15 +202,26 @@ public sealed class SonioxPlugin
 
     public bool SupportsStreaming => true;
     public bool SupportsLanguageHints => true;
+
+    // Terms arrive as a list, so a term with a comma stays one Soniox context term.
+    public bool SupportsStructuredDictionaryTerms => true;
+
+    // The terms share Soniox's context allowance with the transcription context text.
+    public DictionaryTermsBudget DictionaryTermsBudget =>
+        new(MaxTotalChars: MaximumContextCharacters - TranscriptionContext.Length);
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 
-    public async Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct)
-        => await StartStreamingWithLanguageHintsAsync(
-            NormalizeLanguage(language) is { } l ? [l] : [], ct);
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAndPromptAsync(
+            NormalizeLanguage(language) is { } l ? [l] : [], prompt: null, ct);
 
-    public async Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
-        IReadOnlyList<string> languageHints, CancellationToken ct)
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+        IReadOnlyList<string> languageHints, CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAndPromptAsync(languageHints, prompt: null, ct);
+
+    public async Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints, string? prompt, CancellationToken ct)
     {
         var settings = CaptureSettings();
         if (string.IsNullOrEmpty(settings.ApiKey))
@@ -209,7 +229,12 @@ public sealed class SonioxPlugin
 
         RefreshCatalogInBackgroundIfStale();
         return await ConnectStreaming(
-            settings.ApiKey, new Uri(settings.Region.RealtimeUrl), settings.RealtimeModelId, languageHints, ct);
+            settings.ApiKey,
+            new Uri(settings.Region.RealtimeUrl),
+            settings.RealtimeModelId,
+            languageHints,
+            CreateRequestContext(prompt, settings.ContextText),
+            ct);
     }
 
     public void SelectModel(string modelId)
@@ -231,7 +256,7 @@ public sealed class SonioxPlugin
             throw new InvalidOperationException("Soniox does not support translation.");
 
         return await TranscribeCoreAsync(
-            wavAudio, NormalizeLanguage(language) is { } l ? [l] : [], fallbackLanguage: NormalizeLanguage(language), ct);
+            wavAudio, NormalizeLanguage(language) is { } l ? [l] : [], fallbackLanguage: NormalizeLanguage(language), prompt, ct);
     }
 
     // Soniox has no progress callback, so the polling preview is the batch call with every hint.
@@ -249,15 +274,16 @@ public sealed class SonioxPlugin
         if (translate)
             throw new InvalidOperationException("Soniox does not support translation.");
 
-        return await TranscribeCoreAsync(wavAudio, languageHints, fallbackLanguage: null, ct);
+        return await TranscribeCoreAsync(wavAudio, languageHints, fallbackLanguage: null, prompt, ct);
     }
 
     private async Task<PluginTranscriptionResult> TranscribeCoreAsync(
-        byte[] wavAudio, IReadOnlyList<string> languageHints, string? fallbackLanguage, CancellationToken ct)
+        byte[] wavAudio, IReadOnlyList<string> languageHints, string? fallbackLanguage, string? prompt,
+        CancellationToken ct)
     {
         // Snapshot the key and region once so a concurrent settings change can't swap the key
         // or the region out partway through the multi-request async flow below.
-        var (apiKey, region, _, asyncModelId, _) = CaptureSettings();
+        var (apiKey, region, _, asyncModelId, _, contextText) = CaptureSettings();
         if (string.IsNullOrEmpty(apiKey))
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
@@ -276,7 +302,8 @@ public sealed class SonioxPlugin
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             transcriptionId = await CreateTranscriptionAsync(
-                fileId, asyncModelId, normalizedLanguageHints, region.BaseUrl, apiKey, ct);
+                fileId, asyncModelId, normalizedLanguageHints, CreateRequestContext(prompt, contextText),
+                region.BaseUrl, apiKey, ct);
             var completedDetails = await WaitUntilCompletedAsync(transcriptionId, region.BaseUrl, apiKey, ct);
             var transcriptJson = await FetchTranscriptAsync(transcriptionId, region.BaseUrl, apiKey, ct);
             var result = ParseTranscript(transcriptJson, completedDetails, fallbackLanguage);
@@ -318,6 +345,12 @@ public sealed class SonioxPlugin
                 Description: Loc.L("Settings.ModelDescription"),
                 Options: ModelOptions(),
                 Kind: PluginSettingKind.Dropdown),
+            new(
+                ContextSettingKey,
+                Loc.L("Settings.TranscriptionContext"),
+                Placeholder: Loc.L("Settings.TranscriptionContextPlaceholder"),
+                Description: Loc.L("Settings.TranscriptionContextDescription", MaximumContextTextCharacters),
+                Kind: PluginSettingKind.Multiline),
         ];
 
     private List<PluginSettingOption> ModelOptions()
@@ -344,6 +377,7 @@ public sealed class SonioxPlugin
                 "api-key" => ApiKey,
                 RegionSettingKey => RegionId,
                 ModelSettingKey => ModelSelection,
+                ContextSettingKey => TranscriptionContext,
                 _ => null,
             });
 
@@ -359,6 +393,9 @@ public sealed class SonioxPlugin
                 break;
             case ModelSettingKey:
                 SetModelSelection(value);
+                break;
+            case ContextSettingKey:
+                SetTranscriptionContext(value);
                 break;
         }
     }
@@ -476,7 +513,8 @@ public sealed class SonioxPlugin
     /// refreshes commit only while the version is unchanged.
     /// </summary>
     internal readonly record struct SettingsSnapshot(
-        string? ApiKey, SonioxRegion Region, long Version, string AsyncModelId, string RealtimeModelId);
+        string? ApiKey, SonioxRegion Region, long Version, string AsyncModelId, string RealtimeModelId,
+        string ContextText);
 
     internal SettingsSnapshot CaptureSettings()
     {
@@ -488,7 +526,8 @@ public sealed class SonioxPlugin
                 Region,
                 _settingsVersion,
                 SonioxModels.ResolveSttModelId(_modelSelection, models, SonioxModels.AsyncMode),
-                SonioxModels.ResolveSttModelId(_modelSelection, models, SonioxModels.RealtimeMode));
+                SonioxModels.ResolveSttModelId(_modelSelection, models, SonioxModels.RealtimeMode),
+                _transcriptionContext);
         }
     }
 
@@ -501,6 +540,62 @@ public sealed class SonioxPlugin
                 return _modelSelection;
             }
         }
+    }
+
+    internal string TranscriptionContext
+    {
+        get
+        {
+            lock (_settingsLock)
+            {
+                return _transcriptionContext;
+            }
+        }
+    }
+
+    internal void SetTranscriptionContext(string? text)
+    {
+        lock (_settingsLock)
+        {
+            var normalized = NormalizeContextText(text) ?? "";
+            if (_transcriptionContext == normalized)
+                return;
+
+            _host?.SetSetting(ContextSettingKey, normalized);
+            _transcriptionContext = normalized;
+        }
+    }
+
+    internal static string? NormalizeContextText(string? text)
+    {
+        var trimmed = text?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            return null;
+
+        return trimmed.Length <= MaximumContextTextCharacters
+            ? trimmed
+            : trimmed[..MaximumContextTextCharacters].TrimEnd();
+    }
+
+    /// <summary>
+    /// Builds Soniox's <c>context</c> from the prompt's dictionary terms and the context text. Prompt
+    /// text is not sent: on the API path it can be the host's language-hint sentence, already in
+    /// <c>language_hints</c>. Terms are clipped again because the context text may have grown since
+    /// the host applied the budget.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, object>? CreateRequestContext(string? prompt, string? contextText)
+    {
+        var text = NormalizeContextText(contextText);
+        var terms = PluginDictionaryTerms.Clip(
+            PluginTranscriptionPrompt.Parse(prompt).DictionaryTerms,
+            new DictionaryTermsBudget(MaxTotalChars: MaximumContextCharacters - (text?.Length ?? 0)));
+
+        var context = new Dictionary<string, object>(StringComparer.Ordinal);
+        if (terms.Count > 0)
+            context["terms"] = terms.ToArray();
+        if (text is not null)
+            context["text"] = text;
+        return context.Count == 0 ? null : context;
     }
 
     /// <summary>The cached model list, but only for the region it was loaded from.</summary>
@@ -549,9 +644,9 @@ public sealed class SonioxPlugin
     }
 
     /// <summary>Opens the realtime session; tests replace it to observe the endpoint and model the plugin picks.</summary>
-    internal Func<string, Uri, string, IReadOnlyList<string>, CancellationToken, Task<IStreamingSession>> ConnectStreaming { get; set; } =
-        static async (apiKey, realtimeUri, model, languageHints, ct) =>
-            await SonioxStreamingSession.ConnectAsync(apiKey, realtimeUri, model, languageHints, ct);
+    internal Func<string, Uri, string, IReadOnlyList<string>, IReadOnlyDictionary<string, object>?, CancellationToken, Task<IStreamingSession>> ConnectStreaming { get; set; } =
+        static async (apiKey, realtimeUri, model, languageHints, context, ct) =>
+            await SonioxStreamingSession.ConnectAsync(apiKey, realtimeUri, model, languageHints, context, ct);
 
     internal async Task<string?> DetectRegionAsync(string apiKey, CancellationToken ct = default) =>
         (await DetectRegionAsync(apiKey, Region, ct))?.RegionId;
@@ -810,6 +905,7 @@ public sealed class SonioxPlugin
         string fileId,
         string model,
         List<string> languageHints,
+        IReadOnlyDictionary<string, object>? context,
         string baseUrl,
         string apiKey,
         CancellationToken ct)
@@ -824,6 +920,9 @@ public sealed class SonioxPlugin
 
         if (languageHints.Count > 0)
             payload["language_hints"] = languageHints;
+
+        if (context is not null)
+            payload["context"] = context;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/transcriptions");
         AddAuthorization(request, apiKey);

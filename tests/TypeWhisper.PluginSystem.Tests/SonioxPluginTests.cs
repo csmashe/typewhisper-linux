@@ -191,6 +191,198 @@ public class SonioxPluginTests
     }
 
     [Fact]
+    public void BuildConfigMessage_AddsContext_WhenGiven()
+    {
+        var context = SonioxPlugin.CreateRequestContext(
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "Kubernetes"]), "Weekly ops sync");
+
+        using var doc = JsonDocument.Parse(SonioxSession.BuildConfigMessage(SonioxModels.FallbackRealtimeModelId, [], context));
+
+        var sent = doc.RootElement.GetProperty("context");
+        Assert.Equal(["Washington, D.C.", "Kubernetes"], sent.GetProperty("terms").EnumerateArray().Select(t => t.GetString()));
+        Assert.Equal("Weekly ops sync", sent.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public void BuildConfigMessage_OmitsContext_WhenNone()
+    {
+        using var doc = JsonDocument.Parse(SonioxSession.BuildConfigMessage(SonioxModels.FallbackRealtimeModelId, []));
+
+        Assert.False(doc.RootElement.TryGetProperty("context", out _));
+    }
+
+    [Fact]
+    public void CreateRequestContext_IsNullWithoutTermsOrText()
+    {
+        Assert.Null(SonioxPlugin.CreateRequestContext(null, null));
+        Assert.Null(SonioxPlugin.CreateRequestContext(PluginTranscriptionPrompt.Encode(null, []), "   "));
+    }
+
+    // API prompt text can be the host's language-hint sentence, which language_hints already carries.
+    [Fact]
+    public void CreateRequestContext_DoesNotSendPromptText()
+    {
+        Assert.Null(SonioxPlugin.CreateRequestContext("The audio may be German or English.", null));
+
+        var context = SonioxPlugin.CreateRequestContext(
+            PluginTranscriptionPrompt.Encode("The audio may be German or English.", ["Jörg"]), null);
+
+        Assert.NotNull(context);
+        Assert.Equal(["terms"], context.Keys);
+    }
+
+    [Fact]
+    public void CreateRequestContext_ClipsTermsToWhatTheContextTextLeaves()
+    {
+        var text = new string('x', SonioxPlugin.MaximumContextTextCharacters);
+        var terms = Enumerable.Range(0, 1_000).Select(i => $"term{i:D4}").ToList();
+
+        var context = SonioxPlugin.CreateRequestContext(PluginTranscriptionPrompt.Encode(null, terms), text)!;
+
+        var sentTerms = (string[])context["terms"];
+        var termChars = sentTerms.Sum(t => t.Length) + (sentTerms.Length - 1) * 2;
+        Assert.True(termChars + text.Length <= SonioxPlugin.MaximumContextCharacters);
+        Assert.Equal(terms.Take(sentTerms.Length), sentTerms);
+        Assert.Equal(text, context["text"]);
+    }
+
+    [Fact]
+    public async Task DictionaryTerms_AreStructuredAndShareTheContextAllowance()
+    {
+        var host = new TestPluginHostServices();
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.True(sut.SupportsStructuredDictionaryTerms);
+        Assert.Equal(SonioxPlugin.MaximumContextCharacters, sut.DictionaryTermsBudget.MaxTotalChars);
+
+        await sut.SetSettingValueAsync(SonioxPlugin.ContextSettingKey, "  Weekly ops sync  ");
+
+        Assert.Equal(SonioxPlugin.MaximumContextCharacters - "Weekly ops sync".Length, sut.DictionaryTermsBudget.MaxTotalChars);
+    }
+
+    [Fact]
+    public async Task TranscriptionContext_IsTrimmedCappedPersistedAndReloaded()
+    {
+        var host = new TestPluginHostServices();
+        var sut = new SonioxPlugin();
+        await sut.ActivateAsync(host);
+
+        await sut.SetSettingValueAsync(SonioxPlugin.ContextSettingKey, "  " + new string('a', SonioxPlugin.MaximumContextTextCharacters + 50));
+
+        var saved = host.GetSetting<string>(SonioxPlugin.ContextSettingKey);
+        Assert.Equal(new string('a', SonioxPlugin.MaximumContextTextCharacters), saved);
+        Assert.Equal(saved, await sut.GetSettingValueAsync(SonioxPlugin.ContextSettingKey));
+
+        var restarted = new SonioxPlugin();
+        await restarted.ActivateAsync(host);
+        Assert.Equal(saved, await restarted.GetSettingValueAsync(SonioxPlugin.ContextSettingKey));
+
+        await restarted.SetSettingValueAsync(SonioxPlugin.ContextSettingKey, null);
+        Assert.Equal("", host.GetSetting<string>(SonioxPlugin.ContextSettingKey));
+    }
+
+    [Fact]
+    public void GetSettingDefinitions_OffersMultilineTranscriptionContext()
+    {
+        var definition = Assert.Single(
+            new SonioxPlugin().GetSettingDefinitions(), d => d.Key == SonioxPlugin.ContextSettingKey);
+
+        Assert.Equal(PluginSettingKind.Multiline, definition.Kind);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_SendsDictionaryTermsAndContextTextAsSonioxContext()
+    {
+        string? createBody = null;
+        var handler = new SonioxFlowHandler(body => createBody = body);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting(SonioxPlugin.ContextSettingKey, "Weekly ops sync");
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync(
+            [1, 2, 3], null, translate: false,
+            PluginTranscriptionPrompt.Encode(null, ["Washington, D.C.", "Kubernetes"]), CancellationToken.None);
+        await sut.LastCleanupTask;
+
+        using var doc = JsonDocument.Parse(createBody!);
+        var context = doc.RootElement.GetProperty("context");
+        Assert.Equal(["Washington, D.C.", "Kubernetes"], context.GetProperty("terms").EnumerateArray().Select(t => t.GetString()));
+        Assert.Equal("Weekly ops sync", context.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task TranscribeWithLanguageHintsAsync_SendsDictionaryTermsAsSonioxContext()
+    {
+        string? createBody = null;
+        var handler = new SonioxFlowHandler(body => createBody = body);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeWithLanguageHintsAsync(
+            [1, 2, 3], ["de", "en"], translate: false,
+            PluginTranscriptionPrompt.Encode(null, ["Jörg"]), CancellationToken.None);
+        await sut.LastCleanupTask;
+
+        using var doc = JsonDocument.Parse(createBody!);
+        var context = doc.RootElement.GetProperty("context");
+        Assert.Equal(["Jörg"], context.GetProperty("terms").EnumerateArray().Select(t => t.GetString()));
+        Assert.False(context.TryGetProperty("text", out _));
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_OmitsContextWithoutTermsOrText()
+    {
+        string? createBody = null;
+        var handler = new SonioxFlowHandler(body => createBody = body);
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        using var httpClient = new HttpClient(handler);
+        var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.LastCleanupTask;
+
+        using var doc = JsonDocument.Parse(createBody!);
+        Assert.False(doc.RootElement.TryGetProperty("context", out _));
+    }
+
+    [Fact]
+    public async Task StartStreamingWithPrompt_SendsDictionaryTermsAndContextText()
+    {
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        host.SetSetting(SonioxPlugin.ContextSettingKey, "Weekly ops sync");
+        using var httpClient = new HttpClient(new CapturingHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {request.RequestUri}")));
+        var sut = new SonioxPlugin(httpClient);
+        await sut.ActivateAsync(host);
+        IReadOnlyDictionary<string, object>? connectedContext = null;
+        IReadOnlyList<string>? connectedHints = null;
+        sut.ConnectStreaming = (_, _, _, hints, context, _) =>
+        {
+            connectedHints = hints;
+            connectedContext = context;
+            throw new InvalidOperationException("connection captured");
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.StartStreamingWithLanguageHintsAndPromptAsync(
+            ["de"], PluginTranscriptionPrompt.Encode(null, ["Kubernetes"]), CancellationToken.None));
+
+        Assert.Equal(["de"], connectedHints);
+        Assert.NotNull(connectedContext);
+        Assert.Equal(["Kubernetes"], (string[])connectedContext["terms"]);
+        Assert.Equal("Weekly ops sync", connectedContext["text"]);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartStreamingWithLanguageHintsAsync(["de"], CancellationToken.None));
+        Assert.Equal(["text"], connectedContext!.Keys);
+    }
+
+    [Fact]
     public void ParseMessage_DiscriminatesFinalAndNonFinalTokens()
     {
         var message = SonioxSession.ParseMessage(
@@ -559,7 +751,7 @@ public class SonioxPluginTests
 
         var definitions = sut.GetSettingDefinitions();
 
-        Assert.Equal(3, definitions.Count);
+        Assert.Equal(4, definitions.Count);
         Assert.Equal("region", definitions[1].Key);
         Assert.Equal(PluginSettingKind.Dropdown, definitions[1].Kind);
         Assert.Equal(["us", "eu", "jp", "in"], definitions[1].Options!.Select(option => option.Value));
@@ -631,7 +823,7 @@ public class SonioxPluginTests
         await sut.ActivateAsync(host);
 
         Uri? connected = null;
-        sut.ConnectStreaming = (_, realtimeUri, _, _, _) =>
+        sut.ConnectStreaming = (_, realtimeUri, _, _, _, _) =>
         {
             connected = realtimeUri;
             throw new InvalidOperationException("connection captured");
@@ -1703,7 +1895,7 @@ public class SonioxPluginTests
         var sut = new SonioxPlugin(httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2);
         await sut.ActivateAsync(host);
         string? streamingModel = null;
-        sut.ConnectStreaming = (_, _, model, _, _) =>
+        sut.ConnectStreaming = (_, _, model, _, _, _) =>
         {
             streamingModel = model;
             throw new InvalidOperationException("connection captured");

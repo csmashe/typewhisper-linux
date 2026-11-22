@@ -20,6 +20,9 @@
   "Settings.ModelsRefreshed": "Modelos actualizados. Automático usa {0} para el texto en vivo y {1} para las grabaciones.",
   "Settings.ModelListInvalid": "Soniox no devolvió una lista de modelos utilizable.",
   "Settings.ModelListTimeout": "Soniox no devolvió su lista de modelos a tiempo.",
+  "Settings.TranscriptionContext": "Contexto de transcripción",
+  "Settings.TranscriptionContextPlaceholder": "Tema, nombres o situación, por ejemplo: Reunión semanal de producto con Anna y Jörg sobre el lanzamiento de TypeWhisper para Linux.",
+  "Settings.TranscriptionContextDescription": "Información de fondo opcional que Soniox usa para el texto en vivo y las grabaciones. Tus términos del diccionario se envían con ella automáticamente. Hasta {0} caracteres.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin no configurado. Se requiere la clave de API.",
   "Manifest.Name": "Soniox",
   "Manifest.Description": "Motor de transcripción de voz a texto de Soniox"

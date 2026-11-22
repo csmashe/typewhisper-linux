@@ -20,6 +20,9 @@
   "Settings.ModelsRefreshed": "Modelle aktualisiert. Automatisch nutzt {0} für Live-Text und {1} für Aufnahmen.",
   "Settings.ModelListInvalid": "Soniox hat keine verwendbare Modellliste geliefert.",
   "Settings.ModelListTimeout": "Soniox hat die Modellliste nicht rechtzeitig geliefert.",
+  "Settings.TranscriptionContext": "Transkriptionskontext",
+  "Settings.TranscriptionContextPlaceholder": "Thema, Namen oder Situation, zum Beispiel: Wöchentliches Produktmeeting mit Anna und Jörg zum Linux-Release von TypeWhisper.",
+  "Settings.TranscriptionContextDescription": "Optionaler Hintergrund, den Soniox für Live-Text und Aufnahmen nutzt. Deine Wörterbuchbegriffe werden automatisch mitgesendet. Bis zu {0} Zeichen.",
   "Settings.NotConfiguredApiKeyRequired": "Plugin nicht konfiguriert. API-Schlüssel erforderlich.",
   "Manifest.Name": "Soniox",
   "Manifest.Description": "Soniox-Sprache-zu-Text-Transkriptions-Engine"

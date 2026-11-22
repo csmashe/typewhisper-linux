@@ -20,6 +20,9 @@
   "Settings.ModelsRefreshed": "模型已刷新。“自动”对实时文本使用 {0}，对录音使用 {1}。",
   "Settings.ModelListInvalid": "Soniox 未返回可用的模型列表。",
   "Settings.ModelListTimeout": "Soniox 未能及时返回模型列表。",
+  "Settings.TranscriptionContext": "转写上下文",
+  "Settings.TranscriptionContextPlaceholder": "主题、人名或场景，例如：与 Anna 和 Jörg 讨论 TypeWhisper Linux 版发布的每周产品会议。",
+  "Settings.TranscriptionContextDescription": "Soniox 用于实时文本和录音的可选背景信息。你的词典术语会自动随之发送。最多 {0} 个字符。",
   "Settings.NotConfiguredApiKeyRequired": "插件未配置。需要API密钥。",
   "Manifest.Name": "Soniox",
   "Manifest.Description": "Soniox语音转文字转录引擎"
