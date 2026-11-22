@@ -1,10 +1,10 @@
 {
   "id": "com.typewhisper.sherpa-onnx",
   "name": "Local Models (sherpa-onnx)",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "minHostVersion": "0.19.0",
   "author": "TypeWhisper",
-  "description": "Offline transcription via sherpa-onnx (NVIDIA NeMo Parakeet, Parakeet Ultra, Canary + Qwen3-ASR)",
+  "description": "Offline transcription via sherpa-onnx (NVIDIA NeMo Parakeet, Parakeet Ultra, Canary + Qwen3-ASR), with Parakeet on Vulkan graphics cards through transcribe.cpp",
   "networkAccess": "local",
   "categories": ["transcription"],
   "assemblyName": "TypeWhisper.Plugin.SherpaOnnx.dll",

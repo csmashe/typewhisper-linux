@@ -1,0 +1,558 @@
+using System.Runtime.InteropServices;
+using System.Text.Json;
+
+namespace TypeWhisper.Plugin.SherpaOnnx;
+
+/// <summary>
+///     P/Invoke surface of transcribe.cpp's C API (include/transcribe.h), pinned to one release. Only
+///     the offline subset Parakeet needs is declared. The layouts follow the x64 C ABI and are checked
+///     against transcribe_abi_struct_size before the first model loads, so a mismatched library fails
+///     with an error instead of reading the wrong fields.
+/// </summary>
+internal static class TranscribeCppNative
+{
+    internal const string LibraryName = "transcribe";
+    internal const string LibraryFileName = "libtranscribe.so";
+
+    // From contract.json of transcribe-native-0.3.1-linux-x86_64-cpu-vulkan and include/transcribe.abihash.
+    internal const string Version = "0.3.1";
+    internal const string HeaderHash = "57b1af43650f195d";
+
+    internal const int Ok = 0;
+
+    internal const int BackendVulkan = 3;
+
+    internal const uint BackendMaskCpu = 0x1;
+    internal const uint BackendMaskVulkan = 0x4;
+
+    internal const int TimestampsToken = 4;
+
+    internal const int DeviceTypeGpu = 1;
+    internal const int DeviceTypeIntegratedGpu = 2;
+
+    private const int AbiModelLoadParams = 0;
+    private const int AbiSessionParams = 1;
+    private const int AbiRunParams = 2;
+    private const int AbiToken = 8;
+    private const int AbiDeviceInfo = 13;
+    private const int AbiBackendInitParams = 15;
+
+    // Each struct below is filled by the native *_init call, read back by transcribe_*, or both;
+    // the analyzer cannot see those writes and reads through the P/Invoke boundary.
+    // ReSharper disable NotAccessedField.Global, UnassignedField.Global, FieldCanBeMadeReadOnly.Global, MemberCanBePrivate.Global
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct BackendInitParams
+    {
+        public ulong StructSize;
+        public IntPtr ArtifactDirectory;
+        public uint AllowedBackends;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ModelLoadParams
+    {
+        public ulong StructSize;
+        public int Backend;
+        public IntPtr Device;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SessionParams
+    {
+        public ulong StructSize;
+        public int Threads;
+        public int KvType;
+        public int Context;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RunParams
+    {
+        public ulong StructSize;
+        public int Task;
+        public int Timestamps;
+        public int Pnc;
+        public int Itn;
+        public int Diarize;
+        public IntPtr Language;
+        public IntPtr TargetLanguage;
+
+        // C bool: one byte.
+        public byte KeepSpecialTags;
+        public IntPtr Family;
+        public int SpeculativeDrafts;
+        public IntPtr Vocabulary;
+        public int VocabularyCount;
+        public IntPtr Prompt;
+        public IntPtr Prefix;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DeviceInfo
+    {
+        public ulong StructSize;
+        public IntPtr Name;
+        public IntPtr Description;
+        public IntPtr Kind;
+        public IntPtr DeviceId;
+        public ulong MemoryTotal;
+        public ulong MemoryFree;
+        public int DeviceType;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Token
+    {
+        public ulong StructSize;
+        public int Id;
+        public float Probability;
+        public long StartMilliseconds;
+        public long EndMilliseconds;
+        public int SegmentIndex;
+        public int WordIndex;
+        public IntPtr Text;
+    }
+    // ReSharper restore NotAccessedField.Global, UnassignedField.Global, FieldCanBeMadeReadOnly.Global, MemberCanBePrivate.Global
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal delegate bool AbortCallback(IntPtr userData);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void LogCallback(int level, IntPtr message, IntPtr userData);
+
+    // Kept as DllImport: the bindings mirror transcribe.h one-to-one, and LibraryImport would need
+    // AllowUnsafeBlocks and generated marshalling for the ref structs for no real gain.
+#pragma warning disable SYSLIB1054
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr transcribe_status_string(int status);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern nuint transcribe_abi_struct_size(int which);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_log_set(LogCallback? callback, IntPtr userData);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_backend_init_params_init(ref BackendInitParams parameters);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_init_backends_ex(ref BackendInitParams parameters);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_device_count();
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr transcribe_device_get(int index);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_device_info_init(ref DeviceInfo info);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_device_get_info(IntPtr device, ref DeviceInfo info);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_model_load_params_init(ref ModelLoadParams parameters);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_session_params_init(ref SessionParams parameters);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_run_params_init(ref RunParams parameters);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_model_load_file(byte[] utf8Path, ref ModelLoadParams parameters, out IntPtr model);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_model_free(IntPtr model);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr transcribe_model_device(IntPtr model);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_session_init(IntPtr model, ref SessionParams parameters, out IntPtr session);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_session_free(IntPtr session);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_set_abort_callback(IntPtr session, AbortCallback? callback, IntPtr userData);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_run(IntPtr session, float[] pcm, int sampleCount, ref RunParams parameters);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr transcribe_full_text(IntPtr session);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_n_tokens(IntPtr session);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void transcribe_token_init(ref Token token);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int transcribe_get_token(IntPtr session, int index, ref Token token);
+#pragma warning restore SYSLIB1054
+
+    internal static string StatusText(int status) =>
+        Marshal.PtrToStringUTF8(transcribe_status_string(status)) ?? "status " + status;
+
+    internal static byte[] Utf8Path(string path) => System.Text.Encoding.UTF8.GetBytes(path + "\0");
+
+    /// <summary>The managed sizes the declarations above produce, keyed by transcribe_abi_struct.</summary>
+    internal static IReadOnlyDictionary<int, int> ManagedStructSizes { get; } = new Dictionary<int, int>
+    {
+        [AbiModelLoadParams] = Marshal.SizeOf<ModelLoadParams>(),
+        [AbiSessionParams] = Marshal.SizeOf<SessionParams>(),
+        [AbiRunParams] = Marshal.SizeOf<RunParams>(),
+        [AbiDeviceInfo] = Marshal.SizeOf<DeviceInfo>(),
+        [AbiToken] = Marshal.SizeOf<Token>(),
+        [AbiBackendInitParams] = Marshal.SizeOf<BackendInitParams>(),
+    };
+}
+
+/// <summary>One decoded token with its times in seconds from the start of the audio.</summary>
+internal sealed record TranscribeCppToken(string Text, double StartSeconds, double EndSeconds);
+
+/// <summary>Transcript of one run with its token times.</summary>
+internal sealed record TranscribeCppResult(string Text, IReadOnlyList<TranscribeCppToken> Tokens);
+
+/// <summary>One compute device transcribe.cpp registered in this process.</summary>
+internal sealed record TranscribeCppDevice(int Index, string Description, string Kind, int DeviceType)
+{
+    internal bool IsGpu => DeviceType is TranscribeCppNative.DeviceTypeGpu or TranscribeCppNative.DeviceTypeIntegratedGpu;
+    internal bool IsIntegrated => DeviceType == TranscribeCppNative.DeviceTypeIntegratedGpu;
+}
+
+/// <summary>
+///     Loads libtranscribe.so from an extracted runtime and registers its backend modules. Both steps
+///     are process-wide and cannot be repeated with other values: ggml keeps its device registry for the
+///     life of the process, so a failed start stays failed until the worker restarts.
+/// </summary>
+internal static class TranscribeCppRuntime
+{
+    private static readonly Lock s_sync = new();
+    private static bool s_resolverRegistered;
+    private static string? s_directory;
+    private static IntPtr s_library;
+
+    // Native code keeps the pointer for the life of the process.
+    private static TranscribeCppNative.LogCallback? s_logCallback;
+    private static Action<int, string>? s_log;
+    private static Exception? s_startError;
+
+    internal static bool IsInitialized
+    {
+        get
+        {
+            lock (s_sync)
+                return s_library != IntPtr.Zero && s_startError is null;
+        }
+    }
+
+    /// <summary>True once a start failed in this process; only a new worker can try again.</summary>
+    internal static bool HasFailed
+    {
+        get
+        {
+            lock (s_sync)
+                return s_startError is not null;
+        }
+    }
+
+    /// <summary>Checks the runtime's contract against the version these bindings were written for.</summary>
+    internal static void ValidateContract(string directory)
+    {
+        var path = Path.Join(directory, "contract.json");
+        if (!File.Exists(path))
+            throw new FileNotFoundException("The transcribe.cpp runtime has no contract.json.", path);
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var root = document.RootElement;
+        var version = root.TryGetProperty("version", out var v) ? v.GetString() : null;
+        var hash = root.TryGetProperty("header_hash", out var h) ? h.GetString() : null;
+        if (version != TranscribeCppNative.Version || hash != TranscribeCppNative.HeaderHash)
+            throw new InvalidDataException(
+                $"The transcribe.cpp runtime is {version ?? "unknown"} ({hash ?? "no ABI hash"}); "
+                    + $"this plugin needs {TranscribeCppNative.Version} ({TranscribeCppNative.HeaderHash})."
+            );
+    }
+
+    /// <summary>
+    ///     Loads the library and registers the CPU and Vulkan backends. A repeated call with the same
+    ///     directory is a no-op; a different one throws, because the native registry is fixed after the
+    ///     first call.
+    /// </summary>
+    internal static void Initialize(string directory, Action<int, string>? log = null)
+    {
+        directory = Path.GetFullPath(directory);
+        lock (s_sync)
+        {
+            if (s_library != IntPtr.Zero)
+            {
+                if (s_startError is not null)
+                    throw new InvalidOperationException(
+                        "transcribe.cpp failed to start in this process: " + s_startError.Message,
+                        s_startError
+                    );
+                if (string.Equals(s_directory, directory, StringComparison.Ordinal))
+                    return;
+                throw new InvalidOperationException(
+                    "transcribe.cpp is already loaded from another directory in this process."
+                );
+            }
+
+            ValidateContract(directory);
+            var path = Path.Join(directory, TranscribeCppNative.LibraryFileName);
+            if (!File.Exists(path))
+                throw new DllNotFoundException("Missing " + path);
+            s_directory = directory;
+            RegisterResolver();
+
+            // libtranscribe.so finds libggml.so and libggml-base.so through its $ORIGIN runpath.
+            s_library = NativeLibrary.Load(path);
+            try
+            {
+                foreach (var (which, size) in TranscribeCppNative.ManagedStructSizes)
+                {
+                    var native = (int)TranscribeCppNative.transcribe_abi_struct_size(which);
+                    if (native != size)
+                        throw new InvalidDataException(
+                            $"transcribe.cpp struct {which} has {native} bytes; the bindings expect {size}."
+                        );
+                }
+
+                if (log is not null)
+                {
+                    s_log = log;
+                    s_logCallback = static (level, message, _) =>
+                        s_log?.Invoke(level, Marshal.PtrToStringUTF8(message)?.TrimEnd() ?? "");
+                    TranscribeCppNative.transcribe_log_set(s_logCallback, IntPtr.Zero);
+                }
+
+                var utf8 = Marshal.StringToCoTaskMemUTF8(directory);
+                try
+                {
+                    var parameters = new TranscribeCppNative.BackendInitParams();
+                    TranscribeCppNative.transcribe_backend_init_params_init(ref parameters);
+                    parameters.ArtifactDirectory = utf8;
+                    parameters.AllowedBackends = TranscribeCppNative.BackendMaskCpu | TranscribeCppNative.BackendMaskVulkan;
+                    var status = TranscribeCppNative.transcribe_init_backends_ex(ref parameters);
+                    if (status != TranscribeCppNative.Ok)
+                        throw new InvalidOperationException(
+                            "transcribe.cpp found no usable compute device: " + TranscribeCppNative.StatusText(status)
+                        );
+                }
+                finally
+                {
+                    Marshal.FreeCoTaskMem(utf8);
+                }
+            }
+            catch (Exception ex)
+            {
+                s_startError = ex;
+                throw;
+            }
+        }
+    }
+
+    internal static IReadOnlyList<TranscribeCppDevice> Devices()
+    {
+        lock (s_sync)
+            if (s_library == IntPtr.Zero)
+                return [];
+        var devices = new List<TranscribeCppDevice>();
+        var count = TranscribeCppNative.transcribe_device_count();
+        for (var index = 0; index < count; index++)
+            if (Describe(TranscribeCppNative.transcribe_device_get(index), index) is { } device)
+                devices.Add(device);
+        return devices;
+    }
+
+    internal static TranscribeCppDevice? Describe(IntPtr handle, int index)
+    {
+        if (handle == IntPtr.Zero)
+            return null;
+        var info = new TranscribeCppNative.DeviceInfo();
+        TranscribeCppNative.transcribe_device_info_init(ref info);
+        if (TranscribeCppNative.transcribe_device_get_info(handle, ref info) != TranscribeCppNative.Ok)
+            return null;
+        return new TranscribeCppDevice(
+            index,
+            Marshal.PtrToStringUTF8(info.Description) ?? "",
+            Marshal.PtrToStringUTF8(info.Kind) ?? "",
+            info.DeviceType
+        );
+    }
+
+    /// <summary>
+    ///     The Vulkan device to place a model on: the first dedicated GPU, otherwise the first integrated
+    ///     one, the same rule as the whisper.cpp plugin. A bare Vulkan request would take the first listed
+    ///     device, which on desktop Ryzen systems is often the processor's graphics.
+    /// </summary>
+    internal static TranscribeCppDevice? PreferredVulkanDevice(IEnumerable<TranscribeCppDevice> devices)
+    {
+        var vulkan = devices.Where(device => device is { Kind: "vulkan", IsGpu: true }).ToList();
+        return vulkan.FirstOrDefault(device => !device.IsIntegrated) ?? vulkan.FirstOrDefault();
+    }
+
+    private static void RegisterResolver()
+    {
+        if (s_resolverRegistered)
+            return;
+        NativeLibrary.SetDllImportResolver(
+            typeof(TranscribeCppNative).Assembly,
+            static (name, _, _) => ResolveNativeLibrary(name)
+        );
+        s_resolverRegistered = true;
+    }
+
+    // One resolver per assembly: sherpa-onnx's binding lives in its own assembly and keeps its own.
+    private static IntPtr ResolveNativeLibrary(string name) =>
+        name == TranscribeCppNative.LibraryName ? s_library : IntPtr.Zero;
+}
+
+/// <summary>A Parakeet model loaded on the graphics card; the plugin serializes calls.</summary>
+internal interface IParakeetGpuSession : IDisposable
+{
+    /// <summary>The graphics card the model runs on, as the acceleration status names it.</summary>
+    string DeviceName { get; }
+
+    TranscribeCppResult Transcribe(float[] samples, CancellationToken cancellationToken);
+}
+
+/// <summary>
+///     One loaded model and its session. Sessions are single-threaded in transcribe.cpp; the plugin
+///     serializes calls under its lock. A run is aborted through the session's abort callback, which the
+///     native code polls between graph steps.
+/// </summary>
+internal sealed class TranscribeCppSession : IParakeetGpuSession
+{
+    private readonly TranscribeCppNative.AbortCallback _abort;
+    private IntPtr _model;
+    private IntPtr _session;
+    private volatile bool _abortRequested;
+
+    private TranscribeCppSession(IntPtr model, IntPtr session, TranscribeCppDevice? device)
+    {
+        _model = model;
+        _session = session;
+        Device = device;
+        _abort = _ => _abortRequested;
+        TranscribeCppNative.transcribe_set_abort_callback(_session, _abort, IntPtr.Zero);
+    }
+
+    /// <summary>The device that owns the model's weights.</summary>
+    private TranscribeCppDevice? Device { get; }
+
+    public string DeviceName => Device?.Description is { Length: > 0 } description ? description : "graphics card";
+
+    internal static TranscribeCppSession Open(string modelPath, TranscribeCppDevice device, int threads)
+    {
+        if (!TranscribeCppRuntime.IsInitialized)
+            throw new InvalidOperationException("Initialize the transcribe.cpp runtime first.");
+        var load = new TranscribeCppNative.ModelLoadParams();
+        TranscribeCppNative.transcribe_model_load_params_init(ref load);
+        load.Backend = TranscribeCppNative.BackendVulkan;
+        load.Device = TranscribeCppNative.transcribe_device_get(device.Index);
+
+        // A null handle would silently request automatic placement.
+        if (load.Device == IntPtr.Zero)
+            throw new InvalidOperationException("The selected compute device is no longer registered.");
+        var status = TranscribeCppNative.transcribe_model_load_file(
+            TranscribeCppNative.Utf8Path(modelPath),
+            ref load,
+            out var model
+        );
+        if (status != TranscribeCppNative.Ok)
+            throw new InvalidOperationException(
+                "transcribe.cpp could not load the model: " + TranscribeCppNative.StatusText(status)
+            );
+        try
+        {
+            var options = new TranscribeCppNative.SessionParams();
+            TranscribeCppNative.transcribe_session_params_init(ref options);
+            options.Threads = threads;
+            status = TranscribeCppNative.transcribe_session_init(model, ref options, out var session);
+            if (status != TranscribeCppNative.Ok)
+                throw new InvalidOperationException(
+                    "transcribe.cpp could not open a session: " + TranscribeCppNative.StatusText(status)
+                );
+            return new TranscribeCppSession(
+                model,
+                session,
+                TranscribeCppRuntime.Describe(TranscribeCppNative.transcribe_model_device(model), -1)
+            );
+        }
+        catch
+        {
+            TranscribeCppNative.transcribe_model_free(model);
+            throw;
+        }
+    }
+
+    /// <summary>Transcribes mono 16 kHz PCM with token times. Cancellation aborts the native run and throws.</summary>
+    public TranscribeCppResult Transcribe(float[] samples, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_session == IntPtr.Zero, this);
+        var parameters = new TranscribeCppNative.RunParams();
+        TranscribeCppNative.transcribe_run_params_init(ref parameters);
+        parameters.Timestamps = TranscribeCppNative.TimestampsToken;
+        _abortRequested = false;
+        try
+        {
+            using (cancellationToken.Register(() => _abortRequested = true))
+            {
+                var status = TranscribeCppNative.transcribe_run(_session, samples, samples.Length, ref parameters);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (status != TranscribeCppNative.Ok)
+                    throw new InvalidOperationException("transcribe.cpp failed: " + TranscribeCppNative.StatusText(status));
+            }
+
+            var text = (Marshal.PtrToStringUTF8(TranscribeCppNative.transcribe_full_text(_session)) ?? "").Trim();
+            return new TranscribeCppResult(text, ReadTokens());
+        }
+        finally
+        {
+            GC.KeepAlive(_abort);
+        }
+    }
+
+    // Token text is session-owned and replaced by the next run, so it is copied here.
+    private TranscribeCppToken[] ReadTokens()
+    {
+        var count = TranscribeCppNative.transcribe_n_tokens(_session);
+        var result = new TranscribeCppToken[Math.Max(0, count)];
+        for (var index = 0; index < result.Length; index++)
+        {
+            var token = new TranscribeCppNative.Token();
+            TranscribeCppNative.transcribe_token_init(ref token);
+            var status = TranscribeCppNative.transcribe_get_token(_session, index, ref token);
+            if (status != TranscribeCppNative.Ok)
+                throw new InvalidOperationException(
+                    "transcribe.cpp token read failed: " + TranscribeCppNative.StatusText(status)
+                );
+            result[index] = new TranscribeCppToken(
+                Marshal.PtrToStringUTF8(token.Text) ?? "",
+                token.StartMilliseconds / 1000d,
+                token.EndMilliseconds / 1000d
+            );
+        }
+        return result;
+    }
+
+    public void Dispose()
+    {
+        if (_session != IntPtr.Zero)
+        {
+            TranscribeCppNative.transcribe_session_free(_session);
+            _session = IntPtr.Zero;
+        }
+
+        // ReSharper disable once InvertIf -- symmetric with the session release above.
+        if (_model != IntPtr.Zero)
+        {
+            TranscribeCppNative.transcribe_model_free(_model);
+            _model = IntPtr.Zero;
+        }
+    }
+}

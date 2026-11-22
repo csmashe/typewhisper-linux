@@ -30,6 +30,14 @@ public sealed partial class SherpaOnnxPlugin
     private const string ParakeetUltraRepo =
         "https://github.com/csmashe/typewhisper-linux/releases/download/model-parakeet-ultra-int8-v1";
 
+    // Q8_0 GGUFs for the Vulkan path, pinned by size and SHA-256 like the ONNX files. The transcribe.cpp
+    // project's conversion of nvidia/parakeet-tdt-0.6b-v3 at commit 90f08245, and upstream TypeWhisper's
+    // conversion of the same Parakeet Ultra checkpoint as the ONNX export.
+    private const string ParakeetGgufUrl =
+        "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/90f082450fcbacdb54e5900c44ef697c9ea59622/parakeet-tdt-0.6b-v3-Q8_0.gguf";
+    private const string ParakeetUltraGgufUrl =
+        "https://github.com/TypeWhisper/typewhisper-win/releases/download/model-parakeet-ultra-gguf-v1/parakeet-ultra-Q8_0.gguf";
+
     // The sherpa-onnx author's per-file upload of the official 0.6B release archive, pinned to a
     // commit; each file's size and SHA-256 match that archive's contents.
     private const string Qwen06BRepo =
@@ -155,7 +163,13 @@ public sealed partial class SherpaOnnxPlugin
                     93_939,
                     "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"
                 ),
-            ]
+            ],
+            GpuFile: new ModelFileDefinition(
+                "parakeet-ultra-Q8_0.gguf",
+                ParakeetUltraGgufUrl,
+                739_508_704,
+                "b8752062d51d5d24f6e1355a0b5973d9a47f0d9cd6db8c29385c191ff6f5dcd9"
+            )
         ),
         new(
             "parakeet-tdt-0.6b",
@@ -191,7 +205,13 @@ public sealed partial class SherpaOnnxPlugin
                     93_939,
                     "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"
                 ),
-            ]
+            ],
+            GpuFile: new ModelFileDefinition(
+                "parakeet-tdt-0.6b-v3-Q8_0.gguf",
+                ParakeetGgufUrl,
+                739_508_576,
+                "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7"
+            )
         ),
         new(
             "canary-180m-flash",
@@ -294,6 +314,13 @@ public sealed partial class SherpaOnnxPlugin
     private Func<string, string, OfflineRecognizer> _qwenRecognizerFactory = CreateQwenRecognizer;
     private SherpaCudaRuntimeInstaller? _cudaRuntimeInstaller;
     private CudaRuntimeProvisioner? _cudaProvisioner;
+    private TranscribeCppRuntimeInstaller? _vulkanRuntimeInstaller;
+
+    // Parakeet on the graphics card: transcribe.cpp runs the model's GGUF in place of the sherpa
+    // recognizer. Exactly one of _recognizer and _gpuSession is set while a model is loaded.
+    private IParakeetGpuSession? _gpuSession;
+    private Func<string, string, IParakeetGpuSession>? _vulkanSessionFactory;
+    private Func<string?>? _vulkanProbe;
     private string? _loadedModelId;
     private string? _loadedModelDir;
     private string _computeBackend = "cpu";
@@ -347,7 +374,11 @@ public sealed partial class SherpaOnnxPlugin
     private bool IsQwenSelected => SelectedModel?.Family == SherpaModelFamily.Qwen3Asr;
 
     public IReadOnlyList<TranscriptionAccelerationBackend> SupportedAccelerationBackends { get; } =
-        [TranscriptionAccelerationBackend.Cpu, TranscriptionAccelerationBackend.NvidiaCuda];
+    [
+        TranscriptionAccelerationBackend.Cpu,
+        TranscriptionAccelerationBackend.NvidiaCuda,
+        TranscriptionAccelerationBackend.Vulkan,
+    ];
 
     // LoadModelAsync downloads + preloads the CUDA runtime on demand and falls back to
     // CPU itself, so the host need not require a system CUDA install for explicit CUDA.
@@ -405,6 +436,11 @@ public sealed partial class SherpaOnnxPlugin
             _httpClient,
             msg => host.Log(PluginLogLevel.Info, msg)
         );
+        _vulkanRuntimeInstaller ??= new TranscribeCppRuntimeInstaller(
+            host.PluginAssetDirectory,
+            _httpClient,
+            msg => host.Log(PluginLogLevel.Info, msg)
+        );
         _cudaProvisioner ??= new CudaRuntimeProvisioner(
             CudaRuntimeProvisioner.CacheRootForPluginAssetDirectory(
                 host.PluginAssetDirectory
@@ -434,9 +470,7 @@ public sealed partial class SherpaOnnxPlugin
 
     public Task ConfigureComputeBackendAsync(string backend)
     {
-        var normalized = string.Equals(backend, "cuda", StringComparison.OrdinalIgnoreCase)
-            ? "cuda"
-            : "cpu";
+        var normalized = backend.ToLowerInvariant() is "cuda" or "vulkan" ? backend.ToLowerInvariant() : "cpu";
 
         // Serialize backend switches with model load/unload: without the lock,
         // a LoadModelAsync running on another thread could observe the old
@@ -471,7 +505,12 @@ public sealed partial class SherpaOnnxPlugin
     {
         AccelerationPreference = preference;
 
-        var desired = preference == TranscriptionAccelerationPreference.NvidiaCuda ? "cuda" : "cpu";
+        var desired = preference switch
+        {
+            TranscriptionAccelerationPreference.NvidiaCuda => "cuda",
+            TranscriptionAccelerationPreference.Vulkan => "vulkan",
+            _ => "cpu",
+        };
 
         // ConfigureComputeBackendAsync completes synchronously for SherpaOnnx (no
         // awaits in the body) and refuses to switch once the native provider is
@@ -707,6 +746,30 @@ public sealed partial class SherpaOnnxPlugin
             }
         }
 
+        // Parakeet's GGUF and the transcribe.cpp runtime download on the first Vulkan load, outside the
+        // lock like the CUDA runtime. Models without a GGUF run on sherpa-onnx's CPU path instead.
+        string? vulkanUnavailableDetail = null;
+        if (string.Equals(desiredProvider, "vulkan", StringComparison.Ordinal) && model.GpuFile is { } gpuFile)
+        {
+            try
+            {
+                await EnsureVulkanFilesAsync(model, gpuFile, dir, progress, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _host?.Log(
+                    PluginLogLevel.Warning,
+                    $"sherpa-onnx Vulkan files unavailable ({ex.Message}); falling back to CPU."
+                );
+                // Only this load falls back: the worker keeps its preference, so the next load retries.
+                vulkanUnavailableDetail = ex.Message;
+            }
+        }
+
         try
         {
             await Task.Run(
@@ -731,33 +794,58 @@ public sealed partial class SherpaOnnxPlugin
                         // Qwen stays on the CPU even when CUDA is wired: on an RTX 3090 it ran no
                         // faster there, and cuDNN has no kernel for its convolution on older cards.
                         var activeProvider = model.Family == SherpaModelFamily.Qwen3Asr ? "cpu" : desiredProvider;
-                        try
+                        if (string.Equals(activeProvider, "vulkan", StringComparison.Ordinal))
                         {
-                            _recognizer = CreateRecognizer(model, dir, activeProvider);
-                        }
-                        catch (Exception ex)
-                            when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
-                        {
-                            // Recreate with the CPU execution provider. The GPU ONNX
-                            // Runtime is already wired in by ConfigureCudaRuntime and runs
-                            // the CPU provider correctly, so this yields working CPU
-                            // transcription rather than failing the load outright.
-                            _host?.Log(
-                                PluginLogLevel.Warning,
-                                $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
-                            );
-                            cudaUnavailableDetail = ex.Message;
-                            activeProvider = "cpu";
-                            _computeBackend = "cpu";
-                            _recognizer = CreateRecognizer(model, dir, activeProvider);
+                            if (vulkanUnavailableDetail is null && model.GpuFile is { } file)
+                            {
+                                try
+                                {
+                                    _gpuSession = OpenGpuSession(model, file, dir);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _host?.Log(
+                                        PluginLogLevel.Warning,
+                                        $"sherpa-onnx Vulkan load failed ({ex.Message}); falling back to CPU."
+                                    );
+                                    vulkanUnavailableDetail = ex.Message;
+                                }
+                            }
+
+                            if (_gpuSession is null)
+                                activeProvider = "cpu";
                         }
 
-                        // First successful load pins the native runtime for the process.
-                        // Record the WIRED runtime (CUDA-capable vs CPU-only), not the
-                        // recognizer's active provider: a CUDA-wired runtime whose recognizer
-                        // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
-                        // CPU↔CUDA swap needs no restart.
-                        _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
+                        if (_gpuSession is null)
+                        {
+                            try
+                            {
+                                _recognizer = CreateRecognizer(model, dir, activeProvider);
+                            }
+                            catch (Exception ex)
+                                when (string.Equals(activeProvider, "cuda", StringComparison.Ordinal))
+                            {
+                                // Recreate with the CPU execution provider. The GPU ONNX
+                                // Runtime is already wired in by ConfigureCudaRuntime and runs
+                                // the CPU provider correctly, so this yields working CPU
+                                // transcription rather than failing the load outright.
+                                _host?.Log(
+                                    PluginLogLevel.Warning,
+                                    $"sherpa-onnx CUDA recognizer creation failed ({ex.Message}); falling back to CPU."
+                                );
+                                cudaUnavailableDetail = ex.Message;
+                                activeProvider = "cpu";
+                                _computeBackend = "cpu";
+                                _recognizer = CreateRecognizer(model, dir, activeProvider);
+                            }
+
+                            // First successful load pins the native runtime for the process.
+                            // Record the WIRED runtime (CUDA-capable vs CPU-only), not the
+                            // recognizer's active provider: a CUDA-wired runtime whose recognizer
+                            // fell back to CPU is still CUDA-capable, so it pins "cuda" and a later
+                            // CPU↔CUDA swap needs no restart. transcribe.cpp loads no ONNX Runtime.
+                            _loadedNativeProvider ??= _cudaOrtRuntimeWired ? "cuda" : activeProvider;
+                        }
 
                         _loadedModelId = modelId;
                         _loadedModelDir = dir;
@@ -768,7 +856,9 @@ public sealed partial class SherpaOnnxPlugin
                         // provisioning failure). A CUDA-wired runtime whose recognizer fell back
                         // to CPU pins "cuda" above, so CUDA is reachable again by a reload — no
                         // restart (matches CreateLoadedAccelerationStatus / the swap logic).
-                        AccelerationStatus = cudaUnavailableDetail is null
+                        AccelerationStatus = vulkanUnavailableDetail is not null
+                            ? CreateVulkanUnavailableStatus(vulkanUnavailableDetail)
+                            : cudaUnavailableDetail is null
                             ? CreateLoadedStatusForModel(model, activeProvider, AccelerationPreference)
                             : CreateCudaUnavailableStatus(
                                 cudaUnavailableDetail,
@@ -936,6 +1026,162 @@ public sealed partial class SherpaOnnxPlugin
         });
     }
 
+    // The runtime is a small share of the bar; the 740 MB GGUF is the rest. Reports are forwarded on the
+    // download's own thread, so none can arrive after the final 1.0 and flip the host back to downloading.
+    private async Task EnsureVulkanFilesAsync(
+        ModelDefinition model,
+        ModelFileDefinition gpuFile,
+        string dir,
+        IProgress<double>? progress,
+        CancellationToken ct
+    )
+    {
+        if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("Vulkan acceleration for Parakeet is only available on Linux x64.");
+        // The probe loads every Vulkan driver; it is needed only before the first start. Running it
+        // first keeps a machine without a usable driver from downloading 760 MB it cannot run.
+        var unavailable = _vulkanProbe is { } probe ? probe()
+            : TranscribeCppRuntime.IsInitialized ? null
+            : VulkanAvailability.GetUnavailableReason();
+        if (unavailable is not null)
+            throw new InvalidOperationException(unavailable);
+        var installer =
+            _vulkanRuntimeInstaller
+            ?? throw new InvalidOperationException("The transcribe.cpp runtime installer is not initialized.");
+        var runtimeShare =
+            (double)TranscribeCppRuntimeInstaller.AssetSize
+            / (TranscribeCppRuntimeInstaller.AssetSize + gpuFile.SizeBytes);
+        await installer
+            .EnsureInstalledAsync(new ScaledProgress(progress, 0.0, runtimeShare), ct)
+            .ConfigureAwait(false);
+
+        var path = Path.Join(dir, gpuFile.FileName);
+        if (!IsGpuFileComplete(path, gpuFile))
+        {
+            // The same lock as the model's ONNX download, which may share this directory.
+            await using var lease = await InterProcessFileLock
+                .AcquireAsync(Path.Join(Path.GetDirectoryName(dir), $".{model.Id}.download.lock"), ct)
+                .ConfigureAwait(false);
+            if (!IsGpuFileComplete(path, gpuFile))
+            {
+                // A wrong-size file is not a resumable partial; start it over.
+                TryDeleteFile(path);
+                _host?.Log(PluginLogLevel.Info, $"sherpa-onnx: downloading the {model.DisplayName} GPU model");
+                IProgress<double> forward = new ScaledProgress(progress, runtimeShare, 1.0);
+                var lastReport = DateTime.MinValue;
+                await ResilientDownloader.DownloadToFileAsync(
+                    _httpClient,
+                    gpuFile.DownloadUrl,
+                    path,
+                    approxTotalBytes: gpuFile.SizeBytes,
+                    idleTimeout: TimeSpan.FromSeconds(60),
+                    allowResume: true,
+                    onBytesOnDisk: onDisk =>
+                    {
+                        var now = DateTime.UtcNow;
+                        if ((now - lastReport).TotalMilliseconds <= 250)
+                            return;
+                        forward.Report(Math.Min(1.0, (double)onDisk / gpuFile.SizeBytes));
+                        lastReport = now;
+                    },
+                    verifyComplete: downloaded =>
+                    {
+                        VerifyPinnedFile(downloaded, gpuFile);
+                        VerifyGgufHeader(downloaded);
+                    },
+                    ct,
+                    new DownloadSpaceRequirement($"the {model.DisplayName} GPU model", 0, SpaceProbe)
+                ).ConfigureAwait(false);
+            }
+        }
+
+        progress?.Report(1.0);
+    }
+
+    private sealed class ScaledProgress(IProgress<double>? forward, double start, double end) : IProgress<double>
+    {
+        public void Report(double value) => forward?.Report(start + Math.Clamp(value, 0, 1) * (end - start));
+    }
+
+    private static bool IsGpuFileComplete(string path, ModelFileDefinition file) =>
+        new FileInfo(path) is { Exists: true } info && info.Length == file.SizeBytes;
+
+    private static void VerifyGgufHeader(string path)
+    {
+        Span<byte> magic = stackalloc byte[4];
+        using var stream = File.OpenRead(path);
+        if (stream.Read(magic) != 4 || !magic.SequenceEqual("GGUF"u8))
+            throw new InvalidDataException($"{Path.GetFileName(path)} is not a GGUF file.");
+    }
+
+    // Called under _sync. A GGUF that fails its structural check is deleted so the next load fetches it again.
+    private IParakeetGpuSession OpenGpuSession(ModelDefinition model, ModelFileDefinition file, string dir)
+    {
+        var path = Path.Join(dir, file.FileName);
+        try
+        {
+            if (!IsGpuFileComplete(path, file))
+                throw new InvalidDataException($"{file.FileName} is missing or incomplete.");
+            VerifyGgufHeader(path);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            TryDeleteFile(path);
+            throw new InvalidDataException($"The {model.DisplayName} GPU model was invalid and is downloaded again on the next load.", ex);
+        }
+
+        var runtime =
+            _vulkanRuntimeInstaller?.RuntimeDirectory
+            ?? throw new InvalidOperationException("The transcribe.cpp runtime installer is not initialized.");
+        try
+        {
+            return (_vulkanSessionFactory ?? CreateVulkanSession)(runtime, path);
+        }
+        catch (Exception ex) when (!TranscribeCppRuntime.HasFailed)
+        {
+            // A cached file can keep its size and header yet be damaged inside. Hashing every load would
+            // cost seconds, so the pin is checked only after a failed open; a matching file is kept.
+            try
+            {
+                VerifyPinnedFile(path, file);
+            }
+            catch (Exception verify) when (verify is InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                TryDeleteFile(path);
+                throw new InvalidDataException($"The {model.DisplayName} GPU model was invalid and is downloaded again on the next load.", ex);
+            }
+
+            throw;
+        }
+    }
+
+    private TranscribeCppSession CreateVulkanSession(string runtimeDirectory, string modelPath)
+    {
+        TranscribeCppRuntime.Initialize(
+            runtimeDirectory,
+            (level, message) =>
+            {
+                // transcribe_log_level: 2 = warning, 3 = error; info and debug lines are per decode.
+                if (level is 2 or 3 && message.Length > 0)
+                    _host?.Log(level == 3 ? PluginLogLevel.Error : PluginLogLevel.Warning, "transcribe.cpp: " + message);
+            }
+        );
+        var device =
+            TranscribeCppRuntime.PreferredVulkanDevice(TranscribeCppRuntime.Devices())
+            ?? throw new InvalidOperationException("transcribe.cpp found no Vulkan graphics card.");
+        return TranscribeCppSession.Open(modelPath, device, Math.Max(1, Environment.ProcessorCount / 2));
+    }
+
+    // transcribe.cpp marks a word start with a leading space where sherpa uses '▁'; the coordinator
+    // accepts both. Token end minus start is the duration the rescorer and chunk merge use.
+    internal static SherpaDecodeChunk ToDecodeChunk(TranscribeCppResult result) =>
+        new(
+            result.Text,
+            [.. result.Tokens.Select(token => token.Text)],
+            [.. result.Tokens.Select(token => (float)token.StartSeconds)],
+            [.. result.Tokens.Select(token => (float)Math.Max(0, token.EndSeconds - token.StartSeconds))]
+        );
+
     private static void EnsureCudaPlatformSupported()
     {
         if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
@@ -966,7 +1212,7 @@ public sealed partial class SherpaOnnxPlugin
 
                 lock (_sync)
                 {
-                    if (_recognizer is null || _loadedModelId is null)
+                    if ((_recognizer is null && _gpuSession is null) || _loadedModelId is null)
                         throw new InvalidOperationException(
                             "Kein Modell geladen. LoadModelAsync zuerst aufrufen."
                         );
@@ -976,18 +1222,22 @@ public sealed partial class SherpaOnnxPlugin
                     if (model.Family == SherpaModelFamily.Qwen3Asr)
                         return translate
                             ? throw new NotSupportedException("Qwen3-ASR transcribes speech; it cannot translate it.")
-                            : TranscribeQwen(model, _recognizer, audioSamples, language, ct);
+                            : TranscribeQwen(model, _recognizer!, audioSamples, language, ct);
 
                     if (model.SupportsTranslation)
                         EnsureCanaryLanguage(language, translate);
 
+                    var recognizer = _recognizer;
+                    var gpu = _gpuSession;
                     var coordinator = new SherpaDecodeCoordinator(
                         chunk =>
                         {
-                            using var stream = _recognizer.CreateStream();
+                            if (gpu is not null)
+                                return ToDecodeChunk(gpu.Transcribe(chunk, ct));
+                            using var stream = recognizer!.CreateStream();
                             stream.AcceptWaveform(SherpaDecodeCoordinator.SampleRate, chunk);
                             ct.ThrowIfCancellationRequested();
-                            _recognizer.Decode(stream);
+                            recognizer.Decode(stream);
                             ct.ThrowIfCancellationRequested();
                             var result = stream.Result;
                             // result.Durations is garbage in this binding; see SherpaNativeDurations.
@@ -1135,6 +1385,18 @@ public sealed partial class SherpaOnnxPlugin
         _cudaRuntimeInstaller = installer;
     }
 
+    // Test seam: drive the Vulkan load path without a GPU, a runtime download or native code.
+    internal void SetVulkanDependenciesForTests(
+        TranscribeCppRuntimeInstaller installer,
+        Func<string, string, IParakeetGpuSession>? sessionFactory,
+        Func<string?>? probe = null
+    )
+    {
+        _vulkanRuntimeInstaller = installer;
+        _vulkanSessionFactory = sessionFactory;
+        _vulkanProbe = probe ?? (() => null);
+    }
+
     // Test seam: exercise the same eager construction path as ActivateAsync without
     // running the legacy model-file migration against a real per-user directory.
     internal void InitializeCudaDependenciesForTests(IPluginHostServices host)
@@ -1237,6 +1499,8 @@ public sealed partial class SherpaOnnxPlugin
     {
         _recognizer?.Dispose();
         _recognizer = null;
+        _gpuSession?.Dispose();
+        _gpuSession = null;
         _loadedModelId = null;
         _loadedModelDir = null;
         _canarySrcLang = "en";
@@ -1669,7 +1933,20 @@ public sealed partial class SherpaOnnxPlugin
         string effectiveProvider,
         TranscriptionAccelerationPreference preference
     ) =>
-        model?.Family == SherpaModelFamily.Qwen3Asr
+        model is { GpuFile: null, Family: not SherpaModelFamily.Qwen3Asr }
+        && preference == TranscriptionAccelerationPreference.Vulkan
+            ? new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Cpu,
+                "Using CPU",
+                $"Vulkan runs only the Parakeet models; {model.DisplayName} uses the CPU."
+            )
+        : string.Equals(effectiveProvider, "vulkan", StringComparison.Ordinal) && _gpuSession is not null
+            ? new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Vulkan,
+                "Using Vulkan",
+                _gpuSession.DeviceName
+            )
+        : model?.Family == SherpaModelFamily.Qwen3Asr
             ? new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
                 "Using CPU",
@@ -1688,6 +1965,11 @@ public sealed partial class SherpaOnnxPlugin
                 TranscriptionAccelerationBackend.NvidiaCuda,
                 "Preparing NVIDIA CUDA",
                 "The GPU runtime downloads on the next model load."
+            ),
+            TranscriptionAccelerationPreference.Vulkan => new TranscriptionAccelerationStatus(
+                TranscriptionAccelerationBackend.Vulkan,
+                "Preparing Vulkan",
+                "Parakeet downloads its graphics card model on the next model load."
             ),
             _ => new TranscriptionAccelerationStatus(
                 TranscriptionAccelerationBackend.Cpu,
@@ -1711,6 +1993,15 @@ public sealed partial class SherpaOnnxPlugin
             RequiresRestart: requiresRestart
         );
 
+    // A failed transcribe.cpp start stays failed in this process; only a new worker retries it.
+    private static TranscriptionAccelerationStatus CreateVulkanUnavailableStatus(string detail) =>
+        new(
+            TranscriptionAccelerationBackend.Cpu,
+            "Using CPU",
+            $"Vulkan unavailable: {detail}",
+            RequiresRestart: TranscribeCppRuntime.HasFailed
+        );
+
     private void EnsureCanaryLanguage(string? language, bool translate)
     {
         if (_loadedModelDir is null)
@@ -1728,11 +2019,12 @@ public sealed partial class SherpaOnnxPlugin
         // runtime (_loadedNativeProvider): a CUDA-wired runtime whose recognizer fell back
         // to CPU must rebuild on CPU, or this would re-trigger the same CUDA failure.
         _recognizer?.Dispose();
+        // Canary has no GGUF, so a Vulkan choice runs it on the CPU provider.
         _recognizer = CreateCanaryRecognizer(
             _loadedModelDir,
             srcLang,
             tgtLang,
-            _computeBackend
+            _computeBackend == "cuda" ? "cuda" : "cpu"
         );
         _canarySrcLang = srcLang;
         _canaryTgtLang = tgtLang;
@@ -1893,7 +2185,9 @@ public sealed partial class SherpaOnnxPlugin
         IReadOnlyList<ModelFileDefinition> Files,
         SherpaModelFamily Family = SherpaModelFamily.Transducer,
         // Automatic detection is unreliable for this model, so the host asks for a language.
-        bool RequiresExplicitLanguage = false
+        bool RequiresExplicitLanguage = false,
+        // The transcribe.cpp GGUF the Vulkan path runs; null for models that stay on sherpa-onnx.
+        ModelFileDefinition? GpuFile = null
     );
 
     internal enum SherpaModelFamily
