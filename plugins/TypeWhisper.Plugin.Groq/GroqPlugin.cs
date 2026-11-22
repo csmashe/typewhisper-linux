@@ -323,9 +323,12 @@ public sealed class GroqPlugin
 
     internal void SelectLlmModel(string modelId)
     {
-        _preferredLlmModelId = modelId;
-        SelectedLlmModelId = modelId;
-        _host?.SetSetting("selectedLlmModel", modelId);
+        lock (_llmModelsLock)
+        {
+            _preferredLlmModelId = modelId;
+            SelectedLlmModelId = modelId;
+            _host?.SetSetting("selectedLlmModel", modelId);
+        }
     }
 
     internal DateTimeOffset? FetchedLlmModelsAt { get; private set; }
@@ -386,8 +389,8 @@ public sealed class GroqPlugin
     {
         try
         {
-            var models = await FetchLlmModelsAsync(apiKey, ct);
-            if (models is not { Count: > 0 })
+            var models = NormalizeFetchedLlmModels(await FetchLlmModelsAsync(apiKey, ct) ?? []);
+            if (models.Count == 0)
             {
                 _host?.Log(PluginLogLevel.Warning, "Groq returned no usable model list. Keeping the current list.");
                 return;

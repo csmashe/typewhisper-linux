@@ -360,6 +360,28 @@ public class GroqPluginTests
         Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
     }
 
+    [Theory]
+    [InlineData("""{"data":[]}""")]
+    [InlineData("""{"data":[{"id":""}]}""")]
+    public async Task BackgroundRefresh_KeepsCurrentListWhenGroqReturnsNoUsableModels(string json)
+    {
+        var clock = new ManualClock { Now = new DateTimeOffset(2026, 11, 21, 12, 0, 0, TimeSpan.Zero) };
+        var fetchedAt = clock.Now - TimeSpan.FromDays(3);
+        var handler = new CapturingHandler((_, _) => JsonResponse(json));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "groq-key" } };
+        host.SetSetting("fetchedLlmModels", new List<FetchedLlmModel> { new("openai/gpt-oss-20b", "OpenAI") });
+        host.SetSetting("fetchedLlmModelsAtUtc", fetchedAt);
+
+        using var sut = new GroqPlugin(new HttpClient(handler), refreshLlmModelsAutomatically: true, clock);
+        await sut.ActivateAsync(host);
+        await sut.LlmModelRefreshTask;
+
+        Assert.Equal(["openai/gpt-oss-20b"], sut.SupportedModels.Select(m => m.Id).ToArray());
+        Assert.Equal(fetchedAt, sut.FetchedLlmModelsAt);
+        Assert.Equal(fetchedAt, host.GetSetting<DateTimeOffset?>("fetchedLlmModelsAtUtc"));
+        Assert.Equal(0, host.NotifyCapabilitiesChangedCount);
+    }
+
     [Fact]
     public async Task BackgroundRefresh_DropsAListThatArrivesAfterTheKeyChanged()
     {
