@@ -1909,6 +1909,82 @@ public class SonioxPluginTests
         Assert.Equal("stt-async-v6", sut.CaptureSettings().AsyncModelId);
     }
 
+    [Theory]
+    [InlineData("region", "eu")]
+    [InlineData("api-key", "other-key")]
+    public async Task BackgroundRefresh_RetriesAtOnceWhenSettingsChangeAfterAFailure(string settingKey, string value)
+    {
+        var modelRequests = 0;
+        var flow = new SonioxFlowHandler(static _ => { });
+        var handler = new AsyncCapturingHandler(async (request, _, ct) =>
+        {
+            if (request.RequestUri?.AbsolutePath != "/v1/models")
+                return await new HttpMessageInvoker(flow).SendAsync(request, ct);
+
+            // The first list request fails; the one made with the changed setting succeeds.
+            return Interlocked.Increment(ref modelRequests) == 1
+                ? JsonResponse("{}", HttpStatusCode.InternalServerError)
+                : JsonResponse(CatalogJson);
+        });
+        using var httpClient = new HttpClient(handler);
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        var sut = new SonioxPlugin(
+            httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2, timeProvider: time, backgroundCatalogRefresh: true);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.SetSettingValueAsync(settingKey, value);
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.LastCleanupTask;
+
+        Assert.Equal(2, modelRequests);
+        Assert.Equal("stt-async-v7", sut.CaptureSettings().AsyncModelId);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.OK)]
+    public async Task BackgroundRefresh_IgnoresFailureOfARefreshStartedWithEarlierSettings(HttpStatusCode firstStatus)
+    {
+        SonioxPlugin? sut = null;
+        var modelRequests = 0;
+        var flow = new SonioxFlowHandler(static _ => { });
+        var handler = new AsyncCapturingHandler(async (request, _, ct) =>
+        {
+            if (request.RequestUri?.AbsolutePath != "/v1/models")
+                return await new HttpMessageInvoker(flow).SendAsync(request, ct);
+
+            if (Interlocked.Increment(ref modelRequests) > 1)
+                return JsonResponse(CatalogJson);
+
+            // The region changes while the first list request is in flight; that request then
+            // fails outright (500) or returns a list the plugin drops as stale (200).
+            // ReSharper disable once AccessToModifiedClosure
+            sut!.SetRegion("eu");
+            return firstStatus == HttpStatusCode.OK
+                ? JsonResponse(CatalogJson)
+                : JsonResponse("{}", firstStatus);
+        });
+        using var httpClient = new HttpClient(handler);
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "soniox-key" } };
+        sut = new SonioxPlugin(
+            httpClient, pollDelay: TimeSpan.Zero, maxPollAttempts: 2, timeProvider: time, backgroundCatalogRefresh: true);
+        await sut.ActivateAsync(host);
+
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.TranscribeAsync([1, 2, 3], null, translate: false, prompt: null, CancellationToken.None);
+        await sut.CatalogRefreshTask;
+        await sut.LastCleanupTask;
+
+        Assert.Equal(2, modelRequests);
+        Assert.Equal("eu", sut.CurrentCatalog?.Region);
+    }
+
     private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = now;

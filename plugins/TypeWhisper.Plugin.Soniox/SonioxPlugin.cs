@@ -78,7 +78,9 @@ public sealed class SonioxPlugin
     private CancellationTokenSource _backgroundCts = new();
     private Task _catalogRefreshTask = Task.CompletedTask;
     private int _catalogRefreshQueued;
+    // The retry deadline and the settings version it belongs to; both guarded by _settingsLock.
     private long _catalogRetryAfterTicks;
+    private long _catalogRetryVersion;
 
     private IPluginHostServices? _host;
     private string _selectedModelId = DefaultModelId;
@@ -721,7 +723,7 @@ public sealed class SonioxPlugin
     {
         _host?.SetSetting(CatalogSettingKey, catalog);
         Volatile.Write(ref _catalog, catalog);
-        Interlocked.Exchange(ref _catalogRetryAfterTicks, 0);
+        _catalogRetryAfterTicks = 0;
     }
 
     /// <summary>
@@ -738,11 +740,17 @@ public sealed class SonioxPlugin
         if (CurrentCatalog is { } catalog && catalog.FetchedAt <= now && now - catalog.FetchedAt < s_catalogMaximumAge)
             return;
 
-        if (now.UtcTicks < Interlocked.Read(ref _catalogRetryAfterTicks)
-            || Interlocked.CompareExchange(ref _catalogRefreshQueued, 1, 0) != 0)
+        long version;
+        lock (_settingsLock)
         {
-            return;
+            // A failure backs off only the key and region it failed with; a change retries at once.
+            version = _settingsVersion;
+            if (_catalogRetryVersion == version && now.UtcTicks < _catalogRetryAfterTicks)
+                return;
         }
+
+        if (Interlocked.CompareExchange(ref _catalogRefreshQueued, 1, 0) != 0)
+            return;
 
         var token = _backgroundCts.Token;
         Volatile.Write(ref _catalogRefreshTask, Task.Run(async () =>
@@ -755,7 +763,17 @@ public sealed class SonioxPlugin
             }
             catch (Exception ex)
             {
-                Interlocked.Exchange(ref _catalogRetryAfterTicks, (_timeProvider.GetUtcNow() + s_catalogRetryDelay).UtcTicks);
+                lock (_settingsLock)
+                {
+                    // Versions only grow, so this also skips a refresh that failed because the
+                    // settings changed under it.
+                    if (_settingsVersion == version)
+                    {
+                        _catalogRetryVersion = version;
+                        _catalogRetryAfterTicks = (_timeProvider.GetUtcNow() + s_catalogRetryDelay).UtcTicks;
+                    }
+                }
+
                 if (!token.IsCancellationRequested)
                     host.Log(PluginLogLevel.Warning, $"Soniox model list refresh failed: {ex.Message}");
             }
