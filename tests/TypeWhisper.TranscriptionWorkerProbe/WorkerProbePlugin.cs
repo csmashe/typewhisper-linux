@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -150,6 +152,15 @@ public sealed partial class WorkerProbePlugin : ITranscriptionEnginePlugin
             case "spawn-and-hang":
                 Spawn();
                 Thread.Sleep(Timeout.Infinite);
+                break;
+            case "collect-then-load":
+                // A dependency first used after a GC, as a real engine loads its libraries lazily.
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                var dependency = AssemblyLoadContext.GetLoadContext(typeof(WorkerProbePlugin).Assembly)!
+                    .LoadFromAssemblyName(new AssemblyName(prompt!));
+                _host?.Log(PluginLogLevel.Info, $"loaded {dependency.GetName().Name}");
                 break;
         }
 
