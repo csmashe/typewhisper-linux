@@ -23,6 +23,7 @@ internal static class UsageText
               dictation status          Show dictation state
               dictation result <id>     Get a session's transcription
               transcribe [file|-]       Transcribe a file or piped stdin
+              completions <shell>       Print a bash, zsh or fish completion script
 
             Global options:
               --token <token>           API bearer token, or TYPEWHISPER_API_TOKEN
@@ -70,6 +71,7 @@ internal static class UsageText
               typewhisper-cli dictation start
               typewhisper-cli dictation result 7
               typewhisper-cli models load --engine whisper --model tiny
+              typewhisper-cli completions bash > ~/.local/share/bash-completion/completions/typewhisper-cli
             """
         );
     }

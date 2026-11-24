@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Tests;
 using Xunit;
@@ -183,6 +184,91 @@ public sealed class CliInstallServiceTests : IDisposable
         AssertNoTemporaryCliFiles(installDir);
         Assert.False(File.Exists(Path.Join(installDir, "typewhisper")));
         Assert.False(File.Exists(Path.Join(launcherDir, "typewhisper")));
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void Install_writes_bash_and_fish_completions_generated_by_the_installed_cli()
+    {
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var bashPath = Path.Join(_tempDir, "data", "bash-completion", "completions", "typewhisper-cli");
+        var fishPath = Path.Join(_tempDir, "config", "fish", "completions", "typewhisper-cli.fish");
+        var generatedFrom = new List<string>();
+        WriteBundle(sourceDir, "v1");
+        var service = CreateCompletionService(sourceDir, installDir, bashPath, fishPath, (path, shell) =>
+        {
+            generatedFrom.Add($"{path} {shell}");
+            return CompletionScript(shell, "v1");
+        });
+
+        var state = service.Install();
+
+        Assert.True(state.Installed);
+        var installPath = Path.Join(installDir, "typewhisper-cli");
+        Assert.Equal([$"{installPath} bash", $"{installPath} fish"], generatedFrom);
+        Assert.Equal(CompletionScript("bash", "v1"), File.ReadAllText(bashPath));
+        Assert.Equal(CompletionScript("fish", "v1"), File.ReadAllText(fishPath));
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead,
+            File.GetUnixFileMode(bashPath)
+        );
+    }
+
+    [Fact]
+    public void Install_updates_its_own_completion_and_leaves_a_users_file_alone()
+    {
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var bashPath = Path.Join(_tempDir, "completions", "typewhisper-cli");
+        var fishPath = Path.Join(_tempDir, "completions", "typewhisper-cli.fish");
+        Directory.CreateDirectory(Path.Join(_tempDir, "completions"));
+        File.WriteAllText(fishPath, "complete -c typewhisper-cli -a mine\n");
+        WriteBundle(sourceDir, "v1");
+        CreateCompletionService(sourceDir, installDir, bashPath, fishPath,
+            (_, shell) => CompletionScript(shell, "v1")).Install();
+        WriteBundle(sourceDir, "v2");
+
+        var state = CreateCompletionService(sourceDir, installDir, bashPath, fishPath,
+            (_, shell) => CompletionScript(shell, "v2")).Install();
+
+        Assert.True(state.Installed);
+        Assert.Equal(CompletionScript("bash", "v2"), File.ReadAllText(bashPath));
+        Assert.Equal("complete -c typewhisper-cli -a mine\n", File.ReadAllText(fishPath));
+    }
+
+    [Fact]
+    public void Install_succeeds_when_completions_cannot_be_generated()
+    {
+        var sourceDir = Path.Join(_tempDir, "bundle");
+        var installDir = Path.Join(_tempDir, "install");
+        var bashPath = Path.Join(_tempDir, "completions", "typewhisper-cli");
+        var fishPath = Path.Join(_tempDir, "completions", "typewhisper-cli.fish");
+        WriteBundle(sourceDir, "v1");
+
+        var state = CreateCompletionService(sourceDir, installDir, bashPath, fishPath,
+            (_, shell) => shell == "bash" ? throw new InvalidOperationException("boom") : null).Install();
+
+        Assert.True(state.Installed);
+        Assert.False(File.Exists(bashPath));
+        Assert.False(File.Exists(fishPath));
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void ReadCompletionScript_returns_the_clis_output_only_when_it_succeeds()
+    {
+        var cli = Path.Join(_tempDir, "fake-cli");
+        File.WriteAllText(
+            cli,
+            "#!/bin/sh\n[ \"$1 $2\" = \"completions bash\" ] && { printf 'script\\n'; exit 0; }\nexit 1\n"
+        );
+        File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var runner = new ProcessRunner();
+
+        Assert.Equal("script\n", CliInstallService.ReadCompletionScript(runner, cli, "bash"));
+        Assert.Null(CliInstallService.ReadCompletionScript(runner, cli, "fish"));
+        Assert.Null(CliInstallService.ReadCompletionScript(runner, Path.Join(_tempDir, "missing"), "bash"));
     }
 
     [Fact]
@@ -967,6 +1053,36 @@ public sealed class CliInstallServiceTests : IDisposable
             verificationRunner ?? SuccessfulVerification,
             unixFileModeReader
         );
+    }
+
+    private CliInstallService CreateCompletionService(
+        string sourceDir,
+        string installDir,
+        string bashPath,
+        string fishPath,
+        Func<string, string, string?> completionScriptReader
+    )
+    {
+        var launcherDir = Path.Join(_tempDir, "bin");
+        Environment.SetEnvironmentVariable("PATH", launcherDir);
+        return new CliInstallService(
+            () => Path.Join(sourceDir, "typewhisper-cli"),
+            () => installDir,
+            () => launcherDir,
+            SuccessfulVerification,
+            completionTargetsProvider: () =>
+            [
+                new CliInstallService.CliCompletionTarget("bash", bashPath),
+                new CliInstallService.CliCompletionTarget("fish", fishPath),
+            ],
+            completionScriptReader: completionScriptReader
+        );
+    }
+
+    private static string CompletionScript(string shell, string version)
+    {
+        return $"# TypeWhisper CLI completion for {shell}. Generated by: typewhisper-cli completions {shell}\n"
+            + $"# {version}\n";
     }
 
     private static void WriteBundle(string sourceDir, string version)
