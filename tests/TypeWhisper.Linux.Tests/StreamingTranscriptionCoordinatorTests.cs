@@ -47,6 +47,56 @@ public sealed class StreamingTranscriptionCoordinatorTests
         Assert.Equal(prompt is null ? [] : [prompt], plugin.PromptedStarts);
     }
 
+    [Theory]
+    [InlineData(false, 1)]
+    // A preview's final text is never used, so disposal must not wait on the provider's finals.
+    [InlineData(true, 0)]
+    public async Task DisposeAsync_FinalizesTheSessionOnlyWhenTheStreamIsNotAPreview(
+        bool isPreviewOnly,
+        int expectedFinalizeCalls)
+    {
+        var session = new FakeStreamingSession();
+        var plugin = new FakePlugin { OnStartStreaming = _ => Task.FromResult<IStreamingSession>(session) };
+        var partials = new List<string>();
+        var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, text) => partials.Add(text), _ => { },
+            isPreviewOnly: isPreviewOnly);
+        await coord.StartAsync(CancellationToken.None);
+        coord.AcceptAudioFrame(new float[160], 16000);
+        session.RaisePartial("live text");
+
+        await coord.DisposeAsync();
+
+        Assert.Equal(isPreviewOnly, coord.IsPreviewOnly);
+        Assert.Equal(["live text"], partials);
+        Assert.Equal(expectedFinalizeCalls, session.FinalizeCallCount);
+        Assert.True(session.Disposed);
+        Assert.False(coord.Faulted);
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 0)]
+    public async Task StartAsync_ConnectionAfterDispose_FinalizesOnlyWhenNotAPreview(
+        bool isPreviewOnly,
+        int expectedFinalizeCalls)
+    {
+        var session = new FakeStreamingSession();
+        var connect = new TaskCompletionSource<IStreamingSession>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var plugin = new FakePlugin { OnStartStreaming = _ => connect.Task };
+        var coord = new StreamingTranscriptionCoordinator(
+            plugin, LanguageSelection.Automatic, [], 1, (_, _) => { }, _ => { },
+            isPreviewOnly: isPreviewOnly);
+        var start = coord.StartAsync(CancellationToken.None);
+
+        await coord.DisposeAsync();
+        connect.SetResult(session);
+        await start;
+
+        Assert.Equal(expectedFinalizeCalls, session.FinalizeCallCount);
+        Assert.True(session.Disposed);
+    }
+
     [Fact]
     public async Task DetectedLanguage_IsNullWhenFinalSegmentsDisagree()
     {

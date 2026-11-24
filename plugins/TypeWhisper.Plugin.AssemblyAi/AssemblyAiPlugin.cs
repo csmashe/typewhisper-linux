@@ -84,6 +84,19 @@ public sealed class AssemblyAiPlugin
 
     public bool SupportsTranslation => false;
     public bool SupportsStreaming => !SpeakerLabels;
+
+    // Streaming keyterms have a tighter budget than recorded audio; a stream that would drop some only previews.
+    public bool SupportsStreamingForPrompt(string? prompt)
+    {
+        if (!SupportsStreaming)
+            return false;
+
+        var streamed = StreamingKeytermsFor(prompt, UseDictionaryTerms).ToHashSet(StringComparer.Ordinal);
+        return KeytermsFor(prompt, UseDictionaryTerms, BudgetFor(SelectedModelId)).All(streamed.Contains);
+    }
+
+    public bool SupportsStreamingPreviewForPrompt(string? prompt) =>
+        SupportsStreaming && !SupportsStreamingForPrompt(prompt);
     public bool SupportsStructuredDictionaryTerms => UseDictionaryTerms;
     public DictionaryTermsBudget DictionaryTermsBudget => BudgetFor(SelectedModelId);
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Supported;

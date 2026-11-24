@@ -19,8 +19,18 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
     private int _transcriptionCount;
     private readonly ConcurrentQueue<bool> _receivedTranslate = new();
     private readonly ConcurrentQueue<string?> _receivedPrompts = new();
+    private readonly ConcurrentQueue<string?> _streamingPrompts = new();
 
     internal IReadOnlyList<string?> ReceivedPrompts => [.. _receivedPrompts];
+
+    internal IReadOnlyList<string?> StreamingPrompts => [.. _streamingPrompts];
+
+    /// <summary>The session a stream opens; null keeps streaming unsupported, so it faults.</summary>
+    internal ScriptedStreamingSession? StreamingSession { get; set; }
+
+    internal Func<string?, bool>? StreamsPrompt { get; set; }
+
+    internal Func<string?, bool>? PreviewsPrompt { get; set; }
 
     internal IReadOnlyList<bool> ReceivedTranslations => [.. _receivedTranslate];
 
@@ -117,5 +127,73 @@ internal sealed class RecordingTranscriptionPlugin : ITranscriptionEnginePlugin
         return result(ct);
     }
 
+    public bool SupportsStreamingForPrompt(string? prompt) => StreamsPrompt?.Invoke(prompt) ?? SupportsStreaming;
+
+    public bool SupportsStreamingPreviewForPrompt(string? prompt) => PreviewsPrompt?.Invoke(prompt) ?? false;
+
+    public Task<IStreamingSession> StartStreamingAsync(string? language, CancellationToken ct) =>
+        StartStreamingWithLanguageHintsAndPromptAsync([], null, ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAsync(
+        IReadOnlyList<string> languageHints,
+        CancellationToken ct
+    ) => StartStreamingWithLanguageHintsAndPromptAsync(languageHints, null, ct);
+
+    public Task<IStreamingSession> StartStreamingWithLanguageHintsAndPromptAsync(
+        IReadOnlyList<string> languageHints,
+        string? prompt,
+        CancellationToken ct
+    )
+    {
+        ct.ThrowIfCancellationRequested();
+        if (StreamingSession is not { } session)
+        {
+            throw new NotSupportedException();
+        }
+
+        _streamingPrompts.Enqueue(prompt);
+        return Task.FromResult<IStreamingSession>(session);
+    }
+
     public void Dispose() { }
+}
+
+/// <summary>Answers the first audio chunk with one final segment and counts finalize requests.</summary>
+internal sealed class ScriptedStreamingSession(string finalText) : IStreamingSession
+{
+    private int _finalizeCount;
+    private int _sentAudio;
+
+    public event Action<StreamingTranscriptEvent>? TranscriptReceived;
+
+    internal TaskCompletionSource FirstAudio { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal int FinalizeCount => Volatile.Read(ref _finalizeCount);
+
+    internal bool Disposed { get; private set; }
+
+    public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16Audio, CancellationToken ct)
+    {
+        if (Interlocked.Exchange(ref _sentAudio, 1) != 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        TranscriptReceived?.Invoke(new StreamingTranscriptEvent(finalText, true));
+        FirstAudio.TrySetResult();
+        return Task.CompletedTask;
+    }
+
+    public Task FinalizeAsync(CancellationToken ct)
+    {
+        Interlocked.Increment(ref _finalizeCount);
+        return Task.CompletedTask;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Disposed = true;
+        return ValueTask.CompletedTask;
+    }
 }
