@@ -67,7 +67,8 @@ public sealed class CtcModelAssets(
     public async Task EnsureAsync(
         string directory,
         CancellationToken cancellationToken,
-        Action<string>? report = null
+        Action<string>? report = null,
+        bool ignoreStamps = false
     )
     {
         directory = Path.GetFullPath(directory);
@@ -79,7 +80,7 @@ public sealed class CtcModelAssets(
         await using var lease = await InterProcessFileLock
             .AcquireAsync(Path.Join(parent, ".ctc-assets.lock"), ct)
             .ConfigureAwait(false);
-        if (await IsVerifiedAsync(directory, ct).ConfigureAwait(false))
+        if (await IsVerifiedAsync(directory, ignoreStamps, ct).ConfigureAwait(false))
             return;
         var staging = Path.Join(parent, ".ctc-staging-" + Guid.NewGuid().ToString("N"));
         var ready = Path.Join(staging, "model");
@@ -143,7 +144,11 @@ public sealed class CtcModelAssets(
         }
     }
 
-    private async Task<bool> IsVerifiedAsync(string directory, CancellationToken ct)
+    private async Task<bool> IsVerifiedAsync(
+        string directory,
+        bool ignoreStamps,
+        CancellationToken ct
+    )
     {
         var receiptPath = Path.Join(directory, "verified-assets.json");
         if (!File.Exists(receiptPath))
@@ -169,7 +174,7 @@ public sealed class CtcModelAssets(
                     return false;
                 var checkedAt = DateTime.UtcNow;
                 var stamp = Stamp(path);
-                if (receipt.Stamps?.GetValueOrDefault(name) == stamp)
+                if (!ignoreStamps && receipt.Stamps?.GetValueOrDefault(name) == stamp)
                 {
                     stamps[name] = stamp;
                     continue;
@@ -207,8 +212,10 @@ public sealed class CtcModelAssets(
     /// <summary>
     /// Drops the stamps so the next <see cref="EnsureAsync"/> hashes every file again. A model
     /// that fails to load may have been corrupted behind an unchanged size and write time.
+    /// Returns false when a stamp may remain; pass <c>ignoreStamps</c> to the next
+    /// <see cref="EnsureAsync"/> then.
     /// </summary>
-    public static async Task ForgetStampsAsync(string directory, CancellationToken ct)
+    public static async Task<bool> ForgetStampsAsync(string directory, CancellationToken ct)
     {
         directory = Path.GetFullPath(directory);
         var receiptPath = Path.Join(directory, "verified-assets.json");
@@ -220,8 +227,8 @@ public sealed class CtcModelAssets(
             var receipt = JsonSerializer.Deserialize<Receipt>(
                 await File.ReadAllTextAsync(receiptPath, ct).ConfigureAwait(false)
             );
-            if (receipt?.Stamps is { Count: > 0 })
-                await TryWriteReceiptAsync(receiptPath, receipt with { Stamps = null }, ct)
+            return receipt?.Stamps is not { Count: > 0 }
+                || await TryWriteReceiptAsync(receiptPath, receipt with { Stamps = null }, ct)
                     .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -230,7 +237,10 @@ public sealed class CtcModelAssets(
                         or IOException
                         or UnauthorizedAccessException
                         or OperationCanceledException
-            ) { }
+            )
+        {
+            return false;
+        }
     }
 
     private static FileStamp Stamp(string path)
@@ -241,7 +251,7 @@ public sealed class CtcModelAssets(
 
     // The files are verified either way; a receipt that cannot be rewritten only means they are
     // hashed again next time.
-    private static async Task TryWriteReceiptAsync(
+    private static async Task<bool> TryWriteReceiptAsync(
         string receiptPath,
         Receipt receipt,
         CancellationToken ct
@@ -258,8 +268,12 @@ public sealed class CtcModelAssets(
             await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(receipt), ct)
                 .ConfigureAwait(false);
             File.Move(temporary, receiptPath, overwrite: true);
+            return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
         finally
         {
             try

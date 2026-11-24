@@ -15,6 +15,8 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
     private string? _modelPath;
     private NemoCtcModel? _model;
     private string? _managedDirectory;
+    // Set when a failed load could not drop the model's stamp; the next activation hashes it anyway.
+    private bool _rehashModel;
     private CtcTokenizer? _tokenizer;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private volatile bool _disposed;
@@ -63,13 +65,17 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
             var custom = host.GetSetting<string>("ModelDirectory");
             var directory = custom ?? Path.Join(host.PluginAssetDirectory, "model");
             if (custom is null)
+            {
                 await _assetsFactory(_downloads)
                     .EnsureAsync(
                         directory,
                         activation.Token,
-                        message => host.Log(PluginLogLevel.Info, message)
+                        message => host.Log(PluginLogLevel.Info, message),
+                        ignoreStamps: _rehashModel
                     )
                     .ConfigureAwait(false);
+                _rehashModel = false;
+            }
             activation.Token.ThrowIfCancellationRequested();
             var tokenizer = new CtcTokenizer(Path.Join(directory, "tokens.txt"));
             var modelPath = Path.Join(directory, "model.int8.onnx");
@@ -176,7 +182,9 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
             if (_managedDirectory is { } managed)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await CtcModelAssets.ForgetStampsAsync(managed, timeout.Token).ConfigureAwait(false);
+                _rehashModel = !await CtcModelAssets
+                    .ForgetStampsAsync(managed, timeout.Token)
+                    .ConfigureAwait(false);
             }
             throw;
         }

@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.Net;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -269,21 +270,28 @@ public sealed class ParakeetCtcModelAssetsTests : IDisposable
             )
         );
         await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
         // Files written moments ago get no stamp: a rewrite within the file-time resolution could keep it.
         Assert.Empty(Stamps());
+        var model = Path.Join(Model, "model.int8.onnx");
+        var modelWritten = File.GetLastWriteTimeUtc(model);
+        await File.WriteAllBytesAsync(model, [3, 2, 1]);
+        File.SetLastWriteTimeUtc(model, modelWritten);
+        await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        Assert.Equal(4, requests);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
         AgeInstalledFiles();
         await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
         Assert.Equal(["model.int8.onnx"], Stamps().Keys);
         var receipt = Path.Join(Model, "verified-assets.json");
         var receiptWritten = DateTime.UtcNow.AddMinutes(-5);
         File.SetLastWriteTimeUtc(receipt, receiptWritten);
-        var model = Path.Join(Model, "model.int8.onnx");
-        var modelWritten = File.GetLastWriteTimeUtc(model);
+        modelWritten = File.GetLastWriteTimeUtc(model);
         // Different bytes behind the recorded size and last write time: a matching stamp means the file is not read again.
         await File.WriteAllBytesAsync(model, [3, 2, 1]);
         File.SetLastWriteTimeUtc(model, modelWritten);
         await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
-        Assert.Equal(2, requests);
+        Assert.Equal(4, requests);
         Assert.Equal(new byte[] { 3, 2, 1 }, await File.ReadAllBytesAsync(model));
         Assert.Equal(receiptWritten, File.GetLastWriteTimeUtc(receipt));
         // The small files are hashed every time, so their corruption is repaired despite a kept write time.
@@ -293,7 +301,7 @@ public sealed class ParakeetCtcModelAssetsTests : IDisposable
         await File.WriteAllBytesAsync(tokens, tokensBytes.Select(b => (byte)(b ^ 1)).ToArray());
         File.SetLastWriteTimeUtc(tokens, tokensWritten);
         await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
-        Assert.Equal(4, requests);
+        Assert.Equal(6, requests);
         Assert.Equal(tokensBytes, await File.ReadAllBytesAsync(tokens));
         Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
         // A changed model stamp is verified by hashing again, and the mismatch is repaired.
@@ -303,7 +311,7 @@ public sealed class ParakeetCtcModelAssetsTests : IDisposable
         await File.WriteAllBytesAsync(model, [3, 2, 1]);
         File.SetLastWriteTimeUtc(model, modelWritten.AddSeconds(2));
         await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
-        Assert.Equal(6, requests);
+        Assert.Equal(8, requests);
         Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
     }
 
@@ -397,6 +405,85 @@ public sealed class ParakeetCtcModelAssetsTests : IDisposable
         await plugin.ActivateAsync(host.Object);
         Assert.Equal(4, requests);
         Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public async Task ModelIsHashedOnTheNextActivationWhenAFailedLoadCannotDropItsStamp()
+    {
+        var archive = ValidArchive();
+        var requests = 0;
+        using var client = new HttpClient(
+            new Handler(
+                (request, _) =>
+                {
+                    requests++;
+                    return Task.FromResult(
+                        Response(
+                            request.RequestUri!.AbsolutePath == "/model" ? archive : s_tokenizer
+                        )
+                    );
+                }
+            )
+        );
+        var host = new Mock<IPluginHostServices>();
+        host.Setup(h => h.GetSetting<string>("ModelDirectory")).Returns((string?)null);
+        host.SetupGet(h => h.PluginAssetDirectory).Returns(_root);
+        var model = Path.Join(Model, "model.int8.onnx");
+        using var plugin = new ParakeetCtcPlugin(
+            client,
+            modelFactory: _ => throw new InvalidDataException("corrupt model"),
+            assetsFactory: http => Create(http, archive)
+        );
+        await plugin.ActivateAsync(host.Object);
+        await plugin.DeactivateAsync();
+        AgeInstalledFiles();
+        await plugin.ActivateAsync(host.Object);
+        await plugin.DeactivateAsync();
+        var written = File.GetLastWriteTimeUtc(model);
+        await File.WriteAllBytesAsync(model, [3, 2, 1]);
+        File.SetLastWriteTimeUtc(model, written);
+        await plugin.ActivateAsync(host.Object);
+        // A read-only model directory makes the receipt rewrite fail, so the stamp stays.
+        File.SetUnixFileMode(Model, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                plugin.RescoreAsync(
+                    new VocabularyRescoreRequest(
+                        Guid.NewGuid(),
+                        "a",
+                        ReadOnlyMemory<float>.Empty,
+                        16000,
+                        [],
+                        []
+                    ),
+                    CancellationToken.None
+                )
+            );
+        }
+        finally
+        {
+            File.SetUnixFileMode(
+                Model,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
+        }
+        Assert.Equal(["model.int8.onnx"], Stamps().Keys);
+        await plugin.ActivateAsync(host.Object);
+        Assert.Equal(4, requests);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(model));
+        // Once verified, later activations trust the stamp again.
+        await plugin.DeactivateAsync();
+        AgeInstalledFiles();
+        await plugin.ActivateAsync(host.Object);
+        await plugin.DeactivateAsync();
+        written = File.GetLastWriteTimeUtc(model);
+        await File.WriteAllBytesAsync(model, [3, 2, 1]);
+        File.SetLastWriteTimeUtc(model, written);
+        await plugin.ActivateAsync(host.Object);
+        Assert.Equal(4, requests);
+        Assert.Equal(new byte[] { 3, 2, 1 }, await File.ReadAllBytesAsync(model));
     }
 
     // Moves the installed files' last write times back, as they are on every launch after the one that installed them.
