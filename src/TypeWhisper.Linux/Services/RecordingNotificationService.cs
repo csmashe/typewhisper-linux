@@ -369,7 +369,7 @@ public sealed partial class RecordingNotificationService : IDisposable
         }
     }
 
-    private static string ResolveIconPath()
+    internal static string ResolveIconPath()
     {
         // Prefer installer-dropped icon theme path; then bundled resource;
         // last resort a themed name notification daemons resolve from the icon theme.

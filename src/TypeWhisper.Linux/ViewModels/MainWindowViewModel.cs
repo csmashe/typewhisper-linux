@@ -219,6 +219,22 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void OpenReleaseNotes()
+    {
+        if (_updateReleaseUrl is { } url)
+        {
+            _services.GetRequiredService<UrlLauncher>().Open(url);
+        }
+    }
+
+    [RelayCommand]
+    private void SnoozeUpdate()
+    {
+        _updateCheck.SnoozeUpdate();
+        UpdateBannerVisible = false;
+    }
+
+    [RelayCommand]
     private void DismissUpdate()
     {
         _updateCheck.DismissUpdate(_updateCheck.LastResult.LatestVersion);
@@ -239,15 +255,17 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     private string? _updateVersion;
+    private string? _updateReleaseUrl;
 
     private void ApplyUpdateResult(UpdateCheckResult result)
     {
         var show =
             result is { Checked: true, UpdateAvailable: true }
-            && !_updateCheck.IsDismissed(result.LatestVersion);
+            && !_updateCheck.IsSuppressed(result.LatestVersion);
 
         UpdateBannerVisible = show;
         _updateVersion = show ? result.LatestVersion : null;
+        _updateReleaseUrl = show ? result.ReleaseUrl : null;
         RefreshUpdateBannerText();
     }
 
