@@ -18,6 +18,7 @@ public sealed class LocalModelStorageService
         {
             ["com.typewhisper.whisper-cpp"] = ["Models", "Runtimes"],
             ["com.typewhisper.sherpa-onnx"] = ["Models", "Runtimes"],
+            ["com.typewhisper.gigaam"] = ["Models"],
             ["com.typewhisper.gemma-local"] = ["Models"],
             ["com.typewhisper.supertonic-tts"] = ["Models"],
             ["com.typewhisper.granite-speech"] =

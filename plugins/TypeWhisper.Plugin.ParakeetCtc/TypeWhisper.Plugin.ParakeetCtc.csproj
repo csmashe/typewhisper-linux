@@ -22,6 +22,8 @@
                  Link="Shared\Net\DownloadSpace.cs" />
         <Compile Include="..\Shared\Net\InterProcessFileLock.cs"
                  Link="Shared\Net\InterProcessFileLock.cs" />
+        <Compile Include="..\Shared\Onnx\OnnxRuntimeNativeLibrary.cs"
+                 Link="Shared\Onnx\OnnxRuntimeNativeLibrary.cs" />
     </ItemGroup>
     <ItemGroup>
         <Content Include="manifest.json">

@@ -14,11 +14,12 @@ internal sealed class TranscriptionIsolation
     /// <summary>Set to <c>0</c> to keep every engine in the app process, for diagnosis.</summary>
     private const string EnvironmentVariable = "TYPEWHISPER_TRANSCRIPTION_WORKER";
 
-    // Native whisper.cpp and sherpa-onnx inference; a crash there must not end the app.
+    // Native whisper.cpp, sherpa-onnx and ONNX Runtime (GigaAM) inference; a crash there must not end the app.
     private static readonly HashSet<string> s_defaultPluginIds =
     [
         "com.typewhisper.whisper-cpp",
         "com.typewhisper.sherpa-onnx",
+        "com.typewhisper.gigaam",
     ];
 
     private readonly ProcessCommand? _executable;

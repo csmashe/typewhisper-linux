@@ -1,0 +1,6 @@
+{
+  "Provider.DisplayName": "GigaAM",
+  "Model.DisplayName": "GigaAM v3 (русский, с пунктуацией)",
+  "Manifest.Name": "GigaAM",
+  "Manifest.Description": "Локальное распознавание русской речи с GigaAM v3 от Сбера. Расставляет знаки препинания и заглавные буквы, работает на процессоре. Только русский язык."
+}

@@ -1,0 +1,6 @@
+{
+  "Provider.DisplayName": "GigaAM",
+  "Model.DisplayName": "GigaAM v3（俄语，带标点）",
+  "Manifest.Name": "GigaAM",
+  "Manifest.Description": "使用 Sber 的 GigaAM v3 进行本地俄语语音识别。自动添加标点和大写，在 CPU 上运行。仅支持俄语。"
+}

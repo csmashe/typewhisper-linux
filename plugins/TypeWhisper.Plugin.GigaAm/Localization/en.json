@@ -1,0 +1,6 @@
+{
+  "Provider.DisplayName": "GigaAM",
+  "Model.DisplayName": "GigaAM v3 (Russian, with punctuation)",
+  "Manifest.Name": "GigaAM",
+  "Manifest.Description": "Local Russian speech-to-text with GigaAM v3 by Sber. Adds punctuation and capitalization and runs on the CPU. Russian only."
+}

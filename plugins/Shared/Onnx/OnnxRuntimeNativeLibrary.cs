@@ -2,8 +2,9 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.ML.OnnxRuntime;
 
-namespace TypeWhisper.Plugin.ParakeetCtc;
+namespace TypeWhisper.Plugins.Shared.Onnx;
 
+// File-linked into each ONNX Runtime plugin, so the assembly below is that plugin's own.
 internal static class OnnxRuntimeNativeLibrary
 {
     private static readonly Lock s_sync = new();
@@ -39,7 +40,7 @@ internal static class OnnxRuntimeNativeLibrary
         if (!libraryName.Contains("onnxruntime", StringComparison.OrdinalIgnoreCase))
             return IntPtr.Zero;
 
-        var pluginDirectory = Path.GetDirectoryName(typeof(NemoCtcModel).Assembly.Location);
+        var pluginDirectory = Path.GetDirectoryName(typeof(OnnxRuntimeNativeLibrary).Assembly.Location);
         if (pluginDirectory is null)
             return IntPtr.Zero;
 
