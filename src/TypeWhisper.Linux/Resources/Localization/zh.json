@@ -329,7 +329,7 @@
   "Dictation.AccelCudaNotVisible": "CUDA 12已安装，但TypeWhisper尚无法检测到它。",
   "Dictation.AccelCudaReady": "CUDA已就绪，可用于whisper.cpp和sherpa-onnx模型。其他本地插件使用CPU。",
   "Dictation.AccelVulkanNotSupported": "Vulkan加速仅适用于支持Vulkan的本地模型。",
-  "Dictation.AccelVulkanReady": "Vulkan已就绪，可用于whisper.cpp模型。其他本地插件使用CPU。",
+  "Dictation.AccelVulkanReady": "Vulkan已就绪，可用于whisper.cpp和Parakeet模型。其他本地模型使用CPU。",
   "Dictation.AccelerationAuto": "自动",
   "Dictation.AccelerationCpu": "CPU",
   "Dictation.AccelerationNvidiaCuda": "NVIDIA CUDA",
