@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Text;
 using PortAudioSharp;
 using TypeWhisper.Core.Interfaces;
@@ -1022,6 +1023,83 @@ public sealed class AudioRecordingServiceTests
         }
 
         return samples;
+    }
+
+    [Fact]
+    public void StopRecording_TracesStreamOpenFirstFrameAndLeadingSilence()
+    {
+        var timeProvider = new ManualTimeProvider();
+        using var service = new AudioRecordingService(
+            _ => timeProvider.Advance(TimeSpan.FromMilliseconds(40)),
+            () => 0,
+            () => { },
+            timeProvider: timeProvider,
+            postToUiThread: _ => { }
+        );
+        var session = service.TryStartRecording(false);
+        Assert.NotNull(session);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(25));
+        service.ProcessAudioBufferForTest(new float[160]);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(10));
+        service.ProcessAudioBufferForTest([0f, 0.1f, -0.1f]);
+
+        // ReSharper disable once AccessToDisposedClosure -- CaptureTrace runs the action synchronously, before the using disposes the service.
+        var lines = CaptureTrace(() => service.StopRecording(session));
+
+        Assert.Contains(
+            "[AudioRecordingService] Capture start latency: session=1, streamReady=40 ms, "
+                + "firstFrame=65 ms, leadingSilence=10 ms.",
+            lines
+        );
+    }
+
+    [Fact]
+    public void StopRecording_TracesMissingFirstFrame()
+    {
+        using var service = new AudioRecordingService(
+            _ => { },
+            () => 0,
+            () => { },
+            timeProvider: new ManualTimeProvider(),
+            postToUiThread: _ => { }
+        );
+        var session = service.TryStartRecording(false);
+        Assert.NotNull(session);
+
+        // ReSharper disable once AccessToDisposedClosure -- CaptureTrace runs the action synchronously, before the using disposes the service.
+        var lines = CaptureTrace(() => service.StopRecording(session));
+
+        Assert.Contains(lines, line => line.Contains("firstFrame=none,", StringComparison.Ordinal));
+    }
+
+    private static List<string> CaptureTrace(Action action)
+    {
+        var lines = new List<string>();
+        using var listener = new LineTraceListener(lines);
+        Trace.Listeners.Add(listener);
+        try
+        {
+            action();
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+
+        return lines;
+    }
+
+    private sealed class LineTraceListener(List<string> lines) : TraceListener
+    {
+        public override void Write(string? message)
+        {
+            lines.Add(message ?? string.Empty);
+        }
+
+        public override void WriteLine(string? message)
+        {
+            lines.Add(message ?? string.Empty);
+        }
     }
 
     private static AudioRecordingService CreateLevelTestService(
