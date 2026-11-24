@@ -50,6 +50,7 @@ public sealed class PluginManager : IDisposable
     // Debounce guard for on-demand model re-polls (triggered when a dropdown opens).
     private bool _isRefreshingModels;
     private DateTime _lastModelRefresh = DateTime.MinValue;
+    private volatile bool _startupPassActive;
 
     private List<ILlmProviderRole> _llmProviders = [];
     private List<IPostProcessorPlugin> _postProcessors = [];
@@ -465,9 +466,20 @@ public sealed class PluginManager : IDisposable
         }
     }
 
+    // Test seam: replaces assembly discovery with seeded plugins.
+    internal Func<List<LoadedPlugin>>? DiscoverPlugins { get; init; }
+
     private async Task InitializeCoreAsync()
     {
-        var discovered = _loader.DiscoverAndLoad(_searchDirectories);
+        // Assembly loads, plugin constructors and activations froze the UI for ~300 ms.
+        await Task.Run(RunStartupPassAsync);
+        // Back on the caller's thread: this can write settings, whose listeners may touch the UI.
+        await MigrateApiKeysAsync();
+    }
+
+    private async Task RunStartupPassAsync()
+    {
+        var discovered = DiscoverPlugins?.Invoke() ?? _loader.DiscoverAndLoad(_searchDirectories);
 
         lock (_lock)
         {
@@ -487,24 +499,78 @@ public sealed class PluginManager : IDisposable
             );
         }
 
-        var enabledState = _settings.Current.PluginEnabledState;
-
-        foreach (var plugin in discovered)
+        _startupPassActive = true;
+        try
         {
-            // Honor saved choice; otherwise default-enable plugins whose metadata
-            // marks them local-only.
-            var isEnabled = enabledState.TryGetValue(plugin.Manifest.Id, out var state)
-                ? state
-                : IsEnabledByDefault(plugin);
-
-            if (isEnabled)
+            foreach (var plugin in discovered)
             {
-                await ActivatePluginAsync(plugin);
+                // Read per plugin: the UI stays live during the pass, so the user can toggle one.
+                // Honor saved choice; otherwise default-enable plugins whose metadata
+                // marks them local-only.
+                var isEnabled = _settings.Current.PluginEnabledState.TryGetValue(plugin.Manifest.Id, out var state)
+                    ? state
+                    : IsEnabledByDefault(plugin);
+
+                if (isEnabled)
+                {
+                    await ActivateSharedAsync(plugin);
+                }
             }
+        }
+        finally
+        {
+            // Cleared before the rebuild, so a later notification rebuilds on its own.
+            _startupPassActive = false;
         }
 
         RebuildCapabilityIndices();
-        await MigrateApiKeysAsync();
+    }
+
+    // The startup pass and an Enable from Settings share one activation. Claim before activating:
+    // GetOrAdd stores a factory's task only once it returns, so a second caller would start another.
+    private async Task<bool> ActivateSharedAsync(LoadedPlugin plugin)
+    {
+        var pluginId = plugin.Manifest.Id;
+        var claim = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activation = _activationTasks.GetOrAdd(pluginId, claim.Task);
+        if (activation == claim.Task)
+        {
+            bool alreadyActive;
+            lock (_lock)
+            {
+                // An activation that finished and released its claim after the caller's own check.
+                alreadyActive = _activatedPlugins.Contains(pluginId);
+            }
+
+            try
+            {
+                claim.SetResult(alreadyActive || await ActivatePluginAsync(plugin));
+            }
+            catch (Exception ex)
+            {
+                claim.SetException(ex);
+            }
+        }
+
+        try
+        {
+            return await activation;
+        }
+        finally
+        {
+            _activationTasks.TryRemove(new KeyValuePair<string, Task<bool>>(pluginId, activation));
+        }
+    }
+
+    // The rebuild after the startup pass answers notifications raised during it.
+    private void OnPluginCapabilitiesChanged()
+    {
+        if (_startupPassActive)
+        {
+            return;
+        }
+
+        RebuildCapabilityIndices();
     }
 
     internal static bool IsEnabledByDefault(LoadedPlugin plugin)
@@ -533,18 +599,7 @@ public sealed class PluginManager : IDisposable
             }
         }
 
-        var activation = _activationTasks.GetOrAdd(pluginId, _ => ActivatePluginAsync(plugin));
-        bool success;
-        try
-        {
-            success = await activation;
-        }
-        finally
-        {
-            _activationTasks.TryRemove(new KeyValuePair<string, Task<bool>>(pluginId, activation));
-        }
-
-        if (!success)
+        if (!await ActivateSharedAsync(plugin))
         {
             return;
         }
@@ -818,7 +873,7 @@ public sealed class PluginManager : IDisposable
                 EventBus,
                 _profiles,
                 _settings,
-                RebuildCapabilityIndices,
+                OnPluginCapabilitiesChanged,
                 _errorLog,
                 ResolveErrorCategory(plugin),
                 plugin.Manifest.Name,
