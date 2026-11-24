@@ -61,6 +61,7 @@ public sealed partial class DiagnosticLogFile
             ["audio.duration_s"] = Number,
             ["duration-ms"] = Number,
             ["http.status"] = Number,
+            ["native.error"] = Number,
             ["retention-days"] = Number,
             ["startup.time_to_window_ms"] = Number,
             ["transcript.chars"] = Number,
@@ -71,6 +72,7 @@ public sealed partial class DiagnosticLogFile
             ["install"] = Token,
             ["mode"] = Token,
             ["os"] = Token,
+            ["plugin.action"] = Token,
             ["plugin.id"] = Token,
             ["runtime"] = Token,
             ["socket.error"] = Token,
@@ -78,7 +80,9 @@ public sealed partial class DiagnosticLogFile
             ["outcome"] = value => OutcomeValue().IsMatch(value),
             ["language"] = value => LanguageValue().IsMatch(value),
             ["operation"] = value => EventName().IsMatch(value),
+            ["plugin.stage"] = value => EventName().IsMatch(value),
             ["inner"] = value => TypeName().IsMatch(value),
+            ["inner.hresult"] = value => HResultValue().IsMatch(value),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     private static readonly UTF8Encoding s_utf8 = new(encoderShouldEmitUTF8Identifier: false);

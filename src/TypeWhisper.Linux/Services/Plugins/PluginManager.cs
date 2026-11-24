@@ -844,18 +844,7 @@ public sealed class PluginManager : IDisposable
             // The local scope, not hostServices.ProcessScope: this also covers a
             // PluginHostServices constructor that threw before it was assigned.
             processScope?.Retire();
-            if (ex is not OperationCanceledException)
-            {
-                try
-                {
-                    _diagnostics?.CaptureException(ex, "plugin.activate",
-                        new Dictionary<string, string> { ["plugin.id"] = plugin.Manifest.Id });
-                }
-                catch (Exception diagnosticError)
-                {
-                    Trace.WriteLine($"[Telemetry] Plugin capture failed: {diagnosticError.Message}");
-                }
-            }
+            CapturePluginFailure(ex, "plugin.activate", plugin);
             Trace.WriteLine(
                 $"[PluginManager] Failed to activate plugin {plugin.Manifest.Id}: {ex.Message}"
             );
@@ -864,6 +853,24 @@ public sealed class PluginManager : IDisposable
                 ErrorCategory.Plugin
             );
             return false;
+        }
+    }
+
+    private void CapturePluginFailure(Exception exception, string operation, LoadedPlugin plugin)
+    {
+        if (exception is OperationCanceledException)
+        {
+            return;
+        }
+
+        try
+        {
+            _diagnostics?.CaptureException(exception, operation,
+                new Dictionary<string, string> { ["plugin.id"] = plugin.Manifest.Id });
+        }
+        catch (Exception diagnosticError)
+        {
+            Trace.WriteLine($"[Telemetry] Plugin capture failed: {diagnosticError.GetType().Name}");
         }
     }
 
@@ -917,6 +924,7 @@ public sealed class PluginManager : IDisposable
         }
         catch (Exception ex)
         {
+            CapturePluginFailure(ex, "plugin.deactivate", plugin);
             Trace.WriteLine(
                 $"[PluginManager] Failed to deactivate plugin {plugin.Manifest.Id}: {ex.Message}"
             );

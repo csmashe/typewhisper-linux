@@ -125,6 +125,14 @@ public sealed class DiagnosticLogFileTests : IDisposable
     [InlineData("inner", "connection refused by host", false)]
     [InlineData("outcome", "insertion_failed", true)]
     [InlineData("outcome", "Failed: disk full", false)]
+    [InlineData("plugin.stage", "run-settings-action", true)]
+    [InlineData("plugin.stage", "save setting 'apiKey'", false)]
+    [InlineData("plugin.action", "download-runtime", true)]
+    [InlineData("plugin.action", "send to /home/someone", false)]
+    [InlineData("inner.hresult", "0x80004005", true)]
+    [InlineData("inner.hresult", "access denied", false)]
+    [InlineData("native.error", "13", true)]
+    [InlineData("native.error", "EACCES: /home/someone", false)]
     public void Each_admitted_key_checks_its_value_domain(string key, string value, bool admitted)
     {
         var line = DiagnosticLogFile.Admit(new DiagnosticLogLine(_now, "check",

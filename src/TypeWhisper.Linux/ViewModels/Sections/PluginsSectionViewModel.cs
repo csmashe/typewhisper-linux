@@ -7,6 +7,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Plugins;
+using TypeWhisper.Linux.Services.Telemetry;
 using TypeWhisper.PluginSDK;
 using TypeWhisper.PluginSDK.Models;
 
@@ -20,6 +21,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     private static readonly TimeSpan s_defaultPluginBoundaryTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan s_defaultPluginValidationTimeout = TimeSpan.FromMinutes(10);
 
+    private readonly IDiagnosticsReporter? _diagnostics;
     private readonly IErrorLogService? _errorLog;
     private readonly Dictionary<string, LoadedPlugin> _pluginById = [];
     private readonly TimeSpan _pluginBoundaryTimeout;
@@ -48,8 +50,12 @@ public partial class PluginsSectionViewModel : ObservableObject
     [ObservableProperty]
     private string _summary = "";
 
-    public PluginsSectionViewModel(PluginManager pluginManager, IErrorLogService? errorLog = null)
-        : this(pluginManager, errorLog, s_defaultPluginBoundaryTimeout)
+    public PluginsSectionViewModel(
+        PluginManager pluginManager,
+        IErrorLogService? errorLog = null,
+        IDiagnosticsReporter? diagnostics = null
+    )
+        : this(pluginManager, errorLog, s_defaultPluginBoundaryTimeout, diagnostics: diagnostics)
     {
     }
 
@@ -58,11 +64,13 @@ public partial class PluginsSectionViewModel : ObservableObject
         IErrorLogService? errorLog,
         TimeSpan pluginBoundaryTimeout,
         TimeSpan? pluginValidationTimeout = null,
-        Action<Action>? postToUi = null
+        Action<Action>? postToUi = null,
+        IDiagnosticsReporter? diagnostics = null
     )
     {
         _pluginManager = pluginManager;
         _errorLog = errorLog;
+        _diagnostics = diagnostics;
         _postToUi = postToUi ?? (action => Dispatcher.UIThread.Post(action));
         _pluginBoundaryTimeout = pluginBoundaryTimeout;
         if (_pluginBoundaryTimeout <= TimeSpan.Zero)
@@ -181,7 +189,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                 {
                     var definitions = TryInvokePluginBoundary(
                         plugin,
-                        "read setting definitions",
+                        new PluginOperation("read setting definitions"),
                         () => settingsProvider.GetSettingDefinitions().ToList()
                     );
                     if (definitions.IsSuccess)
@@ -201,7 +209,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                 {
                     var definitions = TryInvokePluginBoundary(
                         plugin,
-                        "read collection definitions",
+                        new PluginOperation("read collection definitions"),
                         () => collectionSettingsProvider.GetCollectionDefinitions().ToList()
                     );
                     if (definitions.IsSuccess)
@@ -251,7 +259,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             }
             catch (Exception ex)
             {
-                ReportPluginBoundaryFailure(plugin, "build settings card", ex);
+                ReportPluginBoundaryFailure(plugin, new PluginOperation("build settings card"), ex);
                 var row = new PluginRow(
                     this,
                     plugin.Manifest.Id,
@@ -589,7 +597,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             var setResult = await TryInvokePluginBoundaryAsync(
                 loaded,
-                $"save collection '{key}'",
+                new PluginOperation("save collection", key),
                 ct => collectionProvider.SetItemsAsync(key, items, ct)
             );
             if (!setResult.IsSuccess || setResult.Value is null)
@@ -598,7 +606,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                 {
                     ReportPluginBoundaryFailure(
                         loaded,
-                        $"save collection '{key}'",
+                        new PluginOperation("save collection", key),
                         new InvalidOperationException(
                             "The plugin returned no collection validation result."
                         )
@@ -642,7 +650,7 @@ public partial class PluginsSectionViewModel : ObservableObject
 
         var validation = await TryInvokePluginBoundaryAsync(
             loaded,
-            "validate settings",
+            new PluginOperation("validate settings"),
             provider.ValidateAsync,
             _pluginValidationTimeout
         );
@@ -716,7 +724,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             row.Status = Loc.Instance["Plugins.RefreshingModels"];
             var result = await TryInvokePluginBoundaryAsync(
                 loaded,
-                "refresh model catalog",
+                new PluginOperation("refresh model catalog"),
                 async ct =>
                 {
                     await provider.RefreshModelCatalogAsync(ct);
@@ -860,7 +868,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            ReportPluginBoundaryFailure(loaded, $"run settings action '{action.Id}'", ex);
+            ReportPluginBoundaryFailure(loaded, new PluginOperation("run settings action", action.Id, action.Id), ex);
             status = Loc.Instance["Plugins.ActionFailed"];
         }
         finally
@@ -963,7 +971,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            ReportPluginBoundaryFailure(loaded, $"test an item of collection '{key}'", ex);
+            ReportPluginBoundaryFailure(loaded, new PluginOperation("test an item of collection", key), ex);
             item.TestMessage = Loc.Instance["Plugins.CollectionTestFailed"];
         }
         finally
@@ -1031,7 +1039,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             var setResult = await TryInvokePluginBoundaryAsync(
                 loaded,
-                $"save setting '{field.Key}'",
+                new PluginOperation("save setting", field.Key),
                 async ct =>
                 {
                     await provider.SetSettingValueAsync(field.Key, field.Value, ct)
@@ -1132,7 +1140,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             var definitions = await TryInvokePluginBoundaryAsync(
                 loaded,
-                "read setting definitions",
+                new PluginOperation("read setting definitions"),
                 _ => Task.FromResult(flatProvider.GetSettingDefinitions().ToList())
             );
             if (!row.IsCurrentSettingsLoad(load))
@@ -1152,7 +1160,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                 {
                     var settingValue = await TryInvokePluginBoundaryAsync(
                         loaded,
-                        $"read setting '{definition.Key}'",
+                        new PluginOperation("read setting", definition.Key),
                         ct => flatProvider.GetSettingValueAsync(definition.Key, ct)
                     );
                     if (!row.IsCurrentSettingsLoad(load))
@@ -1182,7 +1190,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             }
             catch (Exception ex)
             {
-                ReportPluginBoundaryFailure(loaded, "read setting definitions", ex);
+                ReportPluginBoundaryFailure(loaded, new PluginOperation("read setting definitions"), ex);
                 MarkSettingsLoadFailed(row, keepStatusOnFailure);
                 return;
             }
@@ -1192,7 +1200,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             var definitions = await TryInvokePluginBoundaryAsync(
                 loaded,
-                "read collection definitions",
+                new PluginOperation("read collection definitions"),
                 _ => Task.FromResult(collectionProvider.GetCollectionDefinitions().ToList())
             );
             if (!row.IsCurrentSettingsLoad(load))
@@ -1212,7 +1220,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                 {
                     var collectionItems = await TryInvokePluginBoundaryAsync(
                         loaded,
-                        $"read collection '{definition.Key}'",
+                        new PluginOperation("read collection", definition.Key),
                         async ct =>
                             (
                                 await collectionProvider
@@ -1238,7 +1246,7 @@ public partial class PluginsSectionViewModel : ObservableObject
             }
             catch (Exception ex)
             {
-                ReportPluginBoundaryFailure(loaded, "read collection settings", ex);
+                ReportPluginBoundaryFailure(loaded, new PluginOperation("read collection settings"), ex);
                 MarkSettingsLoadFailed(row, keepStatusOnFailure);
                 return;
             }
@@ -1315,7 +1323,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             if (_pluginById.TryGetValue(row.Id, out var loaded))
             {
-                ReportPluginBoundaryFailure(loaded, "load settings", ex);
+                ReportPluginBoundaryFailure(loaded, new PluginOperation("load settings"), ex);
             }
             else
             {
@@ -1338,7 +1346,7 @@ public partial class PluginsSectionViewModel : ObservableObject
     {
         var actions = await TryInvokePluginBoundaryAsync(
             loaded,
-            "read settings actions",
+            new PluginOperation("read settings actions"),
             _ => Task.FromResult(actionsProvider.GetSettingsActions().ToList())
         );
         if (!actions.IsSuccess || !row.IsCurrentSettingsLoad(load))
@@ -1375,7 +1383,7 @@ public partial class PluginsSectionViewModel : ObservableObject
 
     private PluginBoundaryResult<T> TryInvokePluginBoundary<T>(
         LoadedPlugin plugin,
-        string operation,
+        PluginOperation operation,
         Func<T> boundary
     )
     {
@@ -1390,7 +1398,7 @@ public partial class PluginsSectionViewModel : ObservableObject
 
     private async Task<PluginBoundaryResult<T>> TryInvokePluginBoundaryAsync<T>(
         LoadedPlugin plugin,
-        string operation,
+        PluginOperation operation,
         Func<CancellationToken, Task<T>> boundary,
         TimeSpan? overrideTimeout = null
     )
@@ -1421,7 +1429,7 @@ public partial class PluginsSectionViewModel : ObservableObject
                 catch (Exception ex)
                 {
                     Trace.WriteLine(
-                        $"[PluginsSectionViewModel] cancelling {operation} for plugin "
+                        $"[PluginsSectionViewModel] cancelling {operation.Description} for plugin "
                             + $"'{plugin.Manifest.Id}' threw: {ex.GetBaseException().Message}"
                     );
                 }
@@ -1430,11 +1438,11 @@ public partial class PluginsSectionViewModel : ObservableObject
                 $"The operation timed out after "
                     + $"{timeoutDuration.TotalSeconds:0.###} seconds."
             );
-            ReportPluginBoundaryFailure(plugin, operation, timeout);
+            ReportPluginBoundaryFailure(plugin, operation, timeout, timedOut: true);
             ObserveLatePluginBoundary(
                 boundaryTask,
                 plugin.Manifest.Id,
-                operation
+                operation.Description
             );
             return PluginBoundaryResult<T>.Failure;
         }
@@ -1454,15 +1462,85 @@ public partial class PluginsSectionViewModel : ObservableObject
 
     private void ReportPluginBoundaryFailure(
         LoadedPlugin plugin,
-        string operation,
-        Exception exception
+        PluginOperation operation,
+        Exception exception,
+        bool timedOut = false
     )
     {
         var failure = exception.GetBaseException();
         var message =
-            $"Plugin '{plugin.Manifest.Name}' failed to {operation}: {failure.Message}";
+            $"Plugin '{plugin.Manifest.Name}' failed to {operation.Description}: {failure.Message}";
         _errorLog?.AddEntry(message, ErrorCategory.Plugin);
         Trace.WriteLine($"[PluginsSectionViewModel] {message}");
+        ReportPluginDiagnostics(plugin, operation, exception, timedOut);
+    }
+
+    // Content-free: the plugin id, a fixed stage name and a reduced action name, never the key or message.
+    private void ReportPluginDiagnostics(
+        LoadedPlugin plugin,
+        PluginOperation operation,
+        Exception exception,
+        bool timedOut
+    )
+    {
+        if (_diagnostics is null)
+        {
+            return;
+        }
+
+        var tags = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["plugin.id"] = plugin.Manifest.Id,
+            ["plugin.stage"] = operation.Stage,
+        };
+        if (operation.ActionId is { } actionId)
+        {
+            tags["plugin.action"] = DiagnosticActionName(actionId);
+        }
+
+        if (timedOut)
+        {
+            tags["outcome"] = "timed_out";
+        }
+
+        try
+        {
+            _diagnostics.CaptureException(exception, "plugin.settings", tags);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Telemetry] Plugin settings capture failed: {ex.GetType().Name}");
+        }
+    }
+
+    // The bundled plugins' action names. Action ids are plugin text, so any other name is reported as "other".
+    private static readonly HashSet<string> s_diagnosticActionNames = new(StringComparer.Ordinal)
+    {
+        "download",
+        "download-model",
+        "download-runtime",
+        "recent-deliveries",
+        "refresh",
+        "refresh-voices",
+        "remove",
+        "remove-runtime",
+        "test",
+    };
+
+    /// <summary>
+    ///     Reduces a settings action id to a known action name: <c>"&lt;profile&gt;/refresh"</c> becomes
+    ///     <c>refresh</c> and <c>"test:&lt;id&gt;"</c> becomes <c>test</c>, so item ids never reach diagnostics.
+    /// </summary>
+    internal static string DiagnosticActionName(string actionId)
+    {
+        var name = actionId[(actionId.LastIndexOf('/') + 1)..];
+        var colon = name.IndexOf(':');
+        if (colon >= 0)
+        {
+            name = name[..colon];
+        }
+
+        return s_diagnosticActionNames.Contains(name) ? name : "other";
     }
 
     private static void ObserveLatePluginBoundary(
@@ -1503,6 +1581,13 @@ public partial class PluginsSectionViewModel : ObservableObject
         );
     }
 
+    // Name is a fixed phrase; Key and ActionId are plugin-defined, so only the reduced action name leaves the app.
+    private readonly record struct PluginOperation(string Name, string? Key = null, string? ActionId = null)
+    {
+        public string Description => Key is null ? Name : $"{Name} '{Key}'";
+        public string Stage => Name.Replace(' ', '-');
+    }
+
     private readonly record struct PluginBoundaryResult<T>(bool IsSuccess, T? Value)
     {
         public static PluginBoundaryResult<T> Failure => new(false, default);
@@ -1538,7 +1623,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             var definitions = TryInvokePluginBoundary(
                 plugin,
-                "read setting definitions",
+                new PluginOperation("read setting definitions"),
                 () => flatProvider.GetSettingDefinitions().ToList()
             );
             if (definitions.IsSuccess)
@@ -1554,7 +1639,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             var definitions = TryInvokePluginBoundary(
                 plugin,
-                "read collection definitions",
+                new PluginOperation("read collection definitions"),
                 () => collectionProvider.GetCollectionDefinitions().ToList()
             );
             if (definitions.IsSuccess)
@@ -1570,7 +1655,7 @@ public partial class PluginsSectionViewModel : ObservableObject
         {
             var actions = TryInvokePluginBoundary(
                 plugin,
-                "read settings actions",
+                new PluginOperation("read settings actions"),
                 () => actionsProvider.GetSettingsActions().ToList()
             );
             if (actions.IsSuccess)
@@ -1680,11 +1765,13 @@ public partial class PluginRow : ObservableObject
         get;
         internal set
         {
-            if (SetProperty(ref field, value))
+            if (!SetProperty(ref field, value))
             {
-                OnPropertyChanged(nameof(Monogram));
-                OnPropertyChanged(nameof(ExpanderAccessibleName));
+                return;
             }
+
+            OnPropertyChanged(nameof(Monogram));
+            OnPropertyChanged(nameof(ExpanderAccessibleName));
         }
     }
 
