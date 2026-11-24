@@ -248,71 +248,12 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
             );
             cursor = position + token.Length;
         }
-        var words = WordRegex().Matches(request.Text).ToArray();
-        var candidates =
-            new List<(
-                int Start,
-                int Length,
-                string Term,
-                string Original,
-                double From,
-                double To,
-                double Similarity
-            )>();
-        var similarityRejected = 0;
-        var timingRejected = 0;
-        double bestSimilarity = 0;
-        foreach (
-            var term in request.Terms.Take(256).DistinctBy(t => t.Text, StringComparer.Ordinal)
-        )
-        {
-            cancellation.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(term.Text) || term.Text.Length > 160)
-                continue;
-            var threshold =
-                term.MinimumSimilarity
-                ?? CtcBiasPolicy.MinimumSimilarity(Math.Min(request.Terms.Count, 256));
-            if (!float.IsFinite(threshold) || threshold is < 0 or > 1)
-                continue;
-            for (var first = 0; first < words.Length; first++)
-            for (var count = 1; count <= 3 && first + count <= words.Length; count++)
-            {
-                var start = words[first].Index;
-                var end = words[first + count - 1].Index + words[first + count - 1].Length;
-                var original = request.Text[start..end];
-                var similarity = Similarity(original, term.Text);
-                bestSimilarity = Math.Max(bestSimilarity, similarity);
-                // Compare at the threshold's float precision: .60f promoted to double sits
-                // just above 0.6 and would reject a window at exactly the minimum.
-                if (original == term.Text || (float)similarity < threshold)
-                {
-                    similarityRejected++;
-                    continue;
-                }
-                if (WindowAlreadyContainsTerm(original, term.Text))
-                {
-                    similarityRejected++;
-                    continue;
-                }
-                var times = aligned.Where(t => t.Start < end && t.End > start).ToArray();
-                if (times.Length == 0 || times[0].Start > start || times[^1].End < end)
-                {
-                    timingRejected++;
-                    continue;
-                }
-                candidates.Add(
-                    (
-                        start,
-                        end - start,
-                        term.Text,
-                        original,
-                        times[0].From,
-                        times[^1].To,
-                        similarity
-                    )
-                );
-            }
-        }
+        var (candidates, similarityRejected, timingRejected, bestSimilarity) = FindCandidates(
+            request.Text,
+            aligned,
+            request.Terms,
+            cancellation
+        );
         var proposals =
             new List<(int Start, int Length, string Term, double Similarity, double Score)>();
         Trace(
@@ -454,13 +395,120 @@ public sealed partial class ParakeetCtcPlugin : IVocabularyRescorerPlugin
         return selected.OrderBy(p => p.Start).ToArray();
     }
 
-    private static double Similarity(string a, string b)
+    internal readonly record struct Candidate(
+        int Start,
+        int Length,
+        string Term,
+        string Original,
+        double From,
+        double To,
+        double Similarity
+    );
+
+    private readonly record struct Window(int Start, int End, string Original, string Letters);
+
+    internal static (
+        List<Candidate> Candidates,
+        int SimilarityRejected,
+        int TimingRejected,
+        double BestSimilarity
+    ) FindCandidates(
+        string text,
+        IReadOnlyList<(int Start, int End, double From, double To)> aligned,
+        IReadOnlyList<VocabularyTermHint> terms,
+        CancellationToken cancellation
+    )
     {
-        a = string.Concat(a.Where(char.IsLetterOrDigit)).ToLowerInvariant();
-        b = string.Concat(b.Where(char.IsLetterOrDigit)).ToLowerInvariant();
+        // Every term is compared with the same windows, so they are built once.
+        var words = WordRegex().Matches(text);
+        var windows = new List<Window>(words.Count * 3);
+        for (var first = 0; first < words.Count; first++)
+        for (var count = 1; count <= 3 && first + count <= words.Count; count++)
+        {
+            var start = words[first].Index;
+            var end = words[first + count - 1].Index + words[first + count - 1].Length;
+            var original = text[start..end];
+            windows.Add(new Window(start, end, original, LettersOf(original)));
+        }
+        var candidates = new List<Candidate>();
+        var similarityRejected = 0;
+        var timingRejected = 0;
+        double bestSimilarity = 0;
+        foreach (var term in terms.Take(256).DistinctBy(t => t.Text, StringComparer.Ordinal))
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(term.Text) || term.Text.Length > 160)
+                continue;
+            var threshold =
+                term.MinimumSimilarity ?? CtcBiasPolicy.MinimumSimilarity(Math.Min(terms.Count, 256));
+            if (!float.IsFinite(threshold) || threshold is < 0 or > 1)
+                continue;
+            var termLetters = LettersOf(term.Text);
+            var row = new int[termLetters.Length + 1];
+            foreach (var (start, end, original, letters) in windows)
+            {
+                // Edit distance is at least the length difference, so a window that can't reach the
+                // threshold (or raise the best similarity) even then skips the distance.
+                if (
+                    letters.Length is > 0 and <= 160
+                    && termLetters.Length > 0
+                    && 1
+                        - Math.Abs(letters.Length - termLetters.Length)
+                            / (double)Math.Max(letters.Length, termLetters.Length)
+                        is var bound
+                    && (float)bound < threshold
+                    && bound <= bestSimilarity
+                )
+                {
+                    similarityRejected++;
+                    continue;
+                }
+                var similarity = EditSimilarity(letters, termLetters, row);
+                bestSimilarity = Math.Max(bestSimilarity, similarity);
+                // Compare at the threshold's float precision: .60f promoted to double sits
+                // just above 0.6 and would reject a window at exactly the minimum.
+                if (original == term.Text || (float)similarity < threshold)
+                {
+                    similarityRejected++;
+                    continue;
+                }
+                if (WindowAlreadyContainsTerm(original, term.Text))
+                {
+                    similarityRejected++;
+                    continue;
+                }
+                var times = aligned.Where(t => t.Start < end && t.End > start).ToArray();
+                if (times.Length == 0 || times[0].Start > start || times[^1].End < end)
+                {
+                    timingRejected++;
+                    continue;
+                }
+                candidates.Add(
+                    new Candidate(
+                        start,
+                        end - start,
+                        term.Text,
+                        original,
+                        times[0].From,
+                        times[^1].To,
+                        similarity
+                    )
+                );
+            }
+        }
+        return (candidates, similarityRejected, timingRejected, bestSimilarity);
+    }
+
+    private static string LettersOf(string value) =>
+        string.Concat(value.Where(char.IsLetterOrDigit)).ToLowerInvariant();
+
+    // Edit similarity of two LettersOf() strings; row is reused and must hold b.Length + 1 values.
+    private static double EditSimilarity(string a, string b, int[] row)
+    {
         if (a.Length == 0 || b.Length == 0 || a.Length > 160)
             return 0;
-        var row = Enumerable.Range(0, b.Length + 1).ToArray();
+        for (var j = 0; j <= b.Length; j++)
+            row[j] = j;
         for (var i = 1; i <= a.Length; i++)
         {
             var diagonal = row[0];
