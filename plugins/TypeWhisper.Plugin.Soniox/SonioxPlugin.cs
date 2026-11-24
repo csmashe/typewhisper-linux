@@ -15,14 +15,17 @@ public sealed class SonioxPlugin
     : ITranscriptionEnginePlugin,
         ITranscriptionLanguageSelectionCapabilities,
         IPluginSettingsProvider,
+        IPluginSettingsActions,
         IPluginLocalizationAware
 {
     internal const string DefaultModelId = "default";
 
     internal const string DefaultRegionId = "us";
     private const string RegionSettingKey = "region";
+    internal const string ModelSettingKey = "model";
+    internal const string CatalogSettingKey = "model-catalog";
+    internal const string RefreshModelsActionId = "refresh-models";
     private const string ApiKeySecretName = "api-key";
-    private const string SonioxAsyncModelId = "stt-async-v5";
     private const int DefaultMaxPollAttempts = 3600;
     private const int MaxSubtitleSegmentCharacters = 84;
     private const int MinSentenceSegmentCharacters = 20;
@@ -34,6 +37,11 @@ public sealed class SonioxPlugin
     private static readonly TimeSpan s_defaultInitialPollDelay = TimeSpan.FromMilliseconds(150);
     private static readonly TimeSpan s_defaultMaxPollDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan s_defaultCleanupBudget = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan s_catalogMaximumAge = TimeSpan.FromHours(24);
+
+    // After a failed background refresh, wait before trying again so an offline machine does not
+    // retry on every dictation.
+    internal static readonly TimeSpan s_catalogRetryDelay = TimeSpan.FromMinutes(10);
 
     private static readonly IReadOnlyList<PluginModelInfo> s_models =
     [
@@ -62,13 +70,23 @@ public sealed class SonioxPlugin
     private readonly SemaphoreSlim _apiKeyWriteLock = new(1, 1);
     private readonly Lock _cleanupChainLock = new();
     private readonly Lock _settingsLock = new();
+    private readonly TimeProvider _timeProvider;
+    private readonly bool _backgroundCatalogRefresh;
     private long _settingsVersion;
+    private string _modelSelection = SonioxModels.Automatic;
+    private SonioxCatalog? _catalog;
+    private CancellationTokenSource _backgroundCts = new();
+    private Task _catalogRefreshTask = Task.CompletedTask;
+    private int _catalogRefreshQueued;
+    // The retry deadline and the settings version it belongs to; both guarded by _settingsLock.
+    private long _catalogRetryAfterTicks;
+    private long _catalogRetryVersion;
 
     private IPluginHostServices? _host;
     private string _selectedModelId = DefaultModelId;
 
     public SonioxPlugin()
-        : this(CreateHttpClient())
+        : this(CreateHttpClient(), backgroundCatalogRefresh: true)
     {
     }
 
@@ -77,7 +95,9 @@ public sealed class SonioxPlugin
         TimeSpan? pollDelay = null,
         int maxPollAttempts = DefaultMaxPollAttempts,
         TimeSpan? cleanupBudget = null,
-        TimeSpan? regionProbeTimeout = null)
+        TimeSpan? regionProbeTimeout = null,
+        TimeProvider? timeProvider = null,
+        bool backgroundCatalogRefresh = false)
     {
         if (maxPollAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxPollAttempts), "Poll attempts must be positive.");
@@ -96,6 +116,8 @@ public sealed class SonioxPlugin
         _maxPollDelay = pollDelay ?? s_defaultMaxPollDelay;
         _maxPollAttempts = maxPollAttempts;
         _cleanupBudget = resolvedCleanupBudget;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _backgroundCatalogRefresh = backgroundCatalogRefresh;
     }
 
     // ITypeWhisperPlugin
@@ -106,11 +128,32 @@ public sealed class SonioxPlugin
 
     public async Task ActivateAsync(IPluginHostServices host)
     {
+        if (_backgroundCts.IsCancellationRequested)
+        {
+            _backgroundCts.Dispose();
+            _backgroundCts = new CancellationTokenSource();
+        }
+
         _host = host;
         ApiKey = NormalizeApiKey(await host.LoadSecretAsync(ApiKeySecretName));
         _selectedModelId = DefaultModelId;
         RegionId = NormalizeRegionId(host.GetSetting<string>(RegionSettingKey));
-        host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured}, region={RegionId})");
+        _modelSelection = SonioxModels.NormalizeSelection(ReadSetting<string>(host, ModelSettingKey));
+        Volatile.Write(ref _catalog, SonioxModels.Sanitize(ReadSetting<SonioxCatalog>(host, CatalogSettingKey)));
+        host.Log(PluginLogLevel.Info, $"Activated (configured={IsConfigured}, region={RegionId}, model={_modelSelection})");
+    }
+
+    // A damaged or outdated settings value must not keep the plugin from activating.
+    private static T? ReadSetting<T>(IPluginHostServices host, string key)
+    {
+        try
+        {
+            return host.GetSetting<T>(key);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            return default;
+        }
     }
 
     public async Task DeactivateAsync()
@@ -118,6 +161,9 @@ public sealed class SonioxPlugin
         // Uploaded audio must not outlive the session: finish pending deletions before the host
         // (and then the HttpClient) go away. CleanupAsync already bounds each deletion. A
         // transcription finishing mid-drain appends to the chain, so loop until it stops growing.
+        await _backgroundCts.CancelAsync();
+        await Volatile.Read(ref _catalogRefreshTask);
+
         Task pending;
         do
         {
@@ -161,7 +207,9 @@ public sealed class SonioxPlugin
         if (string.IsNullOrEmpty(settings.ApiKey))
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
 
-        return await ConnectStreaming(settings.ApiKey, new Uri(settings.Region.RealtimeUrl), languageHints, ct);
+        RefreshCatalogInBackgroundIfStale();
+        return await ConnectStreaming(
+            settings.ApiKey, new Uri(settings.Region.RealtimeUrl), settings.RealtimeModelId, languageHints, ct);
     }
 
     public void SelectModel(string modelId)
@@ -209,9 +257,11 @@ public sealed class SonioxPlugin
     {
         // Snapshot the key and region once so a concurrent settings change can't swap the key
         // or the region out partway through the multi-request async flow below.
-        var (apiKey, region, _) = CaptureSettings();
+        var (apiKey, region, _, asyncModelId, _) = CaptureSettings();
         if (string.IsNullOrEmpty(apiKey))
             throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
+
+        RefreshCatalogInBackgroundIfStale();
 
         string? fileId = null;
         string? transcriptionId = null;
@@ -225,7 +275,8 @@ public sealed class SonioxPlugin
                 .Select(static language => language!)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            transcriptionId = await CreateTranscriptionAsync(fileId, normalizedLanguageHints, region.BaseUrl, apiKey, ct);
+            transcriptionId = await CreateTranscriptionAsync(
+                fileId, asyncModelId, normalizedLanguageHints, region.BaseUrl, apiKey, ct);
             var completedDetails = await WaitUntilCompletedAsync(transcriptionId, region.BaseUrl, apiKey, ct);
             var transcriptJson = await FetchTranscriptAsync(transcriptionId, region.BaseUrl, apiKey, ct);
             var result = ParseTranscript(transcriptJson, completedDetails, fallbackLanguage);
@@ -261,7 +312,30 @@ public sealed class SonioxPlugin
                 Description: Loc.L("Settings.RegionDescription"),
                 Options: AvailableRegions.Select(r => new PluginSettingOption(r.Id, Loc.L(r.LabelKey))).ToList(),
                 Kind: PluginSettingKind.Dropdown),
+            new(
+                ModelSettingKey,
+                Loc.L("Settings.Model"),
+                Description: Loc.L("Settings.ModelDescription"),
+                Options: ModelOptions(),
+                Kind: PluginSettingKind.Dropdown),
         ];
+
+    private List<PluginSettingOption> ModelOptions()
+    {
+        var models = CurrentCatalog?.SttModels;
+        var automatic = SonioxModels.VersionKey(SonioxModels.PreferredSttModelId(models, SonioxModels.RealtimeMode));
+        var versions = SonioxModels.SelectableVersions(models).ToList();
+        // Without a cached list, v6 is the one version known to exist. The host's dropdown still
+        // shows a saved pin that the list no longer offers.
+        if (models is null)
+            versions.Add(SonioxModels.VersionKey(SonioxModels.FallbackRealtimeModelId)!);
+
+        return
+        [
+            new PluginSettingOption(SonioxModels.Automatic, Loc.L("Settings.ModelAutomatic", automatic ?? "")),
+            .. versions.Select(version => new PluginSettingOption(version, version)),
+        ];
+    }
 
     public Task<string?> GetSettingValueAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(
@@ -269,6 +343,7 @@ public sealed class SonioxPlugin
             {
                 "api-key" => ApiKey,
                 RegionSettingKey => RegionId,
+                ModelSettingKey => ModelSelection,
                 _ => null,
             });
 
@@ -282,6 +357,9 @@ public sealed class SonioxPlugin
             case RegionSettingKey:
                 SetRegion(value);
                 break;
+            case ModelSettingKey:
+                SetModelSelection(value);
+                break;
         }
     }
 
@@ -291,11 +369,15 @@ public sealed class SonioxPlugin
         if (string.IsNullOrEmpty(probed.ApiKey))
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyRequired"));
 
-        var detected = await DetectRegionAsync(probed.ApiKey, probed.Region, ct);
-        if (detected is null)
+        if (await DetectRegionAsync(probed.ApiKey, probed.Region, ct) is not { } detection)
             return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyInvalid"));
 
+        var (detected, modelsJson) = detection;
+
         var detectedLabel = Loc.L(ResolveRegion(detected).LabelKey);
+        // The probe already fetched the model list. One that doesn't parse leaves the cache alone;
+        // the key is still valid.
+        var catalog = TryParseCatalog(detected, modelsJson);
         lock (_settingsLock)
         {
             // The probes can take a while; if the key or region was saved again meanwhile (even
@@ -304,13 +386,66 @@ public sealed class SonioxPlugin
             if (_settingsVersion != probed.Version)
                 return new PluginSettingsValidationResult(false, Loc.L("Settings.SettingsChangedDuringProbe"));
 
-            if (detected == probed.Region.Id)
-                return new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidRegion", detectedLabel));
+            var switched = detected != probed.Region.Id;
+            if (switched)
+                SetRegionLocked(detected);
 
-            SetRegionLocked(detected);
+            if (catalog is not null)
+                CommitCatalogLocked(catalog);
+
+            return switched
+                ? new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidRegionSwitched", detectedLabel))
+                : new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidRegion", detectedLabel));
+        }
+    }
+
+    // IPluginSettingsActions
+
+    public IReadOnlyList<PluginSettingsAction> GetSettingsActions() =>
+    [
+        new(
+            RefreshModelsActionId,
+            Loc.L("Settings.RefreshModels"),
+            Loc.L("Settings.RefreshModelsDescription"),
+            IsEnabled: IsConfigured),
+    ];
+
+    public async Task<PluginSettingsValidationResult> ExecuteSettingsActionAsync(string actionId, CancellationToken ct)
+    {
+        if (actionId != RefreshModelsActionId)
+            throw new ArgumentException($"Unknown settings action: {actionId}", nameof(actionId));
+
+        if (!IsConfigured)
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ApiKeyRequired"));
+
+        SonioxCatalog catalog;
+        try
+        {
+            catalog = await RefreshCatalogAsync(ct);
+        }
+        catch (PluginRequestException ex)
+        {
+            return new PluginSettingsValidationResult(false, ex.Message);
+        }
+        catch (JsonException)
+        {
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ModelListInvalid"));
+        }
+        catch (TimeoutException)
+        {
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.ModelListTimeout"));
+        }
+        catch (SettingsChangedException)
+        {
+            return new PluginSettingsValidationResult(false, Loc.L("Settings.SettingsChangedDuringProbe"));
         }
 
-        return new PluginSettingsValidationResult(true, Loc.L("Settings.ApiKeyValidRegionSwitched", detectedLabel));
+        return new PluginSettingsValidationResult(
+            true,
+            Loc.L(
+                "Settings.ModelsRefreshed",
+                SonioxModels.PreferredSttModelId(catalog.SttModels, SonioxModels.RealtimeMode),
+                SonioxModels.PreferredSttModelId(catalog.SttModels, SonioxModels.AsyncMode)));
     }
 
     // Settings support
@@ -336,17 +471,52 @@ public sealed class SonioxPlugin
     internal SonioxRegion Region => ResolveRegion(RegionId);
 
     /// <summary>
-    /// The key and region as they stood at one instant, plus the settings version they were read
-    /// at. Request flows use the pair so a settings save can't mix a new key with an old region,
-    /// and validation commits its result only while the version is unchanged.
+    /// The key, region and resolved models at one instant, plus the settings version. Request flows
+    /// use one snapshot so a save can't mix a new key with an old region; validation and catalog
+    /// refreshes commit only while the version is unchanged.
     /// </summary>
-    internal readonly record struct SettingsSnapshot(string? ApiKey, SonioxRegion Region, long Version);
+    internal readonly record struct SettingsSnapshot(
+        string? ApiKey, SonioxRegion Region, long Version, string AsyncModelId, string RealtimeModelId);
 
     internal SettingsSnapshot CaptureSettings()
     {
         lock (_settingsLock)
         {
-            return new SettingsSnapshot(ApiKey, Region, _settingsVersion);
+            var models = CurrentCatalog?.SttModels;
+            return new SettingsSnapshot(
+                ApiKey,
+                Region,
+                _settingsVersion,
+                SonioxModels.ResolveSttModelId(_modelSelection, models, SonioxModels.AsyncMode),
+                SonioxModels.ResolveSttModelId(_modelSelection, models, SonioxModels.RealtimeMode));
+        }
+    }
+
+    internal string ModelSelection
+    {
+        get
+        {
+            lock (_settingsLock)
+            {
+                return _modelSelection;
+            }
+        }
+    }
+
+    /// <summary>The cached model list, but only for the region it was loaded from.</summary>
+    internal SonioxCatalog? CurrentCatalog =>
+        Volatile.Read(ref _catalog) is { } catalog && catalog.Region == RegionId ? catalog : null;
+
+    internal void SetModelSelection(string? selection)
+    {
+        lock (_settingsLock)
+        {
+            var normalized = SonioxModels.NormalizeSelection(selection);
+            if (_modelSelection == normalized)
+                return;
+
+            _host?.SetSetting(ModelSettingKey, normalized);
+            _modelSelection = normalized;
         }
     }
 
@@ -378,15 +548,17 @@ public sealed class SonioxPlugin
         _settingsVersion++;
     }
 
-    /// <summary>Opens the realtime session; tests replace it to observe the endpoint the plugin picks.</summary>
-    internal Func<string, Uri, IReadOnlyList<string>, CancellationToken, Task<IStreamingSession>> ConnectStreaming { get; set; } =
-        static async (apiKey, realtimeUri, languageHints, ct) =>
-            await SonioxStreamingSession.ConnectAsync(apiKey, realtimeUri, languageHints, ct);
+    /// <summary>Opens the realtime session; tests replace it to observe the endpoint and model the plugin picks.</summary>
+    internal Func<string, Uri, string, IReadOnlyList<string>, CancellationToken, Task<IStreamingSession>> ConnectStreaming { get; set; } =
+        static async (apiKey, realtimeUri, model, languageHints, ct) =>
+            await SonioxStreamingSession.ConnectAsync(apiKey, realtimeUri, model, languageHints, ct);
 
-    internal Task<string?> DetectRegionAsync(string apiKey, CancellationToken ct = default) =>
-        DetectRegionAsync(apiKey, Region, ct);
+    internal async Task<string?> DetectRegionAsync(string apiKey, CancellationToken ct = default) =>
+        (await DetectRegionAsync(apiKey, Region, ct))?.RegionId;
 
-    private async Task<string?> DetectRegionAsync(string apiKey, SonioxRegion selected, CancellationToken ct)
+    /// <summary>The region whose model list accepted the key, with that list's JSON.</summary>
+    private async Task<(string RegionId, string ModelsJson)?> DetectRegionAsync(
+        string apiKey, SonioxRegion selected, CancellationToken ct)
     {
         var normalized = NormalizeApiKey(apiKey);
         if (normalized is null)
@@ -400,8 +572,8 @@ public sealed class SonioxPlugin
             probeCts.CancelAfter(_regionProbeTimeout);
             try
             {
-                if (await ProbeModelsAsync(region.BaseUrl, normalized, probeCts.Token))
-                    return region.Id;
+                if (await ProbeModelsAsync(region.BaseUrl, normalized, probeCts.Token) is { } modelsJson)
+                    return (region.Id, modelsJson);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -462,17 +634,18 @@ public sealed class SonioxPlugin
         if (normalized is null)
             return false;
 
-        return await ProbeModelsAsync(Region.BaseUrl, normalized, ct);
+        return await ProbeModelsAsync(Region.BaseUrl, normalized, ct) is not null;
     }
 
-    private async Task<bool> ProbeModelsAsync(string baseUrl, string apiKey, CancellationToken ct)
+    /// <summary>Returns the region's model list JSON when the key authenticates there, otherwise null.</summary>
+    private async Task<string?> ProbeModelsAsync(string baseUrl, string apiKey, CancellationToken ct)
     {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/models");
             AddAuthorization(request, apiKey);
             using var response = await _httpClient.SendAsync(request, ct);
-            return response.IsSuccessStatusCode;
+            return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync(ct) : null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -480,17 +653,141 @@ public sealed class SonioxPlugin
         }
         catch (HttpRequestException)
         {
-            return false;
+            return null;
         }
         catch (TaskCanceledException)
         {
-            return false;
+            return null;
         }
         catch (FormatException)
         {
-            return false;
+            return null;
         }
     }
+
+    // Model catalog
+
+    /// <summary>Loads the selected region's model list and caches it for that region.</summary>
+    internal async Task<SonioxCatalog> RefreshCatalogAsync(CancellationToken ct)
+    {
+        var settings = CaptureSettings();
+        if (string.IsNullOrEmpty(settings.ApiKey))
+            throw new PluginRequestException(Loc.L("Settings.NotConfiguredApiKeyRequired"), PluginRequestFailureKind.Configuration);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(_regionProbeTimeout);
+        string json;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{settings.Region.BaseUrl}/v1/models");
+            AddAuthorization(request, settings.ApiKey);
+            json = await SendJsonAsync(request, "Soniox model list", timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("Soniox did not return its model list in time.");
+        }
+
+        var models = SonioxModels.ParseSttModels(json);
+        if (models.Count == 0)
+            throw new JsonException("Soniox returned no transcription models.");
+
+        var catalog = new SonioxCatalog(settings.Region.Id, _timeProvider.GetUtcNow(), models);
+        lock (_settingsLock)
+        {
+            // A list fetched with a key or region the user has since replaced must not be cached.
+            if (_settingsVersion != settings.Version)
+                throw new SettingsChangedException();
+
+            CommitCatalogLocked(catalog);
+        }
+
+        return catalog;
+    }
+
+    private SonioxCatalog? TryParseCatalog(string regionId, string modelsJson)
+    {
+        try
+        {
+            var models = SonioxModels.ParseSttModels(modelsJson);
+            return models.Count == 0 ? null : new SonioxCatalog(regionId, _timeProvider.GetUtcNow(), models);
+        }
+        catch (JsonException ex)
+        {
+            _host?.Log(PluginLogLevel.Warning, $"Soniox model list could not be read: {ex.Message}");
+            return null;
+        }
+    }
+
+    private void CommitCatalogLocked(SonioxCatalog catalog)
+    {
+        _host?.SetSetting(CatalogSettingKey, catalog);
+        Volatile.Write(ref _catalog, catalog);
+        _catalogRetryAfterTicks = 0;
+    }
+
+    /// <summary>
+    /// Starts a background refresh when no list is cached for this region or the cached one is a
+    /// day old. The current request keeps the cached list or the built-in v6 fallback.
+    /// </summary>
+    private void RefreshCatalogInBackgroundIfStale()
+    {
+        var host = _host;
+        if (!_backgroundCatalogRefresh || host is null || !IsConfigured)
+            return;
+
+        var now = _timeProvider.GetUtcNow();
+        if (CurrentCatalog is { } catalog && catalog.FetchedAt <= now && now - catalog.FetchedAt < s_catalogMaximumAge)
+            return;
+
+        long version;
+        lock (_settingsLock)
+        {
+            // A failure backs off only the key and region it failed with; a change retries at once.
+            version = _settingsVersion;
+            if (_catalogRetryVersion == version && now.UtcTicks < _catalogRetryAfterTicks)
+                return;
+        }
+
+        if (Interlocked.CompareExchange(ref _catalogRefreshQueued, 1, 0) != 0)
+            return;
+
+        var token = _backgroundCts.Token;
+        Volatile.Write(ref _catalogRefreshTask, Task.Run(async () =>
+        {
+            try
+            {
+                await RefreshCatalogAsync(token);
+                // An open settings panel reloads so the Automatic label and versions match the new list.
+                host.NotifyCapabilitiesChanged();
+            }
+            catch (Exception ex)
+            {
+                lock (_settingsLock)
+                {
+                    // Versions only grow, so this also skips a refresh that failed because the
+                    // settings changed under it.
+                    if (_settingsVersion == version)
+                    {
+                        _catalogRetryVersion = version;
+                        _catalogRetryAfterTicks = (_timeProvider.GetUtcNow() + s_catalogRetryDelay).UtcTicks;
+                    }
+                }
+
+                if (!token.IsCancellationRequested)
+                    host.Log(PluginLogLevel.Warning, $"Soniox model list refresh failed: {ex.Message}");
+            }
+            finally
+            {
+                Volatile.Write(ref _catalogRefreshQueued, 0);
+            }
+        }, CancellationToken.None));
+    }
+
+    /// <summary>Tests await this task to observe the background catalog refresh deterministically.</summary>
+    internal Task CatalogRefreshTask => Volatile.Read(ref _catalogRefreshTask);
+
+    private sealed class SettingsChangedException() : Exception("Soniox settings changed while the model list was loading.");
 
     private async Task<string> UploadFileAsync(byte[] wavAudio, string baseUrl, string apiKey, CancellationToken ct)
     {
@@ -511,6 +808,7 @@ public sealed class SonioxPlugin
 
     private async Task<string> CreateTranscriptionAsync(
         string fileId,
+        string model,
         List<string> languageHints,
         string baseUrl,
         string apiKey,
@@ -518,8 +816,10 @@ public sealed class SonioxPlugin
     {
         var payload = new Dictionary<string, object?>
         {
-            ["model"] = SonioxAsyncModelId,
+            ["model"] = model,
             ["file_id"] = fileId,
+            // Tokens carry a language only when identification is on.
+            ["enable_language_identification"] = true,
         };
 
         if (languageHints.Count > 0)
@@ -971,7 +1271,9 @@ public sealed class SonioxPlugin
 
     public void Dispose()
     {
+        _backgroundCts.Cancel();
         _httpClient.Dispose();
         _apiKeyWriteLock.Dispose();
+        _backgroundCts.Dispose();
     }
 }

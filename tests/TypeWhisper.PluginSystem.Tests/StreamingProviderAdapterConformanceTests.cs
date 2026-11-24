@@ -132,7 +132,7 @@ public sealed class StreamingProviderAdapterConformanceTests
                 []
             )
             .GetConnectionOptionsAsync(CancellationToken.None);
-        var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), ["de"])
+        var soniox = await new SonioxWebSocketAdapter("soniox-key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), SonioxModels.FallbackRealtimeModelId, ["de"])
             .GetConnectionOptionsAsync(CancellationToken.None);
         var speechmatics = await new SpeechmaticsWebSocketAdapter(
                 "speechmatics-key",
@@ -673,7 +673,7 @@ public sealed class StreamingProviderAdapterConformanceTests
     private static IWebSocketSessionAdapter CreateAdditionalProviderAdapter(string provider) =>
         provider switch
         {
-            "Soniox" => new SonioxWebSocketAdapter("key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), []),
+            "Soniox" => new SonioxWebSocketAdapter("key", new Uri(SonioxPlugin.AvailableRegions[0].RealtimeUrl), SonioxModels.FallbackRealtimeModelId, []),
             "Gemini" => new GeminiWebSocketAdapter(
                 "key",
                 "gemini-3.5-transcribe-live",

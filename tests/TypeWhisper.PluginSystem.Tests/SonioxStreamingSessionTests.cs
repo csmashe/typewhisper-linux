@@ -84,7 +84,7 @@ public sealed class SonioxStreamingSessionTests
     {
         var transport = new ScriptedWebSocketTransport(connected: false);
         await using var pump = await WebSocketSessionPump.ConnectAsync(
-            new SonioxWebSocketAdapter("fixture-key", new Uri("wss://stt-rt.eu.soniox.com/transcribe-websocket"), ["de"]),
+            new SonioxWebSocketAdapter("fixture-key", new Uri("wss://stt-rt.eu.soniox.com/transcribe-websocket"), "stt-rt-v7", ["de"]),
             CancellationToken.None,
             transportFactory: new ScriptedWebSocketTransportFactory(transport)
         ).WaitAsync(s_timeout);
@@ -94,7 +94,7 @@ public sealed class SonioxStreamingSessionTests
         var start = Encoding.UTF8.GetString((await transport.NextSentAsync()).Payload.Span);
         Assert.DoesNotContain("fixture-key", start);
         using var config = JsonDocument.Parse(start);
-        Assert.Equal("stt-rt-v5", config.RootElement.GetProperty("model").GetString());
+        Assert.Equal("stt-rt-v7", config.RootElement.GetProperty("model").GetString());
         Assert.True(config.RootElement.GetProperty("enable_language_identification").GetBoolean());
     }
 
@@ -254,7 +254,7 @@ public sealed class SonioxStreamingSessionTests
     }
 
     private static SonioxWebSocketAdapter CreateAdapter() =>
-        new("key", new Uri("wss://example.com/realtime"), []);
+        new("key", new Uri("wss://example.com/realtime"), SonioxModels.FallbackRealtimeModelId, []);
 
     private static WebSocketInboundResult Handle(SonioxWebSocketAdapter adapter, string json) =>
         adapter.HandleMessage(WebSocketMessageType.Text, Encoding.UTF8.GetBytes(json));

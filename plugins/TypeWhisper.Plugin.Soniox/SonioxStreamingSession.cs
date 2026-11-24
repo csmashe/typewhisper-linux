@@ -12,8 +12,6 @@ namespace TypeWhisper.Plugin.Soniox;
 
 internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSessionHealth
 {
-    internal const string RealtimeModel = "stt-rt-v5";
-
     private readonly WebSocketSessionPump _pump;
 
     private SonioxStreamingSession(WebSocketSessionPump pump)
@@ -32,12 +30,13 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
     public static async Task<SonioxStreamingSession> ConnectAsync(
         string apiKey,
         Uri realtimeUri,
+        string model,
         IReadOnlyList<string> languageHints,
         CancellationToken ct
     )
     {
         var pump = await WebSocketSessionPump.ConnectAsync(
-            new SonioxWebSocketAdapter(apiKey, realtimeUri, languageHints),
+            new SonioxWebSocketAdapter(apiKey, realtimeUri, model, languageHints),
             ct
         );
         return new SonioxStreamingSession(pump);
@@ -216,6 +215,7 @@ internal sealed class SonioxStreamingSession : IStreamingSession, IStreamingSess
 internal sealed class SonioxWebSocketAdapter(
     string apiKey,
     Uri realtimeUri,
+    string model,
     IReadOnlyList<string> languageHints
 ) : IWebSocketSessionAdapter
 {
@@ -248,7 +248,7 @@ internal sealed class SonioxWebSocketAdapter(
                 new WebSocketOutboundMessage(
                     Encoding.UTF8.GetBytes(
                         SonioxStreamingSession.BuildConfigMessage(
-                            SonioxStreamingSession.RealtimeModel,
+                            model,
                             languageHints
                         )
                     ),
