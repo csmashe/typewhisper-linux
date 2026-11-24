@@ -213,6 +213,8 @@ public sealed partial class ShortcutsSectionViewModel : ObservableObject, IDispo
 
     public void ReportUnsupportedHotkey() => StatusMessage = Loc.Instance["Shortcuts.UnsupportedCaptureKey"];
 
+    public void ReportHotkeyNeedsModifier() => StatusMessage = Loc.Instance["Shortcuts.CaptureKeyNeedsModifier"];
+
     public async Task ApplyCapturedHotkeyAsync(string hotkey)
     {
         if (!IsCapturingHotkey) return;

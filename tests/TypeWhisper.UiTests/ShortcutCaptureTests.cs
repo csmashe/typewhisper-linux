@@ -2,8 +2,12 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.ViewModels.Sections;
@@ -73,6 +77,37 @@ public sealed class ShortcutCaptureTests(UiSession ui)
             Dispatcher.UIThread.RunJobs();
             Assert.False(vm.IsCapturingHotkey);
             Assert.False(hotkey.IsSuspended);
+            window.Close();
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task LoneTypingKeyShowsModifierHintAndKeepsCapturing()
+    {
+        await ui.Session.Dispatch(() =>
+        {
+            var vm = ui.Services.GetRequiredService<ShortcutsSectionViewModel>();
+            var hotkey = ui.Services.GetRequiredService<HotkeyService>();
+            var before = hotkey.CurrentHotkeyString;
+            var section = new ShortcutsSection { DataContext = vm };
+            var window = new Window { Content = section };
+            window.Show();
+            section.Focus();
+            vm.StartHotkeyCaptureCommand.Execute(null);
+
+            window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, " ");
+            window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, " ");
+            Dispatcher.UIThread.RunJobs();
+
+            var hint = Loc.Instance["Shortcuts.CaptureKeyNeedsModifier"];
+            Assert.Equal(hint, vm.StatusMessage);
+            Assert.Contains(section.GetLogicalDescendants().OfType<TextBlock>(), t => t.Text == hint && t.IsEffectivelyVisible);
+            Assert.True(vm.IsCapturingHotkey);
+            Assert.Equal(before, hotkey.CurrentHotkeyString);
+
+            window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(vm.IsCapturingHotkey);
             window.Close();
         }, CancellationToken.None);
     }
