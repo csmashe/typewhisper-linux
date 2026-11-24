@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Tmds.DBus.Protocol;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
+using TypeWhisper.Core.Services;
 
 namespace TypeWhisper.Linux.Services.ActiveWindow;
 
@@ -74,6 +75,8 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
     // AtspiRole.PASSWORD_TEXT — confirmed against the existing extractor's role numbering
     // (ROLE_FRAME = 23) which shares the same AtspiRole enum.
     private const uint RolePasswordText = 40;
+    private const uint RoleInvalid = 0;
+    private const uint RoleUnknown = 67;
 
     // AtspiStateType bit positions within GetState's first bitfield word. ACTIVE marks a
     // toolkit's currently activated top-level window; FOCUSED the widget holding keyboard
@@ -120,6 +123,18 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
     private static readonly MessageValueReader<uint> s_readUInt32 =
         static (m, _) => m.GetBodyReader().ReadUInt32();
+
+    private static readonly MessageValueReader<int> s_readInt32 =
+        static (m, _) => m.GetBodyReader().ReadInt32();
+
+    // Text.GetSelection's "(ii)" reply: start and end character offsets.
+    private static readonly MessageValueReader<(int Start, int End)> s_readOffsetPair =
+        static (m, _) =>
+        {
+            var reader = m.GetBodyReader();
+            var start = reader.ReadInt32();
+            return (start, reader.ReadInt32());
+        };
 
     // Reads Accessible.GetState's "au" reply — two 32-bit words of AtspiStateType bits. Only
     // word 0 is needed (ACTIVE=1 and FOCUSED=12 both live there).
@@ -726,6 +741,92 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
         }
     }
 
+    public async Task<DictationInsertionContext?> TryReadTextAroundCaretAsync(
+        AtSpiElementRef element,
+        int contextLength,
+        CancellationToken cancellationToken
+    )
+    {
+        var conn = _connection;
+        if (conn is null || !element.IsValid || contextLength <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            // Past the caller's deadline the paste has gone ahead; send no further requests.
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsReadableCaretContextRole(await GetRoleAsync(conn, element).ConfigureAwait(false)))
+            {
+                return null;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var characterCount = await GetCharacterCountAsync(conn, element).ConfigureAwait(false);
+            if (characterCount < 0)
+            {
+                return null;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            // A paste replaces the selection, so the context is the text either side of it.
+            var selections = await CallTextAsync(conn, element, "GetNSelections", s_readInt32)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            int start, end;
+            switch (selections)
+            {
+                case 0:
+                    start = end = await GetTextPropertyAsync(conn, element, "CaretOffset").ConfigureAwait(false);
+                    break;
+                case 1:
+                    (start, end) = await GetSelectionAsync(conn, element).ConfigureAwait(false);
+                    if (start > end)
+                    {
+                        (start, end) = (end, start);
+                    }
+
+                    break;
+                default:
+                    return null;
+            }
+
+            // A negative caret means the toolkit has none to report (e.g. an unfocused field).
+            if (start < 0 || end > characterCount)
+            {
+                return null;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var before = start == 0
+                ? ""
+                : await GetTextAsync(conn, element, Math.Max(0, start - contextLength), start).ConfigureAwait(false) ?? "";
+            cancellationToken.ThrowIfCancellationRequested();
+            var after = end == characterCount
+                ? ""
+                : await GetTextAsync(conn, element, end, Math.Min(characterCount, end + contextLength)).ConfigureAwait(false) ?? "";
+            // Offsets count code points, string lengths UTF-16 units; never pass on more than was asked for.
+            if (before.Length > contextLength)
+            {
+                before = before[^contextLength..];
+            }
+
+            if (after.Length > contextLength)
+            {
+                after = after[..contextLength];
+            }
+
+            return new DictationInsertionContext(before, after);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort, like TryReadTextAsync: the paste falls back to the plain trailing space.
+            Trace.WriteLine($"[AtSpiEventClient] AT-SPI caret context read failed: {ex.GetType().Name}");
+            return null;
+        }
+    }
+
     public async Task<bool?> IsPasswordFieldAsync(AtSpiElementRef element)
     {
         var conn = _connection;
@@ -738,22 +839,7 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
 
         try
         {
-            MessageBuffer message;
-            using (var writer = conn.GetMessageWriter())
-            {
-                writer.WriteMethodCallHeader(
-                    destination: element.BusName,
-                    path: element.ObjectPath,
-                    @interface: AccessibleInterface,
-                    member: "GetRole"
-                );
-                message = writer.CreateMessage();
-            }
-
-            var role = await conn.CallMethodAsync(message, s_readUInt32)
-                .WaitOrAbandonAsync(s_callTimeout)
-                .ConfigureAwait(false);
-            return role == RolePasswordText;
+            return await GetRoleAsync(conn, element).ConfigureAwait(false) == RolePasswordText;
         }
         catch
         {
@@ -1851,7 +1937,35 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
             .ConfigureAwait(false);
     }
 
-    private static async Task<int> GetCharacterCountAsync(DBusConnection conn, AtSpiElementRef element)
+    // Stricter than the shared password gate: a role the toolkit can't name could still be a password field.
+    internal static bool IsReadableCaretContextRole(uint role) =>
+        role is not (RolePasswordText or RoleInvalid or RoleUnknown);
+
+    private static async Task<uint> GetRoleAsync(DBusConnection conn, AtSpiElementRef element)
+    {
+        MessageBuffer message;
+        using (var writer = conn.GetMessageWriter())
+        {
+            writer.WriteMethodCallHeader(
+                destination: element.BusName,
+                path: element.ObjectPath,
+                @interface: AccessibleInterface,
+                member: "GetRole"
+            );
+            message = writer.CreateMessage();
+        }
+
+        return await conn.CallMethodAsync(message, s_readUInt32)
+            .WaitOrAbandonAsync(s_callTimeout)
+            .ConfigureAwait(false);
+    }
+
+    private static Task<int> GetCharacterCountAsync(DBusConnection conn, AtSpiElementRef element)
+    {
+        return GetTextPropertyAsync(conn, element, "CharacterCount");
+    }
+
+    private static async Task<int> GetTextPropertyAsync(DBusConnection conn, AtSpiElementRef element, string property)
     {
         MessageBuffer message;
         using (var writer = conn.GetMessageWriter())
@@ -1864,11 +1978,56 @@ public sealed class AtSpiEventClient : IAtSpiEventClient, IDisposable
                 signature: "ss"
             );
             writer.WriteString(TextInterface);
-            writer.WriteString("CharacterCount");
+            writer.WriteString(property);
             message = writer.CreateMessage();
         }
 
         return await conn.CallMethodAsync(message, s_readVariantInt32)
+            .WaitOrAbandonAsync(s_callTimeout)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<T> CallTextAsync<T>(
+        DBusConnection conn,
+        AtSpiElementRef element,
+        string member,
+        MessageValueReader<T> reader
+    )
+    {
+        MessageBuffer message;
+        using (var writer = conn.GetMessageWriter())
+        {
+            writer.WriteMethodCallHeader(
+                destination: element.BusName,
+                path: element.ObjectPath,
+                @interface: TextInterface,
+                member: member
+            );
+            message = writer.CreateMessage();
+        }
+
+        return await conn.CallMethodAsync(message, reader)
+            .WaitOrAbandonAsync(s_callTimeout)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<(int Start, int End)> GetSelectionAsync(DBusConnection conn, AtSpiElementRef element)
+    {
+        MessageBuffer message;
+        using (var writer = conn.GetMessageWriter())
+        {
+            writer.WriteMethodCallHeader(
+                destination: element.BusName,
+                path: element.ObjectPath,
+                @interface: TextInterface,
+                member: "GetSelection",
+                signature: "i"
+            );
+            writer.WriteInt32(0);
+            message = writer.CreateMessage();
+        }
+
+        return await conn.CallMethodAsync(message, s_readOffsetPair)
             .WaitOrAbandonAsync(s_callTimeout)
             .ConfigureAwait(false);
     }

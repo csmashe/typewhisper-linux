@@ -17,6 +17,17 @@ public class AppSettingsTests
         Assert.False(AppSettings.Default.LockPasteToFocusedField);
 
     [Fact]
+    public void CursorContextFormatting_DefaultsOn_IncludingForSettingsSavedBeforeIt()
+    {
+        var legacy = JsonSerializer.Deserialize<AppSettings>("{}", s_jsonOptions)!;
+        foreach (var settings in new[] { AppSettings.Default, legacy })
+        {
+            Assert.True(settings.FitDictationToCursorContext);
+            Assert.True(settings.StripFinalPeriodFromStandaloneValues);
+        }
+    }
+
+    [Fact]
     public void GetLanguageHints_AutoLanguage_IsEmpty() => Assert.Empty(AppSettings.Default.GetLanguageHints());
 
     [Fact]

@@ -165,6 +165,55 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public void CursorContextSettings_LoadAndPersist()
+    {
+        var disabled = AppSettings.Default with
+        {
+            FitDictationToCursorContext = false, StripFinalPeriodFromStandaloneValues = false,
+        };
+        using var context = new ViewModelTestContext(disabled, new FakeAudioDeviceEnumerator());
+        Assert.False(context.Sut.FitDictationToCursorContext);
+        Assert.False(context.Sut.StripFinalPeriodFromStandaloneValues);
+
+        context.Sut.FitDictationToCursorContext = true;
+        context.Sut.StripFinalPeriodFromStandaloneValues = true;
+        context.Settings.Verify(
+            service => service.Update(It.Is<Func<AppSettings, AppSettings>>(mutation =>
+                mutation(disabled).FitDictationToCursorContext)),
+            Times.Once
+        );
+        context.Settings.Verify(
+            service => service.Update(It.Is<Func<AppSettings, AppSettings>>(mutation =>
+                mutation(disabled).StripFinalPeriodFromStandaloneValues)),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public void CursorContextAvailability_FollowsConsentAndRunningClient()
+    {
+        var client = new Mock<IAtSpiEventClient>();
+        var pendingNotifications = new Queue<Action>();
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator(), atSpiClient: client.Object,
+            dispatchNotification: pendingNotifications.Enqueue
+        );
+        var notifications = new List<string?>();
+        context.Sut.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+
+        client.SetupGet(value => value.IsRunning).Returns(true);
+        client.Raise(value => value.RunningChanged += null);
+        pendingNotifications.Dequeue()();
+        Assert.Contains(nameof(context.Sut.IsCursorContextFormattingAvailable), notifications);
+        Assert.False(context.Sut.IsCursorContextFormattingAvailable);
+
+        notifications.Clear();
+        context.Sut.TargetAppCorrectionLearningEnabled = true;
+        Assert.Contains(nameof(context.Sut.IsCursorContextFormattingAvailable), notifications);
+        Assert.True(context.Sut.IsCursorContextFormattingAvailable);
+    }
+
+    [Fact]
     public void LockPasteAvailability_RequiresLearningConsent()
     {
         var client = new Mock<IAtSpiEventClient>();

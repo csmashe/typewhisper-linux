@@ -5023,6 +5023,10 @@ public sealed class TextInsertionServiceTests
             return Task.CompletedTask;
         }
 
+        public Task<TypeWhisper.Core.Services.DictationInsertionContext?> TryReadTextAroundCaretAsync(
+            AtSpiElementRef element, int contextLength, CancellationToken cancellationToken) =>
+            Task.FromResult<TypeWhisper.Core.Services.DictationInsertionContext?>(null);
+
         public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)
         {
             TextReadRequests.Add((element, maxLength));

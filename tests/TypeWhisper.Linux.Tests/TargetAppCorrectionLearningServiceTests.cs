@@ -1774,6 +1774,10 @@ public sealed class TargetAppCorrectionLearningServiceTests : IDisposable
             return Task.FromResult<AtSpiElementRef?>(seeded);
         }
 
+        public Task<DictationInsertionContext?> TryReadTextAroundCaretAsync(
+            AtSpiElementRef element, int contextLength, CancellationToken cancellationToken) =>
+            Task.FromResult<DictationInsertionContext?>(null);
+
         public Task<string?> TryReadTextAsync(AtSpiElementRef element, int maxLength)
         {
             TextReadCalls++;

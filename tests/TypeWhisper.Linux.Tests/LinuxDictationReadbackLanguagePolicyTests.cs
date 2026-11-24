@@ -37,6 +37,17 @@ public sealed class LinuxDictationReadbackLanguagePolicyTests
     }
 
     [Fact]
+    public void Resolve_RewritesKeepLanguage_KeepsTheSourceButStillFollowsTranslation()
+    {
+        Assert.Equal("de", LinuxDictationReadbackLanguagePolicy.Resolve(
+            "de", "de", false, null, [Plugin(), PromptAction()], rewritesKeepLanguage: true));
+        Assert.Equal("en", LinuxDictationReadbackLanguagePolicy.Resolve(
+            "de", "de", false, "en", [Translation(), Plugin()], rewritesKeepLanguage: true));
+        Assert.Null(LinuxDictationReadbackLanguagePolicy.Resolve(
+            "de", "de", false, null, [Plugin()]));
+    }
+
+    [Fact]
     public void Resolve_UsesEffectiveSourceLanguage_OverConfiguredLanguage()
     {
         // Regression: global Language="de" but the effective engine output is

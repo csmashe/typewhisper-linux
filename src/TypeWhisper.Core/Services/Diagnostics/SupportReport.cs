@@ -119,6 +119,8 @@ public sealed record SupportReport(
         bool OnlineBatchLivePreviewEnabled,
         bool AutoPaste,
         bool LockPasteToFocusedField,
+        bool FitDictationToCursorContext,
+        bool StripFinalPeriodFromStandaloneValues,
         string CleanupLevel,
         string SpokenFormattingStrategy,
         bool NumberNormalizationEnabled,

@@ -59,6 +59,10 @@ public record AppSettings
     } = [];
     public bool AutoPaste { get; init; } = true;
     public bool LockPasteToFocusedField { get; init; }
+    /// <summary>Fits a pasted dictation to the text around the cursor; read only through the target-app correction AT-SPI opt-in.</summary>
+    public bool FitDictationToCursorContext { get; init; } = true;
+    /// <summary>Drops a model-added final period from an email address, URL, number or version pasted into an empty field.</summary>
+    public bool StripFinalPeriodFromStandaloneValues { get; init; } = true;
 
     public Dictionary<string, TextInsertionStrategy> AppInsertionStrategies
     {

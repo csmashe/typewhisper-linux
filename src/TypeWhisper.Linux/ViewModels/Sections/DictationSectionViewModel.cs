@@ -114,6 +114,15 @@ public partial class DictationSectionViewModel : ObservableObject
     public bool IsLockPasteToFocusedFieldAvailable => TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
 
     [ObservableProperty]
+    private bool _fitDictationToCursorContext = true;
+
+    [ObservableProperty]
+    private bool _stripFinalPeriodFromStandaloneValues = true;
+
+    /// <summary>Cursor-context formatting reads the field through the same AT-SPI listener as the paste lock.</summary>
+    public bool IsCursorContextFormattingAvailable => IsLockPasteToFocusedFieldAvailable;
+
+    [ObservableProperty]
     private CleanupLevel _cleanupLevel = CleanupLevel.None;
 
     [ObservableProperty]
@@ -330,9 +339,7 @@ public partial class DictationSectionViewModel : ObservableObject
         _atSpiClient = atSpiClient;
         if (_atSpiClient is not null)
         {
-            _atSpiClient.RunningChanged += () => dispatchNotification(
-                () => OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable))
-            );
+            _atSpiClient.RunningChanged += () => dispatchNotification(NotifyFocusedFieldFeaturesAvailability);
         }
 
         _dictation = dictation;
@@ -1070,7 +1077,9 @@ public partial class DictationSectionViewModel : ObservableObject
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
         LockPasteToFocusedField = settings.LockPasteToFocusedField;
-        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
+        FitDictationToCursorContext = settings.FitDictationToCursorContext;
+        StripFinalPeriodFromStandaloneValues = settings.StripFinalPeriodFromStandaloneValues;
+        NotifyFocusedFieldFeaturesAvailability();
         DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays.ToString(CultureInfo.InvariantCulture);
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
         TargetAppCorrectionLearningEnabled = settings.TargetAppCorrectionLearningEnabled;
@@ -2238,6 +2247,22 @@ public partial class DictationSectionViewModel : ObservableObject
         _settings.Update(current => current with { LockPasteToFocusedField = value });
     }
 
+    partial void OnFitDictationToCursorContextChanged(bool value)
+    {
+        _settings.Update(current => current with { FitDictationToCursorContext = value });
+    }
+
+    partial void OnStripFinalPeriodFromStandaloneValuesChanged(bool value)
+    {
+        _settings.Update(current => current with { StripFinalPeriodFromStandaloneValues = value });
+    }
+
+    private void NotifyFocusedFieldFeaturesAvailability()
+    {
+        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
+        OnPropertyChanged(nameof(IsCursorContextFormattingAvailable));
+    }
+
     [ObservableProperty]
     private string _dictationRecoveryRetentionDays = "30";
 
@@ -2265,7 +2290,7 @@ public partial class DictationSectionViewModel : ObservableObject
     partial void OnTargetAppCorrectionLearningEnabledChanged(bool value)
     {
         _settings.Update(current => current with { TargetAppCorrectionLearningEnabled = value });
-        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
+        NotifyFocusedFieldFeaturesAvailability();
         OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         // Re-read the live flag when the feature is switched on so the enable button appears
         // if the bridge isn't active yet.
@@ -2277,7 +2302,7 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnAccessibilityBridgeActivatedChanged(bool value)
     {
-        OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
+        NotifyFocusedFieldFeaturesAvailability();
         OnPropertyChanged(nameof(ShowAccessibilityBridgeSetup));
         OnPropertyChanged(nameof(ShowAccessibilityBridgeRemove));
     }
