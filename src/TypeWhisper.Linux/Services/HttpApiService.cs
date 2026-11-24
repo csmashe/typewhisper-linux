@@ -17,6 +17,7 @@ using TypeWhisper.Core;
 using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Ipc;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Vocabulary;
@@ -220,7 +221,9 @@ public sealed partial class HttpApiService : IDisposable
     };
     private static readonly TimeSpan s_defaultQuiesceBudget = TimeSpan.FromSeconds(5);
 
+    private readonly IActiveWindowService? _activeWindow;
     private readonly AudioFileService _audioFiles;
+    private readonly BrowserExtensionContextStore? _browserContext;
     private readonly HotkeyService _hotkeys;
     private readonly DictationOrchestrator _dictation;
     private readonly RecorderService _recorder;
@@ -277,6 +280,8 @@ public sealed partial class HttpApiService : IDisposable
         DictationSessionResultStore sessionResults,
         RecorderService recorder,
         ApiDiscoveryFile discoveryFile,
+        IActiveWindowService activeWindow,
+        BrowserExtensionContextStore browserContext,
         string? secretProtectionKeyFilePath = null
     )
         : this(
@@ -298,7 +303,9 @@ public sealed partial class HttpApiService : IDisposable
             discoveryFile,
             secretProtectionKeyFilePath,
             null,
-            null
+            null,
+            activeWindow,
+            browserContext
         )
     {
     }
@@ -322,9 +329,13 @@ public sealed partial class HttpApiService : IDisposable
         ApiDiscoveryFile discoveryFile,
         string? secretProtectionKeyFilePath,
         string? apiSocketPath,
-        Func<Socket, bool>? validateUnixPeer
+        Func<Socket, bool>? validateUnixPeer,
+        IActiveWindowService? activeWindow = null,
+        BrowserExtensionContextStore? browserContext = null
     )
     {
+        _activeWindow = activeWindow;
+        _browserContext = browserContext;
         _models = models;
         _settings = settings;
         _audioFiles = audioFiles;
@@ -1381,6 +1392,7 @@ public sealed partial class HttpApiService : IDisposable
                 ("/v1/dictation/stop", "POST") => await HandleDictationStopAsync(),
                 ("/v1/dictation/status", "GET") => HandleDictationStatus(),
                 ("/v1/dictation/transcription", "GET") => HandleDictationTranscription(request),
+                ("/v1/browser/context", "PUT") => await HandleBrowserContextAsync(context, ct),
                 ("/v1/recorder/start", "POST") => await HandleRecorderStartAsync(request, ct),
                 ("/v1/recorder/stop", "POST") => await HandleRecorderStopAsync(),
                 ("/v1/recorder/status", "GET") => HandleRecorderStatus(),
@@ -1490,6 +1502,7 @@ public sealed partial class HttpApiService : IDisposable
             modelSelection = "request-scoped engine/model overrides; await_download supported",
             supportsDictationControl = true,
             supportsRecorderControl = true,
+            supportsBrowserContext = true,
             requiresAuthentication = true,
         }));
     }
@@ -1514,6 +1527,7 @@ public sealed partial class HttpApiService : IDisposable
                     apiVersion = ApiVersion,
                     supportsStreaming = plugin?.SupportsStreaming ?? false,
                     supportsTranslation = plugin?.SupportsTranslation ?? false,
+                    supportsBrowserContext = true,
                     acceleration = BuildAccelerationDto(plugin, _settings.Current),
                 }
             )
@@ -2747,6 +2761,61 @@ public sealed partial class HttpApiService : IDisposable
             : (200, Serialize(new { stopped = true }));
     }
 
+    private async Task<(int, string)> HandleBrowserContextAsync(HttpContext context, CancellationToken ct)
+    {
+        if (context.Request.Query.Count != 0)
+        {
+            return (400, Serialize(new { error = "This endpoint accepts no query parameters" }));
+        }
+
+        // Ordered by arrival, before any wait (body or foreground lookup), so a slower earlier report can't
+        // override a later one.
+        var sequence = _browserContext?.BeginReport() ?? 0;
+        var apiRequest = await HttpApiRequestParser.FromHttpContextAsync(context, MaxJsonRequestBytes, ct);
+        var report = HttpApiRequestParser.ParseBrowserContext(apiRequest.Body);
+        BrowserExtensionReport? stored = null;
+        // ReSharper disable once InvertIf -- both paths share the response built below; an early return would duplicate it.
+        if (_browserContext is not null)
+        {
+            // The report belongs to whatever is in front now; the extension sends it when its window gains focus.
+            ActiveWindowSnapshot? foreground = null;
+            if (report.Focused && _activeWindow is not null)
+            {
+                using var snapshotCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                snapshotCts.CancelAfter(TimeSpan.FromMilliseconds(500));
+                try
+                {
+                    foreground = await _activeWindow.GetActiveWindowSnapshotAsync(snapshotCts.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // No foreground within the budget: the report is ignored rather than misattributed.
+                }
+            }
+
+            stored = _browserContext.Report(
+                sequence,
+                report.ClientId,
+                report.Focused,
+                BrowserExtensionContextStore.NormalizeUrl(report.Url),
+                BrowserExtensionContextStore.NormalizeTitle(report.Title),
+                foreground
+            );
+        }
+
+        return (
+            200,
+            Serialize(
+                new
+                {
+                    status = !report.Focused ? "cleared" : stored is not null ? "active" : "ignored",
+                    processName = stored?.ProcessName,
+                    url = stored?.Url,
+                }
+            )
+        );
+    }
+
     private (int, string) HandleDictationStatus()
     {
         return (
@@ -3272,7 +3341,17 @@ public sealed partial class HttpApiService : IDisposable
     {
         var origin = request.Headers.Origin.ToString();
         return string.IsNullOrWhiteSpace(origin)
+            || IsBrowserExtensionOrigin(origin)
             || string.Equals(origin, GetAllowedOrigin(request), StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Web pages (http(s) or "null" origin) stay blocked. Extensions call with host permission, so they need no
+    // CORS headers; the token is still required.
+    private static bool IsBrowserExtensionOrigin(string origin)
+    {
+        var separator = origin.IndexOf("://", StringComparison.Ordinal);
+        return separator > 0
+            && origin[..separator].ToLowerInvariant() is "chrome-extension" or "moz-extension";
     }
 
     private static bool IsAllowedLoopbackHost(string? host)

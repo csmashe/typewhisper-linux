@@ -703,6 +703,7 @@
   "General.AutostartEntryPreserved": "TypeWhisperは、{0}にある外部またはカスタマイズされた自動起動エントリーには手を加えず、上書きや削除も行いません。",
   "General.AutostartHint": "ログイン時にTypeWhisperが自動で起動します。",
   "General.BearerToken": "Bearerトークン",
+  "General.BrowserExtensionHint": "TypeWhisperブラウザー拡張機能はこのAPIを使って音声入力を開始し、開いているサイトをWebサイトプロファイルに伝えられます。拡張機能の設定でこのポートを入力し、トークンを貼り付けてください。",
   "General.CliBundledTarget": "同梱: {0}  |  インストール先: {1}",
   "General.CliInstallHint": "同梱のCLIランチャーを~/.local/bin/typewhisper-cliにインストールします。上記のBearerトークンは、TYPEWHISPER_API_TOKENまたは--tokenで指定してください。",
   "General.CliInstallerTarget": "インストール先: {0}",

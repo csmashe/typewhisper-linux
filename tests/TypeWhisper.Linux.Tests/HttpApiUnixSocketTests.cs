@@ -10,6 +10,7 @@ using TypeWhisper.Core.Interfaces;
 using TypeWhisper.Core.Models;
 using TypeWhisper.Core.Services;
 using TypeWhisper.Linux.Services;
+using TypeWhisper.Linux.Services.ActiveWindow;
 using TypeWhisper.Linux.Services.Localization;
 using TypeWhisper.Linux.Services.Vocabulary;
 using TypeWhisper.Linux.Tests.Vocabulary;
@@ -639,6 +640,223 @@ public sealed class HttpApiUnixSocketTests
         Assert.Equal(HttpStatusCode.Forbidden, hostResponse.StatusCode);
         using var status = await client.GetAsync("/v1/status");
         Assert.Equal(HttpStatusCode.Unauthorized, status.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("chrome-extension://abcdefghijklmnopabcdefghijklmnop", HttpStatusCode.OK)]
+    [InlineData("moz-extension://8d1f0c2e-1111-2222-3333-444455556666", HttpStatusCode.OK)]
+    [InlineData("safari-web-extension://ABC", HttpStatusCode.Forbidden)]
+    [InlineData("https://example.com", HttpStatusCode.Forbidden)]
+    [InlineData("http://127.0.0.1:1", HttpStatusCode.Forbidden)]
+    [InlineData("null", HttpStatusCode.Forbidden)]
+    [InlineData("chrome-extension:abc", HttpStatusCode.Forbidden)]
+    public async Task BrowserExtensionOriginsMayCallTheApiButWebPagesMayNot(string origin, HttpStatusCode expected)
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/status");
+        request.Headers.Add("Origin", origin);
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(expected, response.StatusCode);
+        // Extensions call with host permission and need no CORS headers, so none are sent.
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
+    [Fact]
+    public async Task BrowserExtensionOriginStillNeedsTheToken()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/status");
+        request.Headers.Add("Origin", "chrome-extension://abcdefghijklmnopabcdefghijklmnop");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task StatusAndCapabilitiesReportBrowserContextSupport()
+    {
+        using var fixture = new ApiFixture();
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        using var status = JsonDocument.Parse(await client.GetStringAsync("/v1/status"));
+        using var capabilities = JsonDocument.Parse(await client.GetStringAsync("/v1/capabilities"));
+
+        Assert.True(status.RootElement.GetProperty("supports_browser_context").GetBoolean());
+        Assert.True(capabilities.RootElement.GetProperty("supports_browser_context").GetBoolean());
+    }
+
+    [Fact]
+    public async Task BrowserContextReportIsStoredForTheWindowInFront()
+    {
+        var firefox = new ActiveWindowSnapshot("firefox", "Docs", "0x1", null, "xdotool", 4242);
+        var activeWindow = new Mock<IActiveWindowService>();
+        activeWindow
+            .Setup(service => service.GetActiveWindowSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(firefox);
+        var store = new BrowserExtensionContextStore();
+        using var fixture = new ApiFixture(activeWindow: activeWindow.Object, browserContext: store);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        using var active = await PutBrowserContextAsync(
+            client,
+            """{"client_id":" ext-1 ","focused":true,"url":"https://docs.example.com/page","title":"Docs"}"""
+        );
+        Assert.Equal(HttpStatusCode.OK, active.StatusCode);
+        using (var body = JsonDocument.Parse(await active.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("active", body.RootElement.GetProperty("status").GetString());
+            Assert.Equal("firefox", body.RootElement.GetProperty("process_name").GetString());
+            Assert.Equal("https://docs.example.com/page", body.RootElement.GetProperty("url").GetString());
+        }
+
+        var report = store.Current(firefox);
+        Assert.NotNull(report);
+        Assert.Equal("ext-1", report.ClientId);
+        Assert.Equal("Docs", report.Title);
+
+        using var newTab = await PutBrowserContextAsync(
+            client,
+            """{"client_id":"ext-1","focused":true,"url":"chrome://newtab/","title":null}"""
+        );
+        using (var body = JsonDocument.Parse(await newTab.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("active", body.RootElement.GetProperty("status").GetString());
+            Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("url").ValueKind);
+        }
+
+        Assert.Null(store.Current(firefox)!.Url);
+
+        using var cleared = await PutBrowserContextAsync(client, """{"client_id":"ext-1","focused":false}""");
+        using (var body = JsonDocument.Parse(await cleared.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("cleared", body.RootElement.GetProperty("status").GetString());
+        }
+
+        Assert.Null(store.Current(firefox));
+    }
+
+    [Fact]
+    public async Task ClearArrivingDuringTheForegroundLookupWinsOverTheEarlierReport()
+    {
+        var firefox = new ActiveWindowSnapshot("firefox", "Docs", "0x1", null, "xdotool", 4242);
+        var lookupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLookup = new TaskCompletionSource<ActiveWindowSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeWindow = new Mock<IActiveWindowService>();
+        activeWindow
+            .Setup(service => service.GetActiveWindowSnapshotAsync(It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                lookupStarted.TrySetResult();
+                return releaseLookup.Task;
+            });
+        var store = new BrowserExtensionContextStore();
+        using var fixture = new ApiFixture(activeWindow: activeWindow.Object, browserContext: store);
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        var focusedTask = PutBrowserContextAsync(
+            client,
+            """{"client_id":"ext-1","focused":true,"url":"https://docs.example.com/"}"""
+        );
+        await lookupStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        using (var cleared = await PutBrowserContextAsync(client, """{"client_id":"ext-1","focused":false}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
+        }
+
+        releaseLookup.SetResult(firefox);
+        using var focused = await focusedTask;
+
+        using var body = JsonDocument.Parse(await focused.Content.ReadAsStringAsync());
+        Assert.Equal("ignored", body.RootElement.GetProperty("status").GetString());
+        Assert.Null(store.Current(firefox));
+    }
+
+    [Fact]
+    public async Task BrowserContextReportIsIgnoredWithoutAWindowInFront()
+    {
+        var activeWindow = new Mock<IActiveWindowService>();
+        activeWindow
+            .Setup(service => service.GetActiveWindowSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ActiveWindowSnapshot?)null);
+        using var fixture = new ApiFixture(
+            activeWindow: activeWindow.Object,
+            browserContext: new BrowserExtensionContextStore()
+        );
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        using var response = await PutBrowserContextAsync(
+            client,
+            """{"client_id":"ext-1","focused":true,"url":"https://example.com/"}"""
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("ignored", body.RootElement.GetProperty("status").GetString());
+    }
+
+    [Theory]
+    [InlineData("""{"client_id":"a","focused":true,"extra":1}""", "Unknown or duplicate JSON field")]
+    [InlineData("""{"client_id":"a","client_id":"b","focused":true}""", "Unknown or duplicate JSON field")]
+    [InlineData("""{"focused":true}""", "Missing or invalid client_id")]
+    [InlineData("""{"client_id":"   ","focused":true}""", "Missing or invalid client_id")]
+    [InlineData("""{"client_id":42,"focused":true}""", "Missing or invalid client_id")]
+    [InlineData("""{"client_id":"a"}""", "focused must be a boolean")]
+    [InlineData("""{"client_id":"a","focused":"true"}""", "focused must be a boolean")]
+    [InlineData("""{"client_id":"a","focused":true,"url":5}""", "url and title must be strings or null")]
+    [InlineData("""{"client_id":"a","focused":true,"title":[]}""", "url and title must be strings or null")]
+    [InlineData("[]", "Invalid JSON body")]
+    [InlineData("{", "Invalid JSON body")]
+    [InlineData("", "Invalid JSON body")]
+    public async Task BrowserContextRejectsInvalidBodies(string json, string error)
+    {
+        using var fixture = new ApiFixture(browserContext: new BrowserExtensionContextStore());
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        using var response = await PutBrowserContextAsync(client, json);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(error, body.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task BrowserContextRejectsQueryParametersAndOtherMethods()
+    {
+        using var fixture = new ApiFixture(browserContext: new BrowserExtensionContextStore());
+        fixture.Start();
+        using var client = fixture.CreateTcpClient(withBearer: true);
+
+        using var withQuery = await PutBrowserContextAsync(
+            client,
+            """{"client_id":"a","focused":false}""",
+            "/v1/browser/context?x=1"
+        );
+        using var get = await client.GetAsync("/v1/browser/context");
+
+        Assert.Equal(HttpStatusCode.BadRequest, withQuery.StatusCode);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, get.StatusCode);
+        Assert.Equal("PUT", Assert.Single(get.Content.Headers.Allow));
+    }
+
+    private static Task<HttpResponseMessage> PutBrowserContextAsync(
+        HttpClient client,
+        string json,
+        string path = "/v1/browser/context"
+    )
+    {
+        return client.PutAsync(path, new StringContent(json, Encoding.UTF8, "application/json"));
     }
 
     [Fact]
@@ -2230,7 +2448,9 @@ public sealed class HttpApiUnixSocketTests
             IPostProcessingPipeline? pipeline = null,
             ITranslationService? translation = null,
             IReadOnlyList<ITranscriptionEngineRole>? transcriptionEngines = null,
-            bool vocabularyBoostingEnabled = false
+            bool vocabularyBoostingEnabled = false,
+            IActiveWindowService? activeWindow = null,
+            BrowserExtensionContextStore? browserContext = null
         )
         {
             Port = GetFreeTcpPort();
@@ -2318,7 +2538,9 @@ public sealed class HttpApiUnixSocketTests
                 new ApiDiscoveryFile(),
                 Path.Join(_tempDirectory, "secret-protection.key"),
                 SocketPath,
-                validateUnixPeer
+                validateUnixPeer,
+                activeWindow,
+                browserContext
             );
         }
 
@@ -2327,7 +2549,7 @@ public sealed class HttpApiUnixSocketTests
 
         internal ModelManagerService Models { get; }
 
-        internal int Port { get; }
+        internal int Port { get; private set; }
 
         internal string SocketPath { get; }
 
@@ -2345,7 +2567,19 @@ public sealed class HttpApiUnixSocketTests
 
         internal void Start()
         {
-            Service.ApplySettings();
+            // GetFreeTcpPort releases the port before Kestrel binds it, so a parallel test process can take it first.
+            for (var attempt = 1; ; attempt++)
+            {
+                Service.ApplySettings();
+                if (attempt == 5 || !Service.StatusText.Contains("Failed to bind", StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                Port = GetFreeTcpPort();
+                _current = _current with { ApiServerPort = Port };
+            }
+
             Assert.StartsWith(
                 "Local API is running",
                 Service.StatusText,

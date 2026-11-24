@@ -24,6 +24,7 @@ internal static class HttpApiRoutes
             ("POST", "/v1/dictation/stop", "Stop the active dictation session."),
             ("GET", "/v1/dictation/status", "Read dictation state."),
             ("GET", "/v1/dictation/transcription", "Read a dictation session result."),
+            ("PUT", "/v1/browser/context", "Report the active tab from the TypeWhisper browser extension for website profiles."),
             ("POST", "/v1/recorder/start", "Start a microphone recorder session (no automatic transcription)."),
             ("POST", "/v1/recorder/stop", "Stop the recorder session and save the WAV file."),
             ("GET", "/v1/recorder/status", "Read recorder state."),
