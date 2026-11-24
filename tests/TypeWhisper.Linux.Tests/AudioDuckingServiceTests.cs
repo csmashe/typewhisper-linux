@@ -38,7 +38,7 @@ public sealed class AudioDuckingServiceTests
         service.DuckAudio(0.5f);
         service.RestoreAudio();
 
-        Assert.Equal(8, runner.Invocations.Count);
+        Assert.Equal(9, runner.Invocations.Count);
         Assert.All(runner.Invocations, invocation => Assert.Equal("pactl", invocation.FileName));
         Assert.All(
             runner.Invocations,
@@ -56,13 +56,14 @@ public sealed class AudioDuckingServiceTests
             runner.Invocations[4].Args
         );
         Assert.Equal(["info"], runner.Invocations[5].Args);
+        Assert.Equal(["list", "sink-inputs"], runner.Invocations[6].Args);
         Assert.Equal(
             ["set-sink-input-volume", "593", "45875", "26214"],
-            runner.Invocations[6].Args
+            runner.Invocations[7].Args
         );
         Assert.Equal(
             ["set-sink-input-volume", "42", "32769"],
-            runner.Invocations[7].Args
+            runner.Invocations[8].Args
         );
 
         var stereoInvocations = runner.Invocations
@@ -113,8 +114,8 @@ public sealed class AudioDuckingServiceTests
         service.Dispose();
         service.RestoreAudio();
 
-        Assert.Equal(10, runner.Invocations.Count);
-        Assert.Equal(1, CountInvocations(runner, list));
+        Assert.Equal(12, runner.Invocations.Count);
+        Assert.Equal(3, CountInvocations(runner, list));
         Assert.Equal(1, CountInvocations(runner, firstDuck));
         Assert.Equal(1, CountInvocations(runner, secondDuck));
         Assert.Equal(1, CountInvocations(runner, successfulRestore));
@@ -169,8 +170,8 @@ public sealed class AudioDuckingServiceTests
         service.RestoreAudio();
         service.Dispose();
 
-        Assert.Equal(8, runner.Invocations.Count);
-        Assert.Equal(1, CountInvocations(runner, list));
+        Assert.Equal(10, runner.Invocations.Count);
+        Assert.Equal(3, CountInvocations(runner, list));
         Assert.Equal(1, CountInvocations(runner, duck));
         Assert.Equal(2, CountInvocations(runner, restore));
     }
@@ -257,7 +258,8 @@ public sealed class AudioDuckingServiceTests
         service.RestoreAudio();
         service.DuckAudio(0.5f);
 
-        Assert.Equal(2, CountInvocations(runner, list));
+        // Two ducks plus a volume check before each of the three restores.
+        Assert.Equal(5, CountInvocations(runner, list));
         Assert.Equal(2, CountInvocations(runner, duck));
         Assert.Equal(3, CountInvocations(runner, restore));
         errorLog.Verify(
@@ -310,7 +312,7 @@ public sealed class AudioDuckingServiceTests
         service.RestoreAudio();
         service.DuckAudio(0.5f);
 
-        Assert.Equal(2, CountInvocations(runner, list));
+        Assert.Equal(3, CountInvocations(runner, list));
         Assert.Equal(2, CountInvocations(runner, duck));
         Assert.Equal(1, CountInvocations(runner, restore));
         errorLog.VerifyNoOtherCalls();
@@ -341,10 +343,10 @@ public sealed class AudioDuckingServiceTests
         service.RestoreAudio();
         service.RestoreAudio();
 
-        Assert.Equal(2, CountInvocations(runner, list));
+        Assert.Equal(4, CountInvocations(runner, list));
         Assert.Equal(2, CountInvocations(runner, duck));
         Assert.Equal(2, CountInvocations(runner, restore));
-        Assert.Equal(12, runner.Invocations.Count);
+        Assert.Equal(14, runner.Invocations.Count);
     }
 
 
@@ -476,12 +478,13 @@ public sealed class AudioDuckingServiceTests
         Assert.Equal(["info"], runner.Invocations[2].Args);
         Assert.Equal(["set-sink-input-volume", "593", "22938"], runner.Invocations[3].Args);
         Assert.Equal(["info"], runner.Invocations[4].Args);
-        Assert.Equal(["set-sink-input-volume", "593", "45875"], runner.Invocations[5].Args);
-        Assert.Equal(6, runner.Invocations.Count);
+        Assert.Equal(["list", "sink-inputs"], runner.Invocations[5].Args);
+        Assert.Equal(["set-sink-input-volume", "593", "45875"], runner.Invocations[6].Args);
+        Assert.Equal(7, runner.Invocations.Count);
 
         // The deferred restore completed, so a later restore has nothing left to undo.
         service.RestoreAudio();
-        Assert.Equal(6, runner.Invocations.Count);
+        Assert.Equal(7, runner.Invocations.Count);
     }
 
     [Fact]
@@ -516,7 +519,8 @@ public sealed class AudioDuckingServiceTests
         // The duck stopped after its running command instead of lowering the next stream.
         Assert.Equal(0, CountInvocations(runner, s_duck594));
         service.DuckAudio(0.5f);
-        Assert.Equal(1, CountInvocations(runner, ["list", "sink-inputs"]));
+        // The duck's listing and shutdown's volume check; the refused duck lists nothing.
+        Assert.Equal(2, CountInvocations(runner, ["list", "sink-inputs"]));
     }
 
     [Fact]

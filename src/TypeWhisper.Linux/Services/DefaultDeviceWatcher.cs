@@ -222,6 +222,7 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
 {
     private readonly Func<bool> _isPactlAvailable;
     private readonly Func<PactlSubscription> _subscriptionFactory;
+    private readonly Func<string?, bool> _isRelevant;
     private readonly TimeSpan _debounce;
     private readonly Lock _gate = new();
     private readonly Lock _disposeGate = new();
@@ -279,6 +280,22 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
     public PactlDefaultDeviceWatcher(SystemCommandAvailabilityService commands)
         : this(commands, new ProcessRunner()) { }
 
+    // The same subscription for other events (AudioDuckingService watches for new streams).
+    internal PactlDefaultDeviceWatcher(
+        SystemCommandAvailabilityService commands,
+        IProcessRunner processRunner,
+        Func<string?, bool> isRelevant,
+        TimeSpan debounce
+    )
+        : this(
+            () => commands.HasPactl,
+            () => LaunchPactlSubscribe(processRunner),
+            isRelevant: isRelevant,
+            debounce: debounce
+        )
+    {
+    }
+
     // Availability-probe seam: tests inject a probe that reports pactl absent so the
     // graceful-fallback path (Start does nothing, never throws) is verifiable without
     // a real pactl on PATH.
@@ -298,13 +315,16 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
         Func<PactlSubscription> subscriptionFactory,
         TimeSpan? minRunBeforeRestart = null,
         TimeSpan? retryBackoff = null,
-        Func<Action, IDisposable>? registerSigtermHandler = null
+        Func<Action, IDisposable>? registerSigtermHandler = null,
+        Func<string?, bool>? isRelevant = null,
+        TimeSpan? debounce = null
     )
     {
         _registerSigtermHandler = registerSigtermHandler ?? RegisterSigtermHandler;
         _isPactlAvailable = isPactlAvailable;
         _subscriptionFactory = subscriptionFactory;
-        _debounce = TimeSpan.FromMilliseconds(350);
+        _isRelevant = isRelevant ?? IsDefaultDeviceRelevant;
+        _debounce = debounce ?? TimeSpan.FromMilliseconds(350);
         _minRunBeforeRestart = minRunBeforeRestart ?? TimeSpan.FromSeconds(5);
         _retryBackoff = retryBackoff ?? TimeSpan.FromSeconds(1);
     }
@@ -531,7 +551,7 @@ public sealed class PactlDefaultDeviceWatcher : IDefaultDeviceChangeWatcher
                     .ConfigureAwait(false)
             )
             {
-                if (IsDefaultDeviceRelevant(line))
+                if (_isRelevant(line))
                 {
                     dispatcher.Signal();
                 }
