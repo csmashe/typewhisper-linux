@@ -745,6 +745,42 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public async Task EngineDetectingAnyLanguage_OffersEveryLanguageForTextProcessing()
+    {
+        var plugin = new ModelDependentLanguagePlugin();
+        var devices = new FakeAudioDeviceEnumerator(
+            new FakeDevice(0, "Default Mic", 1, isDefault: true)
+        );
+        using var context = new ViewModelTestContext(
+            AppSettings.Default with { Language = "de", SelectedModelId = null },
+            devices,
+            [plugin]
+        );
+
+        context.Sut.SelectedModel = Assert.Single(
+            context.Sut.ModelOptions,
+            option => option.ModelId == plugin.SeventhFullModelId
+        );
+        await WaitUntilAsync(() => context.Sut.LanguageIsTextOnly);
+
+        Assert.Contains(context.Sut.LanguageChoices, option => option.Code == "auto");
+        Assert.Contains(context.Sut.LanguageChoices, option => option.Code == "fr");
+        // Outside the default list, yet it has spoken-formatting rules.
+        Assert.Contains(context.Sut.LanguageChoices, option => option.Code == "ru");
+        Assert.Equal("de", context.Sut.SelectedLanguageOption?.Code);
+        Assert.False(context.Sut.LanguageSelectionRequired);
+        Assert.Contains(context.Sut.AvailableAdditionalLanguages, option => option.Code == "fr");
+
+        context.Sut.SelectedModel = Assert.Single(
+            context.Sut.ModelOptions,
+            option => option.ModelId == plugin.ThirdFullModelId
+        );
+        await WaitUntilAsync(() => !context.Sut.LanguageIsTextOnly);
+
+        Assert.True(context.Sut.LanguageSelectionRequired);
+    }
+
+    [Fact]
     public void RefreshDevices_WhenPinnedIdentityDisappears_ClearsRuntimeSelectionAndPreservesPreference()
     {
         const int pinnedIndex = 4;
@@ -1144,6 +1180,7 @@ public sealed class DictationSectionViewModelTests
         private const string FourthModelId = "explicit-only";
         private const string FifthModelId = "wide";
         private const string SixthModelId = "any-language";
+        private const string SeventhModelId = "detects-any-language";
 
         // Cohere Transcribe's languages.
         internal static string[] ExplicitOnlyLanguages { get; } =
@@ -1165,6 +1202,8 @@ public sealed class DictationSectionViewModelTests
             ModelManagerService.GetPluginModelId(PluginId, FifthModelId);
         public string SixthFullModelId =>
             ModelManagerService.GetPluginModelId(PluginId, SixthModelId);
+        public string SeventhFullModelId =>
+            ModelManagerService.GetPluginModelId(PluginId, SeventhModelId);
         public string PluginId => "com.test.language-picker";
         public string PluginName => "Language picker fake";
         public string PluginVersion => "1.0.0";
@@ -1179,6 +1218,7 @@ public sealed class DictationSectionViewModelTests
             new(FourthModelId, "Explicit only"),
             new(FifthModelId, "Wide"),
             new(SixthModelId, "Any language"),
+            new(SeventhModelId, "Detects any language"),
         ];
         public string? SelectedModelId { get; private set; }
         public bool SupportsTranslation { get; init; }
@@ -1187,7 +1227,7 @@ public sealed class DictationSectionViewModelTests
                 ? LanguageSelectionSupport.Unsupported
                 : LanguageSelectionSupport.Supported;
         public LanguageSelectionSupport ExplicitSelectionSupport =>
-            SelectedModelId == ThirdModelId
+            SelectedModelId is ThirdModelId or SeventhModelId
                 ? LanguageSelectionSupport.Unsupported
                 : LanguageSelectionSupport.Supported;
         public IReadOnlyList<string> SupportedLanguages =>
@@ -1196,7 +1236,7 @@ public sealed class DictationSectionViewModelTests
                 SecondModelId => ["en"],
                 FourthModelId => ExplicitOnlyLanguages,
                 FifthModelId => WideLanguages,
-                SixthModelId => [],
+                SixthModelId or SeventhModelId => [],
                 _ => ["de", "fr"],
             };
 
