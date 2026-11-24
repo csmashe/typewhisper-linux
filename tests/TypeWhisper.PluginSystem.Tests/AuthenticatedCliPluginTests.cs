@@ -1179,8 +1179,7 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
         var linkPath = Path.Join(linkDirectory, "codex");
         File.CreateSymbolicLink(linkPath, fake.ExecutablePath("codex"));
         using var plugin = CreatePlugin(linkDirectory);
-        await plugin.ActivateAsync(CreateHost().Object);
-        await plugin.RefreshFromSettingsAsync();
+        await ActivateAndSettleAsync(plugin);
         Assert.Equal(
             CliAvailabilityState.Ready,
             plugin.GetSnapshot(Descriptor(CliProviderKind.Codex)).State
@@ -1221,8 +1220,7 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
         var linkPath = Path.Join(linkDirectory, "codex");
         File.CreateSymbolicLink(linkPath, fake.ExecutablePath("codex"));
         using var plugin = CreatePlugin(linkDirectory);
-        await plugin.ActivateAsync(CreateHost().Object);
-        await plugin.RefreshFromSettingsAsync();
+        await ActivateAndSettleAsync(plugin);
         Assert.Equal(
             CliAvailabilityState.Ready,
             plugin.GetSnapshot(Descriptor(CliProviderKind.Codex)).State
@@ -2211,6 +2209,24 @@ public sealed partial class AuthenticatedCliPluginTests : IDisposable
         + $"\"providerID\":{JsonSerializer.Serialize(providerId)},\"name\":{JsonSerializer.Serialize(name)},"
         + $"\"status\":{JsonSerializer.Serialize(status)},\"modalities\":{{\"input\":{inputModalities},\"output\":{outputModalities}}},"
         + $"\"cost\":{cost},\"variants\":{variants}}}";
+
+    // ActivateAsync starts a background availability pass at once. Wait for it as well as the
+    // explicit refresh, so it can't probe a link the test is swapping and store its own state.
+    private async Task ActivateAndSettleAsync(AuthenticatedCliPlugin plugin)
+    {
+        var finishedPasses = 0;
+        var bothPassesFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        plugin.SettingsActivityChanged += activity =>
+        {
+            if (activity is null && Interlocked.Increment(ref finishedPasses) == 2)
+            {
+                bothPassesFinished.TrySetResult();
+            }
+        };
+        await plugin.ActivateAsync(CreateHost().Object);
+        await plugin.RefreshFromSettingsAsync();
+        await bothPassesFinished.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
 
     private static AuthenticatedCliPlugin CreatePlugin(string processPath) =>
         new(new CliExecutableDiscovery(() => processPath), CreateRunner()) { RuntimeDirectory = null };
