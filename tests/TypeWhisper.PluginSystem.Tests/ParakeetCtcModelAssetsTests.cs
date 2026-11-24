@@ -270,10 +270,12 @@ public sealed class ParakeetCtcModelAssetsTests : IDisposable
             )
         );
         await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
+        var model = Path.Join(Model, "model.int8.onnx");
+        // A future write time stays inside the settle window however slow the run is.
+        File.SetLastWriteTimeUtc(model, DateTime.UtcNow.AddHours(1));
         await Create(client, archive).EnsureAsync(Model, CancellationToken.None);
         // Files written moments ago get no stamp: a rewrite within the file-time resolution could keep it.
         Assert.Empty(Stamps());
-        var model = Path.Join(Model, "model.int8.onnx");
         var modelWritten = File.GetLastWriteTimeUtc(model);
         await File.WriteAllBytesAsync(model, [3, 2, 1]);
         File.SetLastWriteTimeUtc(model, modelWritten);
