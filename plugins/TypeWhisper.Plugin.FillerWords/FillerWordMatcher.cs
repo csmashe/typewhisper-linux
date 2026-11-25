@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -160,7 +161,8 @@ internal sealed class FillerWordMatcher
         {
             var character = text[position];
             if (char.IsUpper(character)
-                || !(char.IsLetter(character) || char.IsSurrogate(character) || character is '\'' or '’' or '-' or '‐' or '‑'))
+                || !(char.IsLetter(character) || char.IsSurrogate(character) || IsCombiningMark(character)
+                     || character is '\'' or '’' or '-' or '‐' or '‑'))
             {
                 return false;
             }
@@ -168,6 +170,11 @@ internal sealed class FillerWordMatcher
 
         return true;
     }
+
+    // Decomposed spellings carry accents as separate marks (e + U+0301).
+    private static bool IsCombiningMark(char character) =>
+        char.GetUnicodeCategory(character) is UnicodeCategory.NonSpacingMark
+            or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
 
     // Whether a word appended to the output would open a sentence: it starts the text or a line,
     // follows sentence-ending punctuation (also inside closing quotes: “Yes.” Um, …), or follows an

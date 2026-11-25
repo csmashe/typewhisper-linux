@@ -259,6 +259,7 @@ public sealed class FillerWordFilterTests
     [InlineData("He said “yes.” Um, then left.", "He said “yes.” Then left.")]
     [InlineData("Um, uh, hello", "Hello")]
     [InlineData("Uh, émile is here", "Émile is here")]
+    [InlineData("Uh, e\u0301mile is here", "E\u0301mile is here")]
     [InlineData("Um, don't stop", "Don't stop")]
     [InlineData("Э, привет", "Привет")]
     public void Remove_HandsASentenceOpeningFillersCapitalToTheNextWord(string input, string expected) =>
