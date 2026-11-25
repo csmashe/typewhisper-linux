@@ -422,6 +422,8 @@
   "Dictation.LocalModelAcceleration": "Local model acceleration",
   "Dictation.LockPasteToFocusedField": "Lock paste to the initial text field",
   "Dictation.LockPasteToFocusedFieldHint": "Returns focus to the field active when dictation starts before pasting. If it is unavailable, the text stays on the clipboard. Needs the accessibility listener that target-app correction learning turns on.",
+  "Dictation.PreserveClipboard": "Preserve clipboard content",
+  "Dictation.PreserveClipboardHint": "After pasting, puts back what was on the clipboard before. Turn off to keep the dictated text on the clipboard, where clipboard history can see it.",
   "Dictation.LockedFieldGone": "The text field active when dictation started is gone. The text was copied to the clipboard.",
   "Dictation.Microphone": "Microphone",
   "Dictation.MicTest": "Microphone test",

@@ -422,6 +422,8 @@
   "Dictation.LocalModelAcceleration": "ローカルモデルのアクセラレーション",
   "Dictation.LockPasteToFocusedField": "貼り付け先を最初のテキストフィールドに固定",
   "Dictation.LockPasteToFocusedFieldHint": "貼り付ける前に、音声入力の開始時にアクティブだったフィールドにフォーカスを戻します。そのフィールドが利用できない場合、テキストはクリップボードに残ります。他のアプリからの修正学習で有効になるアクセシビリティリスナーが必要です。",
+  "Dictation.PreserveClipboard": "クリップボードの内容を保持",
+  "Dictation.PreserveClipboardHint": "貼り付けた後、クリップボードを元の内容に戻します。オフにすると、音声入力したテキストがクリップボードに残り、クリップボード履歴にも記録されます。",
   "Dictation.LockedFieldGone": "音声入力の開始時にアクティブだったテキストフィールドがなくなりました。テキストはクリップボードにコピーされました。",
   "Dictation.Microphone": "マイク",
   "Dictation.MicTest": "マイクテスト",

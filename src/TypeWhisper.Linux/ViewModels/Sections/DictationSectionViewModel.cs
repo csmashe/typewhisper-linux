@@ -109,6 +109,9 @@ public partial class DictationSectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _lockPasteToFocusedField;
 
+    [ObservableProperty]
+    private bool _preserveClipboard;
+
     private readonly IAtSpiEventClient? _atSpiClient;
 
     public bool IsLockPasteToFocusedFieldAvailable => TargetAppCorrectionLearningEnabled && _atSpiClient?.IsRunning == true;
@@ -1040,6 +1043,8 @@ public partial class DictationSectionViewModel : ObservableObject
         {
             Language = languageHints.Count > 0 ? languageHints[0] : "auto";
             ReplaceCollection(AdditionalLanguages, languageHints.Skip(1).Select(ResolveLanguageOption));
+            LockPasteToFocusedField = settings.LockPasteToFocusedField;
+            PreserveClipboard = settings.PreserveClipboard;
         }
         finally
         {
@@ -1069,7 +1074,6 @@ public partial class DictationSectionViewModel : ObservableObject
         IsUsingCustomModelStorage =
             AppSettings.NormalizeLocalModelStoragePath(settings.LocalModelStoragePath) is not null;
         AutoPaste = settings.AutoPaste;
-        LockPasteToFocusedField = settings.LockPasteToFocusedField;
         OnPropertyChanged(nameof(IsLockPasteToFocusedFieldAvailable));
         DictationRecoveryRetentionDays = settings.DictationRecoveryRetentionDays.ToString(CultureInfo.InvariantCulture);
         AutoAddDictionaryCorrections = settings.AutoAddDictionaryCorrections;
@@ -1611,7 +1615,7 @@ public partial class DictationSectionViewModel : ObservableObject
             ModelStatusType.Loading => Loc.Instance["Dictation.StatusLoading"],
             ModelStatusType.Downloading => Loc.Instance.GetString(
                 "Dictation.StatusDownloading",
-                status.Progress.ToString("P0")
+                status.Progress.ToString("P0", CultureInfo.CurrentCulture)
             ),
             ModelStatusType.Error => FormatModelStatusError(status.ErrorMessage),
             _ => Loc.Instance["Dictation.StatusNotReady"],
@@ -1932,7 +1936,7 @@ public partial class DictationSectionViewModel : ObservableObject
         var progress = new Progress<double>(p =>
             CudaSetupStatus = Loc.Instance.GetString(
                 "Dictation.CudaDownloading",
-                Math.Clamp(p, 0, 1).ToString("P0")
+                Math.Clamp(p, 0, 1).ToString("P0", CultureInfo.CurrentCulture)
             )
         );
 
@@ -2235,7 +2239,22 @@ public partial class DictationSectionViewModel : ObservableObject
 
     partial void OnLockPasteToFocusedFieldChanged(bool value)
     {
+        if (_isLocalizedOptionRefresh)
+        {
+            return;
+        }
+
         _settings.Update(current => current with { LockPasteToFocusedField = value });
+    }
+
+    partial void OnPreserveClipboardChanged(bool value)
+    {
+        if (_isLocalizedOptionRefresh)
+        {
+            return;
+        }
+
+        _settings.Update(current => current with { PreserveClipboard = value });
     }
 
     [ObservableProperty]

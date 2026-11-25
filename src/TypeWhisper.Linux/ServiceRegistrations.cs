@@ -207,7 +207,8 @@ internal static class ServiceRegistrations
                 isAnotherSessionRecording: () => audioRecording.IsRecording,
                 atSpiClient: sp.GetRequiredService<IAtSpiEventClient>(),
                 learningConsent: () => settings.Current.TargetAppCorrectionLearningEnabled,
-                inputAllowed: () => sessionActivity.IsInputAllowed
+                inputAllowed: () => sessionActivity.IsInputAllowed,
+                preserveClipboard: () => settings.Current.PreserveClipboard
             );
         });
         services.AddSingleton<YdotoolSetupHelper>();

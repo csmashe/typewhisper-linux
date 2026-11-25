@@ -103,6 +103,17 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void PreserveClipboard_DefaultsOnForExistingFiles_AndRoundTrips()
+    {
+        File.WriteAllText(_filePath, "{\"uiLanguage\":\"de\"}");
+        Assert.True(new SettingsService(_filePath).Current.PreserveClipboard);
+
+        new SettingsService(_filePath).Save(AppSettings.Default with { PreserveClipboard = false });
+
+        Assert.False(new SettingsService(_filePath).Current.PreserveClipboard);
+    }
+
+    [Fact]
     public void DiagnosticLog_DefaultsOff_AndUnofferedRetentionFallsBackToSevenDays()
     {
         Assert.False(new SettingsService(_filePath).Current.DiagnosticLogEnabled);

@@ -2327,7 +2327,7 @@ public sealed class HttpApiUnixSocketTests
 
         internal ModelManagerService Models { get; }
 
-        internal int Port { get; }
+        internal int Port { get; private set; }
 
         internal string SocketPath { get; }
 
@@ -2346,6 +2346,14 @@ public sealed class HttpApiUnixSocketTests
         internal void Start()
         {
             Service.ApplySettings();
+            // GetFreeTcpPort releases the port before Kestrel binds it, so another process can take it first.
+            for (var retry = 0; retry < 3 && Service.StatusText.Contains("address already in use", StringComparison.OrdinalIgnoreCase); retry++)
+            {
+                Port = GetFreeTcpPort();
+                _current = _current with { ApiServerPort = Port };
+                Service.ApplySettings();
+            }
+
             Assert.StartsWith(
                 "Local API is running",
                 Service.StatusText,
