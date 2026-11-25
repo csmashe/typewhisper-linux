@@ -162,17 +162,83 @@ public sealed class FillerWordsPluginTests
     }
 
     [Fact]
-    public void GetSettingDefinitions_ExposesOneMultilineWordsField()
+    public void GetSettingDefinitions_ExposesTheWordsFieldAndTheCollapseToggle()
     {
         var sut = new FillerWordsPlugin();
         sut.SetLocalization(new PluginLocalization(PluginDirectory(), "en"));
 
-        var definition = Assert.Single(sut.GetSettingDefinitions());
+        var definitions = sut.GetSettingDefinitions();
 
-        Assert.Equal("words", definition.Key);
-        Assert.Equal(PluginSettingKind.Multiline, definition.Kind);
-        Assert.Equal("Filler words", definition.Label);
-        Assert.Equal("One word per line; commas and semicolons also separate words. Start a line with a language code and a colon (de: äh, ähm) to apply it to that spoken language only; other lines apply to every language.", definition.Description);
+        Assert.Equal(2, definitions.Count);
+        var words = definitions[0];
+        Assert.Equal("words", words.Key);
+        Assert.Equal(PluginSettingKind.Multiline, words.Kind);
+        Assert.Equal("Filler words", words.Label);
+        Assert.Equal("One word per line; commas and semicolons also separate words. Start a line with a language code and a colon (de: äh, ähm) to apply it to that spoken language only; other lines apply to every language.", words.Description);
+        var collapse = definitions[1];
+        Assert.Equal("collapseRepeatedWords", collapse.Key);
+        Assert.Equal(PluginSettingKind.Boolean, collapse.Kind);
+        Assert.Equal("Collapse repeated words", collapse.Label);
+        Assert.Equal("Shortens a word said three or more times in a row, such as \"I I I\", to one.", collapse.Description);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_CollapsesStuttersByDefault()
+    {
+        var host = new TestPluginHostServices();
+        var sut = new FillerWordsPlugin();
+        await sut.ActivateAsync(host);
+
+        Assert.Equal("true", await sut.GetSettingValueAsync("collapseRepeatedWords"));
+        Assert.Equal("I think so", await sut.ProcessAsync("I um I uh I think so", s_context, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SetSettingValue_CollapseOff_PersistsAndKeepsStutters()
+    {
+        var host = new TestPluginHostServices();
+        var sut = new FillerWordsPlugin();
+        await sut.ActivateAsync(host);
+
+        await sut.SetSettingValueAsync("collapseRepeatedWords", "false");
+
+        Assert.False(host.GetSetting<bool?>("collapseRepeatedWords"));
+        Assert.Equal("false", await sut.GetSettingValueAsync("collapseRepeatedWords"));
+        Assert.Equal("I I I think so", await sut.ProcessAsync("I I I think so", s_context, CancellationToken.None));
+
+        var reloaded = new FillerWordsPlugin();
+        await reloaded.ActivateAsync(host);
+        Assert.False(reloaded.Settings!.CollapseRepeatedWords);
+
+        await sut.SetSettingValueAsync("collapseRepeatedWords", null);
+        Assert.True(sut.Settings!.CollapseRepeatedWords);
+        Assert.True(host.GetSetting<bool?>("collapseRepeatedWords"));
+    }
+
+    [Theory]
+    [InlineData("Um, I think that this is what we want", "I think that this is what we want")]
+    [InlineData("Ich glaube, äh, dass das nicht gut ist", "Ich glaube, dass das nicht gut ist")]
+    [InlineData("Ich glaube, es geht um das Geld, nicht um mich", "Ich glaube, es geht um das Geld, nicht um mich")]
+    [InlineData("えっと、これはテストです。", "これはテストです。")]
+    [InlineData("um meh yes", "um meh yes")]
+    public async Task ProcessAsync_UnknownLanguage_PicksWordsForTheLanguageTheTextShows(string input, string expected)
+    {
+        var sut = new FillerWordsPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        Assert.Equal(expected, await sut.ProcessAsync(input, s_unknownLanguageContext, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ReportedLanguageWinsOverTheTextGuess()
+    {
+        var sut = new FillerWordsPlugin();
+        await sut.ActivateAsync(new TestPluginHostServices());
+
+        // English text with German reported: the English-only "um" stays.
+        Assert.Equal(
+            "Um, I think that this is what we want",
+            await sut.ProcessAsync("Um, I think that this is what we want", s_germanContext, CancellationToken.None));
     }
 
     [Fact]
@@ -221,8 +287,12 @@ public sealed class FillerWordsPluginTests
     [Fact]
     public void Localization_ShipsManifestKeysInEveryLocaleWithRealGerman()
     {
-        string[] keys = ["Settings.Title", "Settings.Hint", "Settings.WordCount", "Manifest.Name", "Manifest.Description"];
-        foreach (var locale in new[] { "en", "de", "es", "ru" })
+        string[] keys =
+        [
+            "Settings.Title", "Settings.Hint", "Settings.WordCount", "Settings.CollapseRepeatedWords",
+            "Settings.CollapseRepeatedWordsHint", "Manifest.Name", "Manifest.Description",
+        ];
+        foreach (var locale in new[] { "en", "de", "es", "ru", "ja", "zh" })
         {
             using var document = JsonDocument.Parse(File.ReadAllText(
                 Path.Join(PluginDirectory(), "Localization", locale + ".json")));
@@ -238,6 +308,7 @@ public sealed class FillerWordsPluginTests
         var en = new PluginLocalization(PluginDirectory(), "en");
         var de = new PluginLocalization(PluginDirectory(), "de");
         Assert.NotEqual(en.GetString("Settings.Title"), de.GetString("Settings.Title"));
+        Assert.NotEqual(en.GetString("Settings.CollapseRepeatedWords"), de.GetString("Settings.CollapseRepeatedWords"));
         Assert.NotEqual(en.GetString("Manifest.Name"), de.GetString("Manifest.Name"));
         Assert.NotEqual(en.GetString("Manifest.Description"), de.GetString("Manifest.Description"));
     }
