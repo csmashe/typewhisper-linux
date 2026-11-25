@@ -123,7 +123,7 @@ internal sealed partial class FillerWordMatcher
             var index = start;
             while (index < end)
             {
-                if (text[index] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                if (IsLineSeparator(text[index]))
                 {
                     capitalOwed = false;
                     break;
@@ -168,6 +168,8 @@ internal sealed partial class FillerWordMatcher
 
         output.Append(text, start, end - start);
     }
+
+    private static bool IsLineSeparator(char c) => c is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029';
 
     // Letters with inner apostrophes or hyphens, optionally followed by punctuation.
     private static bool IsPlainLowerCaseWord(string text, int index, int end)
@@ -218,12 +220,12 @@ internal sealed partial class FillerWordMatcher
     private static bool OpensSentence(StringBuilder output)
     {
         var index = output.Length - 1;
-        while (index >= 0 && output[index] != '\n' && char.IsWhiteSpace(output[index]))
+        while (index >= 0 && !IsLineSeparator(output[index]) && char.IsWhiteSpace(output[index]))
         {
             index--;
         }
 
-        if (index < 0 || output[index] == '\n')
+        if (index < 0 || IsLineSeparator(output[index]))
         {
             return true;
         }
