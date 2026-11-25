@@ -5,12 +5,16 @@ using System.Text.RegularExpressions;
 namespace TypeWhisper.Plugin.FillerWords;
 
 /// <summary>Compiled matching rules for one filler word list.</summary>
-internal sealed class FillerWordMatcher
+internal sealed partial class FillerWordMatcher
 {
+    private const string JapaneseBoundary = @"[\s、。,.!?！？…;:；：—–「』」『（）()\[\]“”""‘’'«»]";
+
     private static readonly char[] s_horizontalWhitespace = [' ', '\t', '　'];
 
     private readonly Regex? _latin;
     private readonly Regex? _japanese;
+    // \G-anchored, so a lookup never scans the rest of the text.
+    private readonly Regex? _japaneseHere;
 
     internal FillerWordMatcher(IReadOnlyList<string> normalizedWords)
     {
@@ -19,13 +23,14 @@ internal sealed class FillerWordMatcher
 
         _latin = latinWords.Count == 0 ? null : BuildLatinPattern(latinWords);
         _japanese = japaneseWords.Count == 0 ? null : BuildJapanesePattern(japaneseWords);
+        _japaneseHere = _latin is null || _japanese is null ? null : new Regex(@"\G(?:" + _japanese + ")", _japanese.Options);
     }
 
     /// <summary>Strips the matcher's filler words from <paramref name="text"/>.</summary>
     internal string Apply(string text)
     {
-        var result = _latin is null ? text : RemoveFillers(text, _latin);
-        return _japanese is null ? result : RemoveFillers(result, _japanese);
+        var result = _latin is null ? text : RemoveFillers(text, _latin, _japaneseHere);
+        return _japanese is null ? result : RemoveFillers(result, _japanese, null);
     }
 
     private static Regex BuildLatinPattern(IReadOnlyList<string> words)
@@ -57,7 +62,7 @@ internal sealed class FillerWordMatcher
 
         // The boundary is a lookbehind rather than a consumed capture so that consecutive
         // fillers ("えっと、あのー、") each still see the separator the previous one left behind.
-        const string boundary = @"(?<=^|[\s、。,.!?！？…;:；：—–「』」『（）()\[\]“”""‘’'«»])";
+        const string boundary = "(?<=^|" + JapaneseBoundary + ")";
         // "+" so that fillers written back to back ("えっとあのー") go together.
         var pattern = @"(?<lead>[ \t　]*)" + boundary + "(?:" + alternation + @")+(?<gap>[ \t　]*)(?<trail>[、。,.!?！？…;:；：]*)(?<after>[ \t　]*)";
 
@@ -67,7 +72,8 @@ internal sealed class FillerWordMatcher
     // Each removal is settled from its own surroundings instead of a whitespace pass over the
     // whole text, so indentation on untouched lines survives and a sentence-ending mark after a
     // filler ("I agree um. Next") stays with the sentence it closes.
-    private static string RemoveFillers(string text, Regex pattern)
+    // A capital owed to the next word skips the fillers that removeNext takes out afterwards.
+    private static string RemoveFillers(string text, Regex pattern, Regex? removeNext)
     {
         var matches = pattern.Matches(text);
         if (matches.Count == 0)
@@ -80,7 +86,7 @@ internal sealed class FillerWordMatcher
         var capitalOwed = false;
         foreach (Match match in matches)
         {
-            AppendRestoringCapital(output, text, position, match.Index, ref capitalOwed);
+            AppendRestoringCapital(output, text, position, match.Index, removeNext, ref capitalOwed);
             position = match.Index + match.Length;
             var contentFollows = ContentFollowsOnLine(text, position);
             if (!contentFollows)
@@ -104,18 +110,18 @@ internal sealed class FillerWordMatcher
             output.Append(Replacement(output, match, contentFollows, text, position));
         }
 
-        AppendRestoringCapital(output, text, position, text.Length, ref capitalOwed);
+        AppendRestoringCapital(output, text, position, text.Length, removeNext, ref capitalOwed);
         return output.ToString();
     }
 
     // Only a plain lower-case word takes the owed capital; "@jdoe", "example.com" and "iPhone"
     // keep their casing.
-    private static void AppendRestoringCapital(StringBuilder output, string text, int start, int end, ref bool capitalOwed)
+    private static void AppendRestoringCapital(StringBuilder output, string text, int start, int end, Regex? removeNext, ref bool capitalOwed)
     {
         if (capitalOwed)
         {
             var index = start;
-            while (index < end && char.IsWhiteSpace(text[index]))
+            while (index < end)
             {
                 if (text[index] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
                 {
@@ -123,7 +129,27 @@ internal sealed class FillerWordMatcher
                     break;
                 }
 
-                index++;
+                if (char.IsWhiteSpace(text[index]))
+                {
+                    index++;
+                    continue;
+                }
+
+                // Removing the Latin filler may have taken the Japanese one off its boundary.
+                if (removeNext?.Match(text, index) is not { Success: true } next
+                    || (index == start && output.Length > 0 && !JapaneseBoundaryRegex().IsMatch(output[^1].ToString())))
+                {
+                    break;
+                }
+
+                // A filler running into the next Latin match ("あの uh") loses its end with it.
+                var matchEnd = index + next.Length;
+                if (matchEnd > end && !text.AsSpan(end, matchEnd - end).IsWhiteSpace())
+                {
+                    break;
+                }
+
+                index = Math.Min(matchEnd, end);
             }
 
             if (capitalOwed && index < end)
@@ -485,6 +511,9 @@ internal sealed class FillerWordMatcher
 
         return open;
     }
+
+    [GeneratedRegex(JapaneseBoundary)]
+    private static partial Regex JapaneseBoundaryRegex();
 
     private static bool LineIsEmpty(StringBuilder output) =>
         output.Length == 0 || output[^1] == '\n';

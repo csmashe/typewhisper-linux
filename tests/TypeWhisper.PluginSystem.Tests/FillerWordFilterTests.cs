@@ -258,6 +258,9 @@ public sealed class FillerWordFilterTests
     [InlineData("first line\nUm, second line", "first line\nSecond line")]
     [InlineData("He said “yes.” Um, then left.", "He said “yes.” Then left.")]
     [InlineData("Um, uh, hello", "Hello")]
+    [InlineData("Um, あのー、hello", "Hello")]
+    [InlineData("Um, あのー。hello", "Hello")]
+    [InlineData("Um, あのー uh, hello", "Hello")]
     [InlineData("Uh, émile is here", "Émile is here")]
     [InlineData("Uh, e\u0301mile is here", "E\u0301mile is here")]
     [InlineData("Um, don't stop", "Don't stop")]
@@ -287,8 +290,13 @@ public sealed class FillerWordFilterTests
     [InlineData("Um,\u2028hello", "\u2028hello")]
     [InlineData("Um, a\U00010400", "a\U00010400")]
     [InlineData("He said \"hello,\" Um, friend", "He said \"hello,\" friend")]
+    [InlineData("„Um, あのーhello“", "„あのーhello“")]
     public void Remove_KeepsCasingWhenNoCapitalIsOwed(string input, string expected) =>
         Assert.Equal(expected, FillerWordFilter.Remove(input));
+
+    [Fact]
+    public void Remove_KeepsCasingAfterAJapanesePhraseTheLatinPassBreaks() =>
+        Assert.Equal("あの hello", FillerWordFilter.Remove("Um, あの uh hello", ["um", "uh", "あの uh"]));
 
     [Theory]
     [InlineData("Il a dit « bonjour » Euh, puis il est parti.", "Il a dit « bonjour » puis il est parti.")]
