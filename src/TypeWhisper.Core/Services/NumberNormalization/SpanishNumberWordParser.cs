@@ -4,10 +4,8 @@ using System.Text;
 
 namespace TypeWhisper.Core.Services.NumberNormalization;
 
-// The IReadOnlyList<string> parser contract is intentional: it keeps a uniform,
-// upstream-parity signature across all language parsers. CA1859's array micro-optimization
-// is irrelevant for these tiny (<10-element) word spans, so it is suppressed here.
-[SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "Uniform IReadOnlyList parser contract; negligible perf impact on tiny word spans.")]
+// NumberWordNormalizer passes ArraySegment views of a word run, so CA1859's array advice doesn't apply.
+[SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "NumberWordNormalizer passes ArraySegment views of a word run.")]
 internal static class SpanishNumberWordParser
 {
     private static readonly Dictionary<string, int> s_unitValues = new(StringComparer.Ordinal)
@@ -44,12 +42,11 @@ internal static class SpanishNumberWordParser
         ["novecientos"] = 900, ["novecientas"] = 900,
     };
 
-    public static NumberWordNormalizer.ParsedWords? Parse(IReadOnlyList<string> words)
+    public static NumberWordNormalizer.ParsedWords? Parse(IReadOnlyList<string> normalizedWords)
     {
-        if (words.Count == 0)
+        if (normalizedWords.Count == 0)
             return null;
 
-        var normalizedWords = words.Select(NumberWordNormalizer.NormalizeWord).ToArray();
         var index = 0;
         var isNegative = false;
 
@@ -57,7 +54,7 @@ internal static class SpanishNumberWordParser
         {
             isNegative = true;
             index++;
-            if (index >= normalizedWords.Length)
+            if (index >= normalizedWords.Count)
                 return null;
         }
 
@@ -73,7 +70,7 @@ internal static class SpanishNumberWordParser
         index = integer.Value.NextIndex;
         var replacement = integer.Value.Value.ToString(CultureInfo.InvariantCulture);
 
-        if (index < normalizedWords.Length && normalizedWords[index] == "coma")
+        if (index < normalizedWords.Count && normalizedWords[index] == "coma")
         {
             var decimalPart = ParseDecimalDigits(normalizedWords, index + 1);
             if (decimalPart.Digits.Length > 0)

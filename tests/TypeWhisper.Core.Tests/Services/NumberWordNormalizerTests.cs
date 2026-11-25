@@ -1,3 +1,4 @@
+using System.Text;
 using TypeWhisper.Core.Services.NumberNormalization;
 
 namespace TypeWhisper.Core.Tests.Services;
@@ -172,5 +173,29 @@ public class NumberWordNormalizerTests
     {
         Assert.Equal("ich habe ein Problem", NumberWordNormalizer.Normalize("ich habe ein Problem", "de"));
         Assert.Equal("100 Euro", NumberWordNormalizer.Normalize("ein hundert Euro", "de"));
+    }
+
+    [Fact]
+    public void Normalize_LongUnpunctuatedDictation_StaysLinear()
+    {
+        // Re-normalizing the rest of the run per start word made allocations grow quadratically.
+        Assert.Equal(Repeat("we have 23 files and ", 2_000), NumberWordNormalizer.Normalize(Spoken(2_000), "en"));
+
+        var small = AllocatedBytes(Spoken(500));
+        var large = AllocatedBytes(Spoken(1_000));
+
+        Assert.True(large < small * 3, $"Doubling the input grew allocations from {small} to {large} bytes.");
+        return;
+
+        static string Spoken(int phrases) => Repeat("we have twenty three files and ", phrases);
+
+        static string Repeat(string phrase, int count) => new StringBuilder().Insert(0, phrase, count).ToString();
+
+        static long AllocatedBytes(string text)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            NumberWordNormalizer.Normalize(text, "en");
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
     }
 }

@@ -4,10 +4,8 @@ using System.Text;
 
 namespace TypeWhisper.Core.Services.NumberNormalization;
 
-// The IReadOnlyList<string> parser contract is intentional: it keeps a uniform,
-// upstream-parity signature across all language parsers. CA1859's array micro-optimization
-// is irrelevant for these tiny (<10-element) word spans, so it is suppressed here.
-[SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "Uniform IReadOnlyList parser contract; negligible perf impact on tiny word spans.")]
+// NumberWordNormalizer passes ArraySegment views of a word run, so CA1859's array advice doesn't apply.
+[SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "NumberWordNormalizer passes ArraySegment views of a word run.")]
 internal static class GermanNumberWordParser
 {
     private static readonly Dictionary<string, int> s_units = new(StringComparer.Ordinal)
@@ -31,12 +29,12 @@ internal static class GermanNumberWordParser
         ["achtzig"] = 80, ["neunzig"] = 90,
     };
 
-    public static NumberWordNormalizer.ParsedWords? Parse(IReadOnlyList<string> words)
+    // Callers normalize with this class's NormalizeWord (ß → ss), not the shared one.
+    public static NumberWordNormalizer.ParsedWords? Parse(IReadOnlyList<string> normalizedWords)
     {
-        if (words.Count == 0)
+        if (normalizedWords.Count == 0)
             return null;
 
-        var normalizedWords = words.Select(NormalizeWord).ToArray();
         var index = 0;
         var isNegative = false;
 
@@ -44,7 +42,7 @@ internal static class GermanNumberWordParser
         {
             isNegative = true;
             index++;
-            if (index >= normalizedWords.Length)
+            if (index >= normalizedWords.Count)
                 return null;
         }
 
@@ -55,7 +53,7 @@ internal static class GermanNumberWordParser
         index = integer.Value.NextIndex;
         var replacement = integer.Value.Value.ToString(CultureInfo.InvariantCulture);
 
-        if (index < normalizedWords.Length && normalizedWords[index] == "komma")
+        if (index < normalizedWords.Count && normalizedWords[index] == "komma")
         {
             var decimalPart = ParseDecimalDigits(normalizedWords, index + 1);
             if (decimalPart.Digits.Length > 0)
@@ -233,6 +231,6 @@ internal static class GermanNumberWordParser
     private static bool AllowsArticleOne(int index, IReadOnlyList<string> words) =>
         index + 1 < words.Count && words[index + 1] is "hundert" or "tausend" or "million" or "millionen";
 
-    private static string NormalizeWord(string word) =>
+    internal static string NormalizeWord(string word) =>
         NumberWordNormalizer.NormalizeWord(word).Replace("ß", "ss", StringComparison.Ordinal);
 }
