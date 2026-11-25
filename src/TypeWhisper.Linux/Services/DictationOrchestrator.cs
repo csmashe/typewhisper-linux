@@ -69,8 +69,8 @@ internal sealed record RecordingContext(
     /// <summary>Whether the prompts and replies in <see cref="Capture" /> are saved with the entry (the provenance setting).</summary>
     public bool PersistLlmCalls { get; init; }
 
-    /// <summary>How long the streaming session took to finalize after the recording stopped.</summary>
-    public double? StreamingFinalizeSeconds { get; init; }
+    /// <summary>The <see cref="Stopwatch" /> timestamp of the recording's end, which the transcription time counts from.</summary>
+    public long RecordingEndedTimestamp { get; init; }
 
     /// <summary>How long speech-to-text took after the recording stopped, set once transcription succeeds.</summary>
     public double? TranscriptionSeconds { get; init; }
@@ -1660,6 +1660,8 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Interlocked.CompareExchange(ref _audioCaptureSession, null, captureSession);
             }
 
+            var recordingEnded = Stopwatch.GetTimestamp();
+
             // Capture ends with the microphone; streaming finalization below is measured on its own.
             if (telemetrySessionId is { } capturedSessionId)
             {
@@ -1766,6 +1768,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                     TargetWindow = _recordingTargetWindow,
                     IsWaylandSession = _commands.IsWaylandSession,
                     TargetField = learningConsent ? _recordingTargetField : null,
+                    RecordingEndedTimestamp = recordingEnded,
                 };
 
                 _recordingAppProcess = null;
@@ -1941,7 +1944,7 @@ public sealed partial class DictationOrchestrator : IDisposable
                         var streamingCancelToken = snapshotCts?.Token ?? CancellationToken.None;
                         var streamingFinalizeOperation =
                             _telemetry.Child(recordingContext.SessionId, "streaming.finalize");
-                        var (streamingFinalText, streamingFaulted, streamingDetectedLanguage, streamingFinalizeSeconds) =
+                        var (streamingFinalText, streamingFaulted, streamingDetectedLanguage) =
                             await TeardownStreamingSessionAsync(
                                 stoppedStreamingCoordinator,
                                 stoppedStreamingStartupCts,
@@ -1956,7 +1959,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                             StreamingFinalText = streamingFinalText,
                             StreamingFaulted = streamingFaulted,
                             StreamingDetectedLanguage = streamingDetectedLanguage,
-                            StreamingFinalizeSeconds = streamingFinalizeSeconds,
                         };
                     }
 
@@ -2470,7 +2472,6 @@ public sealed partial class DictationOrchestrator : IDisposable
             );
 
             PluginTranscriptionResult? result;
-            var batchTranscriptionSeconds = 0d;
             var transcribeOperation = _telemetry.Child(context.SessionId, "transcribe");
             try
             {
@@ -2534,7 +2535,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                     // back to batch on the captured WAV. The audio tap is
                     // non-destructive so the WAV is complete regardless of
                     // streaming state.
-                    var batchStarted = Stopwatch.GetTimestamp();
                     result = await plugin.TranscribeAsync(
                         wav,
                         languageSelection,
@@ -2543,7 +2543,6 @@ public sealed partial class DictationOrchestrator : IDisposable
                         TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
                         cancelToken
                     );
-                    batchTranscriptionSeconds = Stopwatch.GetElapsedTime(batchStarted).TotalSeconds;
                     // Trim before the preview fallback and gates so they see the remaining text.
                     // Honor the aggressive short-clip setting like the two gates below.
                     if (!_settings.Current.TranscribeShortQuietClipsAggressively)
@@ -2603,10 +2602,10 @@ public sealed partial class DictationOrchestrator : IDisposable
                 await leaseScope.DisposeAsync();
             }
 
-            // A faulted or mismatched stream still kept the user waiting before the batch decode.
+            // From the recording's end, so every wait before the transcript counts.
             context = context with
             {
-                TranscriptionSeconds = (context.StreamingFinalizeSeconds ?? 0) + batchTranscriptionSeconds,
+                TranscriptionSeconds = Stopwatch.GetElapsedTime(context.RecordingEndedTimestamp).TotalSeconds,
             };
 
             // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract -- result comes from a plugin transcription call whose non-null annotation may not hold.
@@ -5571,7 +5570,7 @@ public sealed partial class DictationOrchestrator : IDisposable
         });
     }
 
-    private static async Task<(string? FinalText, bool Faulted, string? DetectedLanguage, double? FinalizeSeconds)> TeardownStreamingSessionAsync(
+    private static async Task<(string? FinalText, bool Faulted, string? DetectedLanguage)> TeardownStreamingSessionAsync(
         StreamingTranscriptionCoordinator? coordinator,
         CancellationTokenSource? startupCts,
         bool finalize,
@@ -5600,15 +5599,13 @@ public sealed partial class DictationOrchestrator : IDisposable
         if (coordinator is null)
         {
             startupCts?.Dispose();
-            return (null, false, null, null);
+            return (null, false, null);
         }
 
         string? finalText = null;
         var finalizeThrew = false;
-        double? finalizeSeconds = null;
         if (finalize)
         {
-            var finalizeStarted = Stopwatch.GetTimestamp();
             try
             {
                 finalText = await coordinator.FinalizeAsync(ct);
@@ -5626,13 +5623,12 @@ public sealed partial class DictationOrchestrator : IDisposable
                 Trace.WriteLine($"[Dictation] Streaming finalize error: {ex.GetType().Name}: {FailureMessageSanitizer.Sanitize(ex.Message)}");
                 finalizeThrew = true;
             }
-            finalizeSeconds = Stopwatch.GetElapsedTime(finalizeStarted).TotalSeconds;
         }
 
         var detectedLanguage = coordinator.DetectedLanguage;
         await coordinator.DisposeAsync();
         startupCts?.Dispose();
-        return (finalText, coordinator.Faulted || finalizeThrew, detectedLanguage, finalizeSeconds);
+        return (finalText, coordinator.Faulted || finalizeThrew, detectedLanguage);
     }
 
     private async Task<string> StopPartialTranscriptionSessionAsync()

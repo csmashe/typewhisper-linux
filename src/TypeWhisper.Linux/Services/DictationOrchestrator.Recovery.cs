@@ -309,6 +309,8 @@ public sealed partial class DictationOrchestrator
             var failureStatus = TranscriptionRecordStatus.TranscriptionFailed;
             string? prompt = null;
             double? transcriptionSeconds = null;
+            // From the retry's start, so the model load counts as it does in a dictation.
+            var transcriptionStarted = Stopwatch.GetTimestamp();
             try
             {
                 var wav = await File.ReadAllBytesAsync(path, ct);
@@ -326,7 +328,6 @@ public sealed partial class DictationOrchestrator
                     record = record with { EngineUsed = plugin.ProviderId, ModelUsed = plugin.SelectedModelId };
                     supportsTranslation = plugin.SupportsTranslation;
                     (selection, languageHints) = plugin.ResolveEffectiveLanguage(selection, languageHints);
-                    var transcriptionStarted = Stopwatch.GetTimestamp();
                     result = await plugin.TranscribeAsync(
                         wav,
                         selection,

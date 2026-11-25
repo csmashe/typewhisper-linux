@@ -46,6 +46,19 @@ public sealed class DictationHistoryProcessingDetailsTests
     });
 
     [Fact]
+    public Task TranscriptionTime_CountsWaitsBetweenTheRecordingEndAndTheDecode() => BoundedTest.RunAsync(async () =>
+    {
+        await using var fixture = new OrchestratorCompositionFixture();
+        fixture.Orchestrator.RecordingCaptured += (_, _) => Thread.Sleep(300);
+        fixture.Plugin.EnqueueText("spoken text");
+
+        await DictateAsync(fixture);
+
+        var record = Assert.Single(fixture.History.Records);
+        Assert.True(record.TranscriptionSeconds >= 0.3, $"Recorded {record.TranscriptionSeconds} s.");
+    });
+
+    [Fact]
     public Task FailedPromptAction_NamesTheLlmButRecordsNoLlmTime() => BoundedTest.RunAsync(async () =>
     {
         await using var fixture = new OrchestratorCompositionFixture();
