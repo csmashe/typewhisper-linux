@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:TypeWhisper.Linux.Controls"
              xmlns:vm="using:TypeWhisper.Linux.ViewModels.Sections"
              xmlns:svc="using:TypeWhisper.Linux.Services"
              xmlns:models="using:TypeWhisper.Core.Models"
@@ -119,19 +120,19 @@
                             <TextBlock Text="{loc:Str Dictation.DefaultModel}"
                                        Classes="row-label"
                                        TextWrapping="Wrap" />
-                            <ComboBox Grid.Column="1"
-                                      AutomationProperties.Name="{loc:Str Dictation.DefaultModel}"
-                                      ItemsSource="{Binding ModelOptions}"
-                                      SelectedItem="{Binding SelectedModel}"
-                                      DropDownOpened="OnModelDropDownOpened"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
+                            <controls:SearchableComboBox Grid.Column="1"
+                                                         AutomationProperties.Name="{loc:Str Dictation.DefaultModel}"
+                                                         ItemsSource="{Binding ModelOptions}"
+                                                         SelectedItem="{Binding SelectedModel}"
+                                                         DropDownOpened="OnModelDropDownOpened"
+                                                         HorizontalAlignment="Stretch">
+                                <controls:SearchableComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:DictationModelOption">
                                         <TextBlock Text="{Binding DisplayLabel}" TextTrimming="CharacterEllipsis"
                                                    ToolTip.Tip="{Binding DisplayLabel}" />
                                     </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
+                                </controls:SearchableComboBox.ItemTemplate>
+                            </controls:SearchableComboBox>
                             <Button Grid.Column="2"
                                     Content="{loc:Str Dictation.DeleteModelFiles}"
                                     IsEnabled="{Binding CanDeleteSelectedModel}"
@@ -486,18 +487,18 @@
                               RowDefinitions="Auto,Auto">
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="{loc:Str Dictation.SpokenLanguage}"
                                        Classes="row-label" />
-                            <ComboBox Grid.Column="1"
-                                      Grid.Row="0"
-                                      AutomationProperties.Name="{loc:Str Dictation.SpokenLanguage}"
-                                      ItemsSource="{Binding LanguageChoices}"
-                                      SelectedItem="{Binding SelectedLanguageOption}"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
+                            <controls:SearchableComboBox Grid.Column="1"
+                                                         Grid.Row="0"
+                                                         AutomationProperties.Name="{loc:Str Dictation.SpokenLanguage}"
+                                                         ItemsSource="{Binding LanguageChoices}"
+                                                         SelectedItem="{Binding SelectedLanguageOption}"
+                                                         HorizontalAlignment="Stretch">
+                                <controls:SearchableComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="vm:SpokenLanguageOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
+                                </controls:SearchableComboBox.ItemTemplate>
+                            </controls:SearchableComboBox>
                             <TextBlock Grid.Row="1"
                                        Grid.Column="0"
                                        Grid.ColumnSpan="2"
@@ -562,16 +563,16 @@
                                 </ItemsControl>
                             </StackPanel>
                             <StackPanel Grid.Column="1" Spacing="6">
-                                <ComboBox ItemsSource="{Binding AvailableAdditionalLanguages}"
-                                          AutomationProperties.Name="{loc:Str Dictation.AdditionalLanguages}"
-                                          SelectedItem="{Binding SelectedAdditionalLanguage}"
-                                          HorizontalAlignment="Stretch">
-                                    <ComboBox.ItemTemplate>
+                                <controls:SearchableComboBox ItemsSource="{Binding AvailableAdditionalLanguages}"
+                                                             AutomationProperties.Name="{loc:Str Dictation.AdditionalLanguages}"
+                                                             SelectedItem="{Binding SelectedAdditionalLanguage}"
+                                                             HorizontalAlignment="Stretch">
+                                    <controls:SearchableComboBox.ItemTemplate>
                                         <DataTemplate x:DataType="vm:SpokenLanguageOption">
                                             <TextBlock Text="{Binding DisplayName}" />
                                         </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
+                                    </controls:SearchableComboBox.ItemTemplate>
+                                </controls:SearchableComboBox>
                                 <Button Content="{loc:Str Dictation.AddLanguage}"
                                         Command="{Binding AddAdditionalLanguageCommand}"
                                         HorizontalAlignment="Stretch" />
@@ -587,17 +588,17 @@
                         <Grid ColumnDefinitions="*,240">
                             <TextBlock Grid.Column="0" Text="{loc:Str Dictation.TargetLanguage}"
                                        Classes="row-label" />
-                            <ComboBox Grid.Column="1"
-                                      AutomationProperties.Name="{loc:Str Dictation.TargetLanguage}"
-                                      ItemsSource="{Binding TranslationTargetOptions}"
-                                      SelectedItem="{Binding SelectedTranslationTargetOption}"
-                                      HorizontalAlignment="Stretch">
-                                <ComboBox.ItemTemplate>
+                            <controls:SearchableComboBox Grid.Column="1"
+                                                         AutomationProperties.Name="{loc:Str Dictation.TargetLanguage}"
+                                                         ItemsSource="{Binding TranslationTargetOptions}"
+                                                         SelectedItem="{Binding SelectedTranslationTargetOption}"
+                                                         HorizontalAlignment="Stretch">
+                                <controls:SearchableComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="models:TranslationTargetOption">
                                         <TextBlock Text="{Binding DisplayName}" />
                                     </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
+                                </controls:SearchableComboBox.ItemTemplate>
+                            </controls:SearchableComboBox>
                         </Grid>
                     </Border>
 
