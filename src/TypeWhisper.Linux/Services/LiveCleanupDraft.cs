@@ -26,10 +26,12 @@ internal sealed class LiveCleanupDraft : IDisposable
         _session = new LiveCleanupSession(async (input, token) =>
         {
             var capture = new LlmCallCapture();
+            var fellBack = false;
             var output = await cleanup.CleanAsync(input, level, capture: capture,
                 ct: token, providerOverride: provider, preparedLightText: true,
-                isDraft: true).ConfigureAwait(false);
-            if (capture.Calls.All(call => string.IsNullOrWhiteSpace(call.ResponseReceived)))
+                isDraft: true, fellBackToLight: () => fellBack = true).ConfigureAwait(false);
+            // Light fallback text is not reusable as Medium/High output, even when a late response was recorded.
+            if (fellBack || capture.Calls.All(call => string.IsNullOrWhiteSpace(call.ResponseReceived)))
             {
                 // A timed-out provider may still be running. Do not start another draft
                 // in this recording after failure, even if it ignores cancellation.

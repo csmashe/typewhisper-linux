@@ -180,6 +180,39 @@ public sealed class DictationOrchestratorLiveCleanupTests
         finally { releaseCallback.Set(); release.TrySetResult("obsolete result"); }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedDraft_IsNotReusedAndFinalCleanupReportsItsOwnFallback(bool finalFails)
+    {
+        var calls = 0;
+        var provider = new Provider
+        {
+            Process = (_, _) => Interlocked.Increment(ref calls) == 1 || finalFails
+                ? Task.FromException<string>(new InvalidOperationException("Provider failed."))
+                : Task.FromResult("Final result"),
+        };
+        var manager = TestPluginManagerFactory.Create([provider]);
+        var settings = new Mock<ISettingsService>();
+        settings.SetupGet(s => s.Current).Returns(new AppSettings());
+        var prompts = new PromptProcessingService(manager, settings.Object, new MemoryService(manager));
+        var cleanup = new LlmCleanupService(new CleanupService(), prompts);
+        using var draft = new LiveCleanupDraft(cleanup, CleanupLevel.Medium, "en",
+            prompts.GetCleanupProviderSelection()!, (text, _) => Task.FromResult(text), (_, _) => { }, TimeSpan.Zero);
+        draft.Submit("hello there");
+        await provider.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var fellBack = false;
+
+        var result = await DictationOrchestrator.CompleteCleanupAsync(
+            cleanup, prompts, draft, "hello there", CleanupLevel.Medium, null, null, CancellationToken.None,
+            fellBackToLight: () => fellBack = true).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(2, provider.Calls);
+        Assert.False(draft.Reused);
+        Assert.Equal(finalFails, fellBack);
+        if (!finalFails) Assert.Equal("Final result", result);
+    }
+
     private sealed class Provider : ILlmProviderPlugin
     {
         public int Calls;

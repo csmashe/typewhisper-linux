@@ -107,6 +107,7 @@ public sealed class LlmCleanupService
         }
         catch (Exception ex)
         {
+            fellBackToLight?.Invoke();
             if (isDraft) return lightText;
             var safeMessage =
                 FailureMessageSanitizer.Sanitize(ex.Message, text, lightText, CleanupService.GetLlmSystemPrompt(level))
@@ -127,7 +128,6 @@ public sealed class LlmCleanupService
             }
 
             await NotifyStatusAsync(statusCallback, Loc.Instance["Overlay.CleanupFailedUsingLight"]);
-            fellBackToLight?.Invoke();
             return lightText;
         }
     }
