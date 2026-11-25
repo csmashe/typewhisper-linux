@@ -149,6 +149,27 @@ public sealed class DictationSectionViewModelTests
     }
 
     [Fact]
+    public void PasteSwitches_StaleSettingsReplay_DoesNotOverwriteLatestValues()
+    {
+        using var context = new ViewModelTestContext(
+            AppSettings.Default, new FakeAudioDeviceEnumerator()
+        );
+        context.Sut.PreserveClipboard = false;
+        context.Sut.LockPasteToFocusedField = true;
+        var staleSnapshot = context.Settings.Object.Current;
+        context.Sut.PreserveClipboard = true;
+        context.Sut.LockPasteToFocusedField = false;
+
+        typeof(DictationSectionViewModel).GetMethod("RefreshFromSettings", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(context.Sut, [staleSnapshot]);
+
+        Assert.False(context.Sut.PreserveClipboard);
+        Assert.True(context.Sut.LockPasteToFocusedField);
+        Assert.True(context.Settings.Object.Current.PreserveClipboard);
+        Assert.False(context.Settings.Object.Current.LockPasteToFocusedField);
+    }
+
+    [Fact]
     public void LockPasteToFocusedField_Change_PersistsToSettings()
     {
         using var context = new ViewModelTestContext(
