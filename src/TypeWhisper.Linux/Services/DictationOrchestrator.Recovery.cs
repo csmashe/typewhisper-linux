@@ -191,6 +191,20 @@ public sealed partial class DictationOrchestrator
         string.Equals(context.TranscriptionTaskUsed ?? context.Profile?.SelectedTask ?? _settings.Current.TranscriptionTask,
             "translate", StringComparison.OrdinalIgnoreCase) ? "translate" : "transcribe";
 
+    private static TranscriptionRecord WithRetryTimings(
+        TranscriptionRecord record, RecordingContext context, double? transcriptionSeconds)
+    {
+        var llm = LlmUsageSummary.From(context.Capture?.Calls ?? []);
+        return record with
+        {
+            LlmCalls = PersistedLlmCalls(context),
+            TranscriptionSeconds = transcriptionSeconds,
+            LlmProvider = llm.Provider,
+            LlmModel = llm.Model,
+            LlmSeconds = llm.Seconds,
+        };
+    }
+
     private void AddFailedHistoryRecord(
         RecordingContext context, string? wavPath, double duration, string rawText,
         TranscriptionRecordStatus status, string message, string engine, string? model,
@@ -282,7 +296,8 @@ public sealed partial class DictationOrchestrator
                 record.AppName, record.AppUrl, null, profile, "", null, false, null, null,
                 LanguageSelection.Automatic, [], ct)
             {
-                Capture = _settings.Current.CaptureLlmProvenance ? new LlmCallCapture() : null,
+                Capture = new LlmCallCapture(),
+                PersistLlmCalls = _settings.Current.CaptureLlmProvenance,
                 TranscriptionTaskUsed = record.TranscriptionTaskUsed,
             };
             if (IsPromptActionUnavailable(profile?.PromptActionId, ResolvePromptAction(context) is not null))
@@ -293,6 +308,9 @@ public sealed partial class DictationOrchestrator
             var originalRecord = record;
             var failureStatus = TranscriptionRecordStatus.TranscriptionFailed;
             string? prompt = null;
+            double? transcriptionSeconds = null;
+            // From the retry's start, so the model load counts as it does in a dictation.
+            var transcriptionStarted = Stopwatch.GetTimestamp();
             try
             {
                 var wav = await File.ReadAllBytesAsync(path, ct);
@@ -318,6 +336,7 @@ public sealed partial class DictationOrchestrator
                         TranscriptionPromptComposer.ForDictation(plugin, _dictionary.GetEnabledTerms()),
                         ct
                     );
+                    transcriptionSeconds = Stopwatch.GetElapsedTime(transcriptionStarted).TotalSeconds;
                 }
                 rawText = SelectRawTextWithPreviewFallback(result.Text, "", out _);
                 if (string.IsNullOrWhiteSpace(rawText))
@@ -367,8 +386,8 @@ public sealed partial class DictationOrchestrator
                     PromptActionApplied = WasPipelineStepSucceeded(processed, PostProcessingStepNames.Llm),
                     TranslationApplied = WasPipelineStepChanged(processed, PostProcessingStepNames.Translation),
                     PendingCorrectionSuggestions = [],
-                    LlmCalls = context.Capture?.Calls ?? [],
                 };
+                record = WithRetryTimings(record, context, transcriptionSeconds);
             }
             catch (PluginRequestException) when (ct.IsCancellationRequested)
             {
@@ -384,6 +403,7 @@ public sealed partial class DictationOrchestrator
                 var hasNewRawText = !string.IsNullOrWhiteSpace(rawText);
                 if (!hasNewRawText)
                     record = originalRecord;
+                var keepsFinalText = string.IsNullOrWhiteSpace(finalText) && !string.IsNullOrWhiteSpace(record.FinalText);
                 var status = hasNewRawText ? failureStatus : record.Status;
                 record = record with
                 {
@@ -397,6 +417,11 @@ public sealed partial class DictationOrchestrator
                         : !string.IsNullOrWhiteSpace(record.FinalText) ? record.FinalText
                         : hasNewRawText ? rawText : record.FinalText,
                 };
+                // The transcription time follows the new raw text; the LLM details follow the final text.
+                if (hasNewRawText)
+                    record = keepsFinalText
+                        ? record with { TranscriptionSeconds = transcriptionSeconds }
+                        : WithRetryTimings(record, context, transcriptionSeconds);
                 if (!_history.TryReplaceRecord(record))
                     throw new InvalidOperationException(Loc.Instance["History.RetryRecordMissing"]);
                 throw new InvalidOperationException(message);

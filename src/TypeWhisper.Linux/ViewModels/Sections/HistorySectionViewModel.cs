@@ -904,6 +904,8 @@ public partial class HistoryRecordRow : ObservableObject
     public bool ShowReadOnlyText => IsExpanded && !IsEditing;
     public bool ShowEditPanel => IsExpanded && IsEditing;
     public bool ShowExpandedMeta => IsExpanded && !IsEditing;
+
+    public IReadOnlyList<HistoryDetailRow> ProcessingDetails => BuildProcessingDetails(Record);
     public bool ShowExpandedActions => IsExpanded && !IsEditing;
 
     public bool HasCorrectionSuggestions =>
@@ -948,6 +950,7 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowRetry));
         OnPropertyChanged(nameof(ShowRetryPanel));
         OnPropertyChanged(nameof(DurationLabel));
+        OnPropertyChanged(nameof(ProcessingDetails));
         LocalTimestamp = _owner.ToLocalPresentationTime(value.Timestamp);
         _rawVsFinalDiffCache = null;
         _inspectorCallsCache = null;
@@ -956,6 +959,37 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(RawVsFinalDiff));
         OnPropertyChanged(nameof(InspectorCalls));
     }
+
+    // Older entries have no timings or LLM details, so those rows are left out.
+    internal static IReadOnlyList<HistoryDetailRow> BuildProcessingDetails(TranscriptionRecord record)
+    {
+        var rows = new List<HistoryDetailRow>
+        {
+            new(Loc.Instance["Dictation.Engine"], JoinLabel(record.EngineUsed, record.ModelUsed)),
+        };
+        if (FormatProcessingTime(record.TranscriptionSeconds) is { } transcriptionTime)
+            rows.Add(new HistoryDetailRow(Loc.Instance["History.Details.TranscriptionTime"], transcriptionTime));
+        if (JoinLabel(record.LlmProvider, record.LlmModel) is { Length: > 0 } llm)
+            rows.Add(new HistoryDetailRow(Loc.Instance["History.Details.Llm"], llm));
+        if (FormatProcessingTime(record.LlmSeconds) is { } llmTime)
+            rows.Add(new HistoryDetailRow(Loc.Instance["History.Details.LlmTime"], llmTime));
+        return rows;
+    }
+
+    /// <summary>"1.4 s" under a minute, "2 min 5 s" above; null when the time wasn't recorded.</summary>
+    internal static string? FormatProcessingTime(double? seconds)
+    {
+        if (seconds is not { } value || !double.IsFinite(value) || value < 0)
+            return null;
+        // 59.95 s and up would round to "60.0 s".
+        if (value < 59.95)
+            return Loc.Instance.GetString("History.Details.Seconds", value);
+        var whole = (long)Math.Round(value);
+        return Loc.Instance.GetString("History.Details.MinutesSeconds", whole / 60, whole % 60);
+    }
+
+    private static string JoinLabel(string? first, string? second) =>
+        string.Join(" · ", new[] { first, second }.Where(part => !string.IsNullOrWhiteSpace(part)));
 
     internal void SetCorrectionSuggestions(IEnumerable<CorrectionSuggestion> suggestions)
     {
@@ -1132,6 +1166,8 @@ public partial class HistoryRecordRow : ObservableObject
         OnPropertyChanged(nameof(ShowInspector));
     }
 }
+
+public sealed record HistoryDetailRow(string Label, string Value);
 
 public partial class CorrectionSuggestionRow : ObservableObject
 {
