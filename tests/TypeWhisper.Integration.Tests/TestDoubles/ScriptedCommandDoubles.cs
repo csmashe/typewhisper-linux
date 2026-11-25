@@ -86,9 +86,9 @@ internal sealed class ScriptedActiveWindowProvider : IActiveWindowProvider
 {
     private readonly ActiveWindowSnapshot _snapshot;
 
-    internal ScriptedActiveWindowProvider(string processName, string? title)
+    internal ScriptedActiveWindowProvider(string processName, string? title, string? windowId = null)
     {
-        _snapshot = new ActiveWindowSnapshot(processName, title, null, null, Name);
+        _snapshot = new ActiveWindowSnapshot(processName, title, windowId, null, Name);
     }
 
     public string Name => "integration-scripted";

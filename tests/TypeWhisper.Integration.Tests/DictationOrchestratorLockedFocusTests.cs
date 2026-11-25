@@ -68,6 +68,60 @@ public sealed class DictationOrchestratorLockedFocusTests
         });
     }
 
+    [Theory]
+    [InlineData(false, false, false, true)]
+    [InlineData(true, false, false, true)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, null, false, false)]
+    [InlineData(true, false, null, false)]
+    [Trait("Category", "Integration")]
+    public Task NoEditableField_InAVerifiableWindow_PastesIntoTheWindowUnlessPassword(
+        bool hasElement, bool? password, bool? editable, bool expectPaste
+    )
+    {
+        return BoundedTest.RunAsync(async () =>
+        {
+            await using var fixture = new OrchestratorCompositionFixture(
+                focusedApp: ("zed", "Editor"),
+                focusedWindowId: "zed-window"
+            );
+            // Keep the learner's listener lifecycle separate from the focus-lock assertions.
+            fixture.Provider.GetRequiredService<TargetAppCorrectionLearningService>().Dispose();
+            fixture.Settings.Update(settings => settings with
+            {
+                LockPasteToFocusedField = true,
+                TargetAppCorrectionLearningEnabled = true,
+            });
+            fixture.AtSpi.IsRunning = true;
+            fixture.AtSpi.CurrentFocusedElement = hasElement ? new AtSpiElementRef("zed", "/frame") : null;
+            fixture.AtSpi.PasswordResult = password;
+            fixture.AtSpi.EditableResult = editable;
+            fixture.Plugin.EnqueueText("dictated text");
+
+            var sessionId = await BoundedTest.WaitAsync(fixture.Orchestrator.StartAsync());
+            fixture.FeedNonSilentAudio();
+            var resultTask = fixture.WaitForResultAsync(sessionId);
+            await BoundedTest.WaitAsync(fixture.Orchestrator.StopAsync());
+            await BoundedTest.WaitAsync(resultTask);
+
+            var insertion = fixture.Provider.GetRequiredService<TextInsertionService>();
+            Assert.Equal(0, fixture.AtSpi.FocusReadCount);
+            if (expectPaste)
+            {
+                Assert.NotEqual(InsertionFailureReason.LockedFieldUnavailable, insertion.LastFailureReason);
+                Assert.Equal(1, fixture.InsertionPlatform.PasteAttemptCount);
+            }
+            else
+            {
+                Assert.Equal(InsertionFailureReason.LockedFieldUnavailable, insertion.LastFailureReason);
+                Assert.Equal("dictated text ", fixture.InsertionPlatform.Clipboard);
+                Assert.Equal(0, fixture.InsertionPlatform.PasteAttemptCount);
+            }
+
+            Assert.Empty(fixture.InsertionPlatform.Typed);
+        });
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public Task MissingInitialFocus_ChangedAfterRecordingStarts_FallsBackToClipboard()

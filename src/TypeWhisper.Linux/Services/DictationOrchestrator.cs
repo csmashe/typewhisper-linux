@@ -1773,6 +1773,11 @@ public sealed partial class DictationOrchestrator : IDisposable
                 _recordingStart = default;
             }
 
+            recordingContext = recordingContext with
+            {
+                LockedFocusField = ResolveLockedFocusForDelivery(recordingContext),
+            };
+
             _telemetry.Tag(recordingContext.SessionId, "profile.used",
                 recordingContext.Profile is not null ? "true" : "false");
 
@@ -4394,25 +4399,57 @@ public sealed partial class DictationOrchestrator : IDisposable
 
         try
         {
-            if (initialElement is null)
+            if (initialElement is not { } element)
             {
-                Trace.WriteLine("[Dictation] Focus lock capture unavailable: no focused element.");
-                return new LockedFocusTarget(null);
+                Trace.WriteLine("[Dictation] Focus lock fell back to the window: no focused element.");
+                return LockedFocusTarget.Window;
             }
 
-            if (await _atSpiClient.IsLockableFieldAsync(initialElement.Value, cancellationToken))
+            // An unreadable password status is treated as a password field.
+            if (await _atSpiClient.IsPasswordFieldAsync(element).WaitAsync(cancellationToken) != false)
             {
-                return new LockedFocusTarget(initialElement);
+                Trace.WriteLine("[Dictation] Focus lock rejected: field is a password field or its role is unreadable.");
+                return LockedFocusTarget.Refused;
             }
 
-            Trace.WriteLine("[Dictation] Focus lock rejected: field is password, read-only, or unreadable.");
-            return new LockedFocusTarget(null);
+            switch (await _atSpiClient.IsElementEditableAsync(element).WaitAsync(cancellationToken))
+            {
+                case true:
+                    return new LockedFocusTarget(element);
+                case false:
+                    Trace.WriteLine("[Dictation] Focus lock fell back to the window: focused element is not an editable field.");
+                    return LockedFocusTarget.Window;
+                default:
+                    Trace.WriteLine("[Dictation] Focus lock rejected: the focused element's state is unreadable.");
+                    return LockedFocusTarget.Refused;
+            }
         }
         catch (Exception ex)
         {
             Trace.WriteLine($"[Dictation] Focus lock capture failed: {ex.Message}");
-            return new LockedFocusTarget(null);
+            return LockedFocusTarget.Refused;
         }
+    }
+
+    // A window-only lock needs a verifiable window; TextInsertionService re-checks it right before input.
+    internal LockedFocusTarget? ResolveLockedFocusForDelivery(RecordingContext context)
+    {
+        if (context.LockedFocusField is not { WindowOnly: true } lockedFocus)
+        {
+            return context.LockedFocusField;
+        }
+
+        return CanVerifyTargetWindow(context)
+            ? lockedFocus with { IsWindowStillFocused = () => IsLockedWindowStillFocusedAsync(context) }
+            : LockedFocusTarget.Refused;
+    }
+
+    // X11 compares the xdotool id itself, so an unreadable id fails closed; otherwise the compositor snapshot decides.
+    private Task<bool> IsLockedWindowStillFocusedAsync(RecordingContext context)
+    {
+        return !context.IsWaylandSession && !string.IsNullOrEmpty(context.WindowId)
+            ? Task.FromResult(_activeWindow.GetActiveWindowId() == context.WindowId)
+            : IsCapturedWindowFocusedAsync(context);
     }
 
     /// <summary>
@@ -4915,9 +4952,10 @@ public sealed partial class DictationOrchestrator : IDisposable
     {
         // A locked field is restored through AT-SPI by TextInsertionService, which falls back to
         // the clipboard itself (with its own reason) when it can't be or none was captured.
-        if (context.LockedFocusField is not null)
+        // A window-only lock has no field to compare, so only the window check applies.
+        if (context.LockedFocusField is { } lockedFocus)
         {
-            return true;
+            return !lockedFocus.WindowOnly || await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false);
         }
 
         return await IsCapturedWindowFocusedAsync(context).ConfigureAwait(false)
