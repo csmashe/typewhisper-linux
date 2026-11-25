@@ -14,7 +14,7 @@ public sealed partial class DictationOrchestrator
         LlmCleanupService cleanup, PromptProcessingService prompts, LiveCleanupDraft? draft,
         string text, CleanupLevel level, LlmCallCapture? capture,
         Func<string, Task>? status, CancellationToken token, string? referenceContext = null,
-        Action? referenceContextSent = null)
+        Action? referenceContextSent = null, Action? fellBackToLight = null)
     {
         // ReSharper disable once InvertIf -- inverting would duplicate the final cleanup call below.
         if (draft is not null)
@@ -45,7 +45,8 @@ public sealed partial class DictationOrchestrator
             finally { draft.Dispose(); }
         }
         return await cleanup.CleanAsync(text, level, status, capture, ct: token,
-            referenceContext: referenceContext, referenceContextSent: referenceContextSent);
+            referenceContext: referenceContext, referenceContextSent: referenceContextSent,
+            fellBackToLight: fellBackToLight);
     }
 
     private readonly Lock _recoveryLock = new();
@@ -119,7 +120,8 @@ public sealed partial class DictationOrchestrator
                         {
                             ReportStatus(context, message, DictationOverlayPhase.Transcribing);
                             return Task.CompletedTask;
-                        }, token, referenceContext, context.ReferenceContextUse.MarkSent),
+                        }, token, referenceContext, context.ReferenceContextUse.MarkSent,
+                        context.CleanupFallback.Mark),
             SnippetExpander = text =>
                 _snippets.ApplySnippets(text, profileId: context.Profile?.Id, recordUsage: recordUsage),
             LlmHandler = promptAction is not null
@@ -337,7 +339,7 @@ public sealed partial class DictationOrchestrator
                 var processed = await _pipeline.ProcessAsync(rawText,
                     BuildPipelineOptions(context, duration, language, selection.LanguageTag,
                         languageHints, translate, supportsTranslation, false, false, record.EngineUsed, record.ModelUsed), ct);
-                finalText = ApplyProfileStyleFormatting(context, VoiceCommandParser.Parse(processed.Text).Text);
+                finalText = ApplyProfileStyleFormatting(context, ParseVoiceCommands(context, processed.Text).Text);
                 if (string.IsNullOrWhiteSpace(finalText))
                     throw new InvalidOperationException(Loc.Instance["History.RetryEmpty"]);
 

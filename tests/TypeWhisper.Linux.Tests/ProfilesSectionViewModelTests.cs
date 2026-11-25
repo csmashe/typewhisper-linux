@@ -847,6 +847,8 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         sut.EditStylePreset = ProfileStylePreset.Developer;
         sut.EditCleanupLevelOverride = CleanupLevel.Light;
         sut.EditDeveloperFormattingOverride = false;
+        sut.SelectedAutoEnterModeOption =
+            sut.AutoEnterModeOptions.Single(option => option.Value == ProfileAutoEnterMode.Always);
         sut.SaveProfileCommand.Execute(null);
 
         var profile = Assert.Single(service.Profiles);
@@ -864,6 +866,7 @@ public sealed class ProfilesSectionViewModelTests : IDisposable
         Assert.Equal(ProfileStylePreset.Developer, profile.StylePreset);
         Assert.Equal(CleanupLevel.Light, profile.CleanupLevelOverride);
         Assert.False(profile.DeveloperFormattingOverride);
+        Assert.Equal(ProfileAutoEnterMode.Always, profile.AutoEnterMode);
     }
 
     [Fact]

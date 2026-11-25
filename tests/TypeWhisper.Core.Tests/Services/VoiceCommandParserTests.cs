@@ -32,6 +32,17 @@ public sealed class VoiceCommandParserTests
     }
 
     [Theory]
+    [InlineData("Hello world press enter", "Hello world press enter")]
+    [InlineData("Hello press enter new line", "Hello press enter\n")]
+    public void Parse_PressEnterNotRecognized_KeepsThePhraseAsWords(string input, string expectedText)
+    {
+        var result = VoiceCommandParser.Parse(input, recognizePressEnter: false);
+
+        Assert.Equal(expectedText, result.Text);
+        Assert.False(result.AutoEnter);
+    }
+
+    [Theory]
     [InlineData("Hello new line", "Hello\n")]
     [InlineData("Hello new paragraph", "Hello\n\n")]
     public void Parse_LineBreakSuffixes_ConvertToNewlines(string input, string expectedText)

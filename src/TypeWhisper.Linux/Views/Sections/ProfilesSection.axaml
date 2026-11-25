@@ -345,7 +345,7 @@
 
                         <Border Classes="section-panel"
                                 Margin="0,0,0,18">
-                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
+                            <Grid RowDefinitions="Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto,1,Auto">
                                 <Border Padding="18,14">
                                     <Grid RowDefinitions="Auto,Auto"
                                           RowSpacing="10">
@@ -661,6 +661,32 @@
                                     <Grid RowDefinitions="Auto,Auto"
                                           RowSpacing="10">
                                         <StackPanel>
+                                            <TextBlock Text="{loc:Str Profiles.AutoEnterMode}"
+                                                       Classes="row-label" />
+                                            <TextBlock
+                                                Text="{loc:Str Profiles.AutoEnterModeHint}"
+                                                Classes="page-subtitle"
+                                                Margin="0,6,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Row="1"
+                                                  HorizontalAlignment="Stretch"
+                                                  AutomationProperties.Name="{loc:Str Profiles.AutoEnterMode}"
+                                                  ItemsSource="{Binding AutoEnterModeOptions}"
+                                                  SelectedItem="{Binding SelectedAutoEnterModeOption}">
+                                            <ComboBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:ProfileAutoEnterModeOption">
+                                                    <TextBlock Text="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ComboBox.ItemTemplate>
+                                        </ComboBox>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="25" Background="{DynamicResource TwFillSubtleBrush}" />
+
+                                <Border Grid.Row="26" Padding="18,14">
+                                    <Grid RowDefinitions="Auto,Auto"
+                                          RowSpacing="10">
+                                        <StackPanel>
                                             <TextBlock Text="{loc:Str Profiles.Priority}"
                                                        Classes="row-label" />
                                             <TextBlock Text="{loc:Str Profiles.PriorityHint}"
@@ -676,9 +702,9 @@
                                                        Value="{Binding EditPriority}" />
                                     </Grid>
                                 </Border>
-                                <Border Grid.Row="25" Background="{DynamicResource TwFillSubtleBrush}" />
+                                <Border Grid.Row="27" Background="{DynamicResource TwFillSubtleBrush}" />
 
-                                <Border Grid.Row="26" Padding="18,14">
+                                <Border Grid.Row="28" Padding="18,14">
                                     <Grid RowDefinitions="Auto,Auto"
                                           RowSpacing="10">
                                         <StackPanel>

@@ -129,6 +129,32 @@ public sealed partial class LlmCleanupServiceTests
         Assert.Equal(1, provider.ProcessCalls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DraftFallback_ReportsFellBackToLight(bool deadline)
+    {
+        var provider = new FakeLlmProviderPlugin("unused");
+        if (deadline)
+        {
+            provider.Process = async token =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return "unreachable";
+            };
+        }
+        else
+        {
+            provider.ProcessException = new InvalidOperationException("Provider failed.");
+        }
+        var fellBack = false;
+
+        Assert.Equal("Hello", await CreateService([provider]).CleanAsync("uh hello", CleanupLevel.Medium,
+            isDraft: true, draftTimeout: TimeSpan.FromMilliseconds(50),
+            fellBackToLight: () => fellBack = true).WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(fellBack);
+    }
+
     [Fact]
     public async Task CleanAsync_CallerCancelsUncooperativeProvider_ThrowsWithoutWaitingForProvider()
     {

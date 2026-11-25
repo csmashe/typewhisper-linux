@@ -64,6 +64,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
     private string _currentWindowTitle = "-";
 
     [ObservableProperty]
+    private ProfileAutoEnterMode _editAutoEnterMode = ProfileAutoEnterMode.SpokenCommand;
+
+    [ObservableProperty]
     private CleanupLevel? _editCleanupLevelOverride;
 
     [ObservableProperty]
@@ -239,6 +242,9 @@ public partial class ProfilesSectionViewModel : ObservableObject
 
     public ObservableCollection<NullableCleanupLevelOption> CleanupOverrideOptions { get; } =
         new(CreateCleanupOverrideOptions());
+
+    public ObservableCollection<ProfileAutoEnterModeOption> AutoEnterModeOptions { get; } =
+        new(CreateAutoEnterModeOptions());
 
     public ObservableCollection<string> ProcessNameChips { get; } = [];
     public ObservableCollection<string> UrlPatternChips { get; } = [];
@@ -524,6 +530,20 @@ public partial class ProfilesSectionViewModel : ObservableObject
         }
     }
 
+    public ProfileAutoEnterModeOption? SelectedAutoEnterModeOption
+    {
+        get => AutoEnterModeOptions.FirstOrDefault(o => o.Value == EditAutoEnterMode);
+        set
+        {
+            if (value is null || value.Value == EditAutoEnterMode)
+            {
+                return;
+            }
+
+            EditAutoEnterMode = value.Value;
+        }
+    }
+
     public NullableBooleanOption? SelectedWhisperModeOption
     {
         get => WhisperModeOptions.FirstOrDefault(option => option.Value == EditWhisperModeOverride);
@@ -646,6 +666,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             EditStylePreset = ProfileStylePreset.Raw;
             EditCleanupLevelOverride = null;
             EditDeveloperFormattingOverride = null;
+            EditAutoEnterMode = ProfileAutoEnterMode.SpokenCommand;
             EditScreenContextOverride = null;
             EditClipboardContextOverride = null;
             EditPriority = 0;
@@ -670,6 +691,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditStylePreset = value.StylePreset;
         EditCleanupLevelOverride = value.CleanupLevelOverride;
         EditDeveloperFormattingOverride = value.DeveloperFormattingOverride;
+        EditAutoEnterMode = value.AutoEnterMode;
         EditScreenContextOverride = value.ScreenContextOverride;
         EditClipboardContextOverride = value.ClipboardContextOverride;
         EditPriority = value.Priority;
@@ -766,6 +788,11 @@ public partial class ProfilesSectionViewModel : ObservableObject
     partial void OnEditDeveloperFormattingOverrideChanged(bool? value)
     {
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+    }
+
+    partial void OnEditAutoEnterModeChanged(ProfileAutoEnterMode value)
+    {
+        OnPropertyChanged(nameof(SelectedAutoEnterModeOption));
     }
 
     partial void OnEditScreenContextOverrideChanged(bool? value)
@@ -872,6 +899,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
             StylePreset = EditStylePreset,
             CleanupLevelOverride = EditCleanupLevelOverride,
             DeveloperFormattingOverride = EditDeveloperFormattingOverride,
+            AutoEnterMode = EditAutoEnterMode,
             ScreenContextOverride = EditScreenContextOverride,
             ClipboardContextOverride = EditClipboardContextOverride,
             Priority = EditPriority,
@@ -1249,6 +1277,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         var cleanupLevelOverride = EditCleanupLevelOverride;
         var whisperModeOverride = EditWhisperModeOverride;
         var developerFormattingOverride = EditDeveloperFormattingOverride;
+        var autoEnterMode = EditAutoEnterMode;
         var screenContextOverride = EditScreenContextOverride;
         var clipboardContextOverride = EditClipboardContextOverride;
         var language = EditLanguage;
@@ -1262,6 +1291,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         ReplaceCollection(HotkeyBehaviorOptions, CreateHotkeyBehaviorOptions());
         ReplaceCollection(ContextMatchModeOptions, CreateContextMatchModeOptions());
         ReplaceCollection(CleanupOverrideOptions, CreateCleanupOverrideOptions());
+        ReplaceCollection(AutoEnterModeOptions, CreateAutoEnterModeOptions());
         ReplaceCollection(TaskOptions, CreateTaskOptions());
         ReplaceCollection(TranslationTargetOptions, TranslationTargetLabels.ProfileOptions());
         RefreshLanguageOptions();
@@ -1276,6 +1306,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         EditCleanupLevelOverride = cleanupLevelOverride;
         EditWhisperModeOverride = whisperModeOverride;
         EditDeveloperFormattingOverride = developerFormattingOverride;
+        EditAutoEnterMode = autoEnterMode;
         EditScreenContextOverride = screenContextOverride;
         EditClipboardContextOverride = clipboardContextOverride;
         EditLanguage = language;
@@ -1293,6 +1324,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(SelectedAutoEnterModeOption));
         OnPropertyChanged(nameof(SelectedScreenContextOverrideOption));
         OnPropertyChanged(nameof(SelectedClipboardContextOverrideOption));
         OnPropertyChanged(nameof(SelectedLanguageOption));
@@ -1332,6 +1364,16 @@ public partial class ProfilesSectionViewModel : ObservableObject
         [
             new(ProfileContextMatchMode.Any, Loc.Instance["Profiles.ContextMatchAny"]),
             new(ProfileContextMatchMode.All, Loc.Instance["Profiles.ContextMatchAll"]),
+        ];
+    }
+
+    private static IReadOnlyList<ProfileAutoEnterModeOption> CreateAutoEnterModeOptions()
+    {
+        return
+        [
+            new(ProfileAutoEnterMode.SpokenCommand, Loc.Instance["Profiles.AutoEnterSpokenCommand"]),
+            new(ProfileAutoEnterMode.Never, Loc.Instance["Profiles.AutoEnterNever"]),
+            new(ProfileAutoEnterMode.Always, Loc.Instance["Profiles.AutoEnterAlways"]),
         ];
     }
 
@@ -1832,6 +1874,7 @@ public partial class ProfilesSectionViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedStylePresetOption));
         OnPropertyChanged(nameof(SelectedCleanupOverrideOption));
         OnPropertyChanged(nameof(SelectedDeveloperFormattingOverrideOption));
+        OnPropertyChanged(nameof(SelectedAutoEnterModeOption));
         OnPropertyChanged(nameof(SelectedScreenContextOverrideOption));
         OnPropertyChanged(nameof(SelectedClipboardContextOverrideOption));
         OnPropertyChanged(nameof(SelectedWhisperModeOption));
@@ -1890,6 +1933,11 @@ public sealed record ProfileContextMatchModeOption(ProfileContextMatchMode Value
 }
 
 public sealed record ProfileHotkeyBehaviorOption(ProfileHotkeyBehavior Value, string Label)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record ProfileAutoEnterModeOption(ProfileAutoEnterMode Value, string Label)
 {
     public override string ToString() => Label;
 }
