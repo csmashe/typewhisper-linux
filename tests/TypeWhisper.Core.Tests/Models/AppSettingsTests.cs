@@ -73,7 +73,7 @@ public class AppSettingsTests
     }
 
     [Fact]
-    public void LegacyHotkeyProperties_AreIgnoredOnLoadAndOmittedOnSave()
+    public void LegacyHotkeyProperties_AreUnmappedOnLoadAndKeptOnSave()
     {
         const string legacyJson =
             """
@@ -91,14 +91,19 @@ public class AppSettingsTests
         Assert.NotNull(settings);
         Assert.Equal("de", settings.Language);
         Assert.False(settings.AutoPaste);
+        Assert.NotNull(settings.UnmappedSettings);
+        Assert.Equal(
+            ["pushToTalkHotkey", "toggleOnlyHotkey", "holdOnlyHotkey"],
+            settings.UnmappedSettings.Keys.ToArray());
 
         var reserializedJson = JsonSerializer.Serialize(settings, s_jsonOptions);
         using var reserialized = JsonDocument.Parse(reserializedJson);
         var root = reserialized.RootElement;
 
-        Assert.False(root.TryGetProperty("pushToTalkHotkey", out _));
-        Assert.False(root.TryGetProperty("toggleOnlyHotkey", out _));
-        Assert.False(root.TryGetProperty("holdOnlyHotkey", out _));
+        // Retired keys stay on disk untouched, so a build that still reads them keeps its value.
+        Assert.Equal("Ctrl+Shift+F8", root.GetProperty("pushToTalkHotkey").GetString());
+        Assert.Equal("Ctrl+Shift+F9", root.GetProperty("toggleOnlyHotkey").GetString());
+        Assert.Equal("Ctrl+Shift+F10", root.GetProperty("holdOnlyHotkey").GetString());
     }
 
     [Fact]

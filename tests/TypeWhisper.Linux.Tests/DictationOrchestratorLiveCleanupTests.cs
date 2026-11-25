@@ -21,7 +21,8 @@ public sealed class DictationOrchestratorLiveCleanupTests
     {
         var settings = JsonSerializer.Deserialize<AppSettings>(json)!;
         Assert.False(settings.LiveCleanupEnabled);
-        Assert.DoesNotContain("CleanupTimeoutSeconds", JsonSerializer.Serialize(settings));
+        // The retired key may ride along on disk, but nothing in this build binds it.
+        Assert.Equal(json.Contains("CleanupTimeoutSeconds"), settings.UnmappedSettings?.ContainsKey("CleanupTimeoutSeconds") ?? false);
         Assert.False(new AppSettings().LiveCleanupEnabled);
     }
 
