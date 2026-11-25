@@ -262,6 +262,13 @@ public sealed class FillerWordFilterTests
     [InlineData("Uh, e\u0301mile is here", "E\u0301mile is here")]
     [InlineData("Um, don't stop", "Don't stop")]
     [InlineData("Э, привет", "Привет")]
+    [InlineData("{Um, hello}", "{Hello}")]
+    [InlineData("（Um, hello）", "（Hello）")]
+    [InlineData("„Äh, hallo“", "„Hallo“")]
+    [InlineData("Um, \U00010428\U00010429", "\U00010400\U00010429")]
+    [InlineData("He said, \"Um. Hello\"", "He said, \"Hello\"")]
+    [InlineData("He said \"hi,\" then \"Um, bye\"", "He said \"hi,\" then \"Bye\"")]
+    [InlineData("He is 6'2\". He said, \"Um, hello\"", "He is 6'2\". He said, \"Hello\"")]
     public void Remove_HandsASentenceOpeningFillersCapitalToTheNextWord(string input, string expected) =>
         Assert.Equal(expected, FillerWordFilter.Remove(input));
 
@@ -276,6 +283,10 @@ public sealed class FillerWordFilterTests
     [InlineData("Hello. Um\nand then", "Hello.\nand then")]
     [InlineData("Um\nhello", "hello")]
     [InlineData("Um, uh\nhello", "hello")]
+    [InlineData("Um,\u00a0\nhello", "\u00a0\nhello")]
+    [InlineData("Um,\u2028hello", "\u2028hello")]
+    [InlineData("Um, a\U00010400", "a\U00010400")]
+    [InlineData("He said \"hello,\" Um, friend", "He said \"hello,\" friend")]
     public void Remove_KeepsCasingWhenNoCapitalIsOwed(string input, string expected) =>
         Assert.Equal(expected, FillerWordFilter.Remove(input));
 

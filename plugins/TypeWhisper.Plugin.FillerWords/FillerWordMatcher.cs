@@ -117,10 +117,16 @@ internal sealed class FillerWordMatcher
             var index = start;
             while (index < end && char.IsWhiteSpace(text[index]))
             {
+                if (text[index] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                {
+                    capitalOwed = false;
+                    break;
+                }
+
                 index++;
             }
 
-            if (index < end)
+            if (capitalOwed && index < end)
             {
                 capitalOwed = false;
                 if (IsPlainLowerCaseWord(text, index, end) && Rune.TryGetRuneAt(text, index, out var first))
@@ -151,29 +157,33 @@ internal sealed class FillerWordMatcher
             tokenEnd++;
         }
 
-        while (tokenEnd > index && text[tokenEnd - 1] is ',' or '.' or '!' or '?' or '…' or ';' or ':'
-                   or ')' or ']' or '"' or '\'' or '”' or '’' or '»' or '«')
+        while (tokenEnd > index && (text[tokenEnd - 1] is ',' or '.' or '!' or '?' or '…' or ';' or ':'
+                                    || IsClosingDelimiter(text[tokenEnd - 1])))
         {
             tokenEnd--;
         }
 
-        for (var position = index; position < tokenEnd; position++)
+        // By rune, so a supplementary capital (a𐐀) still marks the word as mixed case.
+        var position = index;
+        while (position < tokenEnd)
         {
-            var character = text[position];
-            if (char.IsUpper(character)
-                || !(char.IsLetter(character) || char.IsSurrogate(character) || IsCombiningMark(character)
-                     || character is '\'' or '’' or '-' or '‐' or '‑'))
+            if (!Rune.TryGetRuneAt(text, position, out var rune)
+                || Rune.IsUpper(rune)
+                || !(Rune.IsLetter(rune) || IsCombiningMark(rune)
+                     || rune.Value is '\'' or '’' or '-' or '‐' or '‑'))
             {
                 return false;
             }
+
+            position += rune.Utf16SequenceLength;
         }
 
         return true;
     }
 
     // Decomposed spellings carry accents as separate marks (e + U+0301).
-    private static bool IsCombiningMark(char character) =>
-        char.GetUnicodeCategory(character) is UnicodeCategory.NonSpacingMark
+    private static bool IsCombiningMark(Rune rune) =>
+        Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark
             or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
 
     // Whether a word appended to the output would open a sentence: it starts the text or a line,
@@ -436,17 +446,44 @@ internal sealed class FillerWordMatcher
             return false;
         }
 
+        return MayOpenQuote(output, index) && !(character == '"' && ClosesStraightQuotePair(output, index));
+    }
+
+    // Whatever precedes an opening quote is not a word or a finished sentence: whitespace,
+    // another opener, a dash or a clause mark (He said—“Um…”); after those it closes.
+    private static bool MayOpenQuote(StringBuilder output, int index)
+    {
         if (index == 0)
         {
             return true;
         }
 
-        // Whatever precedes an opening quote is not a word or a finished sentence: whitespace,
-        // another opener, a dash or a clause mark (He said—“Um…”); after those it closes.
         var previous = output[index - 1];
         return !char.IsLetterOrDigit(previous)
             && previous is not ('.' or '!' or '?' or '…' or '。' or '！' or '？')
             && !IsClosingDelimiter(previous);
+    }
+
+    // Straight quotes pair up on their line (He said "hello," Um, friend); one that could not
+    // open, like the inch mark in 6'2", stays out of the pairing.
+    private static bool ClosesStraightQuotePair(StringBuilder output, int index)
+    {
+        var lineStart = index;
+        while (lineStart > 0 && output[lineStart - 1] != '\n')
+        {
+            lineStart--;
+        }
+
+        var open = false;
+        for (var position = lineStart; position < index; position++)
+        {
+            if (output[position] == '"' && (open || MayOpenQuote(output, position)))
+            {
+                open = !open;
+            }
+        }
+
+        return open;
     }
 
     private static bool LineIsEmpty(StringBuilder output) =>
