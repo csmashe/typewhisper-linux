@@ -728,6 +728,105 @@ public sealed class HistorySectionViewModelTests : IDisposable
     }
 
     [Fact]
+    public void RevealRecord_LoadsPagesDownToAnOlderEntryAndExpandsIt()
+    {
+        var history = CreateHistoryService();
+        var start = DateTime.UtcNow.AddHours(-1);
+        var oldest = CreateRecord("oldest", timestamp: start);
+        history.AddRecord(oldest);
+        for (var i = 1; i < 90; i++)
+        {
+            history.AddRecord(CreateRecord($"newer {i}", timestamp: start.AddSeconds(i)));
+        }
+
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        var revealed = 0;
+        sut.RecordRevealed += () => revealed++;
+        Assert.DoesNotContain(sut.Groups.SelectMany(group => group.Entries), row => row.Record.Id == oldest.Id);
+
+        Assert.True(sut.RevealRecord(oldest.Id));
+
+        var row = Assert.Single(sut.Groups.SelectMany(group => group.Entries), entry => entry.Record.Id == oldest.Id);
+        Assert.True(row.IsExpanded);
+        Assert.False(sut.HasMore);
+        Assert.Equal(1, revealed);
+        Assert.Same(row, sut.TakeRevealedRecord());
+        Assert.Null(sut.TakeRevealedRecord());
+    }
+
+    [Fact]
+    public void RevealRecord_ClearsOnlyTheSearchThatHidesTheEntry()
+    {
+        var history = CreateHistoryService();
+        var target = CreateRecord("beta");
+        history.AddRecord(target);
+        history.AddRecord(CreateRecord("alpha") with { AppProcessName = "other" });
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.SelectedAppFilter = "test";
+        sut.SearchQuery = "alpha";
+
+        Assert.True(sut.RevealRecord(target.Id));
+
+        Assert.Equal("", sut.SearchQuery);
+        Assert.Equal("test", sut.SelectedAppFilter);
+        Assert.True(Assert.Single(sut.Groups.SelectMany(group => group.Entries)).IsExpanded);
+    }
+
+    [Fact]
+    public void RevealRecord_ClearsOnlyTheAppFilterThatHidesTheEntry()
+    {
+        var history = CreateHistoryService();
+        var target = CreateRecord("shared word") with { AppProcessName = "other" };
+        history.AddRecord(target);
+        history.AddRecord(CreateRecord("shared word too"));
+        history.AddRecord(CreateRecord("unrelated"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.SelectedAppFilter = "test";
+        sut.SearchQuery = "shared";
+
+        Assert.True(sut.RevealRecord(target.Id));
+
+        Assert.Equal("shared", sut.SearchQuery);
+        Assert.Equal(Loc.Instance["History.AllApps"], sut.SelectedAppFilter);
+        var rows = sut.Groups.SelectMany(group => group.Entries).ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.True(Assert.Single(rows, row => row.Record.Id == target.Id).IsExpanded);
+    }
+
+    [Fact]
+    public void RevealRecord_KeepsTheOpenEntrysUnsavedEdit()
+    {
+        var history = CreateHistoryService();
+        var record = CreateRecord("original");
+        history.AddRecord(record);
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        var row = Assert.Single(Assert.Single(sut.Groups).Entries);
+        row.ToggleExpandCommand.Execute(null);
+        row.StartEditCommand.Execute(null);
+        row.EditText = "unsaved";
+
+        Assert.True(sut.RevealRecord(record.Id));
+
+        Assert.True(row.IsExpanded);
+        Assert.True(row.IsEditing);
+        Assert.Equal("unsaved", row.EditText);
+    }
+
+    [Fact]
+    public void RevealRecord_MissingEntryReturnsFalse()
+    {
+        var history = CreateHistoryService();
+        history.AddRecord(CreateRecord("kept"));
+        var sut = CreateViewModel(history, CreateDictionaryService());
+        sut.SearchQuery = "kept";
+
+        Assert.False(sut.RevealRecord("deleted"));
+
+        Assert.Equal("kept", sut.SearchQuery);
+        Assert.Null(sut.TakeRevealedRecord());
+    }
+
+    [Fact]
     public void Refresh_UtcPlus13_GroupsLateUtcRecordUnderLocalTodayAndFormatsLocalTime()
     {
         var timeZone = TimeZoneInfo.CreateCustomTimeZone(
