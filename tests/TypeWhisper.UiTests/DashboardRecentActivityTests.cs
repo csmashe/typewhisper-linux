@@ -125,6 +125,7 @@ public sealed class DashboardRecentActivityTests(UiSession ui)
             Dispatcher.UIThread.RunJobs();
         }
 
+        Assert.True(task.IsCompleted, "Timed out after 10 s waiting for the clipboard copy.");
         return task.GetAwaiter().GetResult();
     }
 }
