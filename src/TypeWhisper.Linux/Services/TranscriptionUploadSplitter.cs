@@ -85,7 +85,7 @@ internal static class TranscriptionUploadSplitter
     private static bool IsTooLarge(PluginRequestException failure) =>
         failure.FailureKind == PluginRequestFailureKind.RequestTooLarge || failure.HttpStatusCode == 413;
 
-    // Only two seconds or more is split, so no chunk gets shorter than about a second.
+    // Only two seconds or more is split, so no chunk gets shorter than a second.
     private static bool CanSplit(Pcm16Wav audio, int frames) => frames >= audio.SampleRate * MinimumSplitSeconds;
 
     private static PluginTranscriptionResult Merge(
@@ -238,7 +238,12 @@ internal static class TranscriptionUploadSplitter
             var boundary = limit;
             var bestEnergy = 0.0001;
             var samples = Data.Span;
-            for (var end = limit; end - window >= Math.Max(limit / 2, limit - SampleRate); end -= window)
+            // A quiet point (end - window / 2) counts only when it leaves at least a second on the left.
+            for (
+                var end = limit;
+                end - window >= Math.Max(limit / 2, limit - SampleRate) && end - window / 2 >= SampleRate;
+                end -= window
+            )
             {
                 double energy = 0;
                 var start = (offset + end - window) * BlockAlign;

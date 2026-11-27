@@ -104,6 +104,26 @@ public sealed class TranscriptionUploadSplitterTests
     }
 
     [Fact]
+    public async Task SplitPoint_IgnoresSilenceThatWouldLeaveAChunkUnderASecond()
+    {
+        var samples = Tone(SampleRate * 2);
+        // 20 ms of silence half a second in; splitting there would leave a 0.51 s chunk.
+        Array.Clear(samples, SampleRate / 2, SampleRate / 50);
+        var wav = WavEncoder.Encode(samples);
+        var frames = new List<int>();
+
+        await TranscriptionUploadSplitter.TranscribeAsync(wav, (upload, _) =>
+        {
+            if (upload.Length == wav.Length)
+                throw new PluginRequestException("too large", PluginRequestFailureKind.RequestTooLarge);
+            frames.Add((upload.Length - 44) / 2);
+            return Task.FromResult(new PluginTranscriptionResult("t", null, 0, null));
+        }, CancellationToken.None);
+
+        Assert.Equal([SampleRate, SampleRate], frames);
+    }
+
+    [Fact]
     public async Task TooLarge_ShortOrUnreadableAudio_Rethrows()
     {
         var failure = new PluginRequestException("too large", PluginRequestFailureKind.RequestTooLarge);
