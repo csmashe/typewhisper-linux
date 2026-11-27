@@ -153,16 +153,30 @@ public sealed class LlmRequestRetryPolicyTests
     }
 
     [Fact]
-    public void Delay_UsesRetryAfterWithCapAndLinearFallback()
+    public void Delay_HonoursShortRetryAfterAndFallsBackLinearly()
     {
-        Assert.Equal(TimeSpan.FromSeconds(5), LlmRequestRetryPolicy.GetDelay(
-            new PluginRequestException("rate", PluginRequestFailureKind.RateLimit, retryAfter: TimeSpan.FromHours(1)), 1));
+        Assert.Equal(TimeSpan.FromSeconds(10), LlmRequestRetryPolicy.GetDelay(
+            new PluginRequestException("rate", PluginRequestFailureKind.RateLimit, retryAfter: TimeSpan.FromSeconds(10)), 1));
+        Assert.Null(LlmRequestRetryPolicy.GetDelay(
+            new PluginRequestException("rate", PluginRequestFailureKind.RateLimit, retryAfter: TimeSpan.FromSeconds(11)), 1));
         Assert.Equal(TimeSpan.Zero, LlmRequestRetryPolicy.GetDelay(
             new PluginRequestException("rate", PluginRequestFailureKind.RateLimit, retryAfter: TimeSpan.FromSeconds(-1)), 1));
         Assert.Equal(TimeSpan.FromMilliseconds(250), LlmRequestRetryPolicy.GetDelay(
             new PluginRequestException("network", PluginRequestFailureKind.Network), 1));
         Assert.Equal(TimeSpan.FromMilliseconds(500), LlmRequestRetryPolicy.GetDelay(
             new PluginRequestException("network", PluginRequestFailureKind.Network), 2));
+    }
+
+    [Fact]
+    public async Task RetryAfterAboveCap_SurfacesAtOnce()
+    {
+        var attempts = 0;
+        await Assert.ThrowsAsync<PluginRequestException>(() => LlmRequestRetryPolicy.ExecuteAsync<string>(_ =>
+        {
+            attempts++;
+            throw new PluginRequestException("rate", PluginRequestFailureKind.RateLimit, retryAfter: TimeSpan.FromHours(1));
+        }, CancellationToken.None));
+        Assert.Equal(1, attempts);
     }
 
     [Fact]
@@ -173,7 +187,7 @@ public sealed class LlmRequestRetryPolicyTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => LlmRequestRetryPolicy.ExecuteAsync<string>(_ =>
         {
             attempts++;
-            throw new PluginRequestException("rate", PluginRequestFailureKind.RateLimit, retryAfter: TimeSpan.FromHours(1));
+            throw new PluginRequestException("rate", PluginRequestFailureKind.RateLimit, retryAfter: TimeSpan.FromSeconds(5));
         }, cts.Token, (_, _, delay) =>
         {
             Assert.Equal(TimeSpan.FromSeconds(5), delay);

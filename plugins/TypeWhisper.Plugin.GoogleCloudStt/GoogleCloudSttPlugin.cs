@@ -82,6 +82,8 @@ public sealed class GoogleCloudSttPlugin
     public string? SelectedModelId { get; private set; }
 
     public bool SupportsTranslation => false;
+    // Long recordings go out as several billed 55 s requests, so a host replay would resend the ones that succeeded.
+    public bool SupportsHostRetry => false;
     public LanguageSelectionSupport AutomaticDetectionSupport => LanguageSelectionSupport.Unsupported;
     public LanguageSelectionSupport ExplicitSelectionSupport => LanguageSelectionSupport.Supported;
 

@@ -83,6 +83,10 @@ public sealed class AssemblyAiPlugin
     public string? SelectedModelId { get; private set; } = AssemblyAiModels.DefaultId;
 
     public bool SupportsTranslation => false;
+    // A batch call uploads, creates a remote job and polls it, so a host replay would bill a second job.
+    public bool SupportsHostRetry => false;
+    // Speaker numbers restart in every request, so joined chunks would mix up the speakers.
+    public bool SupportsHostSplitting => !SpeakerLabels;
     public bool SupportsStreaming => !SpeakerLabels;
     public bool SupportsStructuredDictionaryTerms => UseDictionaryTerms;
     public DictionaryTermsBudget DictionaryTermsBudget => BudgetFor(SelectedModelId);
