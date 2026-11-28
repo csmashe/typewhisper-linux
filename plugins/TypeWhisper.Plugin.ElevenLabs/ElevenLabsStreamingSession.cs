@@ -222,6 +222,8 @@ internal sealed class ElevenLabsStreamingSession : IStreamingSession, IStreaming
             or "quota_exceeded"
             or "transcriber_error"
             or "input_error"
+            // An unknown language code, for one; its name has no "error" in it.
+            or "invalid_request"
             or "error"
             or "commit_throttled"
             or "unaccepted_terms"
