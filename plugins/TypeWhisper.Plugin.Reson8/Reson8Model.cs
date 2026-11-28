@@ -14,7 +14,8 @@ public sealed record Reson8Model(
     IReadOnlyList<string>? Languages = null,
     bool? IsDefault = null)
 {
-    internal bool Streams => Endpoints is null || Endpoints.Contains("realtime", StringComparer.OrdinalIgnoreCase);
+    internal bool Streams => !Reson8Models.IsBatchOnly(Id)
+        && (Endpoints is null || Endpoints.Contains("realtime", StringComparer.OrdinalIgnoreCase));
 }
 
 /// <summary>How the transcript treats filler words. Natural sends no <c>filler_mode</c>, Reson8's default.</summary>
@@ -45,11 +46,16 @@ internal static partial class Reson8Models
         },
     };
 
+    // Same docs page: these models have no live endpoint, even when the list leaves out their endpoints.
+    private static readonly HashSet<string> s_batchOnlyModels = new(StringComparer.Ordinal) { "rumble-2-flash" };
+
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,63}$")]
     private static partial Regex ModelIdPattern();
 
     [GeneratedRegex("^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$")]
     private static partial Regex LanguagePattern();
+
+    internal static bool IsBatchOnly(string id) => s_batchOnlyModels.Contains(id);
 
     internal static bool TakesParameter(Reson8Model? model, string parameter) =>
         model is null || !s_rejectedParameters.TryGetValue(model.Id, out var rejected) || !rejected.Contains(parameter);

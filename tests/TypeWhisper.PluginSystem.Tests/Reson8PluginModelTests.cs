@@ -92,6 +92,29 @@ public partial class Reson8PluginTests
     }
 
     [Fact]
+    public async Task Rumble_StaysBatchOnlyWhenTheListLeavesOutItsEndpoints()
+    {
+        var models = Reson8Models.ParseModelListResponse("""
+            [
+              {"id":"rumble-2-flash","displayName":"Rumble-2-Flash"},
+              {"id":"future-model","displayName":"Future Model"}
+            ]
+            """u8.ToArray())!;
+        Assert.False(models[0].Streams);
+        Assert.True(models[1].Streams);
+
+        var host = new TestPluginHostServices { Secrets = { ["api-key"] = "reson-key" } };
+        var sut = new Reson8Plugin(new HttpClient());
+        await sut.ActivateAsync(host);
+        sut.SetFetchedListedModels(models);
+        sut.SelectModel("rumble-2-flash");
+
+        Assert.False(sut.SupportsStreaming);
+        var ex = await Assert.ThrowsAsync<PluginRequestException>(() => sut.StartStreamingAsync(null, CancellationToken.None));
+        Assert.Equal(PluginRequestFailureKind.Configuration, ex.FailureKind);
+    }
+
+    [Fact]
     public async Task Rumble_GoesAsModelAndLeavesOutTheParametersItRejects()
     {
         var queries = new List<NameValueCollection>();
