@@ -423,6 +423,19 @@ public class VoxtralPluginTests
     }
 
     [Fact]
+    public async Task ErrorHandler_DisposesTheResponseWhenTheErrorBodyCannotBeRead()
+    {
+        var content = new UnreadableContent();
+        using var invoker = new HttpMessageInvoker(new MistralErrorHandler(new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = content }))));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => invoker.SendAsync(
+            new HttpRequestMessage(HttpMethod.Get, "https://api.mistral.ai/v1/models"), CancellationToken.None));
+
+        Assert.True(content.Disposed);
+    }
+
+    [Fact]
     public async Task TranscribeAsync_PropagatesCancellation()
     {
         var requestStarted = new TaskCompletionSource<bool>(
@@ -513,6 +526,26 @@ public class VoxtralPluginTests
         host.Setup(service => service.GetSetting<string>("selectedModel"))
             .Returns(selectedModelId);
         return host;
+    }
+
+    private sealed class UnreadableContent : HttpContent
+    {
+        public bool Disposed { get; private set; }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new IOException("connection reset");
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
     }
 
     private sealed class StubHttpMessageHandler(

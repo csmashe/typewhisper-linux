@@ -17,15 +17,24 @@ internal sealed class MistralErrorHandler(HttpMessageHandler inner) : Delegating
         if (response.IsSuccessStatusCode)
             return response;
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (Message(body) is not { } message)
-            return response;
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (Message(body) is not { } message)
+                return response;
 
-        var original = response.Content;
-        response.Content = new StringContent(
-            JsonSerializer.Serialize(new { error = new { message } }), Encoding.UTF8, "application/json");
-        original.Dispose();
-        return response;
+            var original = response.Content;
+            response.Content = new StringContent(
+                JsonSerializer.Serialize(new { error = new { message } }), Encoding.UTF8, "application/json");
+            original.Dispose();
+            return response;
+        }
+        catch
+        {
+            // Nobody owns the response until it is returned.
+            response.Dispose();
+            throw;
+        }
     }
 
     /// <summary>The transcription and model-list error text: Mistral's message, else the body.</summary>
