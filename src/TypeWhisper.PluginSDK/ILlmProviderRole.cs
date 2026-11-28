@@ -38,6 +38,13 @@ public interface ILlmProviderRole
     /// <summary>Models supported by this provider.</summary>
     IReadOnlyList<PluginModelInfo> SupportedModels { get; }
 
+    /// <summary>
+    ///     The <see cref="SupportedModels" /> entry that a saved model ID now names, for a provider
+    ///     whose list replaced aliases or retired models; null when nothing listed matches.
+    /// </summary>
+    // ReSharper disable once UnusedMemberInSuper.Global
+    string? ResolveSavedModelId(string modelId) => null;
+
     /// <summary>Sends a chat completion request and returns the response text.</summary>
     Task<string> ProcessAsync(
         string systemPrompt,
